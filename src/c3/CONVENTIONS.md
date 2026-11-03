@@ -64,3 +64,5 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - `@local` on methods is ignored with a warning, like `@private`.
 - `any` is a type and can't be a variable name.
 - A `{...}` slice literal can't be returned from a function; use a module-level `const`.
+- Integer limits are `long::min`, `ulong::max`, `usz::max`, and the byte size is `usz::size`; `long.min` and `usz.sizeof` do not compile.
+- Integer literal suffixes such as `1u64` are rejected ("not a valid literal"). Write `(ulong)1 << 40`; plain `1 << 40` is an `int` shift and is a compile error.
