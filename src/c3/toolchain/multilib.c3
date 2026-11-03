@@ -1,5 +1,4 @@
 // Port of src/aro/Toolchain/Multilib.zig.
-// STAGE 0 CONTRACT: types and signatures are fixed; bodies are stubs (agent 23.4).
 module aro::toolchain::multilib;
 import aro::toolchain::discovery;
 
@@ -30,7 +29,9 @@ struct Multilib
 *>
 fn Multilib init(String gcc_suffix, String os_suffix, String[] init_flags)
 {
-	return {}; // STUB
+	Multilib m = { .gcc_suffix = gcc_suffix, .os_suffix = os_suffix, .flag_count = (char)init_flags.len };
+	foreach (i, f : init_flags) m.flag_buf[i] = f;
+	return m;
 }
 
 fn String[] Multilib.flags(&self)
@@ -47,7 +48,7 @@ struct Filter
 
 fn bool Filter.exists(&self, Multilib* m, Env* env)
 {
-	return false; // STUB
+	return env.joined_exists({ self.base[0], self.base[1], m.gcc_suffix, self.file });
 }
 
 <* Multilib.Detected. *>
@@ -67,7 +68,7 @@ struct Detected
 *>
 fn void Detected.push(&self, Multilib m)
 {
-	// STUB
+	self.multilib_buf[self.multilib_count++] = m;
 }
 
 fn Multilib[] Detected.multilibs(&self)
@@ -78,7 +79,13 @@ fn Multilib[] Detected.multilibs(&self)
 <* Keeps only the multilibs for which `filter.exists` holds (order preserved). *>
 fn void Detected.filter(&self, Filter filter, Env* env)
 {
-	// STUB
+	char found_count = 0;
+	for (usz i = 0; i < self.multilib_count; i++)
+	{
+		Multilib m = self.multilib_buf[i];
+		if (filter.exists(&m, env)) self.multilib_buf[found_count++] = m;
+	}
+	self.multilib_count = found_count;
 }
 
 <*
@@ -88,5 +95,39 @@ fn void Detected.filter(&self, Filter filter, Env* env)
 *>
 fn bool? Detected.select(&self, String[] check_flags)
 {
-	return aro::UNSUPPORTED~; // STUB
+	bool has_selected = false;
+	Multilib selected;
+	foreach (&m : self.multilibs())
+	{
+		bool all_match = true;
+		foreach (multilib_flag : m.flags())
+		{
+			// The first check flag with the same name (sign ignored) wins;
+			// a flag nobody asks about matches itself.
+			String matched = multilib_flag;
+			foreach (arg_flag : check_flags)
+			{
+				if (arg_flag[1..] == multilib_flag[1..])
+				{
+					matched = arg_flag;
+					break;
+				}
+			}
+			if (matched[0] != multilib_flag[0])
+			{
+				all_match = false;
+				break;
+			}
+		}
+		if (!all_match) continue;
+		if (has_selected) return TOO_MANY_MULTILIBS~;
+		selected = *m;
+		has_selected = true;
+	}
+	if (has_selected)
+	{
+		self.selected = selected;
+		return true;
+	}
+	return false;
 }
