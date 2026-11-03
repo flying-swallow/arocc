@@ -80,3 +80,10 @@ filegroup(
     srcs = glob(["test/cases/**"]),
     visibility = ["//test/migration:__pkg__"],
 )
+
+# The 19 builtin .def inputs as runtime data (plan 12.1 //test/c3:def_parse_tests).
+filegroup(
+    name = "builtin_def_files",
+    srcs = glob(["src/aro/Builtins/*.def"]),
+    visibility = ["//visibility:public"],
+)
