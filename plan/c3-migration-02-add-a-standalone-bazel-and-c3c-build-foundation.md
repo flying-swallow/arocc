@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 02 [Build & validation]: Add a standalone Bazel and c3c build foundation'
-state: waiting
+state: complete
 planned: true
 parent_session: 01a19f7c-d060-7e01-b4aa-ce62ed71b1e2
 sessions:

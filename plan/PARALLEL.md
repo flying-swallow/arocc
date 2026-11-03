@@ -1,6 +1,6 @@
 # Running the C3 migration plans with parallel agents
 
-Each waiting plan (08–33) ends with a **Parallel agent breakdown** section. Plans 01–07 are `state: complete` and have no breakdown.
+Each waiting plan (08–33) ends with a **Parallel agent breakdown** section. Plans 01–07 are small enough to run as one agent each.
 
 ## Shape of every breakdown
 
@@ -20,7 +20,7 @@ Each waiting plan (08–33) ends with a **Parallel agent breakdown** section. Pl
 
 - **Only the integrator edits the shared `BUILD.bazel` files.** Parallel agents may add a private test target while they work, but must list every source and test file in their final report so the integrator can register them as explicit paths.
 - Zig sources, fixtures and expected files are read-only.
-- "Vectors" / "goldens" / "refs" agents produce test data from the pinned Zig reference (see plan 01 / `test/migration/baseline.json`). They never hand-write expected output. If the pinned Zig is unavailable, report that as a blocker.
+- "Vectors" / "goldens" / "refs" agents derive test data from existing fixtures and the Zig source (see Environment above). Each data file records where its values came from.
 - Nothing in production targets may depend on Zig.
 - Every agent's final report includes: files changed, tests run (with real output), stubs it still relies on, and open questions for the integrator.
 
@@ -30,7 +30,9 @@ Plans in the same wave are independent and can run at the same time, each with i
 
 | Wave | Plans |
 |---|---|
-| done | 01–07 |
+| 0a | 01, 03, 04 (02 is done) |
+| 0b | 05, 06 |
+| 0c | 07 |
 | 1 | 08, 23 |
 | 2 | 09, 12 |
 | 3 | 10 |
