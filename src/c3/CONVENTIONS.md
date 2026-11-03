@@ -4,6 +4,7 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 
 ## Modules and files
 - One Zig file maps to one C3 file and one submodule: `src/aro/Foo.zig` becomes `src/c3/foo.c3` with `module aro::foo;`. The root module `aro` (`aro.c3`) holds only crate-wide items.
+- A large Zig file may be split over several C3 files that all declare the same module (`aro::target` is target.c3/target_cpu.c3/target_data.c3; `aro::type_store` is type_store*.c3 plus type_print.c3). Each file lists its own imports.
 - Every file is listed explicitly in `//:aro_c3_lib` (root `BUILD.bazel`). Tests go in `test/c3/<name>_tests.c3` and are registered as `c3_test` in `test/c3/BUILD.bazel`.
 - Test files use `module <name>_tests;` and mark each test `fn void x() @test`. Helpers that take parameters must not be inside a `@test` module section, because c3c rejects them there.
 
