@@ -3,7 +3,7 @@
 // are ported from the `test` blocks at src/aro/Compilation.zig:2899 onward
 // (expected values copied verbatim from the Zig source).
 module source_tests;
-import aro::source, aro::string_interner, aro::compilation;
+import aro::source, aro::string_interner, aro::compilation, aro::diagnostics;
 import std::core::mem::allocators, std::collections::list;
 
 <* test::eq for slices; numeric values are compared as long (test::eq rejects int vs uint). *>
@@ -203,7 +203,7 @@ fn void owned_buffer_is_adopted() @test
 		char* p = alloc::malloc(comp.gpa, raw.len + 1);
 		mem::copy(p, raw.ptr, raw.len);
 		p[raw.len] = 0;
-		Source src = comp.add_source_from_owned_buffer("own.c", p[:raw.len], SYSTEM);
+		Source src = comp.add_source_from_owned_buffer("own.c", p[:raw.len], SYSTEM)!!;
 		check(src.buf, "a\nb");
 		check(src.buf.ptr[src.buf.len], 0);
 		assert(src.kind == SYSTEM);
@@ -487,17 +487,22 @@ fn void invalid_utf8_columns() @test
 	check(e.width, 1);
 }
 
-fn void newline_escape_pending_diagnostic() @test
+fn void newline_escape_diagnostic() @test
 {
-	@tracked(; Compilation* comp)
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
 	{
+		Diagnostics diags;
+		diags.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, diagnostics: &diags);
 		comp.add_source_from_buffer("path", "ab\\ \nc")!!;
-		check(comp.pending_diagnostics.len(), 1);
-		PendingDiagnostic d = comp.pending_diagnostics[0];
-		assert(d.tag == BACKSLASH_NEWLINE_ESCAPE);
-		assert(d.tag.kind() == WARNING);
-		check(d.tag.fmt(), "backslash and newline separated by space");
-		check(d.tag.opt(), "backslash-newline-escape");
+		check(diags.messages.len(), 1);
+		Message d = diags.messages[0];
+		assert(d.kind == WARNING && d.effective_kind == WARNING);
+		check(d.text, "backslash and newline separated by space");
+		assert(d.has_opt && d.opt == BACKSLASH_NEWLINE_ESCAPE);
 		check(d.location.path, "path");
 		check(d.location.line, "a");
 		check(d.location.line_no, 1);
@@ -506,10 +511,14 @@ fn void newline_escape_pending_diagnostic() @test
 
 		// test/cases/newline splicing.c expects 31:14 for this line.
 		comp.add_source_from_buffer("ns.c", "x;\nint trailing\\ \nws = 1;\n")!!;
-		check(comp.pending_diagnostics.len(), 2);
-		d = comp.pending_diagnostics[1];
+		check(diags.messages.len(), 2);
+		d = diags.messages[1];
 		check(d.location.line_no, 2);
 		check(d.location.col, 14);
 		check(d.location.path, "ns.c");
-	};
+		check(comp.warning_count(), 2);
+		comp.free();
+		diags.free();
+	}
+	check(ta.allocation_count(), 0);
 }

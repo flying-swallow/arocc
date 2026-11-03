@@ -3,55 +3,36 @@
 // aliases and the string interner. Later tickets extend `Compilation` with
 // targets, language options, include search, pragmas, etc.
 module aro::compilation;
-import aro::source, aro::string_interner, std::collections::list;
+import aro::source, aro::string_interner, aro::diagnostics, std::collections::list;
 
 excuse FILE_TOO_BIG;
 
-<*
- Diagnostics raised while normalizing sources, recorded as structured events
- until diagnostic rendering (plan 05) exists. Mirrors `Compilation.Diagnostic`.
-*>
-enum PendingDiagnosticTag : char
-{
-	BACKSLASH_NEWLINE_ESCAPE,
-}
+<* Zig `error.FatalError` (Compilation.Error): a fatal error has occurred and compilation has stopped. *>
+excuse FATAL_ERROR;
 
-enum PendingDiagnosticKind : char
-{
-	OFF,
-	WARNING,
-}
+// Zig `Compilation.Diagnostic` constants.
+const DiagnosticTemplate DIAG_BACKSLASH_NEWLINE_ESCAPE = {
+	.fmt = "backslash and newline separated by space",
+	.kind = WARNING,
+	.has_opt = true,
+	.opt = Option.BACKSLASH_NEWLINE_ESCAPE,
+};
 
-fn String PendingDiagnosticTag.fmt(self)
-{
-	switch (self)
-	{
-		case BACKSLASH_NEWLINE_ESCAPE: return "backslash and newline separated by space";
-	}
-}
+const DiagnosticTemplate DIAG_MS_SEARCH_RULE = {
+	.fmt = "#include resolved using non-portable Microsoft search rules as: {s}",
+	.kind = WARNING,
+	.has_opt = true,
+	.opt = Option.MICROSOFT_INCLUDE,
+	.extension = true,
+};
 
-fn String PendingDiagnosticTag.opt(self)
-{
-	switch (self)
-	{
-		case BACKSLASH_NEWLINE_ESCAPE: return "backslash-newline-escape";
-	}
-}
-
-fn PendingDiagnosticKind PendingDiagnosticTag.kind(self)
-{
-	switch (self)
-	{
-		case BACKSLASH_NEWLINE_ESCAPE: return WARNING;
-	}
-}
-
-struct PendingDiagnostic
-{
-	PendingDiagnosticTag tag;
-	<* `location.path` is owned by the source table, `location.line` is an owned copy. *>
-	ExpandedLocation location;
-}
+const DiagnosticTemplate DIAG_CTRL_Z_EOF = {
+	.fmt = "treating Ctrl-Z as end-of-file is a Microsoft extension",
+	.kind = OFF,
+	.has_opt = true,
+	.opt = Option.MICROSOFT_END_OF_FILE,
+	.extension = true,
+};
 
 struct Compilation
 {
@@ -67,7 +48,9 @@ struct Compilation
 
 	List{char} generated_buf;
 	StringInterner string_interner;
-	List{PendingDiagnostic} pending_diagnostics;
+	<* Where diagnostics go. Borrowed unless `owns_diagnostics` (an IGNORE sink allocated in `init`). *>
+	Diagnostics* diagnostics;
+	bool owns_diagnostics;
 
 	<* If not UNUSED_ID, the directory containing this source is searched for includes (MS extension). *>
 	SourceId ms_cwd_source_id;
@@ -75,17 +58,24 @@ struct Compilation
 
 <*
  Initialize an empty compilation. All owned memory comes from `gpa`.
+ `diagnostics` is borrowed (Zig `InitOptions.diagnostics`); when null the
+ compilation owns a sink with IGNORE output that still counts messages.
  @param [&inout] gpa : "Allocator for everything the compilation owns"
 *>
-fn void Compilation.init(&self, Allocator gpa, Allocator arena = null)
+fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnostics* diagnostics = null)
 {
-	*self = { .gpa = gpa, .arena = arena, .ms_cwd_source_id = source::UNUSED_ID };
+	*self = { .gpa = gpa, .arena = arena, .ms_cwd_source_id = source::UNUSED_ID, .diagnostics = diagnostics };
+	if (!diagnostics)
+	{
+		self.diagnostics = alloc::new(gpa, Diagnostics);
+		self.diagnostics.init_ignore();
+		self.owns_diagnostics = true;
+	}
 	self.sources.init(gpa);
 	self.source_paths.init(gpa);
 	self.source_aliases.init(gpa);
 	self.generated_buf.init(gpa);
 	self.string_interner.init(gpa);
-	self.pending_diagnostics.init(gpa);
 }
 
 fn void Compilation.free(&self)
@@ -99,16 +89,16 @@ fn void Compilation.free(&self)
 		if (src.splice_locs.len) alloc::free(gpa, src.splice_locs.ptr);
 	}
 	foreach (&al : self.source_aliases) alloc::free(gpa, al.path.ptr);
-	foreach (&d : self.pending_diagnostics)
-	{
-		if (d.location.line.len) alloc::free(gpa, d.location.line.ptr);
-	}
 	self.sources.free();
 	self.source_paths.free();
 	self.source_aliases.free();
 	self.generated_buf.free();
 	self.string_interner.free();
-	self.pending_diagnostics.free();
+	if (self.owns_diagnostics)
+	{
+		self.diagnostics.free();
+		alloc::free(gpa, self.diagnostics);
+	}
 	*self = {};
 }
 
@@ -116,13 +106,8 @@ fn StringId Compilation.intern_string(&self, String str) => self.string_interner
 
 fn String StringId.lookup(self, Compilation* comp) => self.lookup_extra(&comp.string_interner);
 
-<* Number of pending warnings (Zig tests read `diagnostics.warnings`). *>
-fn uint Compilation.warning_count(&self)
-{
-	uint n;
-	foreach (&d : self.pending_diagnostics) if (d.tag.kind() == WARNING) n++;
-	return n;
-}
+<* Warnings sent to the diagnostics output (Zig tests read `diagnostics.warnings`). *>
+fn uint Compilation.warning_count(&self) => self.diagnostics.warnings;
 
 <*
  Return the source for `id`. The returned value's slices stay valid until
@@ -177,15 +162,20 @@ enum NormalizeState : char @private
  room for one extra byte at `buf.ptr[buf.len]`; it is modified in place and
  may be reallocated. The caller retains ownership of `path` (it is copied).
  To add a buffer the caller keeps, use `add_source_from_buffer`.
+ If a diagnostic fails (FATAL_ERROR) nothing is added, the copied path is freed
+ and `buf` stays with the caller (Zig's `errdefer` behavior).
 
  @require buf.len <= uint::max : "Source too big"
  @require !@ok(self.source_paths.find(path)) : "A source with this path already exists"
+
+ @return? FATAL_ERROR
 *>
-fn Source Compilation.add_source_from_owned_buffer(&self, String path, char[] buf, SourceKind kind)
+fn Source? Compilation.add_source_from_owned_buffer(&self, String path, char[] buf, SourceKind kind)
 {
 	Allocator gpa = self.gpa;
 	char[] contents = buf;
 	String duped_path = path.copy(gpa);
+	defer catch alloc::free(gpa, duped_path.ptr);
 
 	List{uint} splice_list;
 	splice_list.init(gpa);
@@ -222,7 +212,7 @@ fn Source Compilation.add_source_from_owned_buffer(&self, String path, char[] bu
 						splice_list.push(i);
 						if (state == TRAILING_WS)
 						{
-							self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind);
+							self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind)!;
 						}
 						state = state == BACK_SLASH_CR ? CR : BACK_SLASH_CR;
 						line++;
@@ -246,7 +236,7 @@ fn Source Compilation.add_source_from_owned_buffer(&self, String path, char[] bu
 						splice_list.push(i);
 						if (state == TRAILING_WS)
 						{
-							self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind);
+							self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind)!;
 						}
 						line++;
 					case BOM1:
@@ -324,10 +314,11 @@ fn Source Compilation.add_source_from_owned_buffer(&self, String path, char[] bu
 }
 
 <*
- Record a backslash-newline-escape warning. `buf` is the partially normalized
- buffer; the reported line text is copied because `buf` keeps changing.
+ Report a backslash-newline-escape warning. `buf` is the partially normalized
+ buffer; it is only borrowed for the duration of the `Diagnostics.add` call.
+ @return? FATAL_ERROR
 *>
-fn void Compilation.add_newline_escape_error(&self, String path, char[] buf, uint[] splice_locs, uint byte_offset, uint line, SourceKind kind)
+fn void? Compilation.add_newline_escape_error(&self, String path, char[] buf, uint[] splice_locs, uint byte_offset, uint line, SourceKind kind)
 {
 	// Temporary source for getting the location for errors.
 	Source tmp_source = {
@@ -341,14 +332,13 @@ fn void Compilation.add_newline_escape_error(&self, String path, char[] buf, uin
 	if (loc.line.len) loc.line = loc.line[:loc.line.len - 1];
 	loc.width += 1;
 	loc.col += 1;
-	loc.line = loc.line.len ? loc.line.copy(self.gpa) : "";
-	self.pending_diagnostics.push({ .tag = BACKSLASH_NEWLINE_ESCAPE, .location = loc });
+	self.diagnostics.add(DIAG_BACKSLASH_NEWLINE_ESCAPE.message_at(DIAG_BACKSLASH_NEWLINE_ESCAPE.fmt, loc))!;
 }
 
 <*
  Add a source from a buffer the caller keeps (it is copied). If a source with
  the same path already exists it is returned unchanged.
- @return? FILE_TOO_BIG
+ @return? FILE_TOO_BIG, FATAL_ERROR
 *>
 fn Source? Compilation.add_source_from_buffer(&self, String path, char[] buf)
 {
@@ -357,6 +347,7 @@ fn Source? Compilation.add_source_from_buffer(&self, String path, char[] buf)
 	char* contents = alloc::malloc(self.gpa, buf.len + 1);
 	if (buf.len) mem::copy(contents, buf.ptr, buf.len);
 	contents[buf.len] = 0;
+	defer catch alloc::free(self.gpa, contents);
 	return self.add_source_from_owned_buffer(path, contents[:buf.len], USER);
 }
 

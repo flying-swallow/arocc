@@ -32,9 +32,14 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Zig error sets map to C3 faults declared with `excuse` in the module that raises them, named in SCREAMING_CASE (`error.FileTooBig` becomes `compilation::FILE_TOO_BIG`). Fallible functions return `T?` and callers propagate with `!`.
 - Stage-0 stubs return `aro::UNSUPPORTED~`.
 - Misuse that Zig `assert`s on becomes `@require` contracts or `assert`. It is not a fault.
-- Until diagnostic rendering lands (plan 05), diagnostics are recorded as structured events (`compilation::PendingDiagnostic`: a tag plus an `ExpandedLocation` whose `line` is an owned copy) in `Compilation.pending_diagnostics`.
+- Zig `error.FatalError` is `compilation::FATAL_ERROR`. Diagnostics go through `Compilation.diagnostics` (a borrowed `Diagnostics*`; `Compilation.init` allocates an IGNORE sink when none is passed).
+- Zig optional fields (`?Option`, `?ExpandedLocation`) become a `has_x` flag next to the value (`Message.has_opt` / `opt`).
+- Zig `Diagnostic` constants (`fmt`, `kind`, `opt`, `extension`) become `diagnostics::DiagnosticTemplate` constants in the caller's module, named `DIAG_<ZIG_NAME>` so they do not clash with `Option` values. Format them with `diagnostics::format_args` / `template_index`; build messages with `.message(text)` / `.message_at(text, loc)`.
 
 ## Known c3c 0.8.5 issues
 - Comparing a bitstruct field of a module-level constant struct (`source::UNUSED_LOCATION.id == x`) crashes the compiler. Copy the constant to a local first.
 - `test::eq(uint_value, 3)` is rejected (int vs uint). Tests use a local `check` macro that compares integers as `long`.
 - `@private` on methods is ignored and produces a warning, so don't use it.
+- `void?` is not allowed as a variable type. Capture the fault with `fault f = @catch(call());`.
+- An enum's value count is `Enum::len` and its values `Enum::values`; `Enum.len` does not compile.
+- Functions and globals from other modules need their module prefix (`diagnostics::warning_exists`, `compilation::DIAG_CTRL_Z_EOF`). Types and enum values do not.
