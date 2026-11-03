@@ -4,6 +4,7 @@
 // targets, language options, include search, pragmas, etc.
 module aro::compilation;
 import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, aro::type_store, std::collections::list;
+import aro::value_interner;
 
 excuse FILE_TOO_BIG;
 
@@ -63,6 +64,8 @@ struct Compilation
 	Target darwin_target_variant;
 	<* Interned types (Zig `type_store`); named types are filled by `type_store::init_named_types`. *>
 	TypeStore type_store;
+	<* Interned constant values (Zig `interner`, backend Interner); see aro::value. *>
+	Interner interner;
 }
 
 <*
@@ -89,6 +92,7 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 	self.generated_buf.init(gpa);
 	self.string_interner.init(gpa);
 	self.type_store.init(gpa);
+	self.interner.init(gpa);
 }
 
 fn void Compilation.free(&self)
@@ -108,6 +112,7 @@ fn void Compilation.free(&self)
 	self.generated_buf.free();
 	self.string_interner.free();
 	self.type_store.free();
+	self.interner.free();
 	if (self.owns_diagnostics)
 	{
 		self.diagnostics.free();

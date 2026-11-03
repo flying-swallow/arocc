@@ -56,3 +56,6 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - `void?` is not allowed as a variable type. Capture the fault with `fault f = @catch(call());`.
 - An enum's value count is `Enum::len` and its values `Enum::values`; `Enum.len` does not compile.
 - Functions and globals from other modules need their module prefix (`diagnostics::warning_exists`, `compilation::DIAG_CTRL_Z_EOF`). Types and enum values do not.
+- `int`, `float` (and other type names) cannot be struct/union member names; Zig `Key.int`/`.float`/`.complex` became `int_val`/`float_val`/`complex_val`.
+- A `<* @return? A, B *>` contract is enforced: a stub returning `aro::UNSUPPORTED~` from such a function does not compile. Stage-0 stubs of functions with declared faults, or with no fault at all (Zig `!T` where the only error is OOM), use `unreachable("stage 0 stub")`.
+- Two modules may not both export a type with the same name if a third imports both (`type_store::Order` exists, so bigint's `std.math.Order` is `BigIntOrder`).
