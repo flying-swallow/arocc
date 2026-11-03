@@ -5,6 +5,7 @@
 module aro::compilation;
 import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, aro::type_store, std::collections::list;
 import aro::value_interner;
+import aro::builtins;
 
 excuse FILE_TOO_BIG;
 
@@ -66,6 +67,8 @@ struct Compilation
 	TypeStore type_store;
 	<* Interned constant values (Zig `interner`, backend Interner); see aro::value. *>
 	Interner interner;
+	<* Created builtin function types, keyed by name (Zig `builtins`). *>
+	Builtins builtins;
 }
 
 <*
@@ -93,6 +96,7 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 	self.string_interner.init(gpa);
 	self.type_store.init(gpa);
 	self.interner.init(gpa);
+	self.builtins.init(gpa);
 }
 
 fn void Compilation.free(&self)
@@ -113,6 +117,7 @@ fn void Compilation.free(&self)
 	self.string_interner.free();
 	self.type_store.free();
 	self.interner.free();
+	self.builtins.free();
 	if (self.owns_diagnostics)
 	{
 		self.diagnostics.free();

@@ -83,44 +83,171 @@ fn void Builtins.free(&self)
 *>
 fn Expanded Builtins.lookup(&self, String name)
 {
-	unreachable("stage-0 stub: builtins::Builtins.lookup");
+	uint? idx = self.names.find(name);
+	if (catch idx) unreachable("builtin '%s' was not created by get_or_create", name);
+	return self.expanded[idx];
+}
+
+<* The cached entry for `name`, or UNKNOWN_BUILTIN when it has not been created yet. *>
+fn Expanded? Builtins.find(&self, String name)
+{
+	uint? idx = self.names.find(name);
+	if (catch idx) return UNKNOWN_BUILTIN~;
+	return self.expanded[idx];
 }
 
 <* Builtins.getOrCreate: UNKNOWN_BUILTIN when `name` is not a builtin for comp.target. *>
 fn Expanded? Builtins.get_or_create(&self, Compilation* comp, String name)
 {
-	return aro::UNSUPPORTED~;
+	if (try cached = self.find(name)) return cached;
+	FromName builtin = from_name(comp, name)!;
+	// Zig: `if (builtin.features) |_| { // TODO check features }`. Not gated here either.
+	return self.create_from(comp, name_from_tag(builtin.tag), builtin);
 }
+
+<*
+ The insertion half of getOrCreate: builds the function type of `builtin`
+ and caches it under `key`. `key` must outlive the cache (get_or_create passes
+ the static generated name). Returns the existing entry if `key` is cached.
+*>
+fn Expanded Builtins.create_from(&self, Compilation* comp, String key, FromName builtin)
+{
+	if (try cached = self.find(key)) return cached;
+	Expanded expanded = {
+		.tag = builtin.tag,
+		.qt = builtin_type_description::create_builtin(comp, builtin.param_str),
+		.attributes = builtin.attributes,
+		.header = builtin.header,
+		.language = builtin.language,
+	};
+	uint idx = self.names.get_or_put(key);
+	assert(idx == self.expanded.len());
+	self.expanded.push(expanded);
+	return expanded;
+}
+
+<* Number of cached builtins. *>
+fn sz Builtins.len(&self) => self.expanded.len();
 
 <* Builtins.fromName: COMMON, then the groups of comp.target.cpu.arch. *>
 fn FromName? from_name(Compilation* comp, String name)
 {
-	return aro::UNSUPPORTED~;
+	return from_name_for_arch(comp.target.cpu.arch, name);
+}
+
+<* from_name without a Compilation: COMMON, then groups_for_arch(arch); first match wins. *>
+fn FromName? from_name_for_arch(Arch arch, String name)
+{
+	if (try found = from_name_in_group(COMMON, name)) return found;
+	foreach (group : groups_for_arch(arch))
+	{
+		if (try found = from_name_in_group(group, name)) return found;
+	}
+	return UNKNOWN_BUILTIN~;
 }
 
 <* Builtins.fromNameExtra for one group. *>
 fn FromName? from_name_in_group(BuiltinGroup group, String name)
 {
-	return aro::UNSUPPORTED~;
+	BuiltinTag tag = tag_from_name(group, name)!;
+	return from_record(tag, record_from_tag(tag));
+}
+
+<* Builds the FromName of a tag and its record (the body of Zig fromNameExtra). *>
+fn FromName from_record(BuiltinTag tag, BuiltinRecord rec)
+{
+	return {
+		.tag = tag,
+		.param_str = rec.param_str,
+		.language = rec.language,
+		.attributes = rec.attributes,
+		.header = rec.header,
+		.features = rec.features,
+	};
 }
 
 <* The per-group tag of `name` (Zig `tagFromName`). *>
 fn BuiltinTag? tag_from_name(BuiltinGroup group, String name)
 {
-	return aro::UNSUPPORTED~;
+	ushort index = search_names(group_names(group), group_shortest_name(group), group_longest_name(group), name)!;
+	return { .index = index, .group = group };
+}
+
+<*
+ Binary search of `name` in a bytewise-ascending name table (the generated
+ NAMES layout). Lengths outside [shortest, longest] fail fast, as the Zig
+ DAFSA lookup does. UNKNOWN_BUILTIN on a miss.
+ @require names.len <= 0x10000 : "tag indices are 16 bits"
+*>
+fn ushort? search_names(String[] names, usz shortest, usz longest, String name)
+{
+	if (!names.len) return UNKNOWN_BUILTIN~;
+	if (name.len < shortest || name.len > longest) return UNKNOWN_BUILTIN~;
+	sz lo = 0;
+	sz hi = names.len;
+	while (lo < hi)
+	{
+		sz mid = lo + (hi - lo) / 2;
+		int c = compare_bytes(names[mid], name);
+		if (c == 0) return (ushort)mid;
+		if (c < 0)
+		{
+			lo = mid + 1;
+		}
+		else
+		{
+			hi = mid;
+		}
+	}
+	return UNKNOWN_BUILTIN~;
+}
+
+<* Bytewise (unsigned) comparison, like Zig std.mem.order(u8). *>
+fn int compare_bytes(String a, String b)
+{
+	sz n = a.len < b.len ? a.len : b.len;
+	for (sz i = 0; i < n; i++)
+	{
+		char x = a[i];
+		char y = b[i];
+		if (x != y) return x < y ? -1 : 1;
+	}
+	if (a.len == b.len) return 0;
+	return a.len < b.len ? -1 : 1;
 }
 
 <* The canonical (static) name of a tag (Zig `nameFromTag`). @require tag.index < group_names(tag.group).len *>
 fn String name_from_tag(BuiltinTag tag)
 {
-	unreachable("stage-0 stub: builtins::name_from_tag");
+	return group_names(tag.group)[tag.index];
 }
 
 <* The record of a tag (Zig `fromTag`). @require tag.index < group_records(tag.group).len *>
 fn BuiltinRecord record_from_tag(BuiltinTag tag)
 {
-	unreachable("stage-0 stub: builtins::record_from_tag");
+	return group_records(tag.group)[tag.index];
 }
+
+<* The raw feature expression of a tag ("" when it has none). *>
+fn String features_of(BuiltinTag tag) => record_from_tag(tag).features;
+
+const BuiltinGroup[] GROUPS_NONE = {};
+const BuiltinGroup[] GROUPS_AARCH64 = { AARCH64, AARCH64_NEON, NEON };
+const BuiltinGroup[] GROUPS_AMDGCN = { AMDGCN };
+const BuiltinGroup[] GROUPS_ARM = { ARM, NEON };
+const BuiltinGroup[] GROUPS_BPF = { BPF };
+const BuiltinGroup[] GROUPS_HEXAGON = { HEXAGON };
+const BuiltinGroup[] GROUPS_LOONGARCH = { LOONGARCH };
+const BuiltinGroup[] GROUPS_MIPS = { MIPS };
+const BuiltinGroup[] GROUPS_NVPTX = { NVPTX };
+const BuiltinGroup[] GROUPS_POWERPC = { POWERPC };
+const BuiltinGroup[] GROUPS_RISCV = { RISCV };
+const BuiltinGroup[] GROUPS_S390X = { S390X };
+const BuiltinGroup[] GROUPS_VE = { VE };
+const BuiltinGroup[] GROUPS_WASM = { WASM };
+const BuiltinGroup[] GROUPS_XCORE = { XCORE };
+const BuiltinGroup[] GROUPS_X86_64 = { X86_64, X86 };
+const BuiltinGroup[] GROUPS_X86 = { X86 };
 
 <*
  Groups searched after COMMON for `arch`, in Zig fromName order (e.g.
@@ -129,13 +256,63 @@ fn BuiltinRecord record_from_tag(BuiltinTag tag)
 *>
 fn BuiltinGroup[] groups_for_arch(Arch arch)
 {
-	return {};
+	switch (arch)
+	{
+		case AARCH64:
+		case AARCH64_BE: return GROUPS_AARCH64;
+		case AMDGCN: return GROUPS_AMDGCN;
+		case ARM:
+		case ARMEB:
+		case THUMB:
+		case THUMBEB: return GROUPS_ARM;
+		case BPFEB:
+		case BPFEL: return GROUPS_BPF;
+		case HEXAGON: return GROUPS_HEXAGON;
+		case LOONGARCH32:
+		case LOONGARCH64: return GROUPS_LOONGARCH;
+		case MIPS64:
+		case MIPS64EL:
+		case MIPS:
+		case MIPSEL: return GROUPS_MIPS;
+		case NVPTX:
+		case NVPTX64: return GROUPS_NVPTX;
+		case POWERPC64:
+		case POWERPC64LE:
+		case POWERPC:
+		case POWERPCLE: return GROUPS_POWERPC;
+		case RISCV32:
+		case RISCV32BE:
+		case RISCV64:
+		case RISCV64BE: return GROUPS_RISCV;
+		case S390X: return GROUPS_S390X;
+		case VE: return GROUPS_VE;
+		case WASM32:
+		case WASM64: return GROUPS_WASM;
+		case XCORE: return GROUPS_XCORE;
+		case X86_64: return GROUPS_X86_64;
+		case X86: return GROUPS_X86;
+		default: return GROUPS_NONE;
+	}
 }
 
-<* Whether `language` permits the builtin under `opts` (not applied by get_or_create; see module comment). *>
+<*
+ Whether `language` permits the builtin under `opts` (not applied by
+ get_or_create; see module comment). Zig never evaluates Language, so the
+ rule is source-derived from clang's builtinIsSupported, which the .def
+ values come from: MS builtins need -fms-extensions, GNU builtins need a GNU
+ standard (gnu*, or the default mode, which Aro treats as GNU), C23 builtins
+ need C23 or later.
+*>
 fn bool language_allows(Language language, LangOpts* opts)
 {
-	return true;
+	switch (language)
+	{
+		case ALL_LANGUAGES: return true;
+		case ALL_MS_LANGUAGES: return opts.ms_extensions;
+		case ALL_GNU_LANGUAGES:
+		case GNU_LANG: return opts.standard.is_gnu();
+		case C23_LANG: return opts.standard.at_least(C23);
+	}
 }
 
 // ---------------------------------------------------------------------------
