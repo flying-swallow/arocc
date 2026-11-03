@@ -47,3 +47,9 @@ c3_test(
     srcs = ["generate_def_tests.c3"],
     deps = ["//tools:generate_def_lib"],
 )
+
+c3_test(
+    name = "builtin_type_description_tests",
+    srcs = ["builtin_type_description_tests.c3"],
+    deps = ["//:aro_c3_lib"],
+)
