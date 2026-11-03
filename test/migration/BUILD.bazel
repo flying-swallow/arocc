@@ -1,0 +1,34 @@
+load("//tools:c3.bzl", "c3_binary", "c3_library", "c3_test")
+
+# C3 port of test/runner.zig plus migration gate modes.
+c3_library(
+    name = "runner_lib",
+    srcs = ["runner.c3"],
+)
+
+# bazel run //test/migration:runner -- [--cases FILE [--all] [--gate]] <exe> <cases-dir>
+c3_binary(
+    name = "runner",
+    srcs = ["runner_main.c3"],
+    deps = [":runner_lib"],
+)
+
+c3_test(
+    name = "runner_tests",
+    srcs = ["runner_tests.c3"],
+    data = ["testdata/fake_aro.sh"],
+    deps = [":runner_lib"],
+)
+
+# Needs --test_env=ARO_REFERENCE_EXE=/abs/path/to/arocc. Without it the test
+# reports "reference executable unavailable" and fails, so it is manual.
+c3_test(
+    name = "reference_regression",
+    srcs = ["reference_regression.c3"],
+    data = [
+        "baseline.json",
+        "//:test_cases",
+    ],
+    tags = ["manual"],
+    deps = [":runner_lib"],
+)

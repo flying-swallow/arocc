@@ -17,3 +17,11 @@ c3_binary(
     srcs = ["app/aro_c3/main.c3"],
     deps = [":aro_c3_lib"],
 )
+
+# Integration fixture corpus (cases, includes, ast/ and expanded/ goldens)
+# as runtime data for //test/migration:* runner targets.
+filegroup(
+    name = "test_cases",
+    srcs = glob(["test/cases/**"]),
+    visibility = ["//test/migration:__pkg__"],
+)
