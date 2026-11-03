@@ -59,6 +59,76 @@ foo.c: 1:4: error: something went wrong
 
 ---
 
+## C3 migration runner (Bazel)
+
+`test/migration/runner.c3` is the C3 port of `test/runner.zig`. It runs the same
+manifests with the same flags and checks, and it adds gate modes for the C3 port.
+Run Bazel as `plan/PARALLEL.md` describes:
+
+```sh-session
+B="env C3C=/home/user/tools/c3/c3c /home/user/tools/bazel --output_user_root=/home/user/tools/bazel_root"
+$B test //test/migration:runner_tests            # runner unit tests (fake child compiler)
+$B test -c opt //test/migration:runner_tests
+$B build //test/migration:runner                 # the runner CLI
+bazel-bin/test/migration/runner <arocc-exe> test/cases   # like `zig build test-integration`
+```
+
+The runner takes the compiler executable as its first argument. If you give only
+`<cases-dir>`, it reads the compiler path from `ARO_RUNNER_EXE`. The runner does not
+search `PATH`: a relative path resolves against the runner's working directory.
+
+Options:
+
+- `--cases FILE`: run only the cases listed in FILE (a per-stage case list). The run
+  fails if an entry names a file that does not exist, or if the selection is empty.
+- `--all` (requires `--cases`): run the whole corpus. Every `.c` file in the directory
+  must appear in the list; any file not in the list fails the run.
+- `--gate` (requires `--cases`): each case's whole outcome (result, exit status,
+  terminating signal, `fatal error:` diagnostic) must equal its listed expectation.
+  The runner.zig mode accepts any exit status; gate mode does not.
+- `--log FILE`: write a per-case TSV of outcomes. The runner writes it after all cases
+  have run.
+
+Case list format, one entry per line. Lines starting with `//` are comments; `#` can't
+start a comment because case names such as `#pragma pack msvc.c` begin with it:
+
+```
+// stage: preprocessor
+#elifndef.c
+#embed.c exit=1
+hello world.c result=unsupported
+crashy case.c result=fail signal=11
+missing include.c exit=1 fatal
+```
+
+The file name runs up to the first `.c` that is followed by whitespace or the end of the
+line, so names can contain spaces. When a key is left out, the runner expects
+`result=pass exit=0 signal=0` with no fatal diagnostic.
+
+The runner keeps runner.zig's behavior:
+
+- `expand_partial` passes when stdout ends with `expanded/<case>.c`, not when stdout
+  merely contains it, whatever the "Test kinds" section above says.
+- A missing `ast/<case>.c` is allowed.
+- A missing `expanded/<case>.c` is a failure.
+- `compare_output` is still unimplemented. The runner reports it as `unsupported`,
+  never as passed.
+
+The runner normalizes nothing. Every case runs with the case directory as its working
+directory and gets only the case's basename, so its output contains no host paths.
+Child stdout and stderr are always read through pipes.
+
+`//test/migration:reference_regression` runs the whole corpus with a reference
+compiler and checks the counts against `test/migration/baseline.json`. No Zig
+executable is available, so the target is tagged `manual`. Without a compiler it fails
+on purpose and prints `reference executable unavailable`. To run it:
+
+```sh-session
+$B test //test/migration:reference_regression --test_env=ARO_REFERENCE_EXE=/abs/path/to/arocc
+```
+
+---
+
 ## Running fuzz tests using AFLplusplus
 
 Fuzz testing requires [AFLplusplus](https://github.com/AFLplusplus/AFLplusplus). Run `zig build fuzz` to build the fuzz target,

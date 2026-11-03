@@ -7,6 +7,7 @@ c3_library(
         "src/c3/aro.c3",
         "src/c3/char_info.c3",
         "src/c3/compilation.c3",
+        "src/c3/diagnostics.c3",
         "src/c3/identifier_tables.c3",
         "src/c3/lang_opts.c3",
         "src/c3/source.c3",
@@ -20,4 +21,12 @@ c3_binary(
     name = "aro_c3",
     srcs = ["app/aro_c3/main.c3"],
     deps = [":aro_c3_lib"],
+)
+
+# Integration fixture corpus (cases, includes, ast/ and expanded/ goldens)
+# as runtime data for //test/migration:* runner targets.
+filegroup(
+    name = "test_cases",
+    srcs = glob(["test/cases/**"]),
+    visibility = ["//test/migration:__pkg__"],
 )

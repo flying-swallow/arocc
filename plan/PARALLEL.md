@@ -16,6 +16,8 @@ Each waiting plan (08–33) ends with a **Parallel agent breakdown** section. Pl
 - **No Zig executable.** The required Zig 0.18.0-dev can't be downloaded here. The Zig sources under `src/` are the reference: read them and port the behavior. Expected values come from the existing fixtures (`test/cases`, `test/records`, embedded Zig `test` blocks) or from careful reading of the Zig code. Any step a plan describes as "generate from the pinned Zig executable" becomes "derive by hand from the Zig source, and mark the vector as source-derived". Never claim differential parity against a binary that was not run.
 - Bazel `c3_library`/`c3_test`/`c3_binary` rules live in `tools/c3.bzl`. Sources are listed explicitly in `BUILD.bazel` files, which replaces the `project.json` lists the plans mention.
 
+- **Regression targets** (`macro_regression`, `frontend_regression`, ...) run the C3 executable through `test/migration/runner` in the normal fixture mode: each case's own manifest, expected diagnostics and AST/expanded goldens are the oracle. `--gate` case lists that need reference exit codes stay unchecked until a Zig reference can run. Plan 03 is `waiting` only for that reason, and downstream plans may treat it as satisfied.
+
 ## Rules shared by all agents
 
 - **Only the integrator edits the shared `BUILD.bazel` files.** Parallel agents may add a private test target while they work, but must list every source and test file in their final report so the integrator can register them as explicit paths.

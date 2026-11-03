@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 05 [Core runtime]: Port diagnostic state and rendering'
-state: waiting
+state: complete
 depends_on:
 - c3-migration-04-port-source-ownership-and-compilation-storage
 planned: true
