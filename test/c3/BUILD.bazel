@@ -41,3 +41,9 @@ c3_test(
     srcs = ["type_store_tests.c3"],
     deps = ["//:aro_c3_lib"],
 )
+
+c3_test(
+    name = "generate_def_tests",
+    srcs = ["generate_def_tests.c3"],
+    deps = ["//tools:generate_def_lib"],
+)
