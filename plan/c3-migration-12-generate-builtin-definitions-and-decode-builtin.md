@@ -1,0 +1,13 @@
+---
+title: 'C3 migration 12 [Builtin definitions]: Generate builtin definitions and decode builtin signatures'
+state: waiting
+depends_on:
+- c3-migration-08-port-type-representation-and-qualified-type-oper
+- c3-migration-05-port-diagnostic-state-and-rendering
+planned: true
+parent_session: 01a19f7c-d060-7e01-b4aa-ce62ed71b1e2
+---
+
+Add tools/generate_def.c3, a declared Bazel generation rule in tools/builtins.bzl, src/c3/builtins.c3, builtin_type_description.c3 and builtin_properties.c3 plus //test/c3:builtins_tests. Source: build/generate_def.zig parsing/sorting/name lookup generation, all .def inputs enumerated in build.zig, Builtins.zig, Builtins/TypeDescription.zig and properties.zig. Keep .def inputs as source of truth; they contain Zig-style property/header expressions, so explicitly parse the supported grammar into language-neutral records rather than copying it as C3 or evaluating arbitrary text. Generate deterministic name/tag/property tables for all 19 groups and stage outputs through the build rule's generated inputs. Stable semantic lookup matters; DAFSA byte-for-byte reproduction is unnecessary. Port type-description iterators and build C3 types directly rather than constructing an undefined Parser as the Zig implementation does. Preserve language/header/feature restrictions and unknown-name handling. Acceptance: bazel test //test/c3:builtins_tests checks round trips for every definition, duplicate/property errors, representative signatures per architecture and target gating; regeneration yields identical bytes twice and a changed .def invalidates the Bazel action. Builtin expression evaluation and custom type checks belong to parser integration later
+
+For every new //test/c3:* target in this ticket, list its .c3 test source files explicitly in project.json. c3c project source entries do not expand `dir/*.c3`; use explicit paths (the source tree may continue to use `src/c3/**`).
