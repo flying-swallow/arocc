@@ -11,3 +11,9 @@ c3_test(
     srcs = ["source_tests.c3"],
     deps = ["//:aro_c3_lib"],
 )
+
+c3_test(
+    name = "tokenizer_tests",
+    srcs = ["tokenizer_tests.c3"],
+    deps = ["//:aro_c3_lib"],
+)

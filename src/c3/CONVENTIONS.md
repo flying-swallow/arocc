@@ -28,6 +28,14 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Zero-terminated buffers are `String buf` with `buf.ptr[buf.len] == 0`, allocated with `len + 1` bytes and freed via `buf.ptr`.
 - Borrowed keys: `string_interner::StringTable` (a stand-in for Zig's `StringArrayHashMapUnmanaged`) and `StringInterner` never copy keys. The caller keeps the bytes alive. Do not use stdlib `HashMap{String, _}` where Zig borrows keys, because it copies String keys.
 
+## Porting Zig constructs (plan 06)
+- C3 struct fields have no default values. When Zig's `.{}` defaults are not all zero, provide a module constant with them (`lang_opts::DEFAULT`) and start from it.
+- Zig `?T` struct fields become `T` plus a `has_*` flag, or a small `Tristate { UNSET, OFF, ON }` for `?bool`.
+- Zig functions returning `?[]const u8` return `String?` with a module fault (`tokenizer::NO_LEXEME`), or `""` when the empty string can never be a real value (documented on the function).
+- Zig labeled `switch` with `continue :loop .state` maps to `switch LOOP: (State.START)` with `nextcase LOOP: State.X;`.
+- Zig `enum(u8)` with explicit tag values: use an associated value, `enum E : char (char value) { A { 1 }, ... }`, and read `e.value`.
+- Generated table data is produced by a checked-in script under `tools/` that reads the Zig source (`tools/gen_identifier_tables.py`, with `--check`), never hand-copied.
+
 ## Errors
 - Zig error sets map to C3 faults declared with `excuse` in the module that raises them, named in SCREAMING_CASE (`error.FileTooBig` becomes `compilation::FILE_TOO_BIG`). Fallible functions return `T?` and callers propagate with `!`.
 - Stage-0 stubs return `aro::UNSUPPORTED~`.
@@ -38,3 +46,7 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Comparing a bitstruct field of a module-level constant struct (`source::UNUSED_LOCATION.id == x`) crashes the compiler. Copy the constant to a local first.
 - `test::eq(uint_value, 3)` is rejected (int vs uint). Tests use a local `check` macro that compares integers as `long`.
 - `@private` on methods is ignored and produces a warning, so don't use it.
+- Empty fall-through `case` lists must not contain blank or comment-only lines (compile error); put comments at the end of a `case` line.
+- `uint.max` does not exist; write the literal (`0xFFFF_FFFF`).
+- A `char[]` slice (e.g. of a `char[N]` buffer) does not convert implicitly to `String`; take `char[]` or cast.
+- In `assert(a <= b + 1)` mixing `usz` and `uint`, c3c demands an explicit widening cast.

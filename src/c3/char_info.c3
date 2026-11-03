@@ -1,0 +1,1494 @@
+// Port of src/aro/char_info.zig.
+// Classifies characters according to various C standards. No routine here
+// considers characters from the basic character set; callers check those
+// separately (every function requires codepoint > 0x7F where Zig asserts it).
+// is_xid_start / is_xid_continue are adapted from https://github.com/dtolnay/unicode-ident
+// and read the generated Unicode tables in identifier_tables.c3 (LICENSE-UNICODE).
+module aro::char_info;
+import aro::identifier_tables;
+
+<*
+ C11 Standard Annex D
+ @require codepoint > 0x7F
+*>
+fn bool is_c11_id_char(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x00A8: // 1
+		case 0x00AA:
+		case 0x00AD:
+		case 0x00AF:
+		case 0x00B2..0x00B5:
+		case 0x00B7..0x00BA:
+		case 0x00BC..0x00BE:
+		case 0x00C0..0x00D6:
+		case 0x00D8..0x00F6:
+		case 0x00F8..0x00FF:
+		case 0x0100..0x167F: // 2
+		case 0x1681..0x180D:
+		case 0x180F..0x1FFF:
+		case 0x200B..0x200D: // 3
+		case 0x202A..0x202E:
+		case 0x203F..0x2040:
+		case 0x2054:
+		case 0x2060..0x206F:
+		case 0x2070..0x218F: // 4
+		case 0x2460..0x24FF:
+		case 0x2776..0x2793:
+		case 0x2C00..0x2DFF:
+		case 0x2E80..0x2FFF:
+		case 0x3004..0x3007: // 5
+		case 0x3021..0x302F:
+		case 0x3031..0x303F:
+		case 0x3040..0xD7FF: // 6
+		case 0xF900..0xFD3D: // 7
+		case 0xFD40..0xFDCF:
+		case 0xFDF0..0xFE44:
+		case 0xFE47..0xFFFD:
+		case 0x10000..0x1FFFD: // 8
+		case 0x20000..0x2FFFD:
+		case 0x30000..0x3FFFD:
+		case 0x40000..0x4FFFD:
+		case 0x50000..0x5FFFD:
+		case 0x60000..0x6FFFD:
+		case 0x70000..0x7FFFD:
+		case 0x80000..0x8FFFD:
+		case 0x90000..0x9FFFD:
+		case 0xA0000..0xAFFFD:
+		case 0xB0000..0xBFFFD:
+		case 0xC0000..0xCFFFD:
+		case 0xD0000..0xDFFFD:
+		case 0xE0000..0xEFFFD:
+			return true;
+		default:
+			return false;
+	}
+}
+
+<*
+ C99 Standard Annex D
+ @require codepoint > 0x7F
+*>
+fn bool is_c99_id_char(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x00AA: // Latin
+		case 0x00BA:
+		case 0x00C0..0x00D6:
+		case 0x00D8..0x00F6:
+		case 0x00F8..0x01F5:
+		case 0x01FA..0x0217:
+		case 0x0250..0x02A8:
+		case 0x1E00..0x1E9B:
+		case 0x1EA0..0x1EF9:
+		case 0x207F:
+		case 0x0386: // Greek
+		case 0x0388..0x038A:
+		case 0x038C:
+		case 0x038E..0x03A1:
+		case 0x03A3..0x03CE:
+		case 0x03D0..0x03D6:
+		case 0x03DA:
+		case 0x03DC:
+		case 0x03DE:
+		case 0x03E0:
+		case 0x03E2..0x03F3:
+		case 0x1F00..0x1F15:
+		case 0x1F18..0x1F1D:
+		case 0x1F20..0x1F45:
+		case 0x1F48..0x1F4D:
+		case 0x1F50..0x1F57:
+		case 0x1F59:
+		case 0x1F5B:
+		case 0x1F5D:
+		case 0x1F5F..0x1F7D:
+		case 0x1F80..0x1FB4:
+		case 0x1FB6..0x1FBC:
+		case 0x1FC2..0x1FC4:
+		case 0x1FC6..0x1FCC:
+		case 0x1FD0..0x1FD3:
+		case 0x1FD6..0x1FDB:
+		case 0x1FE0..0x1FEC:
+		case 0x1FF2..0x1FF4:
+		case 0x1FF6..0x1FFC:
+		case 0x0401..0x040C: // Cyrillic
+		case 0x040E..0x044F:
+		case 0x0451..0x045C:
+		case 0x045E..0x0481:
+		case 0x0490..0x04C4:
+		case 0x04C7..0x04C8:
+		case 0x04CB..0x04CC:
+		case 0x04D0..0x04EB:
+		case 0x04EE..0x04F5:
+		case 0x04F8..0x04F9:
+		case 0x0531..0x0556: // Armenian
+		case 0x0561..0x0587:
+		case 0x05B0..0x05B9: // Hebrew
+		case 0x05BB..0x05BD:
+		case 0x05BF:
+		case 0x05C1..0x05C2:
+		case 0x05D0..0x05EA:
+		case 0x05F0..0x05F2:
+		case 0x0621..0x063A: // Arabic
+		case 0x0640..0x0652:
+		case 0x0670..0x06B7:
+		case 0x06BA..0x06BE:
+		case 0x06C0..0x06CE:
+		case 0x06D0..0x06DC:
+		case 0x06E5..0x06E8:
+		case 0x06EA..0x06ED:
+		case 0x0901..0x0903: // Devanagari
+		case 0x0905..0x0939:
+		case 0x093E..0x094D:
+		case 0x0950..0x0952:
+		case 0x0958..0x0963:
+		case 0x0981..0x0983: // Bengali
+		case 0x0985..0x098C:
+		case 0x098F..0x0990:
+		case 0x0993..0x09A8:
+		case 0x09AA..0x09B0:
+		case 0x09B2:
+		case 0x09B6..0x09B9:
+		case 0x09BE..0x09C4:
+		case 0x09C7..0x09C8:
+		case 0x09CB..0x09CD:
+		case 0x09DC..0x09DD:
+		case 0x09DF..0x09E3:
+		case 0x09F0..0x09F1:
+		case 0x0A02: // Gurmukhi
+		case 0x0A05..0x0A0A:
+		case 0x0A0F..0x0A10:
+		case 0x0A13..0x0A28:
+		case 0x0A2A..0x0A30:
+		case 0x0A32..0x0A33:
+		case 0x0A35..0x0A36:
+		case 0x0A38..0x0A39:
+		case 0x0A3E..0x0A42:
+		case 0x0A47..0x0A48:
+		case 0x0A4B..0x0A4D:
+		case 0x0A59..0x0A5C:
+		case 0x0A5E:
+		case 0x0A74:
+		case 0x0A81..0x0A83: // Gujarati
+		case 0x0A85..0x0A8B:
+		case 0x0A8D:
+		case 0x0A8F..0x0A91:
+		case 0x0A93..0x0AA8:
+		case 0x0AAA..0x0AB0:
+		case 0x0AB2..0x0AB3:
+		case 0x0AB5..0x0AB9:
+		case 0x0ABD..0x0AC5:
+		case 0x0AC7..0x0AC9:
+		case 0x0ACB..0x0ACD:
+		case 0x0AD0:
+		case 0x0AE0:
+		case 0x0B01..0x0B03: // Oriya
+		case 0x0B05..0x0B0C:
+		case 0x0B0F..0x0B10:
+		case 0x0B13..0x0B28:
+		case 0x0B2A..0x0B30:
+		case 0x0B32..0x0B33:
+		case 0x0B36..0x0B39:
+		case 0x0B3E..0x0B43:
+		case 0x0B47..0x0B48:
+		case 0x0B4B..0x0B4D:
+		case 0x0B5C..0x0B5D:
+		case 0x0B5F..0x0B61:
+		case 0x0B82..0x0B83: // Tamil
+		case 0x0B85..0x0B8A:
+		case 0x0B8E..0x0B90:
+		case 0x0B92..0x0B95:
+		case 0x0B99..0x0B9A:
+		case 0x0B9C:
+		case 0x0B9E..0x0B9F:
+		case 0x0BA3..0x0BA4:
+		case 0x0BA8..0x0BAA:
+		case 0x0BAE..0x0BB5:
+		case 0x0BB7..0x0BB9:
+		case 0x0BBE..0x0BC2:
+		case 0x0BC6..0x0BC8:
+		case 0x0BCA..0x0BCD:
+		case 0x0C01..0x0C03: // Telugu
+		case 0x0C05..0x0C0C:
+		case 0x0C0E..0x0C10:
+		case 0x0C12..0x0C28:
+		case 0x0C2A..0x0C33:
+		case 0x0C35..0x0C39:
+		case 0x0C3E..0x0C44:
+		case 0x0C46..0x0C48:
+		case 0x0C4A..0x0C4D:
+		case 0x0C60..0x0C61:
+		case 0x0C82..0x0C83: // Kannada
+		case 0x0C85..0x0C8C:
+		case 0x0C8E..0x0C90:
+		case 0x0C92..0x0CA8:
+		case 0x0CAA..0x0CB3:
+		case 0x0CB5..0x0CB9:
+		case 0x0CBE..0x0CC4:
+		case 0x0CC6..0x0CC8:
+		case 0x0CCA..0x0CCD:
+		case 0x0CDE:
+		case 0x0CE0..0x0CE1:
+		case 0x0D02..0x0D03: // Malayalam
+		case 0x0D05..0x0D0C:
+		case 0x0D0E..0x0D10:
+		case 0x0D12..0x0D28:
+		case 0x0D2A..0x0D39:
+		case 0x0D3E..0x0D43:
+		case 0x0D46..0x0D48:
+		case 0x0D4A..0x0D4D:
+		case 0x0D60..0x0D61:
+		case 0x0E01..0x0E3A: // Thai (excluding digits 0x0E50...0x0E59; originally 0x0E01...0x0E3A and 0x0E40...0x0E5B
+		case 0x0E40..0x0E4F:
+		case 0x0E5A..0x0E5B:
+		case 0x0E81..0x0E82: // Lao
+		case 0x0E84:
+		case 0x0E87..0x0E88:
+		case 0x0E8A:
+		case 0x0E8D:
+		case 0x0E94..0x0E97:
+		case 0x0E99..0x0E9F:
+		case 0x0EA1..0x0EA3:
+		case 0x0EA5:
+		case 0x0EA7:
+		case 0x0EAA..0x0EAB:
+		case 0x0EAD..0x0EAE:
+		case 0x0EB0..0x0EB9:
+		case 0x0EBB..0x0EBD:
+		case 0x0EC0..0x0EC4:
+		case 0x0EC6:
+		case 0x0EC8..0x0ECD:
+		case 0x0EDC..0x0EDD:
+		case 0x0F00: // Tibetan
+		case 0x0F18..0x0F19:
+		case 0x0F35:
+		case 0x0F37:
+		case 0x0F39:
+		case 0x0F3E..0x0F47:
+		case 0x0F49..0x0F69:
+		case 0x0F71..0x0F84:
+		case 0x0F86..0x0F8B:
+		case 0x0F90..0x0F95:
+		case 0x0F97:
+		case 0x0F99..0x0FAD:
+		case 0x0FB1..0x0FB7:
+		case 0x0FB9:
+		case 0x10A0..0x10C5: // Georgian
+		case 0x10D0..0x10F6:
+		case 0x3041..0x3093: // Hiragana
+		case 0x309B..0x309C:
+		case 0x30A1..0x30F6: // Katakana
+		case 0x30FB..0x30FC:
+		case 0x3105..0x312C: // Bopomofo
+		case 0x4E00..0x9FA5: // CJK Unified Ideographs
+		case 0xAC00..0xD7A3: // Hangul
+		case 0x0660..0x0669: // Digits
+		case 0x06F0..0x06F9:
+		case 0x0966..0x096F:
+		case 0x09E6..0x09EF:
+		case 0x0A66..0x0A6F:
+		case 0x0AE6..0x0AEF:
+		case 0x0B66..0x0B6F:
+		case 0x0BE7..0x0BEF:
+		case 0x0C66..0x0C6F:
+		case 0x0CE6..0x0CEF:
+		case 0x0D66..0x0D6F:
+		case 0x0E50..0x0E59:
+		case 0x0ED0..0x0ED9:
+		case 0x0F20..0x0F33:
+		case 0x00B5: // Special characters
+		case 0x00B7:
+		case 0x02B0..0x02B8:
+		case 0x02BB:
+		case 0x02BD..0x02C1:
+		case 0x02D0..0x02D1:
+		case 0x02E0..0x02E4:
+		case 0x037A:
+		case 0x0559:
+		case 0x093D:
+		case 0x0B3D:
+		case 0x1FBE:
+		case 0x203F..0x2040:
+		case 0x2102:
+		case 0x2107:
+		case 0x210A..0x2113:
+		case 0x2115:
+		case 0x2118..0x211D:
+		case 0x2124:
+		case 0x2126:
+		case 0x2128:
+		case 0x212A..0x2131:
+		case 0x2133..0x2138:
+		case 0x2160..0x2182:
+		case 0x3005..0x3007:
+		case 0x3021..0x3029:
+			return true;
+		default:
+			return false;
+	}
+}
+
+<*
+ C11 standard Annex D
+ @require codepoint > 0x7F
+*>
+fn bool is_c11_disallowed_initial_id_char(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x0300..0x036F:
+		case 0x1DC0..0x1DFF:
+		case 0x20D0..0x20FF:
+		case 0xFE20..0xFE2F:
+			return true;
+		default:
+			return false;
+	}
+}
+
+<*
+ These are "digit" characters; C99 disallows them as the first character of an identifier
+ @require codepoint > 0x7F
+*>
+fn bool is_c99_disallowed_initial_id_char(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x0660..0x0669:
+		case 0x06F0..0x06F9:
+		case 0x0966..0x096F:
+		case 0x09E6..0x09EF:
+		case 0x0A66..0x0A6F:
+		case 0x0AE6..0x0AEF:
+		case 0x0B66..0x0B6F:
+		case 0x0BE7..0x0BEF:
+		case 0x0C66..0x0C6F:
+		case 0x0CE6..0x0CEF:
+		case 0x0D66..0x0D6F:
+		case 0x0E50..0x0E59:
+		case 0x0ED0..0x0ED9:
+		case 0x0F20..0x0F33:
+			return true;
+		default:
+			return false;
+	}
+}
+
+<*
+ @require codepoint > 0x7F
+*>
+fn bool is_invisible(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x00ad: // SOFT HYPHEN
+		case 0x200b: // ZERO WIDTH SPACE
+		case 0x200c: // ZERO WIDTH NON-JOINER
+		case 0x200d: // ZERO WIDTH JOINER
+		case 0x2060: // WORD JOINER
+		case 0x2061: // FUNCTION APPLICATION
+		case 0x2062: // INVISIBLE TIMES
+		case 0x2063: // INVISIBLE SEPARATOR
+		case 0x2064: // INVISIBLE PLUS
+		case 0xfeff: // ZERO WIDTH NO-BREAK SPACE
+			return true;
+		default:
+			return false;
+	}
+}
+
+<*
+ Checks for identifier characters which resemble non-identifier characters.
+ Returns "" when the codepoint is not a homoglyph (Zig returns null).
+ @require codepoint > 0x7F
+*>
+fn String homoglyph(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x01c3:
+			return "!"; // LATIN LETTER RETROFLEX CLICK
+		case 0x037e:
+			return ";"; // GREEK QUESTION MARK
+		case 0x2212:
+			return "-"; // MINUS SIGN
+		case 0x2215:
+			return "/"; // DIVISION SLASH
+		case 0x2216:
+			return "\\"; // SET MINUS
+		case 0x2217:
+			return "*"; // ASTERISK OPERATOR
+		case 0x2223:
+			return "|"; // DIVIDES
+		case 0x2227:
+			return "^"; // LOGICAL AND
+		case 0x2236:
+			return ":"; // RATIO
+		case 0x223c:
+			return "~"; // TILDE OPERATOR
+		case 0xa789:
+			return ":"; // MODIFIER LETTER COLON
+		case 0xff01:
+			return "!"; // FULLWIDTH EXCLAMATION MARK
+		case 0xff03:
+			return "#"; // FULLWIDTH NUMBER SIGN
+		case 0xff04:
+			return "$"; // FULLWIDTH DOLLAR SIGN
+		case 0xff05:
+			return "%"; // FULLWIDTH PERCENT SIGN
+		case 0xff06:
+			return "&"; // FULLWIDTH AMPERSAND
+		case 0xff08:
+			return "("; // FULLWIDTH LEFT PARENTHESIS
+		case 0xff09:
+			return ")"; // FULLWIDTH RIGHT PARENTHESIS
+		case 0xff0a:
+			return "*"; // FULLWIDTH ASTERISK
+		case 0xff0b:
+			return "+"; // FULLWIDTH ASTERISK
+		case 0xff0c:
+			return ","; // FULLWIDTH COMMA
+		case 0xff0d:
+			return "-"; // FULLWIDTH HYPHEN-MINUS
+		case 0xff0e:
+			return "."; // FULLWIDTH FULL STOP
+		case 0xff0f:
+			return "/"; // FULLWIDTH SOLIDUS
+		case 0xff1a:
+			return ":"; // FULLWIDTH COLON
+		case 0xff1b:
+			return ";"; // FULLWIDTH SEMICOLON
+		case 0xff1c:
+			return "<"; // FULLWIDTH LESS-THAN SIGN
+		case 0xff1d:
+			return "="; // FULLWIDTH EQUALS SIGN
+		case 0xff1e:
+			return ">"; // FULLWIDTH GREATER-THAN SIGN
+		case 0xff1f:
+			return "?"; // FULLWIDTH QUESTION MARK
+		case 0xff20:
+			return "@"; // FULLWIDTH COMMERCIAL AT
+		case 0xff3b:
+			return "["; // FULLWIDTH LEFT SQUARE BRACKET
+		case 0xff3c:
+			return "\\"; // FULLWIDTH REVERSE SOLIDUS
+		case 0xff3d:
+			return "]"; // FULLWIDTH RIGHT SQUARE BRACKET
+		case 0xff3e:
+			return "^"; // FULLWIDTH CIRCUMFLEX ACCENT
+		case 0xff5b:
+			return "{"; // FULLWIDTH LEFT CURLY BRACKET
+		case 0xff5c:
+			return "|"; // FULLWIDTH VERTICAL LINE
+		case 0xff5d:
+			return "}"; // FULLWIDTH RIGHT CURLY BRACKET
+		case 0xff5e:
+			return "~"; // FULLWIDTH TILDE
+		default:
+			return "";
+	}
+}
+
+<*
+ @require c > 0x7F && c < 0x110000
+*>
+fn bool is_xid_start(uint c)
+{
+	uint idx = c / 8 / identifier_tables::CHUNK;
+	uint chunk = idx < identifier_tables::TRIE_START.len ? identifier_tables::TRIE_START[idx] : 0;
+	uint offset = chunk * identifier_tables::CHUNK / 2 + (c / 8) % identifier_tables::CHUNK;
+	return (identifier_tables::LEAF[offset] >> (c % 8)) & 1 != 0;
+}
+
+<*
+ @require c > 0x7F && c < 0x110000
+*>
+fn bool is_xid_continue(uint c)
+{
+	uint idx = c / 8 / identifier_tables::CHUNK;
+	uint chunk = idx < identifier_tables::TRIE_CONTINUE.len ? identifier_tables::TRIE_CONTINUE[idx] : 0;
+	uint offset = chunk * identifier_tables::CHUNK / 2 + (c / 8) % identifier_tables::CHUNK;
+	return (identifier_tables::LEAF[offset] >> (c % 8)) & 1 != 0;
+}
+
+enum NfcQuickCheck : char
+{
+	NO,
+	MAYBE,
+	YES,
+}
+
+fn NfcQuickCheck is_normalized(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x0340..0x0341:
+		case 0x0343..0x0344:
+		case 0x0374:
+		case 0x037E:
+		case 0x0387:
+		case 0x0958..0x095F:
+		case 0x09DC..0x09DD:
+		case 0x09DF:
+		case 0x0A33:
+		case 0x0A36:
+		case 0x0A59..0x0A5B:
+		case 0x0A5E:
+		case 0x0B5C..0x0B5D:
+		case 0x0F43:
+		case 0x0F4D:
+		case 0x0F52:
+		case 0x0F57:
+		case 0x0F5C:
+		case 0x0F69:
+		case 0x0F73:
+		case 0x0F75..0x0F76:
+		case 0x0F78:
+		case 0x0F81:
+		case 0x0F93:
+		case 0x0F9D:
+		case 0x0FA2:
+		case 0x0FA7:
+		case 0x0FAC:
+		case 0x0FB9:
+		case 0x1F71:
+		case 0x1F73:
+		case 0x1F75:
+		case 0x1F77:
+		case 0x1F79:
+		case 0x1F7B:
+		case 0x1F7D:
+		case 0x1FBB:
+		case 0x1FBE:
+		case 0x1FC9:
+		case 0x1FCB:
+		case 0x1FD3:
+		case 0x1FDB:
+		case 0x1FE3:
+		case 0x1FEB:
+		case 0x1FEE..0x1FEF:
+		case 0x1FF9:
+		case 0x1FFB:
+		case 0x1FFD:
+		case 0x2000..0x2001:
+		case 0x2126:
+		case 0x212A..0x212B:
+		case 0x2329:
+		case 0x232A:
+		case 0x2ADC:
+		case 0xF900..0xFA0D:
+		case 0xFA10:
+		case 0xFA12:
+		case 0xFA15..0xFA1E:
+		case 0xFA20:
+		case 0xFA22:
+		case 0xFA25..0xFA26:
+		case 0xFA2A..0xFA6D:
+		case 0xFA70..0xFAD9:
+		case 0xFB1D:
+		case 0xFB1F:
+		case 0xFB2A..0xFB36:
+		case 0xFB38..0xFB3C:
+		case 0xFB3E:
+		case 0xFB40..0xFB41:
+		case 0xFB43..0xFB44:
+		case 0xFB46..0xFB4E:
+		case 0x1D15E..0x1D164:
+		case 0x1D1BB..0x1D1C0:
+		case 0x2F800..0x2FA1D:
+			return NO;
+		case 0x0300..0x0304:
+		case 0x0306..0x030C:
+		case 0x030F:
+		case 0x0311:
+		case 0x0313..0x0314:
+		case 0x031B:
+		case 0x0323..0x0328:
+		case 0x032D..0x032E:
+		case 0x0330..0x0331:
+		case 0x0338:
+		case 0x0342:
+		case 0x0345:
+		case 0x0653..0x0655:
+		case 0x093C:
+		case 0x09BE:
+		case 0x09D7:
+		case 0x0B3E:
+		case 0x0B56:
+		case 0x0B57:
+		case 0x0BBE:
+		case 0x0BD7:
+		case 0x0C56:
+		case 0x0CC2:
+		case 0x0CD5..0x0CD6:
+		case 0x0D3E:
+		case 0x0D57:
+		case 0x0DCA:
+		case 0x0DCF:
+		case 0x0DDF:
+		case 0x102E:
+		case 0x1161..0x1175:
+		case 0x11A8..0x11C2:
+		case 0x1B35:
+		case 0x3099..0x309A:
+		case 0x110BA:
+		case 0x11127:
+		case 0x1133E:
+		case 0x11357:
+		case 0x114B0:
+		case 0x114BA:
+		case 0x114BD:
+		case 0x115AF:
+			return MAYBE;
+		default:
+			return YES;
+	}
+}
+
+<* Zig's `enum(u8)`; the Unicode class number is the associated `value`. *>
+enum CanonicalCombiningClass : char (char value)
+{
+	NOT_REORDERED { 0 },
+	OVERLAY { 1 },
+	HAN_READING { 6 },
+	NUKTA { 7 },
+	KANA_VOICING { 8 },
+	VIRAMA { 9 },
+	CCC10 { 10 },
+	CCC11 { 11 },
+	CCC12 { 12 },
+	CCC13 { 13 },
+	CCC14 { 14 },
+	CCC15 { 15 },
+	CCC16 { 16 },
+	CCC17 { 17 },
+	CCC18 { 18 },
+	CCC19 { 19 },
+	CCC20 { 20 },
+	CCC21 { 21 },
+	CCC22 { 22 },
+	CCC23 { 23 },
+	CCC24 { 24 },
+	CCC25 { 25 },
+	CCC26 { 26 },
+	CCC27 { 27 },
+	CCC28 { 28 },
+	CCC29 { 29 },
+	CCC30 { 30 },
+	CCC31 { 31 },
+	CCC32 { 32 },
+	CCC33 { 33 },
+	CCC34 { 34 },
+	CCC35 { 35 },
+	CCC36 { 36 },
+	CCC84 { 84 },
+	CCC91 { 91 },
+	CCC103 { 103 },
+	CCC107 { 107 },
+	CCC118 { 118 },
+	CCC122 { 122 },
+	CCC129 { 129 },
+	CCC130 { 130 },
+	CCC132 { 132 },
+	ATTACHED_BELOW { 202 },
+	ATTACHED_ABOVE { 214 },
+	ATTACHED_ABOVE_RIGHT { 216 },
+	BELOW_LEFT { 218 },
+	BELOW { 220 },
+	BELOW_RIGHT { 222 },
+	LEFT { 224 },
+	RIGHT { 226 },
+	ABOVE_LEFT { 228 },
+	ABOVE { 230 },
+	ABOVE_RIGHT { 232 },
+	DOUBLE_BELOW { 233 },
+	DOUBLE_ABOVE { 234 },
+	IOTA_SUBSCRIPT { 240 }
+}
+
+fn CanonicalCombiningClass get_canonical_class(uint codepoint)
+{
+	switch (codepoint)
+	{
+		case 0x300..0x314:
+			return ABOVE;
+		case 0x315..0x315:
+			return ABOVE_RIGHT;
+		case 0x316..0x319:
+			return BELOW;
+		case 0x31A..0x31A:
+			return ABOVE_RIGHT;
+		case 0x31B..0x31B:
+			return ATTACHED_ABOVE_RIGHT;
+		case 0x31C..0x320:
+			return BELOW;
+		case 0x321..0x322:
+			return ATTACHED_BELOW;
+		case 0x323..0x326:
+			return BELOW;
+		case 0x327..0x328:
+			return ATTACHED_BELOW;
+		case 0x329..0x333:
+			return BELOW;
+		case 0x334..0x338:
+			return OVERLAY;
+		case 0x339..0x33C:
+			return BELOW;
+		case 0x33D..0x344:
+			return ABOVE;
+		case 0x345..0x345:
+			return IOTA_SUBSCRIPT;
+		case 0x346..0x346:
+			return ABOVE;
+		case 0x347..0x349:
+			return BELOW;
+		case 0x34A..0x34C:
+			return ABOVE;
+		case 0x34D..0x34E:
+			return BELOW;
+		case 0x350..0x352:
+			return ABOVE;
+		case 0x353..0x356:
+			return BELOW;
+		case 0x357..0x357:
+			return ABOVE;
+		case 0x358..0x358:
+			return ABOVE_RIGHT;
+		case 0x359..0x35A:
+			return BELOW;
+		case 0x35B..0x35B:
+			return ABOVE;
+		case 0x35C..0x35C:
+			return DOUBLE_BELOW;
+		case 0x35D..0x35E:
+			return DOUBLE_ABOVE;
+		case 0x35F..0x35F:
+			return DOUBLE_BELOW;
+		case 0x360..0x361:
+			return DOUBLE_ABOVE;
+		case 0x362..0x362:
+			return DOUBLE_BELOW;
+		case 0x363..0x36F:
+			return ABOVE;
+		case 0x483..0x487:
+			return ABOVE;
+		case 0x591..0x591:
+			return BELOW;
+		case 0x592..0x595:
+			return ABOVE;
+		case 0x596..0x596:
+			return BELOW;
+		case 0x597..0x599:
+			return ABOVE;
+		case 0x59A..0x59A:
+			return BELOW_RIGHT;
+		case 0x59B..0x59B:
+			return BELOW;
+		case 0x59C..0x5A1:
+			return ABOVE;
+		case 0x5A2..0x5A7:
+			return BELOW;
+		case 0x5A8..0x5A9:
+			return ABOVE;
+		case 0x5AA..0x5AA:
+			return BELOW;
+		case 0x5AB..0x5AC:
+			return ABOVE;
+		case 0x5AD..0x5AD:
+			return BELOW_RIGHT;
+		case 0x5AE..0x5AE:
+			return ABOVE_LEFT;
+		case 0x5AF..0x5AF:
+			return ABOVE;
+		case 0x5B0..0x5B0:
+			return CCC10;
+		case 0x5B1..0x5B1:
+			return CCC11;
+		case 0x5B2..0x5B2:
+			return CCC12;
+		case 0x5B3..0x5B3:
+			return CCC13;
+		case 0x5B4..0x5B4:
+			return CCC14;
+		case 0x5B5..0x5B5:
+			return CCC15;
+		case 0x5B6..0x5B6:
+			return CCC16;
+		case 0x5B7..0x5B7:
+			return CCC17;
+		case 0x5B8..0x5B8:
+			return CCC18;
+		case 0x5B9..0x5BA:
+			return CCC19;
+		case 0x5BB..0x5BB:
+			return CCC20;
+		case 0x5BC..0x5BC:
+			return CCC21;
+		case 0x5BD..0x5BD:
+			return CCC22;
+		case 0x5BF..0x5BF:
+			return CCC23;
+		case 0x5C1..0x5C1:
+			return CCC24;
+		case 0x5C2..0x5C2:
+			return CCC25;
+		case 0x5C4..0x5C4:
+			return ABOVE;
+		case 0x5C5..0x5C5:
+			return BELOW;
+		case 0x5C7..0x5C7:
+			return CCC18;
+		case 0x610..0x617:
+			return ABOVE;
+		case 0x618..0x618:
+			return CCC30;
+		case 0x619..0x619:
+			return CCC31;
+		case 0x61A..0x61A:
+			return CCC32;
+		case 0x64B..0x64B:
+			return CCC27;
+		case 0x64C..0x64C:
+			return CCC28;
+		case 0x64D..0x64D:
+			return CCC29;
+		case 0x64E..0x64E:
+			return CCC30;
+		case 0x64F..0x64F:
+			return CCC31;
+		case 0x650..0x650:
+			return CCC32;
+		case 0x651..0x651:
+			return CCC33;
+		case 0x652..0x652:
+			return CCC34;
+		case 0x653..0x654:
+			return ABOVE;
+		case 0x655..0x656:
+			return BELOW;
+		case 0x657..0x65B:
+			return ABOVE;
+		case 0x65C..0x65C:
+			return BELOW;
+		case 0x65D..0x65E:
+			return ABOVE;
+		case 0x65F..0x65F:
+			return BELOW;
+		case 0x670..0x670:
+			return CCC35;
+		case 0x6D6..0x6DC:
+			return ABOVE;
+		case 0x6DF..0x6E2:
+			return ABOVE;
+		case 0x6E3..0x6E3:
+			return BELOW;
+		case 0x6E4..0x6E4:
+			return ABOVE;
+		case 0x6E7..0x6E8:
+			return ABOVE;
+		case 0x6EA..0x6EA:
+			return BELOW;
+		case 0x6EB..0x6EC:
+			return ABOVE;
+		case 0x6ED..0x6ED:
+			return BELOW;
+		case 0x711..0x711:
+			return CCC36;
+		case 0x730..0x730:
+			return ABOVE;
+		case 0x731..0x731:
+			return BELOW;
+		case 0x732..0x733:
+			return ABOVE;
+		case 0x734..0x734:
+			return BELOW;
+		case 0x735..0x736:
+			return ABOVE;
+		case 0x737..0x739:
+			return BELOW;
+		case 0x73A..0x73A:
+			return ABOVE;
+		case 0x73B..0x73C:
+			return BELOW;
+		case 0x73D..0x73D:
+			return ABOVE;
+		case 0x73E..0x73E:
+			return BELOW;
+		case 0x73F..0x741:
+			return ABOVE;
+		case 0x742..0x742:
+			return BELOW;
+		case 0x743..0x743:
+			return ABOVE;
+		case 0x744..0x744:
+			return BELOW;
+		case 0x745..0x745:
+			return ABOVE;
+		case 0x746..0x746:
+			return BELOW;
+		case 0x747..0x747:
+			return ABOVE;
+		case 0x748..0x748:
+			return BELOW;
+		case 0x749..0x74A:
+			return ABOVE;
+		case 0x7EB..0x7F1:
+			return ABOVE;
+		case 0x7F2..0x7F2:
+			return BELOW;
+		case 0x7F3..0x7F3:
+			return ABOVE;
+		case 0x7FD..0x7FD:
+			return BELOW;
+		case 0x816..0x819:
+			return ABOVE;
+		case 0x81B..0x823:
+			return ABOVE;
+		case 0x825..0x827:
+			return ABOVE;
+		case 0x829..0x82D:
+			return ABOVE;
+		case 0x859..0x85B:
+			return BELOW;
+		case 0x898..0x898:
+			return ABOVE;
+		case 0x899..0x89B:
+			return BELOW;
+		case 0x89C..0x89F:
+			return ABOVE;
+		case 0x8CA..0x8CE:
+			return ABOVE;
+		case 0x8CF..0x8D3:
+			return BELOW;
+		case 0x8D4..0x8E1:
+			return ABOVE;
+		case 0x8E3..0x8E3:
+			return BELOW;
+		case 0x8E4..0x8E5:
+			return ABOVE;
+		case 0x8E6..0x8E6:
+			return BELOW;
+		case 0x8E7..0x8E8:
+			return ABOVE;
+		case 0x8E9..0x8E9:
+			return BELOW;
+		case 0x8EA..0x8EC:
+			return ABOVE;
+		case 0x8ED..0x8EF:
+			return BELOW;
+		case 0x8F0..0x8F0:
+			return CCC27;
+		case 0x8F1..0x8F1:
+			return CCC28;
+		case 0x8F2..0x8F2:
+			return CCC29;
+		case 0x8F3..0x8F5:
+			return ABOVE;
+		case 0x8F6..0x8F6:
+			return BELOW;
+		case 0x8F7..0x8F8:
+			return ABOVE;
+		case 0x8F9..0x8FA:
+			return BELOW;
+		case 0x8FB..0x8FF:
+			return ABOVE;
+		case 0x93C..0x93C:
+			return NUKTA;
+		case 0x94D..0x94D:
+			return VIRAMA;
+		case 0x951..0x951:
+			return ABOVE;
+		case 0x952..0x952:
+			return BELOW;
+		case 0x953..0x954:
+			return ABOVE;
+		case 0x9BC..0x9BC:
+			return NUKTA;
+		case 0x9CD..0x9CD:
+			return VIRAMA;
+		case 0x9FE..0x9FE:
+			return ABOVE;
+		case 0xA3C..0xA3C:
+			return NUKTA;
+		case 0xA4D..0xA4D:
+			return VIRAMA;
+		case 0xABC..0xABC:
+			return NUKTA;
+		case 0xACD..0xACD:
+			return VIRAMA;
+		case 0xB3C..0xB3C:
+			return NUKTA;
+		case 0xB4D..0xB4D:
+			return VIRAMA;
+		case 0xBCD..0xBCD:
+			return VIRAMA;
+		case 0xC3C..0xC3C:
+			return NUKTA;
+		case 0xC4D..0xC4D:
+			return VIRAMA;
+		case 0xC55..0xC55:
+			return CCC84;
+		case 0xC56..0xC56:
+			return CCC91;
+		case 0xCBC..0xCBC:
+			return NUKTA;
+		case 0xCCD..0xCCD:
+			return VIRAMA;
+		case 0xD3B..0xD3C:
+			return VIRAMA;
+		case 0xD4D..0xD4D:
+			return VIRAMA;
+		case 0xDCA..0xDCA:
+			return VIRAMA;
+		case 0xE38..0xE39:
+			return CCC103;
+		case 0xE3A..0xE3A:
+			return VIRAMA;
+		case 0xE48..0xE4B:
+			return CCC107;
+		case 0xEB8..0xEB9:
+			return CCC118;
+		case 0xEBA..0xEBA:
+			return VIRAMA;
+		case 0xEC8..0xECB:
+			return CCC122;
+		case 0xF18..0xF19:
+			return BELOW;
+		case 0xF35..0xF35:
+			return BELOW;
+		case 0xF37..0xF37:
+			return BELOW;
+		case 0xF39..0xF39:
+			return ATTACHED_ABOVE_RIGHT;
+		case 0xF71..0xF71:
+			return CCC129;
+		case 0xF72..0xF72:
+			return CCC130;
+		case 0xF74..0xF74:
+			return CCC132;
+		case 0xF7A..0xF7D:
+			return CCC130;
+		case 0xF80..0xF80:
+			return CCC130;
+		case 0xF82..0xF83:
+			return ABOVE;
+		case 0xF84..0xF84:
+			return VIRAMA;
+		case 0xF86..0xF87:
+			return ABOVE;
+		case 0xFC6..0xFC6:
+			return BELOW;
+		case 0x1037..0x1037:
+			return NUKTA;
+		case 0x1039..0x103A:
+			return VIRAMA;
+		case 0x108D..0x108D:
+			return BELOW;
+		case 0x135D..0x135F:
+			return ABOVE;
+		case 0x1714..0x1715:
+			return VIRAMA;
+		case 0x1734..0x1734:
+			return VIRAMA;
+		case 0x17D2..0x17D2:
+			return VIRAMA;
+		case 0x17DD..0x17DD:
+			return ABOVE;
+		case 0x18A9..0x18A9:
+			return ABOVE_LEFT;
+		case 0x1939..0x1939:
+			return BELOW_RIGHT;
+		case 0x193A..0x193A:
+			return ABOVE;
+		case 0x193B..0x193B:
+			return BELOW;
+		case 0x1A17..0x1A17:
+			return ABOVE;
+		case 0x1A18..0x1A18:
+			return BELOW;
+		case 0x1A60..0x1A60:
+			return VIRAMA;
+		case 0x1A75..0x1A7C:
+			return ABOVE;
+		case 0x1A7F..0x1A7F:
+			return BELOW;
+		case 0x1AB0..0x1AB4:
+			return ABOVE;
+		case 0x1AB5..0x1ABA:
+			return BELOW;
+		case 0x1ABB..0x1ABC:
+			return ABOVE;
+		case 0x1ABD..0x1ABD:
+			return BELOW;
+		case 0x1ABF..0x1AC0:
+			return BELOW;
+		case 0x1AC1..0x1AC2:
+			return ABOVE;
+		case 0x1AC3..0x1AC4:
+			return BELOW;
+		case 0x1AC5..0x1AC9:
+			return ABOVE;
+		case 0x1ACA..0x1ACA:
+			return BELOW;
+		case 0x1ACB..0x1ACE:
+			return ABOVE;
+		case 0x1B34..0x1B34:
+			return NUKTA;
+		case 0x1B44..0x1B44:
+			return VIRAMA;
+		case 0x1B6B..0x1B6B:
+			return ABOVE;
+		case 0x1B6C..0x1B6C:
+			return BELOW;
+		case 0x1B6D..0x1B73:
+			return ABOVE;
+		case 0x1BAA..0x1BAB:
+			return VIRAMA;
+		case 0x1BE6..0x1BE6:
+			return NUKTA;
+		case 0x1BF2..0x1BF3:
+			return VIRAMA;
+		case 0x1C37..0x1C37:
+			return NUKTA;
+		case 0x1CD0..0x1CD2:
+			return ABOVE;
+		case 0x1CD4..0x1CD4:
+			return OVERLAY;
+		case 0x1CD5..0x1CD9:
+			return BELOW;
+		case 0x1CDA..0x1CDB:
+			return ABOVE;
+		case 0x1CDC..0x1CDF:
+			return BELOW;
+		case 0x1CE0..0x1CE0:
+			return ABOVE;
+		case 0x1CE2..0x1CE8:
+			return OVERLAY;
+		case 0x1CED..0x1CED:
+			return BELOW;
+		case 0x1CF4..0x1CF4:
+			return ABOVE;
+		case 0x1CF8..0x1CF9:
+			return ABOVE;
+		case 0x1DC0..0x1DC1:
+			return ABOVE;
+		case 0x1DC2..0x1DC2:
+			return BELOW;
+		case 0x1DC3..0x1DC9:
+			return ABOVE;
+		case 0x1DCA..0x1DCA:
+			return BELOW;
+		case 0x1DCB..0x1DCC:
+			return ABOVE;
+		case 0x1DCD..0x1DCD:
+			return DOUBLE_ABOVE;
+		case 0x1DCE..0x1DCE:
+			return ATTACHED_ABOVE;
+		case 0x1DCF..0x1DCF:
+			return BELOW;
+		case 0x1DD0..0x1DD0:
+			return ATTACHED_BELOW;
+		case 0x1DD1..0x1DF5:
+			return ABOVE;
+		case 0x1DF6..0x1DF6:
+			return ABOVE_RIGHT;
+		case 0x1DF7..0x1DF8:
+			return ABOVE_LEFT;
+		case 0x1DF9..0x1DF9:
+			return BELOW;
+		case 0x1DFA..0x1DFA:
+			return BELOW_LEFT;
+		case 0x1DFB..0x1DFB:
+			return ABOVE;
+		case 0x1DFC..0x1DFC:
+			return DOUBLE_BELOW;
+		case 0x1DFD..0x1DFD:
+			return BELOW;
+		case 0x1DFE..0x1DFE:
+			return ABOVE;
+		case 0x1DFF..0x1DFF:
+			return BELOW;
+		case 0x20D0..0x20D1:
+			return ABOVE;
+		case 0x20D2..0x20D3:
+			return OVERLAY;
+		case 0x20D4..0x20D7:
+			return ABOVE;
+		case 0x20D8..0x20DA:
+			return OVERLAY;
+		case 0x20DB..0x20DC:
+			return ABOVE;
+		case 0x20E1..0x20E1:
+			return ABOVE;
+		case 0x20E5..0x20E6:
+			return OVERLAY;
+		case 0x20E7..0x20E7:
+			return ABOVE;
+		case 0x20E8..0x20E8:
+			return BELOW;
+		case 0x20E9..0x20E9:
+			return ABOVE;
+		case 0x20EA..0x20EB:
+			return OVERLAY;
+		case 0x20EC..0x20EF:
+			return BELOW;
+		case 0x20F0..0x20F0:
+			return ABOVE;
+		case 0x2CEF..0x2CF1:
+			return ABOVE;
+		case 0x2D7F..0x2D7F:
+			return VIRAMA;
+		case 0x2DE0..0x2DFF:
+			return ABOVE;
+		case 0x302A..0x302A:
+			return BELOW_LEFT;
+		case 0x302B..0x302B:
+			return ABOVE_LEFT;
+		case 0x302C..0x302C:
+			return ABOVE_RIGHT;
+		case 0x302D..0x302D:
+			return BELOW_RIGHT;
+		case 0x302E..0x302F:
+			return LEFT;
+		case 0x3099..0x309A:
+			return KANA_VOICING;
+		case 0xA66F..0xA66F:
+			return ABOVE;
+		case 0xA674..0xA67D:
+			return ABOVE;
+		case 0xA69E..0xA69F:
+			return ABOVE;
+		case 0xA6F0..0xA6F1:
+			return ABOVE;
+		case 0xA806..0xA806:
+			return VIRAMA;
+		case 0xA82C..0xA82C:
+			return VIRAMA;
+		case 0xA8C4..0xA8C4:
+			return VIRAMA;
+		case 0xA8E0..0xA8F1:
+			return ABOVE;
+		case 0xA92B..0xA92D:
+			return BELOW;
+		case 0xA953..0xA953:
+			return VIRAMA;
+		case 0xA9B3..0xA9B3:
+			return NUKTA;
+		case 0xA9C0..0xA9C0:
+			return VIRAMA;
+		case 0xAAB0..0xAAB0:
+			return ABOVE;
+		case 0xAAB2..0xAAB3:
+			return ABOVE;
+		case 0xAAB4..0xAAB4:
+			return BELOW;
+		case 0xAAB7..0xAAB8:
+			return ABOVE;
+		case 0xAABE..0xAABF:
+			return ABOVE;
+		case 0xAAC1..0xAAC1:
+			return ABOVE;
+		case 0xAAF6..0xAAF6:
+			return VIRAMA;
+		case 0xABED..0xABED:
+			return VIRAMA;
+		case 0xFB1E..0xFB1E:
+			return CCC26;
+		case 0xFE20..0xFE26:
+			return ABOVE;
+		case 0xFE27..0xFE2D:
+			return BELOW;
+		case 0xFE2E..0xFE2F:
+			return ABOVE;
+		case 0x101FD..0x101FD:
+			return BELOW;
+		case 0x102E0..0x102E0:
+			return BELOW;
+		case 0x10376..0x1037A:
+			return ABOVE;
+		case 0x10A0D..0x10A0D:
+			return BELOW;
+		case 0x10A0F..0x10A0F:
+			return ABOVE;
+		case 0x10A38..0x10A38:
+			return ABOVE;
+		case 0x10A39..0x10A39:
+			return OVERLAY;
+		case 0x10A3A..0x10A3A:
+			return BELOW;
+		case 0x10A3F..0x10A3F:
+			return VIRAMA;
+		case 0x10AE5..0x10AE5:
+			return ABOVE;
+		case 0x10AE6..0x10AE6:
+			return BELOW;
+		case 0x10D24..0x10D27:
+			return ABOVE;
+		case 0x10EAB..0x10EAC:
+			return ABOVE;
+		case 0x10EFD..0x10EFF:
+			return BELOW;
+		case 0x10F46..0x10F47:
+			return BELOW;
+		case 0x10F48..0x10F4A:
+			return ABOVE;
+		case 0x10F4B..0x10F4B:
+			return BELOW;
+		case 0x10F4C..0x10F4C:
+			return ABOVE;
+		case 0x10F4D..0x10F50:
+			return BELOW;
+		case 0x10F82..0x10F82:
+			return ABOVE;
+		case 0x10F83..0x10F83:
+			return BELOW;
+		case 0x10F84..0x10F84:
+			return ABOVE;
+		case 0x10F85..0x10F85:
+			return BELOW;
+		case 0x11046..0x11046:
+			return VIRAMA;
+		case 0x11070..0x11070:
+			return VIRAMA;
+		case 0x1107F..0x1107F:
+			return VIRAMA;
+		case 0x110B9..0x110B9:
+			return VIRAMA;
+		case 0x110BA..0x110BA:
+			return NUKTA;
+		case 0x11100..0x11102:
+			return ABOVE;
+		case 0x11133..0x11134:
+			return VIRAMA;
+		case 0x11173..0x11173:
+			return NUKTA;
+		case 0x111C0..0x111C0:
+			return VIRAMA;
+		case 0x111CA..0x111CA:
+			return NUKTA;
+		case 0x11235..0x11235:
+			return VIRAMA;
+		case 0x11236..0x11236:
+			return NUKTA;
+		case 0x112E9..0x112E9:
+			return NUKTA;
+		case 0x112EA..0x112EA:
+			return VIRAMA;
+		case 0x1133B..0x1133C:
+			return NUKTA;
+		case 0x1134D..0x1134D:
+			return VIRAMA;
+		case 0x11366..0x1136C:
+			return ABOVE;
+		case 0x11370..0x11374:
+			return ABOVE;
+		case 0x11442..0x11442:
+			return VIRAMA;
+		case 0x11446..0x11446:
+			return NUKTA;
+		case 0x1145E..0x1145E:
+			return ABOVE;
+		case 0x114C2..0x114C2:
+			return VIRAMA;
+		case 0x114C3..0x114C3:
+			return NUKTA;
+		case 0x115BF..0x115BF:
+			return VIRAMA;
+		case 0x115C0..0x115C0:
+			return NUKTA;
+		case 0x1163F..0x1163F:
+			return VIRAMA;
+		case 0x116B6..0x116B6:
+			return VIRAMA;
+		case 0x116B7..0x116B7:
+			return NUKTA;
+		case 0x1172B..0x1172B:
+			return VIRAMA;
+		case 0x11839..0x11839:
+			return VIRAMA;
+		case 0x1183A..0x1183A:
+			return NUKTA;
+		case 0x1193D..0x1193E:
+			return VIRAMA;
+		case 0x11943..0x11943:
+			return NUKTA;
+		case 0x119E0..0x119E0:
+			return VIRAMA;
+		case 0x11A34..0x11A34:
+			return VIRAMA;
+		case 0x11A47..0x11A47:
+			return VIRAMA;
+		case 0x11A99..0x11A99:
+			return VIRAMA;
+		case 0x11C3F..0x11C3F:
+			return VIRAMA;
+		case 0x11D42..0x11D42:
+			return NUKTA;
+		case 0x11D44..0x11D45:
+			return VIRAMA;
+		case 0x11D97..0x11D97:
+			return VIRAMA;
+		case 0x11F41..0x11F42:
+			return VIRAMA;
+		case 0x16AF0..0x16AF4:
+			return OVERLAY;
+		case 0x16B30..0x16B36:
+			return ABOVE;
+		case 0x16FF0..0x16FF1:
+			return HAN_READING;
+		case 0x1BC9E..0x1BC9E:
+			return OVERLAY;
+		case 0x1D165..0x1D166:
+			return ATTACHED_ABOVE_RIGHT;
+		case 0x1D167..0x1D169:
+			return OVERLAY;
+		case 0x1D16D..0x1D16D:
+			return RIGHT;
+		case 0x1D16E..0x1D172:
+			return ATTACHED_ABOVE_RIGHT;
+		case 0x1D17B..0x1D182:
+			return BELOW;
+		case 0x1D185..0x1D189:
+			return ABOVE;
+		case 0x1D18A..0x1D18B:
+			return BELOW;
+		case 0x1D1AA..0x1D1AD:
+			return ABOVE;
+		case 0x1D242..0x1D244:
+			return ABOVE;
+		case 0x1E000..0x1E006:
+			return ABOVE;
+		case 0x1E008..0x1E018:
+			return ABOVE;
+		case 0x1E01B..0x1E021:
+			return ABOVE;
+		case 0x1E023..0x1E024:
+			return ABOVE;
+		case 0x1E026..0x1E02A:
+			return ABOVE;
+		case 0x1E08F..0x1E08F:
+			return ABOVE;
+		case 0x1E130..0x1E136:
+			return ABOVE;
+		case 0x1E2AE..0x1E2AE:
+			return ABOVE;
+		case 0x1E2EC..0x1E2EF:
+			return ABOVE;
+		case 0x1E4EC..0x1E4ED:
+			return ABOVE_RIGHT;
+		case 0x1E4EE..0x1E4EE:
+			return BELOW;
+		case 0x1E4EF..0x1E4EF:
+			return ABOVE;
+		case 0x1E8D0..0x1E8D6:
+			return BELOW;
+		case 0x1E944..0x1E949:
+			return ABOVE;
+		case 0x1E94A..0x1E94A:
+			return NUKTA;
+		default:
+			return NOT_REORDERED;
+	}
+}
