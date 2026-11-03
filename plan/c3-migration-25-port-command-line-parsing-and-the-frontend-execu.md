@@ -12,3 +12,19 @@ Add src/c3/driver.c3, driver_options.c3 and codegen_options.c3; replace app/aro_
 Add test/c3/driver_options_tests.c3 and test/migration/cli_tests.c3 with fake child tools and temp outputs. Run bazel test //test/c3:driver_options_tests //test/migration:cli_tests and rerun full frontend/record regression using the real executable instead of frontend_probe. Check help/version, unknown/missing arguments, target/PIC combinations, output failures, dependency escaping, multiple translation-unit state reset and stdout/stderr/status parity. Refactor test adapter argument handling to reuse the driver where practical; preserve the direct library tests.
 
 List test/c3/driver_options_tests.c3 explicitly in project.json for its //test/c3 target: c3c does not expand `dir/*.c3` source entries. Keep `src/c3/**` for the library sources so the app-only `fn main` cannot enter aro_c3_lib or build_smoke.
+
+
+## Parallel agent breakdown
+
+Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it. Only the integrator edits `project.json` and `BUILD.bazel`.
+
+**Stage 0: contract (1 agent, serial).** Define the Driver struct and the backend invocation interface, which returns explicit unavailable failures for now.
+
+**Stage 1: parallel agents (start together after stage 0 merges).**
+- **25.1 `args`**: owns `src/c3/driver_options.c3`. parseArgs: ordering, attached/separate args, -D/-U, warnings, language/emulation, -E/-P/-fsyntax-only/--verbose-ast.
+- **25.2 `target-codegen`**: owns `src/c3/codegen_options.c3`, target/PIC parsing. parseTarget/-mcpu/getPICMode and CodeGenOptions values.
+- **25.3 `process`**: owns `src/c3/driver.c3`. Frontend processSource, stdin, multiple files, dependency filenames, output handling, diagnostic stats, TU state reset.
+- **25.4 `main`**: owns `app/aro_c3/main.c3`. Lifetime/error setup, usage/version, exit status.
+- **25.5 `cli-tests`**: owns `test/migration/cli_tests.c3`, `test/c3/driver_options_tests.c3`. Fake child tools and temp outputs; help/version/unknown args/output failures.
+
+**Stage 2: integrator (1 agent, serial).** Register targets (list driver_options_tests.c3 explicitly in project.json), switch the frontend/record regressions from frontend_probe to the real executable, and rerun them.

@@ -11,3 +11,19 @@ Complete src/c3/aro.c3 public exports corresponding to src/aro.zig and src/backe
 Add examples/parse_buffer.c3 and an isolated test/migration/consumer workspace with its own MODULE.bazel/project.json/BUILD.bazel. The consumer must import only the public dependency, parse a buffer/include, inspect AST/types/diagnostics, recover from a malformed unit, and release allocations. Run bazel test //test/migration:library_consumer and build //:aro_distribution. Test extraction/relocation away from the repository and build/run with Zig absent from PATH. Audit runtime/build dependencies to ensure no Zig executable or sibling template checkout is needed. Do not create a broad C ABI redesign; only the existing fuzz C entrypoint is required by its separate ticket
 
 For every new //test/c3:* target in this ticket, list its .c3 test source files explicitly in project.json. c3c project source entries do not expand `dir/*.c3`; use explicit paths (the source tree may continue to use `src/c3/**`).
+
+
+## Parallel agent breakdown
+
+Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it. Only the integrator edits `project.json` and `BUILD.bazel`.
+
+**Stage 0: contract (1 agent, serial).** Draft the public export list that maps src/aro.zig and src/backend.zig to C3 modules.
+
+**Stage 1: parallel agents (start together after stage 0 merges).**
+- **30.1 `exports`**: owns `src/c3/aro.c3`. Public exports and their visibility.
+- **30.2 `packaging`**: owns BUILD.bazel `//:aro`, `//:aro_distribution`, tools/c3.bzl edits. Library target, resource headers, version metadata, license notices.
+- **30.3 `docs`**: owns `docs/c3-api.md`. Ownership, allocators/errors, lifetimes, Zig→C3 API mapping.
+- **30.4 `consumer`**: owns `examples/parse_buffer.c3`, `test/migration/consumer/*`. Isolated consumer workspace: parse, inspect, recover, release.
+- **30.5 `audit`**: owns relocation/no-Zig test. Extract the package elsewhere and build with Zig absent from PATH; audit the dependency closure.
+
+**Stage 2: integrator (1 agent, serial).** Run `library_consumer` and build `//:aro_distribution`.

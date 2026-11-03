@@ -13,3 +13,19 @@ Extend CI path filters to C3, Starlark, MODULE/project files, fixtures, headers 
 Add a small CI smoke target early once the foundation exists if implementing this ticket incrementally, but completion requires the full matrix. Validate from clean checkouts, paths with spaces, no sibling project and no Zig on the production-build PATH. Record tested versions, platform results and remaining optional AFL/Tracy requirements in docs/c3-migration.md. Run bazel test //... for default tests; expensive reference/optional tool tests may be named explicit suites but must be run by appropriate CI jobs
 
 For every new //test/c3:* target in this ticket, list its .c3 test source files explicitly in project.json. c3c project source entries do not expand `dir/*.c3`; use explicit paths (the source tree may continue to use `src/c3/**`).
+
+
+## Parallel agent breakdown
+
+Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it. Only the integrator edits `project.json` and `BUILD.bazel`.
+
+**Stage 0: contract (1 agent, serial).** Pin the c3c revision/distribution and Bazel version; record checksums.
+
+**Stage 1: parallel agents (start together after stage 0 merges).**
+- **32.1 `provisioning`**: owns `tools/c3c_repo.bzl`, MODULE.bazel. Checksummed download, local override, documented provisioning.
+- **32.2 `portability`**: owns `tools/c3.bzl` launchers/runfiles. Windows/macOS suffixes, quoting, child processes, library linkage; drop Bash assumptions.
+- **32.3 `ci`**: owns `.github/workflows/ci.yml`. Path filters, three-host matrix, separate pinned Zig reference job, 32-bit check.
+- **32.4 `hermeticity`**: owns input declarations audit. Prove that source/compiler changes invalidate actions; no false remote-cacheable flags.
+- **32.5 `validation`**: owns clean-checkout runs. Paths with spaces, no sibling project, no Zig on PATH; record results in docs/c3-migration.md.
+
+**Stage 2: integrator (1 agent, serial).** Run `bazel test //...` and the named explicit suites in CI. Report any matrix gap as a blocker.

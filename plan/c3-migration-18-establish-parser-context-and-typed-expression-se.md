@@ -14,3 +14,19 @@ C's expression/declaration grammar is mutually recursive. Define a shared parser
 Run bazel test //test/c3:parser_expression_tests with preprocessed expressions and seeded symbols/types; compare typed ASTs, cast kinds, values and diagnostics against reference expression wrappers. Cover signedness/overflow, complex/floating conversions, function pointers, arrays, qualifiers, null pointers, bitfield lvalues, short-circuiting, bad calls and malformed recovery. Keep builtin-special forms and statement expressions for their named later steps, tracking explicit remaining entrypoints
 
 For every new //test/c3:* target in this ticket, list its .c3 test source files explicitly in project.json. c3c project source entries do not expand `dir/*.c3`; use explicit paths (the source tree may continue to use `src/c3/**`).
+
+
+## Parallel agent breakdown
+
+Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it. Only the integrator edits `project.json` and `BUILD.bazel`.
+
+**Stage 0: contract (1 agent, serial).** Create `parser.c3` with the parser context, token utilities, error recovery, and stub type-name/compound-body entrypoints that emit diagnostics.
+
+**Stage 1: parallel agents (start together after stage 0 merges).**
+- **18.1 `result`**: owns `src/c3/parser_result.c3`. Result conversions/coercions, cast kinds, promotion/decay, lvalue rules, null pointer constants.
+- **18.2 `diagnostics`**: owns `src/c3/parser_diagnostics.c3`. Parser/Diagnostic.zig messages needed by expression paths, with language-version suppression.
+- **18.3 `binary-unary`**: owns `src/c3/parser_expression.c3` (operators). expr/assignExpr/constExpr/integerConstExpr, binaryExpr/unExpr, pointer arithmetic, constant folding, short-circuit checks.
+- **18.4 `postfix-primary`**: owns `src/c3/parser_postfix.c3`. suffixExpr/primaryExpr/fieldAccess/callExpr/genericSelection.
+- **18.5 `goldens`**: owns `test/c3/data/parser_expression/*`. Reference expression-wrapper ASTs, cast kinds, values and diagnostics.
+
+**Stage 2: integrator (1 agent, serial).** Write `test/c3/parser_expression_tests.c3` with seeded symbols/types, register the target, and keep the list of remaining entrypoints.

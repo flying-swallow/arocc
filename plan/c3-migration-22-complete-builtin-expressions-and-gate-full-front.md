@@ -12,3 +12,19 @@ Add src/c3/parser_builtin.c3 and builtin_eval.c3; complete specialized builtin d
 Add test/migration/record_runner.c3 by porting test/record_runner.zig: MAPPING expansion, CPU/ABI/emulation flags, global exclusions, invalid-target rules and separate parse/layout/extra/offset expected-failure classification. Stage all test/records data in Bazel runfiles. Extend frontend_probe to accept necessary syntax test options without duplicating the future production driver. Add //test/migration:frontend_regression and :record_regression covering the entire frozen syntax/expansion inventory, and //test/c3:builtin_expression_tests. Run these plus all prior C3 tests. Counts must reconcile to baseline; preserve explicit known failures and flag unexpected passes for review rather than silently changing them. A green subset cannot satisfy this gate. Diagnostic and AST differences must be fixed or individually justified with evidence; no bulk golden regeneration. CLI-only coverage is owned by the later Driver ticket
 
 For every new //test/c3:* target in this ticket, list its .c3 test source files explicitly in project.json. c3c project source entries do not expand `dir/*.c3`; use explicit paths (the source tree may continue to use `src/c3/**`).
+
+
+## Parallel agent breakdown
+
+Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it. Only the integrator edits `project.json` and `BUILD.bazel`.
+
+**Stage 0: contract (1 agent, serial).** Produce the gap audit: compare the Parser/Tree/Compilation baseline inventory with the C3 entries and list every remaining unsupported callback.
+
+**Stage 1: parallel agents (start together after stage 0 merges).**
+- **22.1 `builtin-parse`**: owns `src/c3/parser_builtin.c3`. bitCast/shufflevector/convertvector/chooseExpr/offsetof, builtin call argument rules, overflow builtins.
+- **22.2 `builtin-eval`**: owns `src/c3/builtin_eval.c3`. Builtins/eval.zig constant evaluation and constant predicates.
+- **22.3 `features`**: owns `src/c3/features.c3`. features.zig tables, matching the reference across options (including incomplete features it advertises).
+- **22.4 `record-runner`**: owns `test/migration/record_runner.c3`. Port record_runner.zig: MAPPING expansion, flags, exclusions, failure classes; stage test/records in runfiles.
+- **22.5 `gap-close`**: owns files named in the audit. Close the frontend gaps from the audit and remove migration-only unsupported callbacks.
+
+**Stage 2: integrator (1 agent, serial).** Add `frontend_regression`, `record_regression` and `builtin_expression_tests`. Split reconciliation by fixture category, one parallel triage agent per category, each fixing or justifying its own diffs (no bulk golden regeneration). One agent then confirms the counts match the baseline.

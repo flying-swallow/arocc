@@ -14,3 +14,20 @@ Implement the in-memory preprocessor in new src/c3/preprocessor.c3, hideset.c3, 
 Add test/migration/pp_probe.c3 with a narrow in-memory preprocessing CLI for the migration runner, plus a curated fixture list. Run bazel test //test/c3:preprocessor_tests and //test/migration:macro_regression. Include recursive call non-expanded parens.c and nested #ifs.c, self/mutual recursion, nested function arguments, empty arguments/placemarkers, variadics/__VA_OPT__, stringify escaping, invalid paste, inactive branches and unterminated conditionals. Compare tokens, expansion locations, rendered output and diagnostics to the frozen reference. Negative tests must terminate and free token expansions. This step does not need a full C parser or production CLI
 
 For every new //test/c3:* target in this ticket, list its .c3 test source files explicitly in project.json. c3c project source entries do not expand `dir/*.c3`; use explicit paths (the source tree may continue to use `src/c3/**`).
+
+
+## Parallel agent breakdown
+
+Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it. Only the integrator edits `project.json` and `BUILD.bazel`.
+
+**Stage 0: contract (1 agent, serial).** Create the shared `src/c3/tokens.c3` (Token, TokenWithExpansionLocs, expansion flags, location chains) and the preprocessor struct/provider interfaces in `preprocessor.c3`. File lookup and builtin-macro providers return `unsupported`.
+
+**Stage 1: parallel agents (start together after stage 0 merges).**
+- **13.1 `hideset`**: owns `src/c3/hideset.c3`. Hideset union/intersection with ownership tests.
+- **13.2 `pp-expr`**: owns `src/c3/pp_expression.c3`. Preprocessor/Parser.zig: signed/unsigned intmax rules, precedence, short-circuit diagnostics, explicit 64-bit intmax limit.
+- **13.3 `expansion`**: owns `src/c3/macro_expand.c3`. define/defineFn, collectMacroFuncArguments, expandMacroExhaustive, __VA_OPT__, placemarkers, recursion blocking.
+- **13.4 `stringify-paste`**: owns `src/c3/macro_paste.c3`. stringify escaping, pasteTokens, invalid paste diagnostics, generated-buffer offsets.
+- **13.5 `directives`**: owns `src/c3/pp_directives.c3`. Conditional dispatch/skip, #line/#error/#warning, unterminated conditionals; Preprocessor/Diagnostic.zig records.
+- **13.6 `probe`**: owns `src/c3/pp_print.c3`, `test/migration/pp_probe.c3`, macro fixture list. prettyPrintTokens, in-memory probe CLI, curated fixture list for `macro_regression`.
+
+**Stage 2: integrator (1 agent, serial).** Assemble the preprocessor main loop, write `test/c3/preprocessor_tests.c3`, register targets, run `//test/c3:preprocessor_tests` and `//test/migration:macro_regression`, and check that negative tests free their expansions.
