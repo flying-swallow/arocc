@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 01 [Build & validation]: Freeze the Zig reference and regression inventory'
-state: waiting
+state: complete
 planned: true
 parent_session: 01a19f7c-d060-7e01-b4aa-ce62ed71b1e2
 sessions:

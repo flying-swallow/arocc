@@ -1,0 +1,8333 @@
+{
+  "schema": 1,
+  "generator": "test/migration/inventory.py",
+  "reference": {
+    "commit": "29b8685bd464be5849e36a83f37bdc070919e39b",
+    "commit_rule": "last git commit touching reference_paths",
+    "reference_paths": [
+      "build",
+      "build.zig",
+      "build.zig.zon",
+      "include",
+      "src/aro",
+      "src/aro.zig",
+      "src/assembly_backend",
+      "src/assembly_backend.zig",
+      "src/backend",
+      "src/backend.zig",
+      "src/main.zig",
+      "test/cases",
+      "test/fuzz",
+      "test/record_runner.zig",
+      "test/records",
+      "test/runner.zig"
+    ],
+    "inputs_sha256": "9fc692d08e0016378477e8f42c9e92c90e447b5588250d3ba44f6ad5e968cfdd",
+    "input_files": 816,
+    "aro_version": "0.1.0-dev",
+    "minimum_zig_version": "0.18.0-dev.828+9da287565"
+  },
+  "reference_status": {
+    "status": "reference not executed: compiler unavailable",
+    "commands_not_run": [
+      "zig build",
+      "zig build test-unit",
+      "zig build test-integration",
+      "zig build test-record",
+      "zig build test-fmt"
+    ],
+    "pass_fail_counts": null,
+    "note": "No pass/fail/skip counts exist for the Zig reference. The counts below are fixture inventories derived from source, not test results. Never claim a green Zig suite or differential parity without logs from a real run."
+  },
+  "recorded_environment": {
+    "recorded_on": "2026-11-03",
+    "zig_required": "0.18.0-dev.828+9da287565 (build.zig.zon minimum_zig_version)",
+    "zig_available": null,
+    "zig_note": "No Zig executable can build this repo here: the required 0.18.0-dev build cannot be downloaded (ziglang.org is blocked). Do not substitute an older Zig; its failures are not Aro regressions.",
+    "c3c": "0.8.5 (/home/user/tools/c3/c3c, git 640091d3303a393f9651d644063b837fc19d05f1, LLVM 23.1.2)",
+    "bazel": "9.1.0 (/home/user/tools/bazel, pinned by .bazelversion)",
+    "python": "3.13 (only needed for this inventory script)"
+  },
+  "reference_commands": {
+    "build": "zig build --cache-dir <ref>/cache --prefix <ref>/out",
+    "test-unit": "zig build test-unit --cache-dir <ref>/cache --prefix <ref>/out",
+    "test-integration": "zig build test-integration --cache-dir <ref>/cache --prefix <ref>/out",
+    "test-record": "zig build test-record --cache-dir <ref>/cache --prefix <ref>/out",
+    "executable": "<ref>/out/bin/arocc"
+  },
+  "c3_build": {
+    "binary": "//:aro_c3",
+    "smoke_test": "//test/c3:build_smoke",
+    "command": "C3C=/home/user/tools/c3/c3c /home/user/tools/bazel --output_user_root=/home/user/tools/bazel_root test //test/c3:build_smoke"
+  },
+  "integration_cases": {
+    "source": "test/cases/*.c via test/runner.zig caseFromFile (run with cwd test/cases)",
+    "runner_semantics": {
+      "base_args": [
+        "<arocc>",
+        "-fno-color-diagnostics",
+        "<case>.c"
+      ],
+      "syntax|syntax_ignore_errors": [
+        "-fsyntax-only",
+        "--verbose-ast"
+      ],
+      "expand|expand_partial|expand_error": [
+        "-E",
+        "-P"
+      ],
+      "compare_output": "unimplemented: runner prints 'TODO compare output', counts 1 skipped, never runs arocc",
+      "diagnostics": "stderr lines containing 'error: ', 'warning: ' or 'note: ' (minus the Darwin --sysroot note) must match the expected lines in order by substring, and the counts must match",
+      "syntax": "stdout must equal ast/<case>.c when that file exists (optional)",
+      "expand": "stdout must equal expanded/<case>.c (missing file is a failure)",
+      "expand_partial": "stdout must END WITH expanded/<case>.c (missing file is a failure); trailing lines are expected diagnostics",
+      "expand_error": "diagnostics only",
+      "skip": "skip lines do not skip the case; each is printed and added to the skipped count after the case passes",
+      "subdirectories": "ignored by the runner (support files): ast, embed, expanded, frameworks, include"
+    },
+    "summary": {
+      "top_level_files": 492,
+      "c_fixtures": 492,
+      "parsed": 492,
+      "manifest_errors": 0,
+      "non_c_files": 0,
+      "by_kind": {
+        "syntax": 387,
+        "syntax_ignore_errors": 7,
+        "expand_error": 41,
+        "expand": 52,
+        "expand_partial": 4,
+        "compare_output": 1
+      },
+      "active": 491,
+      "unimplemented_compare_output": 1,
+      "with_args": 281,
+      "with_env": 2,
+      "with_skip": 22,
+      "skip_lines_total": 29,
+      "syntax_with_ast_golden": 34,
+      "expand_with_expanded_golden": 56,
+      "expand_missing_expanded_golden": 0,
+      "runner_skip_stat_if_all_pass": 30
+    },
+    "compare_output_cases": [
+      "hello world"
+    ],
+    "skipped_cases": [
+      {
+        "name": "#pragma pack msvc",
+        "kind": "syntax",
+        "skips": [
+          "TODO per field pragma pack"
+        ]
+      },
+      {
+        "name": "_Float16",
+        "kind": "syntax",
+        "skips": [
+          "_Float16 does not promote to double when used as vararg"
+        ]
+      },
+      {
+        "name": "alloc_align attribute",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'alloc_align' attribute"
+        ]
+      },
+      {
+        "name": "asm",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'asm_label' attribute"
+        ]
+      },
+      {
+        "name": "atomic",
+        "kind": "syntax",
+        "skips": [
+          "TODO _Atomic __auto_type"
+        ]
+      },
+      {
+        "name": "attribute errors",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'access' attribute",
+          "TODO: implement 'alias' attribute",
+          "TODO: implement 'assume_aligned' attribute",
+          "TODO: implement 'pure' attribute",
+          "TODO: implement 'simd' attribute",
+          "TODO: add error for standard decl attribute in type position"
+        ]
+      },
+      {
+        "name": "attributed record fields",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'warn_if_not_aligned' attribute"
+        ]
+      },
+      {
+        "name": "attributes",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'mode' attribute",
+          "TODO: implement 'format' attribute"
+        ]
+      },
+      {
+        "name": "bounds_safety",
+        "kind": "syntax",
+        "skips": [
+          "TODO: reimplement bounds safety attributes"
+        ]
+      },
+      {
+        "name": "constexpr",
+        "kind": "syntax",
+        "skips": [
+          "TODO constexpr record field access"
+        ]
+      },
+      {
+        "name": "declspec",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'restrict' attribute"
+        ]
+      },
+      {
+        "name": "enum overflow msvc",
+        "kind": "syntax",
+        "skips": [
+          "should not warn about overflow",
+          "should not warn about enumerator value not being representable"
+        ]
+      },
+      {
+        "name": "global register",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'asm_label' attribute"
+        ]
+      },
+      {
+        "name": "ignored attributes",
+        "kind": "syntax",
+        "skips": [
+          "TODO: implement 'malloc' attribute"
+        ]
+      },
+      {
+        "name": "incomplete types",
+        "kind": "syntax",
+        "skips": [
+          "TODO visibility warning for struct declared in function parameter"
+        ]
+      },
+      {
+        "name": "initializers",
+        "kind": "syntax",
+        "skips": [
+          "TODO missing uninitialized in own initializer warning"
+        ]
+      },
+      {
+        "name": "msvc anonymous default pack clang",
+        "kind": "syntax",
+        "skips": [
+          "TODO aligned bitfield in clang emulation mode targeting msvc abi"
+        ]
+      },
+      {
+        "name": "msvc attribute keywords",
+        "kind": "syntax",
+        "skips": [
+          "__unaligned ignored"
+        ]
+      },
+      {
+        "name": "msvc pointer keywords",
+        "kind": "syntax",
+        "skips": [
+          "TODO: reimplement msvc pointer attribute keywords"
+        ]
+      },
+      {
+        "name": "nullptr",
+        "kind": "syntax",
+        "skips": [
+          "TODO clang allows nullptr to bool cast"
+        ]
+      },
+      {
+        "name": "typedef extra specifiers disallowed",
+        "kind": "syntax",
+        "skips": [
+          "TODO no missing type error after missing semicolon/comma"
+        ]
+      },
+      {
+        "name": "typeof",
+        "kind": "syntax",
+        "skips": [
+          "typeof type in error message missing const"
+        ]
+      }
+    ],
+    "expand_missing_expanded_golden": [],
+    "manifest_errors": [],
+    "non_c_files": [],
+    "orphan_ast_goldens": [],
+    "orphan_expanded_goldens": [],
+    "cases": [
+      {
+        "name": "#elifndef error",
+        "kind": "expand_error",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2
+      },
+      {
+        "name": "#elifndef",
+        "kind": "expand",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "#embed",
+        "kind": "syntax",
+        "args": [
+          "--embed-dir=embed",
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "#if constant expression",
+        "kind": "expand",
+        "args": [
+          "-Wno-integer-overflow"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "#if expression error",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "#if expression macro ws",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "#ifdef",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "#pragma pack clang",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "#pragma pack gcc",
+        "kind": "syntax",
+        "args": [
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "#pragma pack msvc",
+        "kind": "syntax",
+        "args": [
+          "--emulate=msvc"
+        ],
+        "env": [],
+        "skips": [
+          "TODO per field pragma pack"
+        ],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "#pragma pack pop restores alignment",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "#pragma pack",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 18,
+        "ast_golden": false
+      },
+      {
+        "name": "#pragma push then pop",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "X macro",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "_BitInt change size",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "_BitInt min max",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "_BitInt",
+        "kind": "syntax",
+        "args": [
+          "-std=c17",
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "_Float16",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [
+          "_Float16 does not promote to double when used as vararg"
+        ],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "__VA_OPT__",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3
+      },
+      {
+        "name": "__auto_type self init",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "__auto_type",
+        "kind": "syntax",
+        "args": [
+          "-Wno-gnu-alignof-expression",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 19,
+        "ast_golden": false
+      },
+      {
+        "name": "__builtin_types_compatible_p",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "__float80 clang",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "__float80",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "__func__",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "__has_attribute with define",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "__has_attribute",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "__has_builtin",
+        "kind": "expand_error",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "__has_extension",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "__has_feature",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "__has_include",
+        "kind": "expand_error",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 10
+      },
+      {
+        "name": "__has_warning",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2
+      },
+      {
+        "name": "__is_identifier",
+        "kind": "expand_error",
+        "args": [
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2
+      },
+      {
+        "name": "__is_target_arch",
+        "kind": "expand_error",
+        "args": [
+          "-target",
+          "x86-linux-gnu",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_clang_compat",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-apple-darwin-simulator"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5
+      },
+      {
+        "name": "__is_target_darwin",
+        "kind": "expand_error",
+        "args": [
+          "--target=aarch64-macos"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_os",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-linux",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_os_darwin_ios_clang_compat",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-apple-ios",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_os_darwin_macos_clang_compat",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-apple-macos",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_os_darwin_tvos_clang_compat",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-apple-tvos",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_os_darwin_watchos_clang_compat",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-apple-watchos",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_variant",
+        "kind": "expand_error",
+        "args": [
+          "-target",
+          "aarch64-macos-none",
+          "--emulate=clang",
+          "-darwin-target-variant-triple",
+          "x86_64-ios.13.1-macabi"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_vendor",
+        "kind": "expand_error",
+        "args": [
+          "--target=x86_64-pc-linux-gnu",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__is_target_vendor_apple",
+        "kind": "expand_error",
+        "args": [
+          "--target=arm64e-apple-ios12-macabi",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "__line__",
+        "kind": "expand",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "__mfp8 invalid",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=aarch64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 44,
+        "ast_golden": false
+      },
+      {
+        "name": "__mfp8 valid",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=aarch64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "address of label",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "adjust diagnostic levels",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "alignment on typedef msvc",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "alignment on typedef",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "alignment",
+        "kind": "syntax",
+        "args": [
+          "-Wno-implicit-int"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 14,
+        "ast_golden": false
+      },
+      {
+        "name": "alloc_align attribute",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO: implement 'alloc_align' attribute"
+        ],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "allow fp16 parameter",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-fnative-half-arguments-and-returns"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "alternate spellings for signed",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "anonymous attributed field",
+        "kind": "syntax_ignore_errors",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "anonymous_struct_ms",
+        "kind": "syntax",
+        "args": [
+          "-fms-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "anonymous_struct_no-ms",
+        "kind": "syntax",
+        "args": [
+          "-fno-ms-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "apply pasted macro name",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "arithmetic conversion floats",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "arithmetic overflow",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "arm cortex-m0 predefined macros",
+        "kind": "syntax",
+        "args": [
+          "--target=arm-linux-gnueabi",
+          "-mcpu=cortex_m0"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "arm neon vectors",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": true
+      },
+      {
+        "name": "arm-acle-6.4 arm-eabi",
+        "kind": "expand_error",
+        "args": [
+          "--target=arm-linux-gnueabi",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "arm-acle-6.4 armv7-a",
+        "kind": "expand_error",
+        "args": [
+          "--target=armv7a-linux-gnueabi",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "arm-acle-6.4 armv7-m",
+        "kind": "expand_error",
+        "args": [
+          "--target=armv7m-linux-gnueabi",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "arm-acle-6.4 armv8-a",
+        "kind": "expand_error",
+        "args": [
+          "--target=armv8a-linux-gnueabi",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "arm-acle-7.5 llvm-21",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "arm-pic-predefines ropi rwpi",
+        "kind": "expand_error",
+        "args": [
+          "--target=arm-linux-gnueabi",
+          "--emulate=clang",
+          "-fropi",
+          "-frwpi"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "array argument is null",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "array argument too small",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "array designator too large",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "array of invalid",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "array of zero size type",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "array subscript with string",
+        "kind": "syntax_ignore_errors",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "asm",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO: implement 'asm_label' attribute"
+        ],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "assembly invalid token",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "assignment",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 48,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic builtin return types",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic builtins",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic lvalue conversion",
+        "kind": "syntax",
+        "args": [
+          "-std=c11",
+          "-ffreestanding"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic member recovery",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic rvalue types c17",
+        "kind": "syntax",
+        "args": [
+          "-std=c17",
+          "-ffreestanding",
+          "-Wno-cast-qualifiers"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic rvalue types c23",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-ffreestanding",
+          "-Wno-cast-qualifiers"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic value contexts",
+        "kind": "syntax",
+        "args": [
+          "-std=c11",
+          "-ffreestanding"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "atomic",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [
+          "TODO _Atomic __auto_type"
+        ],
+        "expected_diagnostics": 17,
+        "ast_golden": true
+      },
+      {
+        "name": "attribute errors",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux",
+          "-std=c23",
+          "-fdeclspec"
+        ],
+        "env": [],
+        "skips": [
+          "TODO: implement 'access' attribute",
+          "TODO: implement 'alias' attribute",
+          "TODO: implement 'assume_aligned' attribute",
+          "TODO: implement 'pure' attribute",
+          "TODO: implement 'simd' attribute",
+          "TODO: add error for standard decl attribute in type position"
+        ],
+        "expected_diagnostics": 28,
+        "ast_golden": false
+      },
+      {
+        "name": "attributed anonymous record",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "attributed record fields",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [
+          "TODO: implement 'warn_if_not_aligned' attribute"
+        ],
+        "expected_diagnostics": 1,
+        "ast_golden": true
+      },
+      {
+        "name": "attributed typeof",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "attributes",
+        "kind": "syntax",
+        "args": [
+          "-Wno-deprecated-non-prototype",
+          "-Wc23-extensions",
+          "-std=gnu17"
+        ],
+        "env": [],
+        "skips": [
+          "TODO: implement 'mode' attribute",
+          "TODO: implement 'format' attribute"
+        ],
+        "expected_diagnostics": 22,
+        "ast_golden": false
+      },
+      {
+        "name": "avr 24-bit int",
+        "kind": "syntax",
+        "args": [
+          "--target=avr-freestanding-none"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "avr sizeof long",
+        "kind": "syntax",
+        "args": [
+          "--target=avr-freestanding-none"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "basic math",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "binary expressions",
+        "kind": "syntax",
+        "args": [
+          "-Wno-unused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 36,
+        "ast_golden": false
+      },
+      {
+        "name": "binary literal",
+        "kind": "syntax",
+        "args": [
+          "-Wpedantic",
+          "-std=c17",
+          "-Wno-unused-value"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "bitfields",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "block types",
+        "kind": "syntax",
+        "args": [
+          "-fblocks",
+          "-Wpedantic",
+          "-Wno-gnu-auto-type",
+          "--target=aarch64-macos"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 18,
+        "ast_golden": true
+      },
+      {
+        "name": "bool bitfield packing",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "bounds_safety",
+        "kind": "syntax",
+        "args": [
+          "-fexperimental-bounds-safety"
+        ],
+        "env": [],
+        "skips": [
+          "TODO: reimplement bounds safety attributes"
+        ],
+        "expected_diagnostics": 15,
+        "ast_golden": false
+      },
+      {
+        "name": "builtin choose expr",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "builtin complex invalid",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "builtin func types",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "builtin functions",
+        "kind": "syntax",
+        "args": [
+          "--target=powerpc-freestanding-none"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "builtin headers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "builtin macro errors",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "builtin_constant_p",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "builtins-arm-exclusive",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "armv7a"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 67,
+        "ast_golden": false
+      },
+      {
+        "name": "c11 atomic load errors",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "c17 char8_t enabled",
+        "kind": "syntax",
+        "args": [
+          "-std=c17",
+          "-fchar8_t"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c17 char8_t",
+        "kind": "syntax",
+        "args": [
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 attributes",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 auto",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": true
+      },
+      {
+        "name": "c23 char8_t disabled",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-fno-char8_t"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 char8_t",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 defines",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 digit separators",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 identifiers",
+        "kind": "syntax",
+        "args": [
+          "-std=c2x"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 keywords",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-pedantic",
+          "-Wundef"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 missing type specifier",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 static_assert",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 stdarg",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 stdint",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c23 true false ast",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "c2y countof",
+        "kind": "syntax",
+        "args": [
+          "-std=c2y"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "c2y named break",
+        "kind": "syntax",
+        "args": [
+          "-std=c2y"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "c2y octal",
+        "kind": "syntax",
+        "args": [
+          "-std=c2y",
+          "-Wpre-c2y-compat"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "c2y selection header",
+        "kind": "syntax",
+        "args": [
+          "-std=c2y",
+          "-Wpre-c2y-compat"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "c89 standard",
+        "kind": "syntax",
+        "args": [
+          "-std=c89"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "c99 standard",
+        "kind": "syntax",
+        "args": [
+          "-std=c99"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "call undeclared function with invalid type",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "call",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 25,
+        "ast_golden": false
+      },
+      {
+        "name": "calling convention",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "cast kinds",
+        "kind": "syntax",
+        "args": [
+          "-Wno-int-conversion",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "cast to same type",
+        "kind": "syntax",
+        "args": [
+          "-pedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "cast to union",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "casts",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 14,
+        "ast_golden": false
+      },
+      {
+        "name": "char literal sign extension",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-fsigned-char",
+          "-Wno-multichar"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "clang __BASE_FILE__",
+        "kind": "expand",
+        "args": [
+          "--emulate=clang",
+          "-Iinclude",
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "expanded_golden": true
+      },
+      {
+        "name": "clang __FILE_NAME__",
+        "kind": "expand",
+        "args": [
+          "--emulate=clang",
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "expanded_golden": true
+      },
+      {
+        "name": "clang __INCLUDE_LEVEL__",
+        "kind": "expand",
+        "args": [
+          "--emulate=clang",
+          "-Iinclude",
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "expanded_golden": true
+      },
+      {
+        "name": "clang integer suffixes arm64-apple-darwin",
+        "kind": "syntax",
+        "args": [
+          "--target=arm64-apple-darwin",
+          "-fms-extensions",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "clang integer suffixes i386-linux-gnu",
+        "kind": "syntax",
+        "args": [
+          "--target=i386-linux-gnu",
+          "-fms-extensions",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "clang integer suffixes x86_64-linux-gnu",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-fms-extensions",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "colon after #embed",
+        "kind": "syntax_ignore_errors",
+        "args": [
+          "--embed-dir=test/cases/embed"
+        ],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "comma operator",
+        "kind": "syntax",
+        "args": [
+          "-Wno-sizeof-array-argument"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "comment after define",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "complex float16",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "complex init",
+        "kind": "syntax",
+        "args": [
+          "--target=aarch64-macos-musl"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "complex numbers clang",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--emulate=clang",
+          "-pedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "complex numbers gcc",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "complex values",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "compound literals",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "compound stmt fallthrough",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "concat improperly encoded strings",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "condexpr const folding",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "const decl folding",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 23,
+        "ast_golden": false
+      },
+      {
+        "name": "constexpr",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [
+          "TODO constexpr record field access"
+        ],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "containers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 27,
+        "ast_golden": false
+      },
+      {
+        "name": "convertvector",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-Wno-unused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "darwin __float128",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-macos"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "date expansion",
+        "kind": "syntax",
+        "args": [
+          "-Wdate-time"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "debug dump macro names",
+        "kind": "expand_partial",
+        "args": [
+          "-dN"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "debug dump macros and results",
+        "kind": "expand_partial",
+        "args": [
+          "-dD"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "debug dump macros",
+        "kind": "expand_partial",
+        "args": [
+          "-dM"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "decayed attributed array",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "declspec",
+        "kind": "syntax",
+        "args": [
+          "-fdeclspec",
+          "--target=x86_64-linux"
+        ],
+        "env": [],
+        "skips": [
+          "TODO: implement 'restrict' attribute"
+        ],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "deferred macro expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "deprecated vars",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "-Wno-unused-value"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 17,
+        "ast_golden": false
+      },
+      {
+        "name": "deref void",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "designated init skip anonymous",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "designated_init",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "digraph pretty print",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "digraphs disabled",
+        "kind": "syntax",
+        "args": [
+          "-fno-digraphs"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "digraphs enabled",
+        "kind": "syntax",
+        "args": [
+          "-std=c89",
+          "-fdigraphs"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "digraphs not supported",
+        "kind": "syntax",
+        "args": [
+          "-std=c89"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "digraphs",
+        "kind": "syntax",
+        "args": [
+          "-DSTRINGIZE(X)=%:X"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "divide by zero",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "dollars in identifiers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "double long",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "duplicate typedef",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "empty computed include",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "empty macro block expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "empty records",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "empty va args comma delete c99",
+        "kind": "expand",
+        "args": [
+          "-std=c99"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "empty variadic paste",
+        "kind": "expand",
+        "args": [
+          "-pedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "expanded_golden": true
+      },
+      {
+        "name": "enum attributes clang",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "enum attributes gcc",
+        "kind": "syntax",
+        "args": [
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "enum fixed",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 20,
+        "ast_golden": false
+      },
+      {
+        "name": "enum overflow linux",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "enum overflow msvc",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [
+          "should not warn about overflow",
+          "should not warn about enumerator value not being representable"
+        ],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "enum pointer",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "enum sizes linux",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "enum sizes windows",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "enumerator constants",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "expand #pragma args",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "expr pretty printing",
+        "kind": "syntax",
+        "args": [
+          "-Wno-c23-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 19,
+        "ast_golden": false
+      },
+      {
+        "name": "expression statement conversion",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": true
+      },
+      {
+        "name": "extended identifiers c11",
+        "kind": "syntax",
+        "args": [
+          "-std=c11"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 10,
+        "ast_golden": false
+      },
+      {
+        "name": "extended identifiers c99",
+        "kind": "syntax",
+        "args": [
+          "-std=c99"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "extension",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "extern variables",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "feature as extension pedantic",
+        "kind": "syntax",
+        "args": [
+          "-pedantic-errors",
+          "-std=c99"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "feature as extension",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "filename_macros",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include/filename_macros"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "fixed size integer constants x86_64-linux-gnu",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-std=c23",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "float array size",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "float builtins",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "float eval method",
+        "kind": "syntax",
+        "args": [
+          "-ffp-eval-method=double",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "float header aarch64-linux-gnu",
+        "kind": "expand",
+        "args": [
+          "--target=aarch64-linux-gnu",
+          "-std=c11",
+          "-ffp-eval-method=extended"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "float header netbsd 6.99.26",
+        "kind": "expand",
+        "args": [
+          "--target=x86-netbsd.6.99.26-gnu",
+          "-std=c11"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "float header x86-64-linux",
+        "kind": "expand",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-std=c11"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "float to int",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 12,
+        "ast_golden": false
+      },
+      {
+        "name": "float types",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux",
+          "-Wno-unused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": true
+      },
+      {
+        "name": "float values",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "for decl stmt",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "forever stmt",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "fp16 parameter aarch64",
+        "kind": "syntax",
+        "args": [
+          "--target=aarch64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "fp16 parameter",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "function macro expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "functions",
+        "kind": "syntax",
+        "args": [
+          "-Wno-deprecated-non-prototype",
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 14,
+        "ast_golden": false
+      },
+      {
+        "name": "gcc thread",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux",
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": true
+      },
+      {
+        "name": "generated location",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "generic ast",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "generic",
+        "kind": "syntax",
+        "args": [
+          "-Wno-unused-value"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 13,
+        "ast_golden": false
+      },
+      {
+        "name": "global register",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO: implement 'asm_label' attribute"
+        ],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "gnu alignof",
+        "kind": "syntax",
+        "args": [
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnu designated init extension",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "gnu inline assembly statements",
+        "kind": "syntax",
+        "args": [
+          "--target=x86-linux-gnu",
+          "-pedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "gnu pointer arith",
+        "kind": "syntax",
+        "args": [
+          "-Wgnu-pointer-arith",
+          "-Wno-unused-value"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "gnu variadic macros",
+        "kind": "expand",
+        "args": [
+          "-Wpedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "expanded_golden": true
+      },
+      {
+        "name": "gnu89 standard",
+        "kind": "syntax",
+        "args": [
+          "-std=gnu89"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnuc version default clang",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnuc version default gcc",
+        "kind": "syntax",
+        "args": [
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnuc version default msvc",
+        "kind": "syntax",
+        "args": [
+          "--emulate=msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnuc version default",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnuc version empty",
+        "kind": "syntax",
+        "args": [
+          "-fgnuc-version="
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "gnuc version override",
+        "kind": "syntax",
+        "args": [
+          "-fgnuc-version=5.3.42"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "guard defined outside header",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "guard undef",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "hash_hash at func macro start",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "hello world",
+        "kind": "compare_output",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "compare_output_bytes": 13
+      },
+      {
+        "name": "hide warnings",
+        "kind": "syntax",
+        "args": [
+          "-w"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "idirafter shadows include",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include/wrong",
+          "-I",
+          "include/right",
+          "-idirafter",
+          "include/wrong"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "ignored attributes",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO: implement 'malloc' attribute"
+        ],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "imacros flag",
+        "kind": "syntax",
+        "args": [
+          "-imacros",
+          "include/extra_tokens.h"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "imaginary constants",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "implicit main return zero",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "implicitly unsigned literal",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "include flag",
+        "kind": "syntax",
+        "args": [
+          "-include",
+          "include/iquote/iquote_test.h"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "include framework",
+        "kind": "syntax",
+        "args": [
+          "-iframework",
+          "frameworks",
+          "-iframework",
+          "include/next"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "include pragma",
+        "kind": "syntax",
+        "args": [
+          "-fms-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "include umbrella framework",
+        "kind": "syntax",
+        "args": [
+          "-iframework",
+          "frameworks"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "include_next",
+        "kind": "syntax",
+        "args": [
+          "-Wgnu-include-next",
+          "-Wno-gnu-alignof-expression",
+          "-I",
+          "include",
+          "-I",
+          "include/next",
+          "-isystem",
+          "include/system",
+          "-isystem",
+          "include/system/next",
+          "-iquote",
+          "include/iquote"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 14,
+        "ast_golden": false
+      },
+      {
+        "name": "include_next_mixed",
+        "kind": "syntax",
+        "args": [
+          "-fms-extensions",
+          "-Wgnu-include-next",
+          "-Wno-gnu-alignof-expression",
+          "-I",
+          "include//mixed",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "incomplete types",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO visibility warning for struct declared in function parameter"
+        ],
+        "expected_diagnostics": 17,
+        "ast_golden": false
+      },
+      {
+        "name": "incorrect guard",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "incorrect macro arg count",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4
+      },
+      {
+        "name": "incorrect typeof usage",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "indirect macro invocation wrong arg count",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3
+      },
+      {
+        "name": "initializers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO missing uninitialized in own initializer warning"
+        ],
+        "expected_diagnostics": 65,
+        "ast_golden": false
+      },
+      {
+        "name": "int128",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=x86_64-linux",
+          "-Wno-c23-extensions",
+          "-ffreestanding"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "integer conversions 32bit",
+        "kind": "syntax",
+        "args": [
+          "--target=x86-linux-gnu",
+          "-Wno-c23-extensions",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "integer conversions",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-Wno-c23-extensions",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "integer literal macros",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "integer literal promotion warning clang",
+        "kind": "syntax",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "integer literal promotion warning gcc 32",
+        "kind": "syntax",
+        "args": [
+          "--emulate=gcc",
+          "--target=riscv32-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "integer literal promotion warning gcc 64",
+        "kind": "syntax",
+        "args": [
+          "--emulate=gcc",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "intmax_t",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "intptr_t",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "invalid _BitInt pointer",
+        "kind": "syntax_ignore_errors",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "invalid attributes",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "invalid continuation byte at eof",
+        "kind": "syntax_ignore_errors",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "invalid epoch",
+        "kind": "syntax",
+        "args": [],
+        "env": [
+          "SOURCE_DATE_EPOCH=abc"
+        ],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "invalid expr inside parens",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "invalid k&r functions",
+        "kind": "syntax",
+        "args": [
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "invalid specifier in typename",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "invalid types",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 23,
+        "ast_golden": false
+      },
+      {
+        "name": "iquote",
+        "kind": "syntax",
+        "args": [
+          "-iquote",
+          "include/iquote"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "keyword hidden by macro",
+        "kind": "syntax",
+        "args": [
+          "-pedantic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "kr_def_deprecated",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "labeled return",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "latin1",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "layout overflow",
+        "kind": "syntax",
+        "args": [
+          "-fdeclspec"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "lazy macro",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "least and fast int",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=x86_64-macos",
+          "-ffreestanding"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "limits header",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "line counter",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "linkage",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": true
+      },
+      {
+        "name": "linux __float128",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "macro argument evaluation",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "macro backtrace limit",
+        "kind": "syntax",
+        "args": [
+          "-fmacro-backtrace-limit=1"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "macro backtrace",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "macro definition errors",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 12
+      },
+      {
+        "name": "macro expands to self after pasting",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro expansion disabled",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro expansion exhaustion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro expansion to defined parsed",
+        "kind": "syntax",
+        "args": [
+          "-Wexpansion-to-defined"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "macro expansion to defined",
+        "kind": "syntax",
+        "args": [
+          "-Wexpansion-to-defined"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "macro keyword normalization",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "macro re-expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro redefinition",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "macro self definition",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro token pasting order",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro unbalanced parens call",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "macro whitespace",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "main wrong return type",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "member expr",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "misplaced attribute",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "missing newline before eof",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "missing type specifier",
+        "kind": "syntax",
+        "args": [
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "ms-extensions",
+        "kind": "syntax",
+        "args": [
+          "-fms-extensions",
+          "-Wno-microsoft-include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msp430 builtin types",
+        "kind": "syntax",
+        "args": [
+          "--target=msp430-other-none"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc anonymous default pack clang",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-windows-msvc",
+          "--emulate=clang",
+          "-fdeclspec"
+        ],
+        "env": [],
+        "skips": [
+          "TODO aligned bitfield in clang emulation mode targeting msvc abi"
+        ],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc anonymous default pack",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc attribute keywords",
+        "kind": "syntax",
+        "args": [
+          "--target=x86-windows-msvc"
+        ],
+        "env": [],
+        "skips": [
+          "__unaligned ignored"
+        ],
+        "expected_diagnostics": 3,
+        "ast_golden": true
+      },
+      {
+        "name": "msvc boolean bitfield",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc flexible array in union",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc integer suffixes",
+        "kind": "syntax",
+        "args": [
+          "--emulate=msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc macros",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc pointer keywords",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc",
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [
+          "TODO: reimplement msvc pointer attribute keywords"
+        ],
+        "expected_diagnostics": 14,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc required alignment through array",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc typedef alignment inheritance clang",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-windows-msvc",
+          "--emulate=clang",
+          "-fms-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc typedef alignment inheritance",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "msvc zero size array",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "multiline comment",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "nameless param",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "native half type",
+        "kind": "syntax",
+        "args": [
+          "-fnative-half-type",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "negative and too big shift count",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "nested #ifs",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "nested attributes",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "nested invalid struct layout",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "nested macro call",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "nested unterminated macro clang",
+        "kind": "expand_error",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4
+      },
+      {
+        "name": "nested unterminated macro gcc",
+        "kind": "expand_error",
+        "args": [
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4
+      },
+      {
+        "name": "newline splicing",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "nl in macro param",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "no declarations",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "no declspec",
+        "kind": "syntax",
+        "args": [
+          "-fno-declspec",
+          "--target=x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "no dollars in identifiers",
+        "kind": "syntax",
+        "args": [
+          "-fno-dollars-in-identifiers"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "no inline asm",
+        "kind": "syntax",
+        "args": [
+          "-fno-gnu-inline-asm"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "no optimizations",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "non string attribute",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "nonnull attribute errors",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "nonnull attribute",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "null directives with #if",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0
+      },
+      {
+        "name": "nullability",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": true
+      },
+      {
+        "name": "nullptr",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [
+          "TODO clang allows nullptr to bool cast"
+        ],
+        "expected_diagnostics": 18,
+        "ast_golden": false
+      },
+      {
+        "name": "numbers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 12,
+        "ast_golden": false
+      },
+      {
+        "name": "object macro expands to function macro",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "object macro expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "object macro token pasting",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "offsetof",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "old style flexible array",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "optimize define",
+        "kind": "syntax",
+        "args": [
+          "-O"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "optimize size flags",
+        "kind": "syntax",
+        "args": [
+          "-Os"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "packed member address",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "parser using typeof types",
+        "kind": "syntax",
+        "args": [
+          "-Wno-deprecated-non-prototype"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 17,
+        "ast_golden": false
+      },
+      {
+        "name": "paste operator whitespace",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "pic1",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-fpic"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pic2",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-fPIC"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pie1",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-fpie"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pie2",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-fPIE"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "placeholder tokens pasting",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "placemarker at expr start",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "placemarker at include start",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pointer index post increment",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "pointer subtraction",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "ppc elf v1",
+        "kind": "syntax",
+        "args": [
+          "--target=powerpc64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "ppc elf v2",
+        "kind": "syntax",
+        "args": [
+          "--target=powerpc64-freebsd.13.1-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma changes warning to error in parser",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma during parsing",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma once not at start of file",
+        "kind": "syntax",
+        "args": [
+          "-I",
+          "include/pragma_once_not_at_start"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma once self include",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma once",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma operator",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 10,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma poison",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma warning and error",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 11,
+        "ast_golden": false
+      },
+      {
+        "name": "pragma without terminating newline",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "predefined macros",
+        "kind": "syntax",
+        "args": [
+          "-std=c99"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "preprocessor binary operators",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 34,
+        "ast_golden": false
+      },
+      {
+        "name": "preserve comments in macros",
+        "kind": "expand_error",
+        "args": [
+          "-CC",
+          "-fms-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2
+      },
+      {
+        "name": "preserve comments paste whitespace",
+        "kind": "expand",
+        "args": [
+          "-CC"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "preserve comments",
+        "kind": "expand_partial",
+        "args": [
+          "-C"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "promotion edge cases",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "recursive call non-expanded parens",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "recursive func macro",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "recursive object macro",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "redefine invalid typedef",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "redefine typedef",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "redefinitions",
+        "kind": "syntax",
+        "args": [
+          "-Wno-implicit-int",
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 40,
+        "ast_golden": false
+      },
+      {
+        "name": "relocations",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux",
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "repeated paste macro argument",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "repeated preprocessor tokens",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "return",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 17,
+        "ast_golden": false
+      },
+      {
+        "name": "riscv hard-float predefined macros",
+        "kind": "syntax",
+        "args": [
+          "--target=riscv64-linux-gnu",
+          "-mcpu=baseline"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "riscv no-float predefined macros",
+        "kind": "syntax",
+        "args": [
+          "--target=riscv64-linux-gnu",
+          "-mcpu=rv64i"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "riscv single-float predefined macros",
+        "kind": "syntax",
+        "args": [
+          "--target=riscv64-linux-gnuf32",
+          "-mcpu=baseline"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "riscv soft-float predefined macros",
+        "kind": "syntax",
+        "args": [
+          "--target=riscv64-linux-gnusf",
+          "-mcpu=baseline"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "rparen hideset in argument expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "self_include",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "shufflevector",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-Wno-unused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "signed char",
+        "kind": "syntax",
+        "args": [
+          "--target=aarch64-linux-gnu",
+          "-fsigned-char",
+          "-Wno-integer-overflow"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "signed remainder",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "sizeof alignof",
+        "kind": "syntax",
+        "args": [
+          "-Wno-unused",
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 10,
+        "ast_golden": false
+      },
+      {
+        "name": "sizeof variably modified types",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "source epoch",
+        "kind": "expand",
+        "args": [],
+        "env": [
+          "SOURCE_DATE_EPOCH=0"
+        ],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "spliced newline in char literal",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "spliced newline in string literal",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "standard attributes",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "standard-concatenation-strings-example",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "standard-placeholder-example",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "standard-redefinition-reexamination-example",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "statement expressions",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "statements",
+        "kind": "syntax",
+        "args": [
+          "-std=c17"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 12,
+        "ast_golden": false
+      },
+      {
+        "name": "static assert messages",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "stdarg",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 11,
+        "ast_golden": false
+      },
+      {
+        "name": "stdckdint",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 18,
+        "ast_golden": false
+      },
+      {
+        "name": "stdckdint_ast",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "stringify backslashes",
+        "kind": "syntax_ignore_errors",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "stringify invalid escape",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "expanded_golden": true
+      },
+      {
+        "name": "stringify invalid",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "strings",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "subscript",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "switch unsigned int",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "target_macros driverkit",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-driverkit",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros ios",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-ios",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros iphone",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-ios",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros linux",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros maccatalyst",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-maccatalyst",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros macos",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-macos",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros simulator",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-ios-simulator",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros tvos",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-tvos",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros uefi",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-uefi",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros unix",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-freebsd",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros visionos",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-visionos"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros watchos",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "aarch64-watchos",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "target_macros windows",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-windows",
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "tentative array",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "tentative decls defined",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "tentative definitions",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "token paste delete comma gnu",
+        "kind": "expand",
+        "args": [
+          "-Wgnu-zero-variadic-macro-arguments"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "expanded_golden": true
+      },
+      {
+        "name": "transparent_union",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "two pragmas one define",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "type_resolution",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "typedef array qualifiers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "typedef extra specifiers disallowed",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [
+          "TODO no missing type error after missing semicolon/comma"
+        ],
+        "expected_diagnostics": 6,
+        "ast_golden": false
+      },
+      {
+        "name": "typeof incomplete array",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "typeof invalid pointer",
+        "kind": "syntax_ignore_errors",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "ast_golden": false
+      },
+      {
+        "name": "typeof pointer wrong size",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "typeof quals",
+        "kind": "syntax",
+        "args": [
+          "-target",
+          "x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "typeof",
+        "kind": "syntax",
+        "args": [
+          "-std=gnu17"
+        ],
+        "env": [],
+        "skips": [
+          "typeof type in error message missing const"
+        ],
+        "expected_diagnostics": 27,
+        "ast_golden": false
+      },
+      {
+        "name": "typeof_unqual",
+        "kind": "syntax",
+        "args": [
+          "-std=c23",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "types",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": true
+      },
+      {
+        "name": "u8 character constant",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "ucn identifiers",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "uefi intmax_t",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-uefi-msvc",
+          "-nostdlibinc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "unaligned u16 string literal",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "unary expressions",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 14,
+        "ast_golden": false
+      },
+      {
+        "name": "unavailable results",
+        "kind": "syntax",
+        "args": [
+          "-Wno-unused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "undef",
+        "kind": "syntax",
+        "args": [
+          "-undef",
+          "--target=x86_64-linux-gnu"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "undefined macro",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 5,
+        "ast_golden": false
+      },
+      {
+        "name": "unexpected pragmas",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "unexpected_type_name",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "unknown pragmas",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3
+      },
+      {
+        "name": "unmatched macro paren",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "unreachable code",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "unreachable",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "unsigned char",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-funsigned-char",
+          "-Wno-integer-overflow"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "unspecified expansion",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "unterminated char literal",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "unterminated comment in preprocessor expression",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "unterminated comment",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "unterminated macro function at eof clang",
+        "kind": "expand_error",
+        "args": [
+          "--emulate=clang"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "unterminated macro function at eof gcc",
+        "kind": "expand_error",
+        "args": [
+          "--emulate=gcc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "unterminated string literal",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "unused locals",
+        "kind": "syntax",
+        "args": [
+          "-Wunused",
+          "-Wunused-parameter",
+          "-Wno-implicit-int",
+          "-Wno-deprecated-non-prototype"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 7,
+        "ast_golden": false
+      },
+      {
+        "name": "unused",
+        "kind": "syntax",
+        "args": [
+          "-Wunused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "va_arg_pack",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 9,
+        "ast_golden": false
+      },
+      {
+        "name": "var args macro functions",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "vectorcall",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-windows-msvc"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "vectors",
+        "kind": "syntax",
+        "args": [
+          "--target=x86_64-linux-gnu",
+          "-Wno-unused"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 14,
+        "ast_golden": true
+      },
+      {
+        "name": "visibility",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1,
+        "ast_golden": false
+      },
+      {
+        "name": "vla",
+        "kind": "syntax",
+        "args": [
+          "-Wvla"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 3,
+        "ast_golden": false
+      },
+      {
+        "name": "void star",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      },
+      {
+        "name": "warn unused result",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 4,
+        "ast_golden": false
+      },
+      {
+        "name": "whitespace macro arguments",
+        "kind": "expand",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "expanded_golden": true
+      },
+      {
+        "name": "wide character constants",
+        "kind": "syntax",
+        "args": [
+          "-Wfour-char-constants",
+          "-Wno-c23-extensions"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 25,
+        "ast_golden": false
+      },
+      {
+        "name": "wide strings",
+        "kind": "syntax",
+        "args": [
+          "-std=c23"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 8,
+        "ast_golden": false
+      },
+      {
+        "name": "zero argument macro",
+        "kind": "expand_error",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 1
+      },
+      {
+        "name": "zero length array",
+        "kind": "syntax",
+        "args": [
+          "-Wzero-length-array"
+        ],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 2,
+        "ast_golden": false
+      },
+      {
+        "name": "zero length multidimensional array",
+        "kind": "syntax",
+        "args": [],
+        "env": [],
+        "skips": [],
+        "expected_diagnostics": 0,
+        "ast_golden": false
+      }
+    ]
+  },
+  "record_cases": {
+    "source": "test/records/*_test.c via test/record_runner.zig parseTargetsFromCode (run with cwd = repo root)",
+    "runner_semantics": {
+      "invocation": "<arocc> <file> -fsyntax-only -fno-color-diagnostics -target <arch>-<os>-<abi> -mcpu <model> --verbose-ast -D <DEFINE> --emulate=<clang|gcc|msvc> [-fms-extensions if msvc abi and Clang] [-DMSVC if msvc abi]",
+      "invalid_target": "os ios/macos with arch x86/arm is counted as an invalid target and not run",
+      "classification": "an 'error:' line followed by a line with _Static_assert classifies as extra (_extra_), offset (_bitoffsetof), layout (sizeof/_alignof); any other error is parse",
+      "expected_failures": {
+        "x86_64-x86_64-windows-gnu:Gcc|0068": {
+          "parse": false,
+          "layout": true,
+          "extra": true,
+          "offset": false
+        },
+        "x86_64-x86_64-windows-gnu:Gcc|0082": {
+          "parse": false,
+          "layout": true,
+          "extra": true,
+          "offset": false
+        }
+      },
+      "global_test_exclude": [],
+      "summary_quirk": "the 'All N tests passed' branch compares ok_count to the number of files, not cases, so a fully green run prints 'N passed; 0 skipped' instead",
+      "prerequisites": "built arocc executable as argv[1]; Zig std.Target.Query.parse must accept every target/model string (cannot be verified without the pinned Zig)"
+    },
+    "summary": {
+      "files": 88,
+      "cases": 9353,
+      "predicted_invalid_targets": 344,
+      "cases_to_run": 9009,
+      "expected_failures": 2,
+      "by_compiler": {
+        "Clang": 5569,
+        "Gcc": 3336,
+        "Msvc": 448
+      },
+      "by_arch": {
+        "aarch64": 1103,
+        "arm": 1604,
+        "avr": 79,
+        "hexagon": 86,
+        "mips": 324,
+        "mips64": 245,
+        "mips64el": 245,
+        "mipsel": 248,
+        "msp430": 86,
+        "powerpc": 248,
+        "powerpc64": 251,
+        "powerpc64le": 164,
+        "riscv32": 167,
+        "riscv64": 169,
+        "s390x": 82,
+        "sparc": 81,
+        "sparc64": 342,
+        "thumb": 757,
+        "wasm32": 261,
+        "x86": 1214,
+        "x86_64": 1597
+      },
+      "by_os": {
+        "dragonfly": 87,
+        "emscripten": 87,
+        "freebsd": 519,
+        "fuchsia": 174,
+        "haiku": 173,
+        "illumos": 173,
+        "ios": 432,
+        "linux": 3526,
+        "maccatalyst": 174,
+        "macos": 260,
+        "netbsd": 605,
+        "openbsd": 347,
+        "other": 1889,
+        "tvos": 174,
+        "uefi": 138,
+        "wasi": 87,
+        "windows": 508
+      }
+    },
+    "other_files": [],
+    "files": [
+      {
+        "test": "0001",
+        "file": "0001_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 45
+          },
+          {
+            "define": "TWO",
+            "targets": 4
+          },
+          {
+            "define": "THREE",
+            "targets": 61
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0002",
+        "file": "0002_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 97
+          },
+          {
+            "define": "TWO",
+            "targets": 13
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0003",
+        "file": "0003_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0004",
+        "file": "0004_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0005",
+        "file": "0005_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 101
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0006",
+        "file": "0006_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 63
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 38
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0007",
+        "file": "0007_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 88
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 11
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0008",
+        "file": "0008_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 111
+      },
+      {
+        "test": "0009",
+        "file": "0009_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 88
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 11
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0010",
+        "file": "0010_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 111
+      },
+      {
+        "test": "0011",
+        "file": "0011_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0012",
+        "file": "0012_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0013",
+        "file": "0013_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 45
+          },
+          {
+            "define": "TWO",
+            "targets": 4
+          },
+          {
+            "define": "THREE",
+            "targets": 48
+          },
+          {
+            "define": "FOUR",
+            "targets": 13
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0014",
+        "file": "0014_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0015",
+        "file": "0015_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 37
+          },
+          {
+            "define": "TWO",
+            "targets": 8
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 27
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 31
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0016",
+        "file": "0016_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 62
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 40
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0017",
+        "file": "0017_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 64
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 71
+      },
+      {
+        "test": "0018",
+        "file": "0018_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 54
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 9
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 71
+      },
+      {
+        "test": "0019",
+        "file": "0019_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 98
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 4
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0020",
+        "file": "0020_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 3
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          },
+          {
+            "define": "SEVEN",
+            "targets": 2
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0021",
+        "file": "0021_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 108
+          },
+          {
+            "define": "TWO",
+            "targets": 2
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0022",
+        "file": "0022_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 5
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0023",
+        "file": "0023_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0024",
+        "file": "0024_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 57
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 11
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0025",
+        "file": "0025_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 29
+          },
+          {
+            "define": "TWO",
+            "targets": 25
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 7
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 71
+      },
+      {
+        "test": "0026",
+        "file": "0026_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 37
+          },
+          {
+            "define": "TWO",
+            "targets": 27
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 5
+          }
+        ],
+        "cases": 71
+      },
+      {
+        "test": "0027",
+        "file": "0027_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 104
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0028",
+        "file": "0028_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0029",
+        "file": "0029_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 102
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 3
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0030",
+        "file": "0030_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 110
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0031",
+        "file": "0031_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0032",
+        "file": "0032_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 45
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 58
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0033",
+        "file": "0033_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 45
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 58
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0034",
+        "file": "0034_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 45
+          },
+          {
+            "define": "TWO",
+            "targets": 65
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0035",
+        "file": "0035_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 37
+          },
+          {
+            "define": "TWO",
+            "targets": 8
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 27
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 29
+          },
+          {
+            "define": "SEVEN",
+            "targets": 2
+          },
+          {
+            "define": "EIGHT",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0036",
+        "file": "0036_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 7
+          }
+        ],
+        "cases": 7
+      },
+      {
+        "test": "0037",
+        "file": "0037_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 45
+          },
+          {
+            "define": "TWO",
+            "targets": 2
+          },
+          {
+            "define": "THREE",
+            "targets": 56
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 5
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0038",
+        "file": "0038_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0039",
+        "file": "0039_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 66
+          },
+          {
+            "define": "TWO",
+            "targets": 42
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0040",
+        "file": "0040_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 68
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 2
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0041",
+        "file": "0041_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 68
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0042",
+        "file": "0042_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 63
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 71
+      },
+      {
+        "test": "0043",
+        "file": "0043_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 90
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 13
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0044",
+        "file": "0044_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 55
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 11
+          },
+          {
+            "define": "SEVEN",
+            "targets": 3
+          },
+          {
+            "define": "EIGHT",
+            "targets": 2
+          },
+          {
+            "define": "NINE",
+            "targets": 1
+          },
+          {
+            "define": "TEN",
+            "targets": 1
+          },
+          {
+            "define": "ELEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0045",
+        "file": "0045_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0046",
+        "file": "0046_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0047",
+        "file": "0047_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 66
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 9
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0048",
+        "file": "0048_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 68
+          },
+          {
+            "define": "TWO",
+            "targets": 35
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0049",
+        "file": "0049_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 66
+          },
+          {
+            "define": "TWO",
+            "targets": 35
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0050",
+        "file": "0050_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 46
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          }
+        ],
+        "cases": 47
+      },
+      {
+        "test": "0051",
+        "file": "0051_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 62
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 40
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0052",
+        "file": "0052_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 72
+          },
+          {
+            "define": "TWO",
+            "targets": 32
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0053",
+        "file": "0053_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0054",
+        "file": "0054_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 89
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 13
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0055",
+        "file": "0055_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 90
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 13
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0056",
+        "file": "0056_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 110
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0057",
+        "file": "0057_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 110
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0058",
+        "file": "0058_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 105
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0059",
+        "file": "0059_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 101
+          },
+          {
+            "define": "TWO",
+            "targets": 9
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0060",
+        "file": "0060_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 89
+          },
+          {
+            "define": "TWO",
+            "targets": 13
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0061",
+        "file": "0061_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 89
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 13
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0062",
+        "file": "0062_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 89
+          },
+          {
+            "define": "TWO",
+            "targets": 13
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0063",
+        "file": "0063_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 62
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 40
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0064",
+        "file": "0064_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 90
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 13
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0065",
+        "file": "0065_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0066",
+        "file": "0066_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0067",
+        "file": "0067_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 37
+          },
+          {
+            "define": "TWO",
+            "targets": 8
+          },
+          {
+            "define": "THREE",
+            "targets": 27
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 29
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0068",
+        "file": "0068_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 22
+          },
+          {
+            "define": "TWO",
+            "targets": 6
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 19
+          },
+          {
+            "define": "FIVE",
+            "targets": 6
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          },
+          {
+            "define": "EIGHT",
+            "targets": 7
+          },
+          {
+            "define": "NINE",
+            "targets": 7
+          },
+          {
+            "define": "TEN",
+            "targets": 4
+          },
+          {
+            "define": "ELEVEN",
+            "targets": 1
+          },
+          {
+            "define": "TWELVE",
+            "targets": 15
+          },
+          {
+            "define": "THIRTEEN",
+            "targets": 11
+          },
+          {
+            "define": "FOURTEEN",
+            "targets": 1
+          },
+          {
+            "define": "FIFTEEN",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0069",
+        "file": "0069_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 55
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 11
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0070",
+        "file": "0070_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0071",
+        "file": "0071_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 66
+          },
+          {
+            "define": "TWO",
+            "targets": 35
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0072",
+        "file": "0072_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 61
+          },
+          {
+            "define": "TWO",
+            "targets": 2
+          },
+          {
+            "define": "THREE",
+            "targets": 38
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 5
+          },
+          {
+            "define": "SEVEN",
+            "targets": 2
+          },
+          {
+            "define": "EIGHT",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0073",
+        "file": "0073_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 66
+          },
+          {
+            "define": "TWO",
+            "targets": 35
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 2
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0074",
+        "file": "0074_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 110
+          },
+          {
+            "define": "TWO",
+            "targets": 2
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0075",
+        "file": "0075_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 66
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 2
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0076",
+        "file": "0076_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 99
+          },
+          {
+            "define": "TWO",
+            "targets": 2
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0077",
+        "file": "0077_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 101
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0078",
+        "file": "0078_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 68
+          },
+          {
+            "define": "TWO",
+            "targets": 35
+          },
+          {
+            "define": "THREE",
+            "targets": 7
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0079",
+        "file": "0079_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 101
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0080",
+        "file": "0080_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 54
+          },
+          {
+            "define": "TWO",
+            "targets": 2
+          },
+          {
+            "define": "THREE",
+            "targets": 34
+          },
+          {
+            "define": "FOUR",
+            "targets": 2
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          },
+          {
+            "define": "SIX",
+            "targets": 7
+          },
+          {
+            "define": "SEVEN",
+            "targets": 5
+          },
+          {
+            "define": "EIGHT",
+            "targets": 4
+          },
+          {
+            "define": "NINE",
+            "targets": 2
+          },
+          {
+            "define": "TEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0081",
+        "file": "0081_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 88
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 11
+          },
+          {
+            "define": "SIX",
+            "targets": 2
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      },
+      {
+        "test": "0082",
+        "file": "0082_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 55
+          },
+          {
+            "define": "TWO",
+            "targets": 33
+          },
+          {
+            "define": "THREE",
+            "targets": 2
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 11
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          },
+          {
+            "define": "SEVEN",
+            "targets": 1
+          },
+          {
+            "define": "EIGHT",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0083",
+        "file": "0083_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 28
+          },
+          {
+            "define": "TWO",
+            "targets": 17
+          },
+          {
+            "define": "THREE",
+            "targets": 33
+          },
+          {
+            "define": "FOUR",
+            "targets": 21
+          },
+          {
+            "define": "FIVE",
+            "targets": 2
+          },
+          {
+            "define": "SIX",
+            "targets": 1
+          },
+          {
+            "define": "SEVEN",
+            "targets": 2
+          },
+          {
+            "define": "EIGHT",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0084",
+        "file": "0084_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0085",
+        "file": "0085_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0086",
+        "file": "0086_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 103
+          },
+          {
+            "define": "TWO",
+            "targets": 1
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0087",
+        "file": "0087_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 90
+          },
+          {
+            "define": "TWO",
+            "targets": 13
+          },
+          {
+            "define": "THREE",
+            "targets": 1
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          }
+        ],
+        "cases": 105
+      },
+      {
+        "test": "0088",
+        "file": "0088_test.c",
+        "mappings": [
+          {
+            "define": "ONE",
+            "targets": 90
+          },
+          {
+            "define": "TWO",
+            "targets": 7
+          },
+          {
+            "define": "THREE",
+            "targets": 13
+          },
+          {
+            "define": "FOUR",
+            "targets": 1
+          },
+          {
+            "define": "FIVE",
+            "targets": 1
+          }
+        ],
+        "cases": 112
+      }
+    ]
+  },
+  "unit_tests": {
+    "source": "`test` blocks in src/, build/, test/ *.zig; build.zig test-unit roots at src/aro.zig",
+    "note": "Which blocks Zig actually compiles depends on semantic analysis reachability; this lists every block in source. Anonymous blocks are import-only aggregators.",
+    "summary": {
+      "files_with_tests": 15,
+      "blocks_total": 43,
+      "named": 42,
+      "anonymous": 1
+    },
+    "aro_zig_test_imports": [
+      "aro/Builtins.zig",
+      "aro/Compilation.zig",
+      "aro/InitList.zig",
+      "aro/LangOpts.zig",
+      "aro/Preprocessor.zig",
+      "aro/Target.zig",
+      "aro/Tokenizer.zig",
+      "aro/Toolchain/Darwin.zig",
+      "aro/Toolchain/Distro.zig",
+      "aro/Toolchain/GCCDetector.zig",
+      "aro/Toolchain/GCCVersion.zig",
+      "aro/Toolchain/Linux.zig",
+      "aro/Toolchain/Multilib.zig",
+      "aro/Value.zig",
+      "aro/annex_g.zig",
+      "aro/char_info.zig"
+    ],
+    "files": [
+      {
+        "file": "src/aro.zig",
+        "module": "aro (test-unit root module)",
+        "named": 0,
+        "anonymous": 1,
+        "explicitly_referenced_by_aro_zig": false,
+        "names": []
+      },
+      {
+        "file": "src/aro/Builtins.zig",
+        "module": "aro (test-unit root module)",
+        "named": 1,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "all builtins"
+        ]
+      },
+      {
+        "file": "src/aro/Compilation.zig",
+        "module": "aro (test-unit root module)",
+        "named": 3,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "addSourceFromBuffer",
+          "addSourceFromBuffer - exhaustive check for carriage return elimination",
+          "ignore BOM at beginning of file"
+        ]
+      },
+      {
+        "file": "src/aro/InitList.zig",
+        "module": "aro (test-unit root module)",
+        "named": 1,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "basic usage"
+        ]
+      },
+      {
+        "file": "src/aro/LangOpts.zig",
+        "module": "aro (test-unit root module)",
+        "named": 1,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "ArmLdrex versions"
+        ]
+      },
+      {
+        "file": "src/aro/Parser.zig",
+        "module": "aro (test-unit root module)",
+        "named": 1,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": false,
+        "names": [
+          "Node locations"
+        ]
+      },
+      {
+        "file": "src/aro/Preprocessor.zig",
+        "module": "aro (test-unit root module)",
+        "named": 3,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "Preserve pragma tokens sometimes",
+          "destringify",
+          "Include guards"
+        ]
+      },
+      {
+        "file": "src/aro/Target.zig",
+        "module": "aro (test-unit root module)",
+        "named": 5,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "decltest parseArchName",
+          "alignment functions - smoke test",
+          "target size/align tests",
+          "decltest parseAbi",
+          "decltest parseOs"
+        ]
+      },
+      {
+        "file": "src/aro/Tokenizer.zig",
+        "module": "aro (test-unit root module)",
+        "named": 14,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "escaped literals at eof or with embedded NUL byte",
+          "operators",
+          "keywords",
+          "preprocessor keywords",
+          "line continuation",
+          "string prefix",
+          "num suffixes",
+          "comments",
+          "extended identifiers",
+          "digraphs",
+          "C23 keywords",
+          "GCC integer keywords",
+          "Universal character names",
+          "Tokenizer fuzz test"
+        ]
+      },
+      {
+        "file": "src/aro/Toolchain/Distro.zig",
+        "module": "aro (test-unit root module)",
+        "named": 4,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "decltest scanForDebian",
+          "decltest scanForRedHat",
+          "decltest scanForLSBRelease",
+          "decltest scanForOsRelease"
+        ]
+      },
+      {
+        "file": "src/aro/Toolchain/GCCVersion.zig",
+        "module": "aro (test-unit root module)",
+        "named": 1,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "decltest parse"
+        ]
+      },
+      {
+        "file": "src/aro/Toolchain/Linux.zig",
+        "module": "aro (test-unit root module)",
+        "named": 1,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "decltest Linux"
+        ]
+      },
+      {
+        "file": "src/aro/Value.zig",
+        "module": "aro (test-unit root module)",
+        "named": 2,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "minUnsignedBits",
+          "minSignedBits"
+        ]
+      },
+      {
+        "file": "src/aro/annex_g.zig",
+        "module": "aro (test-unit root module)",
+        "named": 2,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "decltest complexFloatMul",
+          "decltest complexFloatDiv"
+        ]
+      },
+      {
+        "file": "src/aro/char_info.zig",
+        "module": "aro (test-unit root module)",
+        "named": 3,
+        "anonymous": 0,
+        "explicitly_referenced_by_aro_zig": true,
+        "names": [
+          "isXidStart / isXidContinue panic check",
+          "decltest isXidStart",
+          "decltest isXidContinue"
+        ]
+      }
+    ]
+  },
+  "public_exports": {
+    "note": "Parity requirement: the C3 library must expose an equivalent for each name.",
+    "src/aro.zig": [
+      {
+        "name": "CodeGen",
+        "kind": "const",
+        "value": "@import(\"aro/CodeGen.zig\")"
+      },
+      {
+        "name": "Compilation",
+        "kind": "const",
+        "value": "@import(\"aro/Compilation.zig\")"
+      },
+      {
+        "name": "Diagnostics",
+        "kind": "const",
+        "value": "@import(\"aro/Diagnostics.zig\")"
+      },
+      {
+        "name": "Driver",
+        "kind": "const",
+        "value": "@import(\"aro/Driver.zig\")"
+      },
+      {
+        "name": "Parser",
+        "kind": "const",
+        "value": "@import(\"aro/Parser.zig\")"
+      },
+      {
+        "name": "Preprocessor",
+        "kind": "const",
+        "value": "@import(\"aro/Preprocessor.zig\")"
+      },
+      {
+        "name": "Source",
+        "kind": "const",
+        "value": "@import(\"aro/Source.zig\")"
+      },
+      {
+        "name": "StringInterner",
+        "kind": "const",
+        "value": "@import(\"aro/StringInterner.zig\")"
+      },
+      {
+        "name": "Target",
+        "kind": "const",
+        "value": "@import(\"aro/Target.zig\")"
+      },
+      {
+        "name": "Tokenizer",
+        "kind": "const",
+        "value": "@import(\"aro/Tokenizer.zig\")"
+      },
+      {
+        "name": "Toolchain",
+        "kind": "const",
+        "value": "@import(\"aro/Toolchain.zig\")"
+      },
+      {
+        "name": "Tree",
+        "kind": "const",
+        "value": "@import(\"aro/Tree.zig\")"
+      },
+      {
+        "name": "TypeStore",
+        "kind": "const",
+        "value": "@import(\"aro/TypeStore.zig\")"
+      },
+      {
+        "name": "QualType",
+        "kind": "const",
+        "value": "TypeStore.QualType"
+      },
+      {
+        "name": "Type",
+        "kind": "const",
+        "value": "TypeStore.Type"
+      },
+      {
+        "name": "Value",
+        "kind": "const",
+        "value": "@import(\"aro/Value.zig\")"
+      },
+      {
+        "name": "Interner",
+        "kind": "const",
+        "value": "backend.Interner"
+      },
+      {
+        "name": "Ir",
+        "kind": "const",
+        "value": "backend.Ir"
+      },
+      {
+        "name": "Object",
+        "kind": "const",
+        "value": "backend.Object"
+      },
+      {
+        "name": "CallingConvention",
+        "kind": "const",
+        "value": "backend.CallingConvention"
+      },
+      {
+        "name": "Assembly",
+        "kind": "const",
+        "value": "backend.Assembly"
+      },
+      {
+        "name": "version_str",
+        "kind": "const",
+        "value": "backend.version_str"
+      },
+      {
+        "name": "version",
+        "kind": "const",
+        "value": "backend.version"
+      }
+    ],
+    "src/backend.zig": [
+      {
+        "name": "Assembly",
+        "kind": "const",
+        "value": "@import(\"backend/Assembly.zig\")"
+      },
+      {
+        "name": "CodeGenOptions",
+        "kind": "const",
+        "value": "@import(\"backend/CodeGenOptions.zig\")"
+      },
+      {
+        "name": "Interner",
+        "kind": "const",
+        "value": "@import(\"backend/Interner.zig\")"
+      },
+      {
+        "name": "Ir",
+        "kind": "const",
+        "value": "@import(\"backend/Ir.zig\")"
+      },
+      {
+        "name": "Object",
+        "kind": "const",
+        "value": "@import(\"backend/Object.zig\")"
+      },
+      {
+        "name": "CallingConvention",
+        "kind": "const",
+        "value": "enum { ... }"
+      },
+      {
+        "name": "version_str",
+        "kind": "const",
+        "value": "@import(\"build_options\").version_str"
+      },
+      {
+        "name": "version",
+        "kind": "const",
+        "value": "@import(\"std\").SemanticVersion.parse(version_str) catch unreachable"
+      }
+    ],
+    "backend.CallingConvention": [
+      "c",
+      "stdcall",
+      "thiscall",
+      "vectorcall",
+      "fastcall",
+      "regcall",
+      "riscv_vector",
+      "aarch64_sve_pcs",
+      "aarch64_vector_pcs",
+      "arm_aapcs",
+      "arm_aapcs_vfp",
+      "x86_64_sysv",
+      "x86_64_win"
+    ]
+  },
+  "backend_limitations": {
+    "note": "Parity requirements describing current behavior, not promises to implement missing codegen. Derived from source.",
+    "items": [
+      {
+        "where": "src/aro/Driver.zig processSource",
+        "behavior": "Past -fsyntax-only / -E, only x86_64 ELF targets are accepted; anything else is fatal: 'unsupported target {arch}-{os}-{abi}, currently only x86-64 elf is supported'."
+      },
+      {
+        "where": "src/aro/Driver.zig (-O handling)",
+        "behavior": "-O0 selects the non-optimizing assembly backend (use_assembly_backend); every other -O level goes through IR (tree.genIr) and Ir.render."
+      },
+      {
+        "where": "src/assembly_backend.zig genAsm",
+        "behavior": "Only x86_64 is implemented; any other arch panics 'genAsm not implemented'."
+      },
+      {
+        "where": "src/assembly_backend/x86_64.zig",
+        "behavior": "Emits data only. Function definitions fail with diagnostic 'TODO: Codegen functions'. Aggregate/array/struct/union initializers -> 'TODO: Codegen multiple inits' / 'Codegen aggregates'; _Complex -> 'TODO: Codegen _Complex values'; non-8/16/32/64/128-bit ints -> 'TODO: Codegen _BitInt values'; pointers -> 'TODO: Codegen pointer'. Scalars, floats (16/32/64/80/128), strings, .bss/.data/.tdata/.tbss/.comm, -fdata-sections, and the .note.GNU-stack section are emitted."
+      },
+      {
+        "where": "src/backend/Ir/x86/Renderer.zig",
+        "behavior": "Every IR decl fails with 'TODO implement lowering functions'; Driver reports 'unable to render Ir to machine code: ...'. So no object code is produced for any function via the IR path."
+      },
+      {
+        "where": "src/aro/CodeGen.zig (AST -> IR)",
+        "behavior": "Fails with 'TODO ...' for: global assembly, struct bitfields, union types, blocks, complex, atomic, VLAs, nullptr_t, case ranges, several statements/expressions/casts/lvalues/builtins/initializers, static/thread_local compound literals, memcpy, and global variables (genVar)."
+      },
+      {
+        "where": "src/backend/Object.zig",
+        "behavior": "Only ELF object format exists (other formats are unreachable)."
+      }
+    ]
+  }
+}
