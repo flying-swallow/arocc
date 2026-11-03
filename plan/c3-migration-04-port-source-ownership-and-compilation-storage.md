@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 04 [Core runtime]: Port source ownership and compilation storage'
-state: waiting
+state: complete
 depends_on:
 - c3-migration-02-add-a-standalone-bazel-and-c3c-build-foundation
 planned: true

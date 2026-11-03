@@ -2,3 +2,6 @@
 module aro;
 
 const String VERSION = "0.0.0-c3";
+
+// Returned by stage-0 stubs whose real implementation has not landed yet.
+excuse UNSUPPORTED;

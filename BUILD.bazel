@@ -5,6 +5,9 @@ c3_library(
     name = "aro_c3_lib",
     srcs = [
         "src/c3/aro.c3",
+        "src/c3/compilation.c3",
+        "src/c3/source.c3",
+        "src/c3/string_interner.c3",
     ],
     visibility = ["//visibility:public"],
 )
