@@ -16,6 +16,11 @@ c3_library(
         "src/c3/target_cpu.c3",
         "src/c3/target_data.c3",
         "src/c3/tokenizer.c3",
+        "src/c3/toolchain/discovery.c3",
+        "src/c3/toolchain/distro.c3",
+        "src/c3/toolchain/gcc_detector.c3",
+        "src/c3/toolchain/gcc_version.c3",
+        "src/c3/toolchain/multilib.c3",
     ],
     visibility = ["//visibility:public"],
 )
