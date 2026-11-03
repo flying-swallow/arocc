@@ -57,6 +57,8 @@ c3_test(
         "data/def_emit_x86.c3",
     ],
     deps = ["//tools:generate_def_lib"],
+)
+
 c3_test(
     name = "builtins_lookup_tests",
     srcs = [
