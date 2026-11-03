@@ -3,7 +3,7 @@
 // aliases and the string interner. Later tickets extend `Compilation` with
 // targets, language options, include search, pragmas, etc.
 module aro::compilation;
-import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, std::collections::list;
+import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, aro::type_store, std::collections::list;
 
 excuse FILE_TOO_BIG;
 
@@ -61,6 +61,8 @@ struct Compilation
 	Target target;
 	bool has_darwin_target_variant;
 	Target darwin_target_variant;
+	<* Interned types (Zig `type_store`); named types are filled by `type_store::init_named_types`. *>
+	TypeStore type_store;
 }
 
 <*
@@ -86,6 +88,7 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 	self.source_aliases.init(gpa);
 	self.generated_buf.init(gpa);
 	self.string_interner.init(gpa);
+	self.type_store.init(gpa);
 }
 
 fn void Compilation.free(&self)
@@ -104,6 +107,7 @@ fn void Compilation.free(&self)
 	self.source_aliases.free();
 	self.generated_buf.free();
 	self.string_interner.free();
+	self.type_store.free();
 	if (self.owns_diagnostics)
 	{
 		self.diagnostics.free();

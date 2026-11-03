@@ -16,7 +16,11 @@ c3_library(
         "src/c3/target_cpu.c3",
         "src/c3/target_data.c3",
         "src/c3/tokenizer.c3",
+        "src/c3/type_print.c3",
         "src/c3/type_store.c3",
+        "src/c3/type_store_layout.c3",
+        "src/c3/type_store_named.c3",
+        "src/c3/type_store_relations.c3",
     ],
     visibility = ["//visibility:public"],
 )

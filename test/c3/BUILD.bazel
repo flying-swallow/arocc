@@ -29,3 +29,9 @@ c3_test(
     srcs = ["target_tests.c3"],
     deps = ["//:aro_c3_lib"],
 )
+
+c3_test(
+    name = "type_store_tests",
+    srcs = ["type_store_tests.c3"],
+    deps = ["//:aro_c3_lib"],
+)

@@ -655,67 +655,579 @@ fn bool Pointer.any_attrs(self) => self.bounds != C || self.nullability != DEFAU
 
 fn bool ArrayLen.is_sized(self) => self.kind == FIXED || self.kind == STATIC;
 
+
 // ---------------------------------------------------------------------------
-// Store lifecycle and storage (stage 0 stubs)
+// Store lifecycle
 // ---------------------------------------------------------------------------
 
 fn void TypeStore.init(&self, Allocator gpa)
 {
-	unreachable("type_store: stage 0 stub");
+	*self = { .gpa = gpa };
+	self.types.init(gpa);
+	self.extra.init(gpa);
+	self.funcs.init(gpa);
+	self.records.init(gpa);
+	self.enums.init(gpa);
+	self.requested_aligns.init(gpa);
+	self.wchar = INVALID;
+	self.wint = INVALID;
+	self.uint_least16_t = INVALID;
+	self.uint_least32_t = INVALID;
+	self.ptrdiff = INVALID;
+	self.size = INVALID;
+	self.va_list = INVALID;
+	self.pid_t = INVALID;
+	self.ns_constant_string = INVALID;
+	self.file = INVALID;
+	self.jmp_buf = INVALID;
+	self.sigjmp_buf = INVALID;
+	self.ucontext_t = INVALID;
+	self.intmax = INVALID;
+	self.intptr = INVALID;
+	self.int16 = INVALID;
+	self.int64 = INVALID;
 }
 
 fn void TypeStore.free(&self)
 {
-	unreachable("type_store: stage 0 stub");
+	Allocator gpa = self.gpa;
+	foreach (&f : self.funcs) if (f.params.len) alloc::free(gpa, f.params.ptr);
+	foreach (&r : self.records) if (r.fields.len) alloc::free(gpa, r.fields.ptr);
+	foreach (&e : self.enums) if (e.fields.len) alloc::free(gpa, e.fields.ptr);
+	self.types.free();
+	self.extra.free();
+	self.funcs.free();
+	self.records.free();
+	self.enums.free();
+	self.requested_aligns.free();
+	*self = {};
 }
 
-fn QualType TypeStore.put(&self, Type ty)
+<* Number of non-builtin types stored (handle indices 0..len-1). *>
+fn usz TypeStore.len(&self) => (usz)self.types.len();
+
+macro copy_slice(Allocator gpa, slice) @local
 {
-	unreachable("type_store: stage 0 stub");
+	if (!slice.len) return slice[:0];
+	var copy = alloc::new_array(gpa, $Typeof(slice[0]), slice.len);
+	copy[..] = slice[..];
+	return copy;
 }
 
+// ---------------------------------------------------------------------------
+// put / putExtra / set
+// ---------------------------------------------------------------------------
+
+fn QualType TypeStore.put(&self, Type ty) => { .index = self.put_extra(ty) };
+
+fn uint int_index(TypeInt k)
+{
+	switch (k)
+	{
+		case CHAR: return IDX_INT_CHAR;
+		case SCHAR: return IDX_INT_SCHAR;
+		case UCHAR: return IDX_INT_UCHAR;
+		case SHORT: return IDX_INT_SHORT;
+		case USHORT: return IDX_INT_USHORT;
+		case INT: return IDX_INT_INT;
+		case UINT: return IDX_INT_UINT;
+		case LONG: return IDX_INT_LONG;
+		case ULONG: return IDX_INT_ULONG;
+		case LONG_LONG: return IDX_INT_LONG_LONG;
+		case ULONG_LONG: return IDX_INT_ULONG_LONG;
+		case INT128: return IDX_INT_INT128;
+		case UINT128: return IDX_INT_UINT128;
+		case INT24: return IDX_INT_INT24;
+		case UINT24: return IDX_INT_UINT24;
+	}
+}
+
+fn uint float_index(TypeFloat k)
+{
+	switch (k)
+	{
+		case BF16: return IDX_FLOAT_BF16;
+		case FP16: return IDX_FLOAT_FP16;
+		case FLOAT16: return IDX_FLOAT_FLOAT16;
+		case FLOAT: return IDX_FLOAT_FLOAT;
+		case DOUBLE: return IDX_FLOAT_DOUBLE;
+		case LONG_DOUBLE: return IDX_FLOAT_LONG_DOUBLE;
+		case FLOAT128: return IDX_FLOAT_FLOAT128;
+		case FLOAT32: return IDX_FLOAT_FLOAT32;
+		case FLOAT64: return IDX_FLOAT_FLOAT64;
+		case FLOAT32X: return IDX_FLOAT_FLOAT32X;
+		case FLOAT64X: return IDX_FLOAT_FLOAT64X;
+		case FLOAT128X: return IDX_FLOAT_FLOAT128X;
+		case DFLOAT32: return IDX_FLOAT_DFLOAT32;
+		case DFLOAT64: return IDX_FLOAT_DFLOAT64;
+		case DFLOAT128: return IDX_FLOAT_DFLOAT128;
+		case DFLOAT64X: return IDX_FLOAT_DFLOAT64X;
+	}
+}
+
+<* Builtin types map to fixed indices; everything else gets a new slot. *>
 fn uint TypeStore.put_extra(&self, Type ty)
 {
-	unreachable("type_store: stage 0 stub");
+	switch (ty.tag)
+	{
+		case VOID: return IDX_VOID;
+		case BOOL: return IDX_BOOL;
+		case NULLPTR_T: return IDX_NULLPTR_T;
+		case INT: return int_index(ty.int_ty);
+		case FLOAT: return float_index(ty.float_ty);
+		case STORAGE_FLOAT: return IDX_MFP8;
+		default: break;
+	}
+	uint index = self.add_one();
+	self.set(ty, index);
+	return index;
 }
 
-<* Reserve an index for a type that `set` will fill in later. *>
+<* Reserve an index for a type that `set` fills in later (Zig `types.addOne`). *>
 fn uint TypeStore.add_one(&self)
 {
-	unreachable("type_store: stage 0 stub");
+	usz index = self.len();
+	assert(index < FIRST_BUILTIN_INDEX, "type store index space (u29) exhausted");
+	self.types.push({});
+	return (uint)index;
 }
 
+<*
+ Store `ty` at `index`, replacing what was there. Used by `put_extra` and to
+ complete forward-declared records and enums in place, keeping their handle.
+ @require index < self.len() : "index must come from add_one/put_extra"
+*>
 fn void TypeStore.set(&self, Type ty, uint index)
 {
-	unreachable("type_store: stage 0 stub");
+	Repr repr;
+	switch (ty.tag)
+	{
+		case VOID:
+		case BOOL:
+		case NULLPTR_T:
+		case INT:
+		case FLOAT:
+		case STORAGE_FLOAT:
+			unreachable("builtin types have fixed indices");
+		case COMPLEX:
+			repr.tag = COMPLEX;
+			repr.data[0] = (uint)ty.complex;
+		case BIT_INT:
+			repr.tag = BIT_INT;
+			repr.data[0] = ty.bit_int.bits;
+			repr.data[1] = ty.bit_int.signedness.ordinal;
+		case ATOMIC:
+			repr.tag = ATOMIC;
+			assert(!ty.atomic.is_const && !ty.atomic.is_volatile);
+			repr.data[0] = (uint)ty.atomic;
+		case BLOCK:
+			repr.tag = BLOCK;
+			repr.data[0] = (uint)ty.block.func;
+		case FUNC:
+			Func func = ty.func;
+			repr.data[0] = (uint)func.return_type;
+			FuncAttrs attr = { .kind = (char)func.kind.ordinal, .cc = (char)func.cc.ordinal };
+			usz n = func.params.len;
+			if (n == 0)
+			{
+				switch (func.kind)
+				{
+					case NORMAL: repr.tag = FUNC_ZERO;
+					case VARIADIC: repr.tag = FUNC_VARIADIC_ZERO;
+					case OLD_STYLE: repr.tag = FUNC_OLD_STYLE_ZERO;
+				}
+				if (func.cc != DEFAULT)
+				{
+					repr.tag = FUNC_ATTRIBUTED_ZERO;
+					repr.data[1] = (uint)attr;
+				}
+			}
+			else
+			{
+				repr.data[1] = (uint)self.funcs.len();
+				self.funcs.push({ .params = copy_slice(self.gpa, func.params), .attrs = attr });
+				switch (func.kind)
+				{
+					case NORMAL: repr.tag = n == 1 ? FUNC_ONE : FUNC;
+					case VARIADIC: repr.tag = n == 1 ? FUNC_VARIADIC_ONE : FUNC_VARIADIC;
+					case OLD_STYLE: repr.tag = n == 1 ? FUNC_OLD_STYLE_ONE : FUNC_OLD_STYLE;
+				}
+				if (func.cc != DEFAULT) repr.tag = n == 1 ? FUNC_ATTRIBUTED_ONE : FUNC_ATTRIBUTED;
+			}
+		case POINTER:
+			Pointer p = ty.pointer;
+			repr.data[0] = (uint)p.child;
+			PointerAttrs attr = { .bounds = (char)p.bounds.ordinal, .nullability = (char)p.nullability.ordinal };
+			if (p.has_decayed)
+			{
+				if (p.any_attrs())
+				{
+					repr.tag = POINTER_DECAYED_ATTRIBUTED;
+					repr.data[1] = (uint)self.extra.len();
+					self.extra.push((uint)p.decayed);
+					self.extra.push((uint)attr);
+				}
+				else
+				{
+					repr.tag = POINTER_DECAYED;
+					repr.data[1] = (uint)p.decayed;
+				}
+			}
+			else
+			{
+				repr.tag = POINTER;
+				repr.data[1] = (uint)attr;
+			}
+		case ARRAY:
+			Array a = ty.array;
+			repr.data[0] = (uint)a.elem;
+			switch (a.len.kind)
+			{
+				case INCOMPLETE:
+					repr.tag = ARRAY_INCOMPLETE;
+				case FIXED:
+				case STATIC:
+					repr.tag = a.len.kind == FIXED ? ARRAY_FIXED : ARRAY_STATIC;
+					repr.data[1] = (uint)self.extra.len();
+					self.extra.push((uint)(a.len.len & 0xFFFF_FFFF));
+					self.extra.push((uint)(a.len.len >> 32));
+				case VARIABLE:
+					repr.tag = ARRAY_VARIABLE;
+					repr.data[1] = (uint)a.len.expr;
+				case UNSPECIFIED_VARIABLE:
+					repr.tag = ARRAY_UNSPECIFIED_VARIABLE;
+			}
+		case VECTOR:
+			switch (ty.vector.kind)
+			{
+				case GENERIC: repr.tag = VECTOR;
+				case NEON: repr.tag = VECTOR_NEON;
+				case NEON_POLY: repr.tag = VECTOR_NEON_POLY;
+			}
+			repr.data[0] = (uint)ty.vector.elem;
+			repr.data[1] = ty.vector.len;
+		case STRUCT:
+		case UNION:
+			Record r = ty.record;
+			bool is_union = ty.tag == UNION;
+			repr.data[0] = (uint)r.name;
+			if (!r.has_layout)
+			{
+				assert(r.fields.len == 0);
+				repr.tag = is_union ? UNION_INCOMPLETE : STRUCT_INCOMPLETE;
+				repr.data[1] = (uint)r.decl_node;
+				break;
+			}
+			repr.tag = is_union ? UNION : STRUCT;
+			repr.data[1] = (uint)self.records.len();
+			self.records.push({ .decl_node = r.decl_node, .layout = r.layout, .fields = copy_slice(self.gpa, r.fields) });
+		case ENUM:
+			EnumType e = ty.enum_ty;
+			if (e.incomplete)
+			{
+				assert(e.fields.len == 0);
+				if (e.fixed)
+				{
+					assert(e.has_tag);
+					repr.tag = ENUM_INCOMPLETE_FIXED;
+					repr.data[0] = (uint)e.tag;
+					repr.data[1] = (uint)self.extra.len();
+					self.extra.push((uint)e.name);
+					self.extra.push((uint)e.decl_node);
+				}
+				else
+				{
+					repr.tag = ENUM_INCOMPLETE;
+					repr.data[0] = (uint)e.name;
+					repr.data[1] = (uint)e.decl_node;
+				}
+				break;
+			}
+			assert(e.has_tag);
+			repr.tag = e.fixed ? ENUM_FIXED : ENUM;
+			repr.data[0] = (uint)e.tag;
+			repr.data[1] = (uint)self.enums.len();
+			self.enums.push({ .name = e.name, .decl_node = e.decl_node, .fields = copy_slice(self.gpa, e.fields) });
+		case TYPEOF:
+			repr.data[0] = (uint)ty.type_of.base;
+			if (ty.type_of.has_expr)
+			{
+				repr.tag = TYPEOF_EXPR;
+				repr.data[1] = (uint)ty.type_of.expr;
+			}
+			else
+			{
+				repr.tag = TYPEOF;
+			}
+		case TYPEDEF:
+			repr.tag = TYPEDEF;
+			repr.data[0] = (uint)ty.type_def.base;
+			repr.data[1] = (uint)self.extra.len();
+			self.extra.push((uint)ty.type_def.name);
+			self.extra.push((uint)ty.type_def.decl_node);
+	}
+	self.types[index] = repr;
 }
 
+fn bool ReprTag.is_func(self)
+{
+	switch (self)
+	{
+		case FUNC..FUNC_ATTRIBUTED_ONE: return true;
+		default: return false;
+	}
+}
+
+<* @require !func_qt.is_invalid() && func_qt.index < self.len() *>
 fn void TypeStore.set_func_return_type(&self, QualType func_qt, QualType return_qt)
 {
-	unreachable("type_store: stage 0 stub");
+	Repr* repr = &self.types[func_qt.index];
+	assert(repr.tag.is_func());
+	repr.data[0] = (uint)return_qt;
 }
 
+<* Record an alignment request for exactly this (qualified) handle. *>
 fn void TypeStore.set_requested_alignment(&self, QualType qt, uint alignment)
 {
-	unreachable("type_store: stage 0 stub");
+	self.requested_aligns.set((uint)qt, alignment);
 }
 
+<* Zig `requested_aligns.get(qt)` *>
+fn uint? TypeStore.get_requested_alignment(&self, QualType qt)
+{
+	return self.requested_aligns.get((uint)qt) ?? NO_ALIGN~;
+}
+
+// ---------------------------------------------------------------------------
+// Decoding: type / base / get / childType
+// ---------------------------------------------------------------------------
+
+fn QualType qt_from(uint raw) @inline => (QualType)raw;
+
+<*
+ Decode a handle into its Type (Zig `QualType.type`).
+ @require !self.is_invalid() && !self.is_auto() && self.index != IDX_DECLARATOR_COMBINE : "placeholder types have no Type"
+*>
 fn Type QualType.get_type(self, Compilation* comp)
 {
-	unreachable("type_store: stage 0 stub");
+	switch (self.index)
+	{
+		case IDX_VOID: return { .tag = VOID };
+		case IDX_BOOL: return { .tag = BOOL };
+		case IDX_NULLPTR_T: return { .tag = NULLPTR_T };
+		case IDX_INT_CHAR: return type_int(CHAR);
+		case IDX_INT_SCHAR: return type_int(SCHAR);
+		case IDX_INT_UCHAR: return type_int(UCHAR);
+		case IDX_INT_SHORT: return type_int(SHORT);
+		case IDX_INT_USHORT: return type_int(USHORT);
+		case IDX_INT_INT: return type_int(INT);
+		case IDX_INT_UINT: return type_int(UINT);
+		case IDX_INT_LONG: return type_int(LONG);
+		case IDX_INT_ULONG: return type_int(ULONG);
+		case IDX_INT_LONG_LONG: return type_int(LONG_LONG);
+		case IDX_INT_ULONG_LONG: return type_int(ULONG_LONG);
+		case IDX_INT_INT128: return type_int(INT128);
+		case IDX_INT_UINT128: return type_int(UINT128);
+		case IDX_INT_INT24: return type_int(INT24);
+		case IDX_INT_UINT24: return type_int(UINT24);
+		case IDX_FLOAT_BF16: return type_float(BF16);
+		case IDX_FLOAT_FP16: return type_float(FP16);
+		case IDX_FLOAT_FLOAT16: return type_float(FLOAT16);
+		case IDX_FLOAT_FLOAT: return type_float(FLOAT);
+		case IDX_FLOAT_DOUBLE: return type_float(DOUBLE);
+		case IDX_FLOAT_LONG_DOUBLE: return type_float(LONG_DOUBLE);
+		case IDX_FLOAT_FLOAT128: return type_float(FLOAT128);
+		case IDX_FLOAT_FLOAT32: return type_float(FLOAT32);
+		case IDX_FLOAT_FLOAT64: return type_float(FLOAT64);
+		case IDX_FLOAT_FLOAT32X: return type_float(FLOAT32X);
+		case IDX_FLOAT_FLOAT64X: return type_float(FLOAT64X);
+		case IDX_FLOAT_FLOAT128X: return type_float(FLOAT128X);
+		case IDX_FLOAT_DFLOAT32: return type_float(DFLOAT32);
+		case IDX_FLOAT_DFLOAT64: return type_float(DFLOAT64);
+		case IDX_FLOAT_DFLOAT128: return type_float(DFLOAT128);
+		case IDX_FLOAT_DFLOAT64X: return type_float(DFLOAT64X);
+		case IDX_MFP8: return { .tag = STORAGE_FLOAT, .storage_float = MFP8 };
+		case IDX_VOID_POINTER: return type_pointer(VOID);
+		case IDX_CHAR_POINTER: return type_pointer(CHAR);
+		case IDX_INT_POINTER: return type_pointer(INT);
+		case IDX_INVALID:
+		case IDX_AUTO_TYPE:
+		case IDX_C23_AUTO:
+		case IDX_DECLARATOR_COMBINE:
+			unreachable("placeholder type has no Type");
+		default: break;
+	}
+
+	TypeStore* ts = &comp.type_store;
+	Repr repr = ts.types[self.index];
+	uint d0 = repr.data[0];
+	uint d1 = repr.data[1];
+	switch (repr.tag)
+	{
+		case COMPLEX: return type_complex(qt_from(d0));
+		case ATOMIC: return type_atomic(qt_from(d0));
+		case BIT_INT: return type_bit_int((ushort)d0, Signedness::from_ordinal(d1));
+		case BLOCK: return type_block(qt_from(d0));
+		case FUNC_ZERO: return type_func(qt_from(d0), NORMAL, {});
+		case FUNC_VARIADIC_ZERO: return type_func(qt_from(d0), VARIADIC, {});
+		case FUNC_OLD_STYLE_ZERO: return type_func(qt_from(d0), OLD_STYLE, {});
+		case FUNC_ATTRIBUTED_ZERO:
+			FuncAttrs attr = (FuncAttrs)d1;
+			return type_func(qt_from(d0), FuncKind::from_ordinal(attr.kind), {}, CallingConvention::from_ordinal(attr.cc));
+		case FUNC_ONE:
+		case FUNC:
+			return type_func(qt_from(d0), NORMAL, ts.funcs[d1].params);
+		case FUNC_VARIADIC_ONE:
+		case FUNC_VARIADIC:
+			return type_func(qt_from(d0), VARIADIC, ts.funcs[d1].params);
+		case FUNC_OLD_STYLE_ONE:
+		case FUNC_OLD_STYLE:
+			return type_func(qt_from(d0), OLD_STYLE, ts.funcs[d1].params);
+		case FUNC_ATTRIBUTED_ONE:
+		case FUNC_ATTRIBUTED:
+			FuncData fd = ts.funcs[d1];
+			return type_func(qt_from(d0), FuncKind::from_ordinal(fd.attrs.kind), fd.params, CallingConvention::from_ordinal(fd.attrs.cc));
+		case POINTER:
+			PointerAttrs attr = (PointerAttrs)d1;
+			Type t = type_pointer(qt_from(d0));
+			t.pointer.bounds = PointerBounds::from_ordinal(attr.bounds);
+			t.pointer.nullability = Nullability::from_ordinal(attr.nullability);
+			return t;
+		case POINTER_DECAYED:
+			return type_decayed_pointer(qt_from(d0), qt_from(d1));
+		case POINTER_DECAYED_ATTRIBUTED:
+			PointerAttrs attr = (PointerAttrs)ts.extra[(sz)d1 + 1];
+			Type t = type_decayed_pointer(qt_from(d0), qt_from(ts.extra[d1]));
+			t.pointer.bounds = PointerBounds::from_ordinal(attr.bounds);
+			t.pointer.nullability = Nullability::from_ordinal(attr.nullability);
+			return t;
+		case ARRAY_INCOMPLETE: return type_array(qt_from(d0), INCOMPLETE);
+		case ARRAY_FIXED:
+		case ARRAY_STATIC:
+			ulong len = (ulong)ts.extra[d1] | ((ulong)ts.extra[(sz)d1 + 1] << 32);
+			return type_array(qt_from(d0), repr.tag == ARRAY_FIXED ? FIXED : STATIC, len);
+		case ARRAY_VARIABLE: return type_vla(qt_from(d0), (NodeIndex)d1);
+		case ARRAY_UNSPECIFIED_VARIABLE: return type_array(qt_from(d0), UNSPECIFIED_VARIABLE);
+		case VECTOR: return type_vector(qt_from(d0), d1, GENERIC);
+		case VECTOR_NEON: return type_vector(qt_from(d0), d1, NEON);
+		case VECTOR_NEON_POLY: return type_vector(qt_from(d0), d1, NEON_POLY);
+		case STRUCT:
+		case UNION:
+			RecordData rd = ts.records[d1];
+			return type_record((StringId)d0, rd.fields, rd.layout, repr.tag == UNION, rd.decl_node);
+		case STRUCT_INCOMPLETE: return type_record_incomplete((StringId)d0, false, (NodeOptIndex)d1);
+		case UNION_INCOMPLETE: return type_record_incomplete((StringId)d0, true, (NodeOptIndex)d1);
+		case ENUM:
+		case ENUM_FIXED:
+			EnumData ed = ts.enums[d1];
+			return { .tag = ENUM, .enum_ty = {
+				.has_tag = true, .tag = qt_from(d0), .fixed = repr.tag == ENUM_FIXED, .incomplete = false,
+				.name = ed.name, .decl_node = ed.decl_node, .fields = ed.fields } };
+		case ENUM_INCOMPLETE:
+			return { .tag = ENUM, .enum_ty = {
+				.incomplete = true, .name = (StringId)d0, .decl_node = (NodeIndex)d1 } };
+		case ENUM_INCOMPLETE_FIXED:
+			return { .tag = ENUM, .enum_ty = {
+				.has_tag = true, .tag = qt_from(d0), .fixed = true, .incomplete = true,
+				.name = (StringId)ts.extra[d1], .decl_node = (NodeIndex)ts.extra[(sz)d1 + 1] } };
+		case TYPEOF: return type_typeof(qt_from(d0));
+		case TYPEOF_EXPR: return type_typeof_expr(qt_from(d0), (NodeIndex)d1);
+		case TYPEDEF: return type_typedef(qt_from(d0), (StringId)ts.extra[d1], (NodeIndex)ts.extra[(sz)d1 + 1]);
+	}
 }
 
+<* Strip typeof/typedef wrappers. *>
 fn BaseType QualType.base(self, Compilation* comp)
 {
-	unreachable("type_store: stage 0 stub");
+	QualType cur = self;
+	while (true)
+	{
+		Type ty = cur.get_type(comp);
+		switch (ty.tag)
+		{
+			case TYPEOF: cur = ty.type_of.base;
+			case TYPEDEF: cur = ty.type_def.base;
+			default: return { .ty = ty, .qt = cur };
+		}
+	}
 }
 
-fn Type? QualType.get(self, Compilation* comp, TypeTag tag) => aro::UNSUPPORTED~;
-fn bool QualType.is(self, Compilation* comp, TypeTag tag) => false;
-fn Func? QualType.get_func(self, Compilation* comp) => aro::UNSUPPORTED~;
-fn Record? QualType.get_record(self, Compilation* comp) => aro::UNSUPPORTED~;
-fn QualType QualType.non_atomic(self, Compilation* comp) => self;
+<*
+ The base type if its tag is `tag` (Zig `QualType.get`), else NO_TYPE.
+ STRUCT and UNION are distinct tags.
+ @require tag != TYPEOF && tag != TYPEDEF : "base() never returns typeof/typedef"
+*>
+fn Type? QualType.get(self, Compilation* comp, TypeTag tag)
+{
+	if (self.is_invalid() || self.is_auto()) return NO_TYPE~;
+	Type base_type = self.base(comp).ty;
+	if (base_type.tag == tag) return base_type;
+	return NO_TYPE~;
+}
+
+fn bool QualType.is(self, Compilation* comp, TypeTag tag) => @ok(self.get(comp, tag));
+
+<* Function or function pointer. *>
+fn Func? QualType.get_func(self, Compilation* comp)
+{
+	QualType base_qt = self;
+	if (try p = self.get(comp, POINTER)) base_qt = p.pointer.child;
+	Type t = base_qt.get(comp, FUNC)!;
+	return t.func;
+}
+
+fn Record? QualType.get_record(self, Compilation* comp)
+{
+	if (self.is_invalid() || self.is_auto()) return NO_TYPE~;
+	Type t = self.base(comp).ty;
+	if (t.tag == STRUCT || t.tag == UNION) return t.record;
+	return NO_TYPE~;
+}
+
+<* The underlying value type of an atomic type, or the original type otherwise. *>
+fn QualType QualType.non_atomic(self, Compilation* comp)
+{
+	if (try t = self.get(comp, ATOMIC)) return t.atomic;
+	return self;
+}
+
+<* @require self.is_invalid() || self.is(comp, COMPLEX) || self.is(comp, POINTER) || self.is(comp, ARRAY) || self.is(comp, VECTOR) || self.is(comp, BLOCK) *>
 fn QualType QualType.child_type(self, Compilation* comp)
 {
-	unreachable("type_store: stage 0 stub");
+	if (self.is_invalid()) return INVALID;
+	BaseType b = self.base(comp);
+	switch (b.ty.tag)
+	{
+		case COMPLEX: return b.ty.complex;
+		case POINTER: return b.ty.pointer.child;
+		case ARRAY: return b.ty.array.elem;
+		case VECTOR: return b.ty.vector.elem;
+		case BLOCK: return b.qt; // special case: block's childType is always itself
+		default: unreachable("type has no child type");
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Record helpers
+// ---------------------------------------------------------------------------
+
+<* Anonymous records are named "(anonymous TAG at path:line:col)". *>
+fn bool Record.is_anonymous(self, Compilation* comp) => self.name.lookup(comp)[0] == '(';
+fn bool EnumType.is_anonymous(self, Compilation* comp) => self.name.lookup(comp)[0] == '(';
+
+<* @require self.has_layout && name != string_interner::EMPTY *>
+fn bool Record.has_field(self, Compilation* comp, StringId name)
+{
+	foreach (field : self.fields)
+	{
+		if (name == field.name) return true;
+		if (field.name_tok == (TokenIndex)0)
+		{
+			if (try rec = field.qt.get_record(comp))
+			{
+				if (rec.has_field(comp, name)) return true;
+			}
+		}
+	}
+	return false;
 }
