@@ -1,0 +1,7 @@
+load("//tools:c3.bzl", "c3_test")
+
+c3_test(
+    name = "build_smoke",
+    srcs = ["build_smoke.c3"],
+    deps = ["//:aro_c3_lib"],
+)

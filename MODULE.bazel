@@ -1,0 +1,5 @@
+module(name = "aro", version = "0.0.0")
+
+c3c = use_repo_rule("//tools:c3c_repo.bzl", "c3c_repo")
+
+c3c(name = "c3c")

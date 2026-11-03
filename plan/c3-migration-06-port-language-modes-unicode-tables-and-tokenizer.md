@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 06 [Lexing & literals]: Port language modes, Unicode tables and tokenizer'
-state: complete
+state: waiting
 depends_on:
 - c3-migration-04-port-source-ownership-and-compilation-storage
 planned: true

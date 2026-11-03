@@ -1,0 +1,6 @@
+# bcr.bazel.build is not reachable from every environment; the GitHub-hosted
+# copy of the Bazel Central Registry serves the same files.
+common --registry=https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/
+common --lockfile_mode=off
+build --repo_env=C3C
+test --test_output=errors

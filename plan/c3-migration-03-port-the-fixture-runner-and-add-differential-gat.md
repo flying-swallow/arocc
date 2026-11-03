@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 03 [Build & validation]: Port the fixture runner and add differential gates'
-state: complete
+state: waiting
 depends_on:
 - c3-migration-01-freeze-the-zig-reference-and-regression-inventor
 - c3-migration-02-add-a-standalone-bazel-and-c3c-build-foundation

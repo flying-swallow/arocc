@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 07 [Types & ABI]: Replace Zig target metadata with explicit C3 target data'
-state: complete
+state: waiting
 depends_on:
 - c3-migration-01-freeze-the-zig-reference-and-regression-inventor
 - c3-migration-04-port-source-ownership-and-compilation-storage
