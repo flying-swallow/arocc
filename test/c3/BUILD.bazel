@@ -47,3 +47,10 @@ c3_test(
     srcs = ["generate_def_tests.c3"],
     deps = ["//tools:generate_def_lib"],
 )
+
+c3_test(
+    name = "def_parse_tests",
+    srcs = ["def_parse_tests.c3"],
+    data = ["//:builtin_def_files"],
+    deps = ["//tools:generate_def_lib"],
+)
