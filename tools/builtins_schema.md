@@ -182,14 +182,17 @@ const BuiltinTag TAG_<NAME UPPERCASED> = { .group = <GROUP>, .index = <i> };
   `builtins::tag_from_name`. Tags compare with `==`, and `switch` works on
   them (`case common::TAG___BUILTIN_VA_START:`).
 - **Empty groups.** An empty table still emits all of the above, with empty
-  braces. The stage-0 placeholder emits exactly this.
+  braces. (All 19 real groups are non-empty.)
 - **Determinism.** The output depends only on the parsed entries and the
   basename. It contains no paths, timestamps or hash order, so regenerating
   gives identical bytes.
 
-The layout was checked at full scale. An emulation of all 19 groups compiled
-together with `aro_c3_lib` in about 2 s, and lookups through
-`builtins::group_names` and `common::TAG___BUILTIN_VA_START` worked.
+The layout was checked at full scale. With the real generated tables
+(13,552 builtins, about 41k lines), an uncontended c3c compile of
+`aro_c3_lib` plus a small test takes about 2.0 s at -O0 and 1.6 s at -O2,
+against about 1.7 s with empty tables (stage 2 measurement). The
+uppercase-collision counts above (1 pair in common, 8 in ve, none elsewhere)
+were verified against the generated tables by `//test/c3:builtins_tests`.
 
 ## Runtime API
 
@@ -232,15 +235,22 @@ together with `aro_c3_lib` in about 2 s, and lookups through
 
 ## Acceptance split (plan 12)
 
-The integrator's `//test/c3:builtins_tests` covers:
+Parser faults are covered by `//test/c3:def_parse_tests`, emitter layout by
+`//test/c3:def_emit_tests`, regeneration determinism (parse + emit twice, and
+equality with the Bazel `GenerateDef` outputs) by
+`//test/c3:builtin_defs_regen_tests`. The integrator's `//test/c3:builtins_tests`
+covers:
 
-- every definition round-trips, i.e. name, then tag, then name and record;
-- duplicate and property errors in the parser;
+- every definition round-trips, i.e. name, then tag, then name and record,
+  and every `.def` entry (re-read at test time) matches its generated record;
+- per-group counts and uppercase-collision counts;
+- `create_builtin` gives a function type for every definition on a
+  representative target of its group;
 - representative signatures per architecture;
-- target gating;
-- regeneration gives identical bytes twice, by running `//tools:generate_def`
-  twice or using a Bazel test that diffs two runs;
-- a changed `.def` invalidates its `GenerateDef` action.
+- target gating (every name on every arch) and unknown names.
+
+A changed `.def` invalidating only its own `GenerateDef` action is a manual
+check (Bazel execution log), recorded in the plan 12 completion notes.
 
 Not in scope: evaluating builtin expressions and custom type checks. Both
 belong to parser integration.

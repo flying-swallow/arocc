@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 12 [Builtin definitions]: Generate builtin definitions and decode builtin signatures'
-state: waiting
+state: complete
 depends_on:
 - c3-migration-08-port-type-representation-and-qualified-type-oper
 - c3-migration-05-port-diagnostic-state-and-rendering
@@ -26,3 +26,25 @@ Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it.
 - **12.4 `lookup-props`**: owns `src/c3/builtins.c3`, `src/c3/builtin_properties.c3`. Name lookup, properties, language/header/feature/target gating, unknown-name handling.
 
 **Stage 2: integrator (1 agent, serial).** Write `test/c3/builtins_tests.c3` (round trip every definition, determinism ×2, `.def` change invalidates the action), register `//test/c3:builtins_tests`.
+
+## Completion notes
+
+- Layout and contract: `tools/builtins_schema.md`. Generator: `tools/generate_def{,_parse,_schema,_main}.c3` (`//tools:generate_def`). Per-file Bazel actions: `tools/builtins.bzl` (`//:builtin_defs`, mnemonic `GenerateDef`). Runtime: `src/c3/builtin_properties.c3`, `src/c3/builtins.c3`, `src/c3/builtin_type_description.c3`. Bazel replaces project.json, and every test source is listed explicitly in `test/c3/BUILD.bazel`.
+- `//:builtin_defs` generates the 19 real tables from `src/aro/Builtins/*.def`: 13,552 builtins, about 41k lines of C3. `//:aro_c3_lib` compiles them. An uncontended c3c compile of the library plus a small test takes about 2.0 s at -O0 and 1.6 s at -O2, against about 1.7 s with empty tables.
+- Tests:
+  - `//test/c3:builtins_tests` (stage 2) covers:
+    - per-group counts and uppercase-collision counts (verified: 1 pair in common, `_Exit`/`_exit`; 8 pairs in ve; none elsewhere, matching the schema);
+    - the name, tag, name/record round trip for every definition in all 19 groups;
+    - a cross-check of every `.def` entry, re-read at test time by an independent line scanner, against its generated record (param_str, header, language, features);
+    - TAG_ constants, with `$defined` showing that colliding names get no constant;
+    - record properties;
+    - `create_builtin` gives a non-invalid function type for every definition, on 25 representative (group, target) pairs that cover every group. An INVALID return or parameter appears only where the param_str uses q/Q/E/P/J/SJ/K. Every name also resolves through `from_name` on that target;
+    - named signatures through `get_or_create` on 16 targets;
+    - `groups_for_arch` gating for every name on every Arch, plus spot checks;
+    - unknown names.
+  - `//test/c3:builtin_defs_regen_tests` parses and emits every `.def` twice in process and requires identical bytes. It also requires the Bazel `GenerateDef` outputs to equal the in-process emit.
+  - Parser faults and emitter layout are covered by `//test/c3:def_parse_tests` and `//test/c3:def_emit_tests`. Type-description details are covered by `//test/c3:builtin_type_description_tests`, and lookup and cache by `//test/c3:builtins_lookup_tests`.
+- Manual determinism check: the built `generate_def` was run twice over all 19 files. `diff -r` showed the two runs identical to each other and to `bazel-bin/builtin_defs`.
+- Manual invalidation check: one builtin was appended to `xcore.def`, and the Bazel execution log showed exactly one `GenerateDef` action rerun (xcore). `xcore.c3` then had `COUNT = 5`. `builtins_tests` reran and failed on the count, and `builtin_defs_regen_tests` reran and passed. Restoring the file reran only that one action again.
+- All expected values are source-derived from the `.def` files and the Zig sources. No Zig executable was run, so no differential parity is claimed.
+- Not in scope, matching Zig: feature and language gating in `get_or_create` (Zig has a TODO; `language_allows` and `features_of` are provided for the parser), builtin expression evaluation and custom type checks.
