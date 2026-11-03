@@ -8,7 +8,7 @@ You are porting the Aro C compiler (Zig, in this repo) to C3.
 4. Build and test with:
    `C3C=/home/user/tools/c3/c3c /home/user/tools/bazel --output_user_root=/home/user/tools/bazel_root test //test/...`
    Also run it with `-c opt`.
-5. Edit only the files you were given. You may add your own lines to `BUILD.bazel` / `test/c3/BUILD.bazel` lists and add new targets. Keep each addition as its own line or block, so merges are mechanical.
+5. Edit only the files you were given. You may add your own lines to `BUILD.bazel` lists. In `test/c3/BUILD.bazel`, add each test target as a single line, `c3_test(name = ..., srcs = [...], deps = [...])`, so concurrent additions merge cleanly.
 6. If you need an API change in a file you don't own, use a local workaround or stub, and list the change in your report.
 7. Add any new c3c quirk you hit to `CONVENTIONS.md`, one line each.
 8. Commit on your worktree branch, and do not push. Commit messages end with:
