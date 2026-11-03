@@ -16,3 +16,4 @@ c3_test(name = "def_parse_tests", srcs = ["def_parse_tests.c3"], data = ["//:bui
 c3_test(name = "value_interner_tests", srcs = ["value_interner_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "integer_value_tests", srcs = ["integer_value_tests.c3"], tags = ["manual"], deps = ["//:aro_c3_lib"])
 c3_test(name = "builtin_type_description_tests", srcs = ["builtin_type_description_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "bigint_tests", srcs = ["bigint_tests.c3"], deps = ["//:aro_c3_lib"])
