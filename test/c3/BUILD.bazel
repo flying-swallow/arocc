@@ -73,3 +73,7 @@ c3_test(
     data = ["//:builtin_def_files"],
     deps = ["//tools:generate_def_lib"],
 )
+    name = "value_interner_tests",
+    srcs = ["value_interner_tests.c3"],
+    deps = ["//:aro_c3_lib"],
+)
