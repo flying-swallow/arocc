@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 08 [Types & ABI]: Port type representation and qualified type operations'
-state: waiting
+state: complete
 depends_on:
 - c3-migration-07-replace-zig-target-metadata-with-explicit-c3-tar
 planned: true
@@ -29,3 +29,10 @@ Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it.
 - **08.6 `vectors`**: owns `test/migration/type_probe.zig`, `test/c3/data/type_store/*`. Dev-only pinned-Zig probe that dumps type-print strings, sizes/aligns and named/va_list types per target; check in generated goldens.
 
 **Stage 2: integrator (1 agent, serial).** Extend compilation storage, write `test/c3/type_store_tests.c3` from the goldens, register `//test/c3:type_store_tests` in BUILD.bazel/project.json, run dbg+opt.
+
+## Completion notes
+
+- One module `aro::type_store` over five files: `src/c3/type_store.c3` (Repr/Index/QualType/Type, storage: put/put_extra/add_one/set/set_func_return_type, get_type/base/get/child_type, requested-alignment slot), `type_store_relations.c3` (eql/eql_qualified, signedness, ranks, promote_int/promote_bitfield, scalar kinds, decay, make_int_unsigned, to_real/to_complex, array_len), `type_store_layout.c3` (sizeof_or_null/alignof/bit_sizeof/has_incomplete_size/requested_alignment/alignable from `aro::target` data; int_least_n, char_signedness), `type_print.c3` (print/print_named/print_desugared/dump/should_desugar) and `type_store_named.c3` (init_named_types, NSConstantString and va_list per ABI). `Compilation.type_store` is initialized and freed with the compilation.
+- Handles are 32-bit `QualType` bitstructs; variable-length payloads (params, record/enum fields) are separate store-owned allocations, so slices in a returned `Type` survive growth (tested with 50k+ types).
+- Deferred: record_layout.compute (only the result is stored; builtin records use `natural_record_layout`, which equals both SysV and MSVC algorithms for their plain scalar fields), the parser `Builder` (only fromType+str for should_desugar), attribute-map lookups, usual arithmetic conversions (Parser.Result in Zig).
+- `test/migration/type_probe.zig` and `test/c3/data/type_store/*` were not added: no Zig executable (PARALLEL.md). Goldens are inline in `test/c3/type_store_tests.c3`, copied from `test/cases/ast` dumps and `test/cases` diagnostics; the rest is marked source-derived. Registered as `//test/c3:type_store_tests` (Bazel replaces project.json).

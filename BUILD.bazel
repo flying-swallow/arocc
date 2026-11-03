@@ -21,6 +21,11 @@ c3_library(
         "src/c3/toolchain/gcc_detector.c3",
         "src/c3/toolchain/gcc_version.c3",
         "src/c3/toolchain/multilib.c3",
+        "src/c3/type_print.c3",
+        "src/c3/type_store.c3",
+        "src/c3/type_store_layout.c3",
+        "src/c3/type_store_named.c3",
+        "src/c3/type_store_relations.c3",
     ],
     visibility = ["//visibility:public"],
 )
