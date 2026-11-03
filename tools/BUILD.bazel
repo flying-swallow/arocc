@@ -1,1 +1,23 @@
-exports_files(["c3.bzl", "c3c_repo.bzl"])
+load("//tools:c3.bzl", "c3_binary", "c3_library")
+
+exports_files(["c3.bzl", "c3c_repo.bzl", "builtins.bzl"])
+
+# Builtin table generator (plan 12). Links only std and builtin_properties.c3,
+# never //:aro_c3_lib (which depends on its output).
+c3_library(
+    name = "generate_def_lib",
+    srcs = [
+        "generate_def.c3",
+        "generate_def_parse.c3",
+        "generate_def_schema.c3",
+        "//:src/c3/builtin_properties.c3",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+c3_binary(
+    name = "generate_def",
+    srcs = ["generate_def_main.c3"],
+    deps = [":generate_def_lib"],
+    visibility = ["//visibility:public"],
+)

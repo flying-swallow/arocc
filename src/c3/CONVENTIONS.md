@@ -56,3 +56,4 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - `void?` is not allowed as a variable type. Capture the fault with `fault f = @catch(call());`.
 - An enum's value count is `Enum::len` and its values `Enum::values`; `Enum.len` does not compile.
 - Functions and globals from other modules need their module prefix (`diagnostics::warning_exists`, `compilation::DIAG_CTRL_Z_EOF`). Types and enum values do not.
+- `DString.str_view().ptr` is not the start of the allocation, so freeing it leaks or crashes. Return `copy_str(a)` and `free()` the DString.

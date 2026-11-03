@@ -1,3 +1,4 @@
+load("//tools:builtins.bzl", "builtin_defs")
 load("//tools:c3.bzl", "c3_binary", "c3_library")
 
 # Library sources are listed explicitly; agents append new modules here.
@@ -5,6 +6,10 @@ c3_library(
     name = "aro_c3_lib",
     srcs = [
         "src/c3/aro.c3",
+        "src/c3/builtin_properties.c3",
+        "src/c3/builtin_type_description.c3",
+        "src/c3/builtins.c3",
+        ":builtin_defs",
         "src/c3/char_info.c3",
         "src/c3/compilation.c3",
         "src/c3/diagnostics.c3",
@@ -29,6 +34,35 @@ c3_library(
     ],
     visibility = ["//visibility:public"],
 )
+
+# Generated builtin tables (plan 12): one aro::builtin_defs::<group> module
+# per .def file, in Builtins.zig order.
+builtin_defs(
+    name = "builtin_defs",
+    srcs = [
+        "src/aro/Builtins/aarch64.def",
+        "src/aro/Builtins/aarch64_neon.def",
+        "src/aro/Builtins/amdgcn.def",
+        "src/aro/Builtins/arm.def",
+        "src/aro/Builtins/bpf.def",
+        "src/aro/Builtins/common.def",
+        "src/aro/Builtins/hexagon.def",
+        "src/aro/Builtins/loongarch.def",
+        "src/aro/Builtins/mips.def",
+        "src/aro/Builtins/neon.def",
+        "src/aro/Builtins/nvptx.def",
+        "src/aro/Builtins/powerpc.def",
+        "src/aro/Builtins/riscv.def",
+        "src/aro/Builtins/s390x.def",
+        "src/aro/Builtins/ve.def",
+        "src/aro/Builtins/wasm.def",
+        "src/aro/Builtins/x86_64.def",
+        "src/aro/Builtins/x86.def",
+        "src/aro/Builtins/xcore.def",
+    ],
+)
+
+exports_files(["src/c3/builtin_properties.c3"])
 
 c3_binary(
     name = "aro_c3",
