@@ -3,7 +3,7 @@
 // aliases and the string interner. Later tickets extend `Compilation` with
 // targets, language options, include search, pragmas, etc.
 module aro::compilation;
-import aro::source, aro::string_interner, aro::diagnostics, std::collections::list;
+import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, std::collections::list;
 
 excuse FILE_TOO_BIG;
 
@@ -54,6 +54,13 @@ struct Compilation
 
 	<* If not UNUSED_ID, the directory containing this source is searched for includes (MS extension). *>
 	SourceId ms_cwd_source_id;
+
+	<* Language options; starts as `lang_opts::DEFAULT` (Zig `langopts: LangOpts = .{}`). *>
+	LangOpts langopts;
+	<* The C program's target; starts as the native target (Zig `target: Target = .default`). *>
+	Target target;
+	bool has_darwin_target_variant;
+	Target darwin_target_variant;
 }
 
 <*
@@ -65,6 +72,9 @@ struct Compilation
 fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnostics* diagnostics = null)
 {
 	*self = { .gpa = gpa, .arena = arena, .ms_cwd_source_id = source::UNUSED_ID, .diagnostics = diagnostics };
+	self.langopts = lang_opts::DEFAULT;
+	// Zig's `Target.default` is the host (builtin); an undescribable host is a build configuration error.
+	self.target = target::native()!!;
 	if (!diagnostics)
 	{
 		self.diagnostics = alloc::new(gpa, Diagnostics);

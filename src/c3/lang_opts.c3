@@ -5,10 +5,9 @@
 // - C3 struct fields have no default values. Start from `lang_opts::DEFAULT`
 //   (Zig's `.{}`), never from a zero-initialized LangOpts.
 // - Zig `?T` option fields become a `T` plus a `has_*` flag (or `Tristate`).
-// - `setTargetOptions` waits for the Target port; `has_int24` and `arm_ldrex`
-//   are set directly until then.
+// - `setTargetOptions` is `set_target_options` (needs aro::target).
 module aro::lang_opts;
-import aro::char_info;
+import aro::char_info, aro::target;
 
 faultdef INVALID_STANDARD;
 
@@ -316,5 +315,57 @@ fn bool LangOpts.allow_fixed_sized_int_suffixes(&self)
 		case CLANG:
 		case NO: return self.ms_extensions;
 		case GCC: return false;
+	}
+}
+
+fn void LangOpts.set_target_options(&self, Target* t)
+{
+	// TODO: Move more stuff here :)
+	self.has_int24 = t.cpu.arch == AVR;
+	switch (t.cpu.arch)
+	{
+		case ARM:
+		case ARMEB:
+		case THUMB:
+		case THUMBEB:
+			// ARM exclusive load/store support.
+			// See this: https://arm-software.github.io/acle/main/acle.html#ldrexstrex
+			// These constants define masks containing data sizes are suitable for
+			// __builtin_arm_ldrex and __builtin_arm_strex.
+			char arm_version = 6;
+			if (try v = t.arm_version()) arm_version = v.version;
+			ArmLdrex ldrex;
+			switch (arm_version)
+			{
+				case 6:
+					if (t.cpu.has(ARM_MCLASS))
+					{
+						ldrex = ARM_LDREX_NONE;
+					}
+					else if (t.cpu.has(ARM_V6K) || t.cpu.has(ARM_V6KZ))
+					{
+						ldrex = ARM_LDREX_ALL;
+					}
+					else
+					{
+						ldrex = { .w = true };
+					}
+				case 7:
+				case 8:
+					ldrex = t.cpu.has(ARM_MCLASS) ? (ArmLdrex){ .b = true, .h = true, .w = true } : ARM_LDREX_ALL;
+				case 9:
+					ldrex = ARM_LDREX_ALL;
+				default:
+					ldrex = ARM_LDREX_NONE;
+			}
+			self.has_arm_ldrex = true;
+			self.arm_ldrex = ldrex;
+		case AARCH64:
+		case AARCH64_BE:
+			// ARM ldrex is always full-width
+			self.has_arm_ldrex = true;
+			self.arm_ldrex = ARM_LDREX_ALL;
+		default:
+			break;
 	}
 }
