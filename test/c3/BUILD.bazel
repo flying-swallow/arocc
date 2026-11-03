@@ -41,3 +41,12 @@ c3_test(
     srcs = ["type_store_tests.c3"],
     deps = ["//:aro_c3_lib"],
 )
+
+# Plan 09 agent 09.3 (value-ops). Tagged manual until the bigint (09.2) and
+# value_interner (09.1) stubs are replaced; the integrator removes the tag.
+c3_test(
+    name = "integer_value_tests",
+    srcs = ["integer_value_tests.c3"],
+    tags = ["manual"],
+    deps = ["//:aro_c3_lib"],
+)
