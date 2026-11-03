@@ -9,9 +9,8 @@
 // - groups_for_arch: the switch in Builtins.zig fromName (source-derived).
 // - language_allows: clang builtinIsSupported semantics (source-derived; Zig
 //   never evaluates Language).
-// - The real generated tables may still be empty placeholders; the tests over
-//   them (round trip, sortedness, arch gating) are generic and hold for empty
-//   and full tables alike.
+// - The tests over the real generated tables (round trip, sortedness, arch
+//   gating) are generic; //test/c3:builtins_tests checks their contents.
 module builtins_lookup_tests;
 import aro::builtins, aro::builtin_properties, aro::builtin_defs::sample;
 import aro::target, aro::lang_opts, aro::compilation, aro::type_store;

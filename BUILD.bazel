@@ -63,6 +63,8 @@ builtin_defs(
         "src/aro/Builtins/x86.def",
         "src/aro/Builtins/xcore.def",
     ],
+    # //test/c3:builtin_defs_regen_tests diffs these outputs against an in-process emit.
+    visibility = ["//test/c3:__pkg__"],
 )
 
 exports_files(["src/c3/builtin_properties.c3"])
