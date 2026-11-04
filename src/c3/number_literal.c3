@@ -44,15 +44,13 @@
 // - `Prefix` carries its base as an associated value (`prefix.base`, Zig
 //   @backingInt(prefix)).
 // - Suffix tags F32x/F64x/IF32x/IF64x/D64x become F32X/F64X/IF32X/IF64X/D64X.
-// - Zig `Compilation.float80Type` (?QualType) is `float80_type`, NO_FLOAT80
-//   for null (API note: belongs in compilation.c3).
+// - Zig `Compilation.float80Type` (?QualType) is `Compilation.float80_type()`
+//   in compilation.c3, with compilation::NO_FLOAT80 for null.
 module aro::number_literal;
 import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::type_store, aro::text_literal;
 
 <* Zig `Suffix.fromString` returned null: not a valid suffix of that kind. *>
 excuse INVALID_SUFFIX;
-<* Zig `Compilation.float80Type` returned null: no __float80 for this target/emulation. *>
-excuse NO_FLOAT80;
 
 // ---------------------------------------------------------------------------
 // Zig `number_literal.Parser.Diagnostic` constants (exact Zig text).
@@ -139,28 +137,6 @@ const DiagnosticTemplate DIAG_C2Y_DEPRECATED_OCTAL = {
 	.has_opt = true,
 	.opt = Option.DEPRECATED_OCTAL_LITERALS,
 };
-
-// ---------------------------------------------------------------------------
-// Compilation helper
-
-<*
- Zig `Compilation.float80Type`: emulate NO/GCC -> Target.float80Type (LONG_DOUBLE
- on x86/x86_64, else none); MSVC/CLANG -> none.
- @return? NO_FLOAT80
-*>
-fn QualType? float80_type(Compilation* comp)
-{
-	switch (comp.langopts.emulate)
-	{
-		case NO:
-		case GCC:
-			if (comp.target.has_float80_type()) return type_store::LONG_DOUBLE;
-			return NO_FLOAT80~;
-		case MSVC:
-		case CLANG:
-			return NO_FLOAT80~;
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Prefix
@@ -542,7 +518,7 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 		self.err(is_float ? DIAG_INVALID_FLOAT_SUFFIX : DIAG_INVALID_INT_SUFFIX, text_literal::arg_str(suffix_str))!;
 		return text_literal::PARSING_FAILED~;
 	}
-	if (suffix.is_float80() && @catch(float80_type(self.comp)))
+	if (suffix.is_float80() && @catch(self.comp.float80_type()))
 	{
 		self.err(DIAG_INVALID_FLOAT_SUFFIX, text_literal::arg_str(suffix_str))!;
 		return text_literal::PARSING_FAILED~;

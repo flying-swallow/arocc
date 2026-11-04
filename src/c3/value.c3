@@ -33,6 +33,7 @@
 //   - Running out of memory panics; Zig's `!Value` (OOM only) is plain `Value`.
 module aro::value;
 import aro::compilation, aro::value_interner, aro::bigint, aro::type_store, aro::lang_opts, aro::float_value;
+import aro::text_literal_semantics;
 import std::core::dstring;
 
 <* Zig `null` from toInt: none, not an int, or does not fit. *>
@@ -907,8 +908,8 @@ struct NestedPrint
 <*
  Value.print: appends `v` (of type `qt`) to `w`. Returns true and sets `*nested`
  for a pointer value (Zig `?NestedPrint` non-null); the caller prints the base
- and then calls print_pointer. The `.bytes` arm (Zig printString) is not ported
- yet and is unreachable.
+ and then calls print_pointer. The `.bytes` arm is Zig printString
+ (text_literal_semantics::print_string, quoted).
  @require !self.is_none()
 *>
 fn bool Value.print(self, QualType qt, Compilation* comp, DString w, NestedPrint* nested = null)
@@ -941,7 +942,7 @@ fn bool Value.print(self, QualType qt, Compilation* comp, DString w, NestedPrint
 			if (nested) *nested = { .node = key.pointer.node, .offset = from_ref(key.pointer.offset) };
 			return true;
 		case BYTES:
-			unreachable("Value.print of bytes: printString is not ported yet");
+			text_literal_semantics::print_string(key.bytes, qt, comp, w);
 		default:
 			unreachable("Value.print of a non-value key");
 	}

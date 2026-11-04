@@ -1,7 +1,7 @@
 // Tests for the plan 11 stage-0 contract code that is implemented (not
 // stubbed): text_literal's shared diagnostic plumbing (Ascii, LiteralArg,
-// emit_literal_diagnostic), wchar_max, text_parser defaults,
-// number_literal::float80_type / NumberLiteralParser.err and the diagnostic
+// emit_literal_diagnostic), Compilation.wchar_max, text_parser defaults,
+// Compilation.float80_type / NumberLiteralParser.err and the diagnostic
 // id -> template tables. Expected values are source-derived from
 // Tokenizer/text_literal.zig (Ascii.format), Compilation.zig (wcharMax,
 // float80Type) and the Diagnostic constants; no Zig executable was run.
@@ -67,18 +67,18 @@ fn void wchar_and_float80() @test
 {
 	@with_comp("x86_64-linux-gnu"; Compilation* comp, Diagnostics* d)
 	{
-		check(text_literal::wchar_max(comp), 0x7FFF_FFFF); // wchar_t = int
-		assert(number_literal::float80_type(comp)!! == type_store::LONG_DOUBLE);
+		check(comp.wchar_max(), 0x7FFF_FFFF); // wchar_t = int
+		assert(comp.float80_type()!! == type_store::LONG_DOUBLE);
 		comp.langopts.emulate = MSVC;
-		assert(@catch(number_literal::float80_type(comp)) == number_literal::NO_FLOAT80);
+		assert(@catch(comp.float80_type()) == compilation::NO_FLOAT80);
 	};
 	@with_comp("x86_64-windows-msvc"; Compilation* comp, Diagnostics* d)
 	{
-		check(text_literal::wchar_max(comp), 0xFFFF); // wchar_t = unsigned short
+		check(comp.wchar_max(), 0xFFFF); // wchar_t = unsigned short
 	};
 	@with_comp("aarch64-linux-gnu"; Compilation* comp, Diagnostics* d)
 	{
-		assert(@catch(number_literal::float80_type(comp)) == number_literal::NO_FLOAT80);
+		assert(@catch(comp.float80_type()) == compilation::NO_FLOAT80);
 	};
 }
 

@@ -3,11 +3,8 @@
 // helper getMSVCIntSuffixType), extracted so it needs no Parser, token list or
 // AST. See number_literal.c3 for how the plan 11 literal modules fit together.
 //
-// Implemented by plan 11 agent 11.2 `number-values`. The Suffix predicates of
-// number_literal (is_imaginary, is_signed_integer, ...) belong to 11.1 and were
-// still stubs when this landed, so the conversions use the local copies at the
-// end of this file (the same Zig switch tables); the integrator may switch
-// them to the number_literal methods.
+// Implemented by plan 11 agent 11.2 `number-values`; the Suffix predicates
+// (is_imaginary, is_signed_integer, ...) are number_literal's Suffix methods.
 //
 // Inputs: the NumberLiteralResult from number_literal (or its parts) and the
 // Compilation (langopts.emulate, target.has_int128, type_store, interner).
@@ -188,7 +185,7 @@ fn NumberValue parse_int(Compilation* comp, Prefix prefix, String bytes, Suffix 
 {
 	char base = prefix.base;
 	NumberValue res;
-	if (suffix_is_bit_int(suffix))
+	if (suffix.is_bit_int())
 	{
 		res = bit_int(comp, base, bytes, suffix);
 	}
@@ -196,7 +193,7 @@ fn NumberValue parse_int(Compilation* comp, Prefix prefix, String bytes, Suffix 
 	{
 		res = fixed_size_int(comp, base, bytes, suffix);
 	}
-	if (suffix_is_imaginary(suffix))
+	if (suffix.is_imaginary())
 	{
 		res.diags.push(GNU_IMAGINARY_CONSTANT);
 		res.qt = res.qt.to_complex(comp);
@@ -233,7 +230,7 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 		res.literal_val = val;
 		return res;
 	}
-	bool is_signed = suffix_is_signed_integer(suffix);
+	bool is_signed = suffix.is_signed_integer();
 	if (is_signed && base == 10)
 	{
 		Value max_intmax = value::max_int(comp.type_store.intmax, comp);
@@ -241,7 +238,7 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 	}
 
 	QualType suffix_qt = int_suffix_type(comp, suffix);
-	if (suffix_is_msvc_extension(suffix))
+	if (suffix.is_msvc_extension())
 	{
 		// No type promotion and no diagnostic for truncation or sign change (Zig).
 		res.qt = suffix_qt;
@@ -321,7 +318,7 @@ fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix
 
 	usz count = c.bit_count_twos_comp();
 	if (count < 1) count = 1; // literal `0` requires at least 1 bit
-	bool is_signed = suffix_is_signed_integer(suffix);
+	bool is_signed = suffix.is_signed_integer();
 	usz bits_needed = is_signed ? count + 1 : count;
 	assert(bits_needed <= 65535, "_BitInt literal wider than bit_int_max_bits");
 
@@ -354,7 +351,7 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 	Value val = float_value::intern_float(f, comp);
 
 	NumberValue res = { .qt = qt, .literal_qt = qt, .val = val, .literal_val = val };
-	if (suffix_is_imaginary(suffix))
+	if (suffix.is_imaginary())
 	{
 		res.diags.push(GNU_IMAGINARY_CONSTANT);
 		res.qt = qt.to_complex(comp);
@@ -391,7 +388,7 @@ fn QualType float_suffix_type(Compilation* comp, Suffix suffix)
 		case L:
 		case IL: return type_store::LONG_DOUBLE;
 		case W:
-		case IW: return number_literal::float80_type(comp)!!;
+		case IW: return comp.float80_type()!!;
 		case Q:
 		case IQ:
 		case F128:
@@ -510,7 +507,7 @@ fn DigitsValue accumulate_u64(String bytes, char base)
 fn PpNumberValue pp_int_value(NumberLiteralResult parsed)
 {
 	PpNumberValue res;
-	if (parsed.is_float || suffix_is_imaginary(parsed.suffix))
+	if (parsed.is_float || parsed.suffix.is_imaginary())
 	{
 		res.diags.push(FLOAT_LITERAL_IN_EXPR);
 		res.rejected = true;
@@ -519,7 +516,7 @@ fn PpNumberValue pp_int_value(NumberLiteralResult parsed)
 	char base = parsed.prefix.base;
 	DigitsValue digits = accumulate_u64(parsed.bytes, base);
 	if (digits.overflow) res.diags.push(INT_LITERAL_TOO_BIG);
-	bool is_signed = suffix_is_signed_integer(parsed.suffix);
+	bool is_signed = parsed.suffix.is_signed_integer();
 	if (digits.val > (ulong)long::max)
 	{
 		if (is_signed && base == 10) res.diags.push(IMPLICITLY_UNSIGNED_LITERAL);
@@ -539,51 +536,7 @@ fn PpNumberValue pp_int_value(NumberLiteralResult parsed)
 }
 
 // ---------------------------------------------------------------------------
-// Local copies of the number_literal Suffix predicates (Zig tables verbatim).
-
-<* Zig `Suffix.isImaginary`. *>
-fn bool suffix_is_imaginary(Suffix s)
-{
-	switch (s)
-	{
-		case I: case IL: case IF: case IU: case IUL: case ILL: case IULL: case IWB: case IUWB:
-		case IF128: case IQ: case IW: case IF16: case IF32: case IF64: case IF32X: case IF64X:
-			return true;
-		default:
-			return false;
-	}
-}
-
-<* Zig `Suffix.isSignedInteger`; unreachable for floating suffixes. *>
-fn bool suffix_is_signed_integer(Suffix s)
-{
-	switch (s)
-	{
-		case NONE: case L: case LL: case I: case IL: case ILL: case WB: case IWB:
-		case I8: case I16: case I32: case I64:
-			return true;
-		case U: case UL: case ULL: case IU: case IUL: case IULL: case UWB: case IUWB:
-		case UI8: case UI16: case UI32: case UI64:
-			return false;
-		default:
-			unreachable("isSignedInteger of a floating suffix");
-	}
-}
-
-<* Zig `Suffix.isBitInt`. *>
-fn bool suffix_is_bit_int(Suffix s) => s == WB || s == UWB || s == IWB || s == IUWB;
-
-<* Zig `Suffix.isMSVCExtension`. *>
-fn bool suffix_is_msvc_extension(Suffix s)
-{
-	switch (s)
-	{
-		case I8: case UI8: case I16: case UI16: case I32: case UI32: case I64: case UI64:
-			return true;
-		default:
-			return false;
-	}
-}
+// Separators
 
 <* `bytes` without '\'' digit separators: `bytes` itself if it has none, else a comp.gpa copy (release with free_stripped). *>
 fn String strip_separators(Compilation* comp, String bytes)

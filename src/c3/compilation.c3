@@ -389,3 +389,54 @@ fn SourceId Compilation.add_source_alias(&self, SourceId id, String new_path, So
 	self.source_aliases.push(aliased);
 	return aliased.id;
 }
+
+// ---------------------------------------------------------------------------
+// Literal helpers (Zig Compilation.CharUnitSize / wcharMax / float80Type),
+// used by number_literal, number_value and text_literal (plan 11).
+
+<* Zig `Compilation.float80Type` returned null: no __float80 for this target/emulation. *>
+excuse NO_FLOAT80;
+
+<* Zig `Compilation.CharUnitSize`: the byte width of one string-literal code unit. *>
+enum CharUnitSize : char (uint size)
+{
+	ONE { 1 },
+	TWO { 2 },
+	FOUR { 4 },
+}
+
+<*
+ Zig `Compilation.wcharMax`: the largest value of the target's wchar_t
+ (maxInt of u8/i8, u16/i16 or u32/i32 by its bit size and signedness).
+*>
+fn uint Compilation.wchar_max(&self)
+{
+	QualType wchar = self.type_store.wchar;
+	bool is_unsigned = wchar.signedness(self) == UNSIGNED;
+	switch (wchar.bit_sizeof(self))
+	{
+		case 8: return is_unsigned ? 0xFF : 0x7F;
+		case 16: return is_unsigned ? 0xFFFF : 0x7FFF;
+		case 32: return is_unsigned ? 0xFFFF_FFFF : 0x7FFF_FFFF;
+		default: unreachable("unexpected wchar_t size");
+	}
+}
+
+<*
+ Zig `Compilation.float80Type`: emulate NO/GCC -> Target.float80Type
+ (LONG_DOUBLE on x86/x86_64, else none); MSVC/CLANG -> none.
+ @return? NO_FLOAT80
+*>
+fn QualType? Compilation.float80_type(&self)
+{
+	switch (self.langopts.emulate)
+	{
+		case NO:
+		case GCC:
+			if (self.target.has_float80_type()) return type_store::LONG_DOUBLE;
+			return NO_FLOAT80~;
+		case MSVC:
+		case CLANG:
+			return NO_FLOAT80~;
+	}
+}

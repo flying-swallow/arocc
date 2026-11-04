@@ -22,8 +22,8 @@
 // - Zig `Parser.Result` (union { unsigned: u32, signed: i32 }) is
 //   `CharLiteralValue` with an `is_signed` flag.
 // - Zig struct field defaults are set by `text_parser(...)`.
-// - Zig `Compilation.wcharMax` and `Compilation.CharUnitSize` live here until
-//   compilation.c3 grows them (API note for the integrator).
+// - Zig `Compilation.wcharMax` / `Compilation.CharUnitSize` are
+//   `Compilation.wchar_max()` / `compilation::CharUnitSize` in compilation.c3.
 // - Parser.parse collects chars in a gpa List (Zig: 4-entry stack buffer
 //   first). For a single CHAR > 0xFF with signed char (only after
 //   char_too_large was reported) the value is truncated to 8 bits where Zig's
@@ -250,34 +250,6 @@ fn void? emit_literal_diagnostic(Compilation* comp, DiagnosticTemplate d, Litera
 }
 
 // ---------------------------------------------------------------------------
-// Compilation helpers (Zig Compilation.wcharMax / CharUnitSize)
-
-<* Zig `Compilation.CharUnitSize`: the byte width of one string-literal code unit. *>
-enum CharUnitSize : char (uint size)
-{
-	ONE { 1 },
-	TWO { 2 },
-	FOUR { 4 },
-}
-
-<*
- Zig `Compilation.wcharMax`: the largest value of the target's wchar_t
- (maxInt of u8/i8, u16/i16 or u32/i32 by its bit size and signedness).
-*>
-fn uint wchar_max(Compilation* comp)
-{
-	QualType wchar = comp.type_store.wchar;
-	bool is_unsigned = wchar.signedness(comp) == UNSIGNED;
-	switch (wchar.bit_sizeof(comp))
-	{
-		case 8: return is_unsigned ? 0xFF : 0x7F;
-		case 16: return is_unsigned ? 0xFFFF : 0x7FFF;
-		case 32: return is_unsigned ? 0xFFFF_FFFF : 0x7FFF_FFFF;
-		default: unreachable("unexpected wchar_t size");
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Item / Kind
 
 enum TextLiteralItemTag : char
@@ -390,7 +362,7 @@ fn uint TextLiteralKind.max_codepoint(self, Compilation* comp)
 		case UTF_8:
 			return 0x7F;
 		case WIDE:
-			uint m = wchar_max(comp);
+			uint m = comp.wchar_max();
 			return m < 0x10FFFF ? m : 0x10FFFF;
 		case UTF_16: return 0xFFFF;
 		case UTF_32: return 0x10FFFF;
@@ -410,7 +382,7 @@ fn uint TextLiteralKind.max_int(self, Compilation* comp)
 		case CHAR:
 		case UTF_8:
 			return 0xFF;
-		case WIDE: return wchar_max(comp);
+		case WIDE: return comp.wchar_max();
 		case UTF_16: return 0xFFFF;
 		case UTF_32: return 0xFFFF_FFFF;
 		case UNTERMINATED: unreachable("max_int of an unterminated literal");
