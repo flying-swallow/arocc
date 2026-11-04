@@ -37,8 +37,7 @@
 // text_literal_semantics::pp_char_value directly.
 //
 // Stage 0 (plan 11 contract): types, diagnostic templates and signatures.
-// `float80_type` and the parser's `err` are implemented; everything else is
-// `unreachable("stage 0 stub")` until 11.1 lands.
+// Stage 1 (11.1 `number-syntax`): every function is implemented.
 //
 // Deviations from Zig:
 // - Suffix.fromString returning null is the INVALID_SUFFIX fault.
@@ -181,7 +180,15 @@ enum Prefix : char (char base)
 *>
 fn bool Prefix.digit_allowed(self, char c)
 {
-	unreachable("stage 0 stub");
+	switch (c)
+	{
+		case '0'..'1': return true;
+		case '2'..'7': return self != BINARY;
+		case '8'..'9': return self == DECIMAL || self == HEX;
+		case 'a'..'f':
+		case 'A'..'F': return self == HEX;
+		default: return false;
+	}
 }
 
 <*
@@ -195,7 +202,30 @@ fn bool Prefix.digit_allowed(self, char c)
 *>
 fn Prefix prefix_from_string(String buf, bool allow_msvc_extensions)
 {
-	unreachable("stage 0 stub");
+	if (buf.len == 1) return DECIMAL;
+	// tokenizer enforces that first byte is a decimal digit or period
+	switch (buf[0])
+	{
+		case '.':
+		case '1'..'9': return DECIMAL;
+		case '0': break;
+		default: unreachable("pp-number starts with a digit or period");
+	}
+	switch (buf[1])
+	{
+		case 'x':
+		case 'X': return buf.len == 2 ? DECIMAL : HEX;
+		case 'b':
+		case 'B': return buf.len == 2 ? DECIMAL : BINARY;
+		case 'o':
+		case 'O': return buf.len == 2 ? DECIMAL : OCTAL;
+		default:
+			// A decimal floating point number that happens to start with zero.
+			if (find_any(buf, "eE.")) return DECIMAL;
+			// `0` with a valid suffix.
+			if (try suffix_from_string(buf[1..], INT, allow_msvc_extensions)) return DECIMAL;
+			return OCTAL;
+	}
 }
 
 <*
@@ -205,7 +235,15 @@ fn Prefix prefix_from_string(String buf, bool allow_msvc_extensions)
 *>
 fn sz Prefix.string_len(self, String buf)
 {
-	unreachable("stage 0 stub");
+	switch (self)
+	{
+		case BINARY: return 2;
+		// Includes digit separator `'` in the prefix so that the first
+		// character after the prefix is a digit.
+		case OCTAL: return buf.len > 2 && (buf[1] == 'o' || buf[1] == 'O' || buf[1] == '\'') ? 2 : 1;
+		case DECIMAL: return 0;
+		case HEX: return 2;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -246,6 +284,73 @@ enum SuffixKind : char
 	FLOAT,
 }
 
+<* One row of Zig's `Suffix.IntSuffixes` / `FloatSuffixes` (`Tuple`): `count` upper-case parts. *>
+struct SuffixCandidate
+{
+	Suffix tag;
+	String[3] parts;
+	char count;
+}
+
+const SuffixCandidate[*] INT_SUFFIXES = {
+	{ U, { "U", "", "" }, 1 },
+	{ L, { "L", "", "" }, 1 },
+	{ WB, { "WB", "", "" }, 1 },
+	{ UL, { "U", "L", "" }, 2 },
+	{ UWB, { "U", "WB", "" }, 2 },
+	{ LL, { "LL", "", "" }, 1 },
+	{ ULL, { "U", "LL", "" }, 2 },
+
+	{ I8, { "I8", "", "" }, 1 },
+	{ UI8, { "UI8", "", "" }, 1 },
+	{ I16, { "I16", "", "" }, 1 },
+	{ UI16, { "UI16", "", "" }, 1 },
+	{ I32, { "I32", "", "" }, 1 },
+	{ UI32, { "UI32", "", "" }, 1 },
+	{ I64, { "I64", "", "" }, 1 },
+	{ UI64, { "UI64", "", "" }, 1 },
+
+	{ I, { "I", "", "" }, 1 },
+
+	{ IWB, { "I", "WB", "" }, 2 },
+	{ IU, { "I", "U", "" }, 2 },
+	{ IL, { "I", "L", "" }, 2 },
+	{ IUL, { "I", "U", "L" }, 3 },
+	{ IUWB, { "I", "U", "WB" }, 3 },
+	{ ILL, { "I", "LL", "" }, 2 },
+	{ IULL, { "I", "U", "LL" }, 3 },
+};
+
+const SuffixCandidate[*] FLOAT_SUFFIXES = {
+	{ F16, { "F16", "", "" }, 1 },
+	{ F, { "F", "", "" }, 1 },
+	{ L, { "L", "", "" }, 1 },
+	{ W, { "W", "", "" }, 1 },
+	{ F128, { "F128", "", "" }, 1 },
+	{ Q, { "Q", "", "" }, 1 },
+	{ BF16, { "BF16", "", "" }, 1 },
+	{ F32, { "F32", "", "" }, 1 },
+	{ F64, { "F64", "", "" }, 1 },
+	{ F32X, { "F32x", "", "" }, 1 },
+	{ F64X, { "F64x", "", "" }, 1 },
+	{ D32, { "D32", "", "" }, 1 },
+	{ D64, { "D64", "", "" }, 1 },
+	{ D128, { "D128", "", "" }, 1 },
+	{ D64X, { "D64x", "", "" }, 1 },
+
+	{ I, { "I", "", "" }, 1 },
+	{ IL, { "I", "L", "" }, 2 },
+	{ IF16, { "I", "F16", "" }, 2 },
+	{ IF, { "I", "F", "" }, 2 },
+	{ IW, { "I", "W", "" }, 2 },
+	{ IF128, { "I", "F128", "" }, 2 },
+	{ IQ, { "I", "Q", "" }, 2 },
+	{ IF32, { "I", "F32", "" }, 2 },
+	{ IF64, { "I", "F64", "" }, 2 },
+	{ IF32X, { "I", "F32x", "" }, 2 },
+	{ IF64X, { "I", "F64x", "" }, 2 },
+};
+
 <*
  Zig `Suffix.fromString`. Empty -> NONE. Otherwise try the IntSuffixes or
  FloatSuffixes table in Zig order; a candidate (a list of upper-case parts,
@@ -257,13 +362,40 @@ enum SuffixKind : char
 *>
 fn Suffix? suffix_from_string(String buf, SuffixKind kind, bool allow_msvc_extensions)
 {
-	unreachable("stage 0 stub");
+	if (buf.len == 0) return NONE;
+
+	SuffixCandidate[] candidates = kind == FLOAT ? &FLOAT_SUFFIXES : &INT_SUFFIXES;
+	char[4] scratch;
+	foreach CANDIDATES: (&candidate : candidates)
+	{
+		sz len = 0;
+		for (sz i = 0; i < candidate.count; i++) len += candidate.parts[i].len;
+		if (len != buf.len) continue;
+
+		for (sz i = 0; i < candidate.count; i++)
+		{
+			String part = candidate.parts[i];
+			foreach (j, c : part) scratch[j] = c.to_lower();
+			String lower = (String)scratch[:part.len];
+			if (!contains(buf, part) && !contains(buf, lower)) continue CANDIDATES;
+		}
+		if (candidate.tag.is_msvc_extension() && !allow_msvc_extensions) continue;
+		return candidate.tag;
+	}
+	return INVALID_SUFFIX~;
 }
 
 <* Zig `Suffix.isImaginary`: I, IL, IF, IU, IUL, ILL, IULL, IWB, IUWB, IF128, IQ, IW, IF16, IF32, IF64, IF32X, IF64X. *>
 fn bool Suffix.is_imaginary(self)
 {
-	unreachable("stage 0 stub");
+	switch (self)
+	{
+		case I: case IL: case IF: case IU: case IUL: case ILL: case IULL: case IWB: case IUWB:
+		case IF128: case IQ: case IW: case IF16: case IF32: case IF64: case IF32X: case IF64X:
+			return true;
+		default:
+			return false;
+	}
 }
 
 <*
@@ -273,31 +405,47 @@ fn bool Suffix.is_imaginary(self)
 *>
 fn bool Suffix.is_signed_integer(self)
 {
-	unreachable("stage 0 stub");
+	switch (self)
+	{
+		case NONE: case L: case LL: case I: case IL: case ILL: case WB: case IWB: case I8: case I16: case I32: case I64:
+			return true;
+		case U: case UL: case ULL: case IU: case IUL: case IULL: case UWB: case IUWB: case UI8: case UI16: case UI32: case UI64:
+			return false;
+		default:
+			unreachable("float suffix has no integer signedness");
+	}
 }
 
 <* Zig `Suffix.signedness`: SIGNED iff is_signed_integer. *>
 fn Signedness Suffix.signedness(self)
 {
-	unreachable("stage 0 stub");
+	return self.is_signed_integer() ? SIGNED : UNSIGNED;
 }
 
 <* Zig `Suffix.isBitInt`: WB, UWB, IWB, IUWB. *>
 fn bool Suffix.is_bit_int(self)
 {
-	unreachable("stage 0 stub");
+	switch (self)
+	{
+		case WB: case UWB: case IWB: case IUWB: return true;
+		default: return false;
+	}
 }
 
 <* Zig `Suffix.isFloat80`: W or IW. *>
 fn bool Suffix.is_float80(self)
 {
-	unreachable("stage 0 stub");
+	return self == W || self == IW;
 }
 
 <* Zig `Suffix.isMSVCExtension`: I8, UI8, I16, UI16, I32, UI32, I64, UI64. *>
 fn bool Suffix.is_msvc_extension(self)
 {
-	unreachable("stage 0 stub");
+	switch (self)
+	{
+		case I8: case UI8: case I16: case UI16: case I32: case UI32: case I64: case UI64: return true;
+		default: return false;
+	}
 }
 
 <*
@@ -307,7 +455,15 @@ fn bool Suffix.is_msvc_extension(self)
 *>
 fn bool Suffix.is_float_only(self)
 {
-	unreachable("stage 0 stub");
+	switch (self)
+	{
+		case F: case IF: case F16: case F128: case IF128: case Q: case IQ: case W: case IW: case IF16:
+		case F32: case IF32: case F64: case IF64: case F32X: case IF32X: case F64X: case IF64X:
+		case D32: case D64: case D128: case D64X: case BF16:
+			return true;
+		default:
+			return false;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +520,62 @@ struct NumberLiteralParser
 *>
 fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 {
-	unreachable("stage 0 stub");
+	String buf = self.literal;
+	bool allow_fixed_size_int_suffixes = self.comp.langopts.allow_fixed_sized_int_suffixes();
+	Prefix prefix = prefix_from_string(buf, allow_fixed_size_int_suffixes);
+	sz prefix_len = prefix.string_len(buf);
+	String after_prefix = buf[prefix_len..];
+
+	String int_part = self.get_integer_part(after_prefix, prefix)!;
+	String after_int = after_prefix[int_part.len..];
+
+	String frac = self.get_frac_part(after_int, prefix)!;
+	String after_frac = after_int[frac.len..];
+
+	String exponent = self.get_exponent(after_frac, prefix)!;
+	String suffix_str = after_frac[exponent.len..];
+
+	bool is_float = exponent.len > 0 || frac.len > 0;
+	Suffix? suffix = suffix_from_string(suffix_str, is_float ? FLOAT : INT, allow_fixed_size_int_suffixes);
+	if (catch suffix)
+	{
+		self.err(is_float ? DIAG_INVALID_FLOAT_SUFFIX : DIAG_INVALID_INT_SUFFIX, text_literal::arg_str(suffix_str))!;
+		return text_literal::PARSING_FAILED~;
+	}
+	if (suffix.is_float80() && @catch(float80_type(self.comp)))
+	{
+		self.err(DIAG_INVALID_FLOAT_SUFFIX, text_literal::arg_str(suffix_str))!;
+		return text_literal::PARSING_FAILED~;
+	}
+
+	if (is_float)
+	{
+		assert(prefix == HEX || prefix == DECIMAL);
+		if (prefix == HEX && exponent.len == 0)
+		{
+			self.err(DIAG_HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT)!;
+			return text_literal::PARSING_FAILED~;
+		}
+		return { .bytes = buf[:buf.len - suffix_str.len], .is_float = true, .prefix = prefix, .suffix = suffix };
+	}
+
+	bool c23 = self.comp.langopts.standard.at_least(C23);
+	// Zig: `if (prefix == .binary and !c23) err(if (c23) pre_c23_binary else c23_binary)`.
+	if (prefix == BINARY && !c23) self.err(DIAG_C23_BINARY)!;
+	if (suffix.is_bit_int()) self.err(c23 ? DIAG_PRE_C23_BITINT : DIAG_BITINT_SUFFIX)!;
+	if (prefix == OCTAL)
+	{
+		bool c2y = self.comp.langopts.standard.at_least(C2Y);
+		if (prefix_len == 2 && buf[1] != '\'')
+		{
+			self.err(c2y ? DIAG_PRE_C2Y_OCTAL : DIAG_C2Y_OCTAL)!;
+		}
+		else if (c2y)
+		{
+			self.err(DIAG_C2Y_DEPRECATED_OCTAL)!;
+		}
+	}
+	return { .bytes = int_part, .is_float = false, .prefix = prefix, .suffix = suffix };
 }
 
 <*
@@ -375,4 +586,158 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 fn void? NumberLiteralParser.err(&self, DiagnosticTemplate d, LiteralArg arg = { .kind = NONE })
 {
 	text_literal::emit_literal_diagnostic(self.comp, d, arg, self.loc, self.expansion_locs)!;
+}
+
+<*
+ Zig `Parser.getIntegerPart`.
+ @require buf.len > 0
+ @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
+*>
+fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix)
+{
+	if (buf[0] == '.') return "";
+
+	if (!prefix.digit_allowed(buf[0]))
+	{
+		switch (prefix)
+		{
+			case BINARY: self.err(DIAG_INVALID_BINARY_DIGIT, text_literal::arg_ascii(text_literal::ascii(buf[0])))!;
+			case OCTAL: self.err(DIAG_INVALID_OCTAL_DIGIT, text_literal::arg_ascii(text_literal::ascii(buf[0])))!;
+			case HEX: self.err(DIAG_INVALID_INT_SUFFIX, text_literal::arg_str(buf))!;
+			case DECIMAL: unreachable("decimal literal starts with a digit");
+		}
+		return text_literal::PARSING_FAILED~;
+	}
+
+	for (sz idx = 1; idx < buf.len; idx++)
+	{
+		char c = buf[idx];
+		switch (c)
+		{
+			case '.':
+				return buf[:idx];
+			case 'p':
+			case 'P':
+				if (prefix == HEX) return buf[:idx];
+				self.err(DIAG_INVALID_INT_SUFFIX, text_literal::arg_str(buf[idx..]))!;
+				return text_literal::PARSING_FAILED~;
+			case 'e':
+			case 'E':
+				switch (prefix)
+				{
+					case HEX: continue;
+					case DECIMAL: return buf[:idx];
+					case BINARY: self.err(DIAG_INVALID_BINARY_DIGIT, text_literal::arg_ascii(text_literal::ascii(c)))!;
+					case OCTAL: self.err(DIAG_INVALID_OCTAL_DIGIT, text_literal::arg_ascii(text_literal::ascii(c)))!;
+				}
+				return text_literal::PARSING_FAILED~;
+			case '0'..'9':
+			case 'a'..'d':
+			case 'A'..'D':
+			case 'f':
+			case 'F':
+				if (!prefix.digit_allowed(c))
+				{
+					switch (prefix)
+					{
+						case BINARY: self.err(DIAG_INVALID_BINARY_DIGIT, text_literal::arg_ascii(text_literal::ascii(c)))!;
+						case OCTAL: self.err(DIAG_INVALID_OCTAL_DIGIT, text_literal::arg_ascii(text_literal::ascii(c)))!;
+						case DECIMAL:
+						case HEX: self.err(DIAG_INVALID_INT_SUFFIX, text_literal::arg_str(buf[idx..]))!;
+					}
+					return text_literal::PARSING_FAILED~;
+				}
+			case '\'':
+				break;
+			default:
+				return buf[:idx];
+		}
+	}
+	return buf;
+}
+
+<*
+ Zig `Parser.getFracPart`.
+ @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
+*>
+fn String? NumberLiteralParser.get_frac_part(&self, String buf, Prefix prefix)
+{
+	if (buf.len == 0 || buf[0] != '.') return "";
+	if (prefix == BINARY || prefix == OCTAL)
+	{
+		self.err(DIAG_INVALID_INT_SUFFIX, text_literal::arg_str(buf))!;
+		return text_literal::PARSING_FAILED~;
+	}
+	for (sz idx = 1; idx < buf.len; idx++)
+	{
+		char c = buf[idx];
+		if (c == '\'') continue;
+		if (!prefix.digit_allowed(c)) return buf[:idx];
+	}
+	return buf;
+}
+
+<*
+ Zig `Parser.getExponent`.
+ @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
+*>
+fn String? NumberLiteralParser.get_exponent(&self, String buf, Prefix prefix)
+{
+	if (buf.len == 0) return "";
+
+	switch (buf[0])
+	{
+		case 'e':
+		case 'E':
+			assert(prefix == DECIMAL);
+		case 'p':
+		case 'P':
+			if (prefix != HEX)
+			{
+				self.err(DIAG_INVALID_FLOAT_SUFFIX, text_literal::arg_str(buf))!;
+				return text_literal::PARSING_FAILED~;
+			}
+		default:
+			return "";
+	}
+	sz end = buf.len;
+	for (sz idx = 1; idx < buf.len; idx++)
+	{
+		char c = buf[idx];
+		if (idx == 1 && (c == '+' || c == '-')) continue;
+		if (c == '\'' || (c >= '0' && c <= '9')) continue;
+		end = idx;
+		break;
+	}
+	String exponent = buf[:end];
+	if (!find_any(exponent, "0123456789"))
+	{
+		self.err(DIAG_EXPONENT_HAS_NO_DIGITS)!;
+		return text_literal::PARSING_FAILED~;
+	}
+	return exponent;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers (Zig std.mem)
+
+<* Zig `mem.findAny(u8, buf, set) != null`. *>
+fn bool find_any(String buf, String set)
+{
+	foreach (c : buf)
+	{
+		foreach (s : set) if (c == s) return true;
+	}
+	return false;
+}
+
+<* Zig `mem.find(u8, haystack, needle) != null`. *>
+fn bool contains(String haystack, String needle)
+{
+	if (needle.len > haystack.len) return false;
+	for (sz i = 0; i + needle.len <= haystack.len; i++)
+	{
+		if (haystack[i:needle.len] == needle) return true;
+	}
+	return false;
 }
