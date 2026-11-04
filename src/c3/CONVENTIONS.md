@@ -73,3 +73,4 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - A type name needs a lowercase letter: `struct A` is parsed as a constant (`Abc` works).
 - `float128` literals are folded at double precision (`(float128)0.1` is the widened double); build f128 constants from bits.
 - Modules may import each other cyclically, and a module may add methods to another module's type (`fn KeyFloat.add(...)` in `aro::float_value`); callers must import the defining module.
+- `cond ? x : y` on a struct holding an anonymous union (`KeyFloat`) is miscompiled at -O0: the result's upper union bytes are garbage (f128 `hi`). Use `if` + separate `return`/assignment; a ternary on the union member type itself (`F128Bits`) works.

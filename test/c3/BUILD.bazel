@@ -22,3 +22,4 @@ c3_test(name = "builtins_tests", srcs = ["builtins_tests.c3"], data = ["//:built
 c3_test(name = "builtin_defs_regen_tests", srcs = ["builtin_defs_regen_tests.c3"], data = ["//:builtin_def_files", "//:builtin_defs"], deps = ["//tools:generate_def_lib"])
 c3_test(name = "float_capability_tests", srcs = ["float_capability_tests.c3"])
 c3_test(name = "float_contract_tests", srcs = ["float_contract_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "float_narrow_tests", srcs = ["float_narrow_tests.c3"], deps = ["//:aro_c3_lib"])
