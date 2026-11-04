@@ -67,6 +67,16 @@ const DiagnosticTemplate DIAG_FLOAT_LITERAL_IN_EXPR = {
 	.kind = ERROR,
 };
 
+<*
+ C3-only (no Zig counterpart): std.fmt.parseFloat rejects a hex float without
+ significand digits (`0x.p1`) that number_literal accepted; Zig's
+ `catch unreachable` is a safety panic there. Same text as clang.
+*>
+const DiagnosticTemplate DIAG_HEX_FLOAT_NO_SIGNIFICAND = {
+	.fmt = "hexadecimal floating constant requires a significand",
+	.kind = ERROR,
+};
+
 <* A diagnostic produced by value conversion, reported by the caller at the literal token. None takes arguments. *>
 enum NumberValueDiag : char
 {
@@ -74,6 +84,7 @@ enum NumberValueDiag : char
 	IMPLICITLY_UNSIGNED_LITERAL,
 	GNU_IMAGINARY_CONSTANT,
 	FLOAT_LITERAL_IN_EXPR,
+	HEX_FLOAT_NO_SIGNIFICAND,
 }
 
 <* The DiagnosticTemplate of a NumberValueDiag (its `fmt` is the final text). *>
@@ -85,6 +96,7 @@ fn DiagnosticTemplate NumberValueDiag.template(self)
 		case IMPLICITLY_UNSIGNED_LITERAL: return DIAG_IMPLICITLY_UNSIGNED_LITERAL;
 		case GNU_IMAGINARY_CONSTANT: return DIAG_GNU_IMAGINARY_CONSTANT;
 		case FLOAT_LITERAL_IN_EXPR: return DIAG_FLOAT_LITERAL_IN_EXPR;
+		case HEX_FLOAT_NO_SIGNIFICAND: return DIAG_HEX_FLOAT_NO_SIGNIFICAND;
 	}
 }
 
@@ -331,7 +343,9 @@ fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix
 
 <*
  Zig `Parser.parseFloat`: qt = float_suffix_type(suffix); strip '\''
- separators; float_value::parse_f128 (cannot fail: syntax already checked);
+ separators; float_value::parse_f128; on failure (only `0x.p1`-style hex
+ floats without significand digits, where Zig's `catch unreachable` panics)
+ push the C3-only HEX_FLOAT_NO_SIGNIFICAND error and use +0.0;
  cast to the KeyFloatTag of qt.bit_sizeof (16 -> F16 — also for __bf16, as in
  Zig —, 32, 64, 80, 128; decimal floats use the binary width too); intern.
  Imaginary: push GNU_IMAGINARY_CONSTANT, qt = to_complex, val = complex
@@ -344,13 +358,26 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 	String digits = strip_separators(comp, bytes);
 	F128Bits? parsed = float_value::parse_f128(digits);
 	free_stripped(comp, bytes, digits);
-	F128Bits bits = parsed!!; // syntax already validated by number_literal
+	NumberValue res;
+	F128Bits bits;
+	if (try parsed)
+	{
+		bits = parsed;
+	}
+	else
+	{
+		// Zig: `catch unreachable` (safety panic). Defined result instead.
+		res.diags.push(HEX_FLOAT_NO_SIGNIFICAND);
+	}
 
 	KeyFloatTag tag = float_value::width_of(qt, comp);
 	KeyFloat f = float_value::f128_value(bits).cast(tag);
 	Value val = float_value::intern_float(f, comp);
 
-	NumberValue res = { .qt = qt, .literal_qt = qt, .val = val, .literal_val = val };
+	res.qt = qt;
+	res.literal_qt = qt;
+	res.val = val;
+	res.literal_val = val;
 	if (suffix.is_imaginary())
 	{
 		res.diags.push(GNU_IMAGINARY_CONSTANT);

@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 11 [Lexing & literals]: Port numeric and text literal decoding'
-state: waiting
+state: complete
 depends_on:
 - c3-migration-05-port-diagnostic-state-and-rendering
 - c3-migration-06-port-language-modes-unicode-tables-and-tokenizer
@@ -28,3 +28,18 @@ Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it.
 - **11.5 `vectors`**: owns `test/c3/data/literals/*`. Reference values and exact diagnostic text from the pinned Zig build for malformed suffixes, overflow, f80/f128 rounding, surrogates.
 
 **Stage 2: integrator (1 agent, serial).** Write `test/c3/literal_tests.c3`, register `//test/c3:literal_tests`, confirm a no-AST decode path works.
+
+## Completion notes (stage 2 integrator)
+
+- Merged: `number_literal.c3` (11.1), `number_value.c3` (11.2), `text_literal.c3` (11.3), `text_literal_semantics.c3` (11.4), vectors `test/c3/data/literals/*.txt` (11.5). All four modules are in `//:aro_c3_lib`. Their unit targets (`number_literal_tests`, `number_value_tests`, `number_value_manual_tests`, `text_literal_tests`, `text_literal_semantics_tests`, `text_literal_semantics_manual_tests`, `literal_contract_tests`) run in `//test/...`; the `manual` tags are removed.
+- Seams fixed: number_value uses number_literal's `Suffix` methods (the local copies are gone). `Value.print` on a bytes value calls `text_literal_semantics::print_string`, which is Zig printString. Zig `Compilation.wcharMax` / `float80Type` / `CharUnitSize` now live in `compilation.c3` as `Compilation.wchar_max()`, `Compilation.float80_type()` (fault `compilation::NO_FLOAT80`) and `compilation::CharUnitSize`. String literals decode with max_codepoint 0x10FFFF, and char constants use `kind.max_codepoint(comp)`, as Parser.zig does. `u"\U0001F917"` gives the surrogate pair `3ed8 17dd`.
+- `//test/c3:literal_tests` (`test/c3/literal_tests.c3`) is data-driven over all 6,078 vectors: kinds/target_info, suffix, number, pp, char, string, ucn_ident and 273 fixture-derived lines. It uses only the parser-free API (token bytes plus Location, no token list or AST), so it also confirms the no-AST decode path. Results are compared as text. Diagnostics are compared in emission order with their exact text and expanded column, under -Weverything, because the vectors list them before the effective-kind filter. Fixture `[-W...]` suffixes are checked against the template option. The test asserts every file's `# end: N` count. It also has explicit acceptance cases that render the full diagnostic lines (`t0.c:1:1: error: invalid suffix 'w' on floating constant`, ...), for: malformed suffixes, overflow, f80/f128 0.1 rounding, UCN/surrogate boundaries, multichar constants, mixed encodings, and printString.
+- Result: all 6,078 vectors pass, in fastbuild and in `-c opt`. That includes the 29 `dblround` vectors (f128 parse, then cast). `bazel test //test/...`: 37/37 pass in both modes.
+- Normalisations (documented in the test header, with their counts asserted):
+  - 397 vectors: Zig `Key.toRef` interns a float equal to +0.0 or 1.0 as the static int zero/one, so the value of `1.0f` is the int 1. The probe keeps the float.
+  - 99 vectors: for an imaginary float the inner float_literal node has no value. The oracle `test/cases/ast/__float80.c` shows this. NumberValue.literal_val is therefore `none`, while the probe reports the parsed float.
+- Reference panics (`= unreachable`, 29 vectors): the port's results are pinned in `UNREACHABLE_RESULTS`.
+  - `0x.p1`: the port reports the new C3-only error `hexadecimal floating constant requires a significand` (`NumberValueDiag.HEX_FLOAT_NO_SIGNIFICAND`, added in number_value.c3) and uses +0.0.
+  - `'€'` / `'😀'` on a signed-char target: the port truncates to 8 bits and sign-extends (-0x54 / 0x0), after char_too_large.
+  - `'\é'` / `"\é"`: `unknown escape sequence '\xc3'`, then 0xA9 decodes as improperly encoded text.
+- Caveat: apart from the `fixture*` lines, the vectors come from a Zig 0.17.0 port of the Aro sources, not from the pinned 0.18-dev binary.
