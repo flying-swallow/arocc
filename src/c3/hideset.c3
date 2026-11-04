@@ -9,9 +9,7 @@
 // instead of storing them with the token. Algorithm:
 // https://www.spinellis.gr/blog/20060626/cpp.algo.pdf
 //
-// Stage 0 (contract): the type, `init`/`free`/clear functions are implemented
-// (the Preprocessor's lifecycle needs them); the list operations are stubs.
-// The private field layout may be changed by 13.1 as long as the API stays.
+// Implemented by 13.1 (stage 0 provided the type and init/free/clear).
 //
 // Ownership: everything is allocated from `comp.gpa` and released by `free`
 // (Zig `deinit`). Lists are never freed individually: an Index stays valid
@@ -21,6 +19,8 @@
 //  - Zig's `AutoHashMap(Identifier, ...)` key is packed into a `ulong`
 //    (`identifier_key`: source id bits << 32 | byte_offset); same equality.
 //  - `tmp_map` (a set) is a HashMap{ulong, bool}.
+//  - Zig's Iterator over the MultiArrayList is replaced by index walks that
+//    re-read linked_list on every step, so appends cannot invalidate them.
 module aro::hideset;
 import aro::source, aro::compilation, std::collections::list, std::collections::map;
 
@@ -102,13 +102,22 @@ fn void Hideset.clear_and_free(&self)
 *>
 fn HidesetIndex Hideset.get(&self, Location loc)
 {
-	unreachable("stage 0 stub");
+	return self.map.get(identifier_from_location(loc).key()) ?? NONE;
 }
 
 <* Zig `put`: map `loc` (id, byte_offset) to `value`, replacing any previous head. *>
 fn void Hideset.put(&self, Location loc, HidesetIndex value)
 {
-	unreachable("stage 0 stub");
+	self.map.set(identifier_from_location(loc).key(), value);
+}
+
+<* Zig `createNodeAssumeCapacityExtra`: append { identifier, len, next } and return its index. *>
+fn HidesetIndex Hideset.create_node(&self, HidesetIdentifier identifier, HidesetIndex next, uint length)
+{
+	sz new_idx = self.linked_list.len();
+	assert(new_idx < 0xFFFF_FFFF, "hideset index overflow");
+	self.linked_list.push({ .identifier = identifier, .len = length, .next = next });
+	return (HidesetIndex)(uint)new_idx;
 }
 
 <*
@@ -117,20 +126,42 @@ fn void Hideset.put(&self, Location loc, HidesetIndex value)
 *>
 fn HidesetIndex Hideset.prepend(&self, Location loc, uint length, HidesetIndex tail)
 {
-	unreachable("stage 0 stub");
+	return self.create_node(identifier_from_location(loc), tail, length);
 }
 
 <*
- Zig `union` (`union` is a C3 keyword): attach the elements of `a` that are not in `b` to the front of `b`.
+ Zig `union` (`union` is a C3 keyword). Despite Zig's doc comment ("attach
+ elements of `b` to the front of `a`"), the code attaches the elements of `a`
+ that are not in `b` to the front of `b`; that is what is ported.
  a == NONE -> b; b == NONE -> a. Otherwise clear tmp_map, insert every
  identifier of `b`, then walk `a` in order and for each identifier not in
  tmp_map create a node { identifier, len, next = head } and make it the head
  (so the copied elements end up in REVERSE order of `a`, followed by `b`).
- Reserve len(a) items first so the walk is not invalidated.
+ Duplicates within `a` itself are not removed (as in Zig). Neither input is
+ modified.
 *>
 fn HidesetIndex Hideset.union_of(&self, HidesetIndex a, HidesetIndex b)
 {
-	unreachable("stage 0 stub");
+	if (a == NONE) return b;
+	if (b == NONE) return a;
+	self.tmp_map.clear();
+
+	for (HidesetIndex i = b; i != NONE; i = self.linked_list[(sz)i].next)
+	{
+		self.tmp_map.set(self.linked_list[(sz)i].identifier.key(), true);
+	}
+
+	HidesetIndex head = b;
+	self.linked_list.reserve((sz)self.len(a));
+	for (HidesetIndex i = a; i != NONE; i = self.linked_list[(sz)i].next)
+	{
+		HidesetItem item = self.linked_list[(sz)i];
+		if (!self.tmp_map.has_key(item.identifier.key()))
+		{
+			head = self.create_node(item.identifier, head, item.len);
+		}
+	}
+	return head;
 }
 
 <*
@@ -138,11 +169,36 @@ fn HidesetIndex Hideset.union_of(&self, HidesetIndex a, HidesetIndex b)
  every identifier of `a`, reserve min(len(a), len(b)) items, then walk `b`
  and for each identifier in tmp_map append a node { identifier, len,
  next = NONE }, linking it after the previous one (order of `b`). Returns the
- first created node or NONE.
+ first created node or NONE. Duplicates within `b` are kept (as in Zig).
 *>
 fn HidesetIndex Hideset.intersection(&self, HidesetIndex a, HidesetIndex b)
 {
-	unreachable("stage 0 stub");
+	if (a == NONE || b == NONE) return NONE;
+	self.tmp_map.clear();
+
+	usz a_len = 0;
+	for (HidesetIndex i = a; i != NONE; i = self.linked_list[(sz)i].next)
+	{
+		self.tmp_map.set(self.linked_list[(sz)i].identifier.key(), true);
+		a_len++;
+	}
+	usz b_len = self.len(b);
+	self.linked_list.reserve((sz)(a_len < b_len ? a_len : b_len));
+
+	HidesetIndex cur = NONE;
+	HidesetIndex head = NONE;
+	for (HidesetIndex i = b; i != NONE; i = self.linked_list[(sz)i].next)
+	{
+		HidesetItem item = self.linked_list[(sz)i];
+		if (self.tmp_map.has_key(item.identifier.key()))
+		{
+			HidesetIndex new_idx = self.create_node(item.identifier, NONE, item.len);
+			if (head == NONE) head = new_idx;
+			if (cur != NONE) self.linked_list[(sz)cur].next = new_idx;
+			cur = new_idx;
+		}
+	}
+	return head;
 }
 
 <*
@@ -151,11 +207,20 @@ fn HidesetIndex Hideset.intersection(&self, HidesetIndex a, HidesetIndex b)
 *>
 fn bool Hideset.contains(&self, HidesetIndex list, String str)
 {
-	unreachable("stage 0 stub");
+	for (HidesetIndex i = list; i != NONE; i = self.linked_list[(sz)i].next)
+	{
+		HidesetItem item = self.linked_list[(sz)i];
+		String buf = self.comp.get_source(item.identifier.id).buf;
+		usz start = item.identifier.byte_offset;
+		if (str == buf[start:item.len]) return true;
+	}
+	return false;
 }
 
 <* Zig `len`: number of items in `list`. *>
 fn usz Hideset.len(&self, HidesetIndex list)
 {
-	unreachable("stage 0 stub");
+	usz count = 0;
+	for (HidesetIndex cur = list; cur != NONE; cur = self.linked_list[(sz)cur].next) count++;
+	return count;
 }
