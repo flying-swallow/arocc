@@ -73,3 +73,4 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - A type name needs a lowercase letter: `struct A` is parsed as a constant (`Abc` works).
 - `float128` literals are folded at double precision (`(float128)0.1` is the widened double); build f128 constants from bits.
 - Modules may import each other cyclically, and a module may add methods to another module's type (`fn KeyFloat.add(...)` in `aro::float_value`); callers must import the defining module.
+- A conditional `c ? 1 : 0` is an `int` and does not convert implicitly to `uint128` in arithmetic (`x + (c ? 1 : 0)`); assign it to a `uint128` local first.
