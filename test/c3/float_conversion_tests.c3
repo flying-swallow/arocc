@@ -77,6 +77,14 @@ fn void check_value(Value got, Value want)
 
 fn QualType complex_of(Compilation* comp, QualType qt) => comp.type_store.put(type_store::type_complex(qt));
 
+<* The interner dedups floats with `==` (as Zig does), so a NaN gets a new ref each time: compare bits. *>
+fn void check_float_key(Compilation* comp, Value v, KeyFloat want)
+{
+	InternerKey k = comp.interner.get(v.ref());
+	assert(k.tag == FLOAT);
+	check_bits(k.float_val, want.tag, want.raw());
+}
+
 const ulong D_ONE = 0x3FF0_0000_0000_0000;
 const ulong D_TWO = 0x4000_0000_0000_0000;
 const ulong D_FOUR = 0x4010_0000_0000_0000;
@@ -102,7 +110,7 @@ fn void cast_from_f64_observed() @test
 	KeyFloat a = raw(F64, 0x3FF0_0000_1000_0000);
 	check_bits(a.cast(F16), F16, 0x3C00);
 	check_bits(a.cast(F32), F32, 0x3F80_0000);
-	check_bits(a.cast(F80), F80, u128(0x3FFF, 0x8000_0000_8000_0000));
+	check_bits(a.cast(F80), F80, u128(0x3FFF, 0x8000_0080_0000_0000));
 	check_bits(a.cast(F128), F128, u128(0x3FFF_0000_0100_0000, 0));
 	// 1 + 3 * 2^-24: an f32 tie, rounds to even (up).
 	check_bits(raw(F64, 0x3FF0_0000_3000_0000).cast(F32), F32, 0x3F80_0002);
@@ -670,7 +678,7 @@ fn void real_arithmetic_values() @test
 		assert(!float_value::div(&r, value::ONE, f64v(comp, 0), type_store::DOUBLE, comp));
 		check_value(r, fv(comp, float_value::inf(F64)));
 		assert(!float_value::div(&r, f64v(comp, 0), f64v(comp, 0), type_store::DOUBLE, comp));
-		check_value(r, f64v(comp, 0xFFF8_0000_0000_0000));
+		check_float_key(comp, r, float_value::f64_value(0xFFF8_0000_0000_0000)); // NaN: never shares a ref
 		// long double / __float128: 1 + 1 = 2
 		assert(!float_value::add(&r, value::ONE, value::ONE, type_store::LONG_DOUBLE, comp));
 		check_value(r, fv(comp, raw(F80, u128(0x4000, 0x8000_0000_0000_0000))));
