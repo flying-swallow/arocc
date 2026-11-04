@@ -710,6 +710,10 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 				self.stringify(arg)!;
 				sz start = self.comp.generated_buf.len();
 				self.comp.generated_buf.push_all(self.char_buf.array_view());
+				// C3: keep a NUL in the spare capacity for the tokenizer's sentinel
+				// precondition when expanded_slice re-reads this token (see macro_paste.c3).
+				self.comp.generated_buf.push(0);
+				self.comp.generated_buf.size -= 1;
 				buf.push(self.make_generated_token(start, STRING_LITERAL, tokens::from_raw(raw)));
 			case MACRO_PARAM_BUILTIN_FUNC:
 				self.builtins.expand_func(self.builtins.ctx, self, func_macro.builtin_kind.func, macro_tok, raw, expanded_args, eval_ctx, &buf)!;
