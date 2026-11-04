@@ -9,9 +9,13 @@
 // base extensions, SPARC v9, s390x vx/te, SPIR-V versions and a few wasm
 // features. CpuModel lists the generic/baseline model of every architecture
 // family aro supports, every model Target.zig names, and the -mcpu models used
-// by test/records target strings that Zig defines. The full LLVM-derived model
-// and feature catalogs (Compilation.zig's x86/aarch64 predefined-macro feature
-// tables) are left to the predefined-macros port, which extends these enums.
+// by test/records target strings that Zig defines. Plan 14 stage 0 added every
+// feature Compilation.zig's x86 / aarch64 predefined-macro tables name and the
+// complete wasm feature list (iterated in declaration order for __wasm_*__).
+// Still missing: FEATURE_DEPS rows for those new features (e.g. avx512vbmi ->
+// avx512bw, sve2 -> sve) and the full LLVM CPU model catalog (-mcpu=skylake
+// etc.); with them absent a +feature turns on only itself and unknown models
+// fail with UNKNOWN_CPU_MODEL.
 //
 // PROVENANCE: model feature sets, feature dependencies, Model.generic and
 // Model.baseline are from Zig std.Target knowledge, not verified by execution
@@ -130,6 +134,71 @@ enum Feature : ushort (FeatureFamily family, String name)
 	X86_CF { X86, "cf" },
 	X86_ZU { X86, "zu" },
 	X86_INLINE_ASM_USE_GPR32 { X86, "inline_asm_use_gpr32" },
+	// x86: the rest of Compilation.zig generateSystemDefines' feature -> macro table (plan 14 stage 0)
+	X86_VAES { X86, "vaes" },
+	X86_VPCLMULQDQ { X86, "vpclmulqdq" },
+	X86_RTM { X86, "rtm" },
+	X86_TBM { X86, "tbm" },
+	X86_LWP { X86, "lwp" },
+	X86_MWAITX { X86, "mwaitx" },
+	X86_XOP { X86, "xop" },
+	X86_FMA4 { X86, "fma4" },
+	X86_GFNI { X86, "gfni" },
+	X86_AVX10_1 { X86, "avx10_1" },
+	X86_AVX10_2 { X86, "avx10_2" },
+	X86_AVX512VPOPCNTDQ { X86, "avx512vpopcntdq" },
+	X86_AVX512VNNI { X86, "avx512vnni" },
+	X86_AVX512BF16 { X86, "avx512bf16" },
+	X86_AVX512FP16 { X86, "avx512fp16" },
+	X86_AVX512BITALG { X86, "avx512bitalg" },
+	X86_AVX512BMM { X86, "avx512bmm" },
+	X86_AVX512VBMI { X86, "avx512vbmi" },
+	X86_AVX512VBMI2 { X86, "avx512vbmi2" },
+	X86_AVX512IFMA { X86, "avx512ifma" },
+	X86_AVX512VP2INTERSECT { X86, "avx512vp2intersect" },
+	X86_SHA512 { X86, "sha512" },
+	X86_PKU { X86, "pku" },
+	X86_CLWB { X86, "clwb" },
+	X86_WBNOINVD { X86, "wbnoinvd" },
+	X86_SHSTK { X86, "shstk" },
+	X86_SGX { X86, "sgx" },
+	X86_SM3 { X86, "sm3" },
+	X86_SM4 { X86, "sm4" },
+	X86_PREFETCHI { X86, "prefetchi" },
+	X86_CLZERO { X86, "clzero" },
+	X86_KL { X86, "kl" },
+	X86_WIDEKL { X86, "widekl" },
+	X86_RDPID { X86, "rdpid" },
+	X86_RDPRU { X86, "rdpru" },
+	X86_CLDEMOTE { X86, "cldemote" },
+	X86_WAITPKG { X86, "waitpkg" },
+	X86_MOVDIRI { X86, "movdiri" },
+	X86_MOVDIR64B { X86, "movdir64b" },
+	X86_MOVRS { X86, "movrs" },
+	X86_PCONFIG { X86, "pconfig" },
+	X86_PTWRITE { X86, "ptwrite" },
+	X86_INVPCID { X86, "invpcid" },
+	X86_ENQCMD { X86, "enqcmd" },
+	X86_HRESET { X86, "hreset" },
+	X86_AMX_TILE { X86, "amx_tile" },
+	X86_AMX_INT8 { X86, "amx_int8" },
+	X86_AMX_BF16 { X86, "amx_bf16" },
+	X86_AMX_FP16 { X86, "amx_fp16" },
+	X86_AMX_COMPLEX { X86, "amx_complex" },
+	X86_AMX_FP8 { X86, "amx_fp8" },
+	X86_AMX_MOVRS { X86, "amx_movrs" },
+	X86_AMX_AVX512 { X86, "amx_avx512" },
+	X86_CMPCCXADD { X86, "cmpccxadd" },
+	X86_RAOINT { X86, "raoint" },
+	X86_AVXIFMA { X86, "avxifma" },
+	X86_AVXNECONVERT { X86, "avxneconvert" },
+	X86_AVXVNNI { X86, "avxvnni" },
+	X86_AVXVNNIINT16 { X86, "avxvnniint16" },
+	X86_AVXVNNIINT8 { X86, "avxvnniint8" },
+	X86_SERIALIZE { X86, "serialize" },
+	X86_TSXLDTRK { X86, "tsxldtrk" },
+	X86_UINTR { X86, "uintr" },
+	X86_USERMSR { X86, "usermsr" },
 	// arm: has_* are the implied version levels, v* the architecture features
 	ARM_HAS_V4T { ARM, "has_v4t" },
 	ARM_HAS_V5T { ARM, "has_v5t" },
@@ -273,6 +342,26 @@ enum Feature : ushort (FeatureFamily family, String name)
 	AARCH64_SME { AARCH64, "sme" },
 	AARCH64_FMV { AARCH64, "fmv" },
 	AARCH64_NO_UNALIGNED_ACCESS { AARCH64, "no_unaligned_access" },
+	// aarch64: the rest of generateSystemDefines' __ARM_FEATURE_* table (plan 14 stage 0)
+	AARCH64_SVE2P1 { AARCH64, "sve2p1" },
+	AARCH64_SVE2_SHA3 { AARCH64, "sve2_sha3" },
+	AARCH64_SVE2_SM4 { AARCH64, "sve2_sm4" },
+	AARCH64_SVE_B16B16 { AARCH64, "sve_b16b16" },
+	AARCH64_SME2 { AARCH64, "sme2" },
+	AARCH64_SME2P1 { AARCH64, "sme2p1" },
+	AARCH64_SME_F16F16 { AARCH64, "sme_f16f16" },
+	AARCH64_SME_B16B16 { AARCH64, "sme_b16b16" },
+	AARCH64_PAUTH_LR { AARCH64, "pauth_lr" },
+	AARCH64_BTI { AARCH64, "bti" },
+	AARCH64_MTE { AARCH64, "mte" },
+	AARCH64_F64MM { AARCH64, "f64mm" },
+	AARCH64_F32MM { AARCH64, "f32mm" },
+	AARCH64_FP16FML { AARCH64, "fp16fml" },
+	AARCH64_LS64 { AARCH64, "ls64" },
+	AARCH64_RAND { AARCH64, "rand" },
+	AARCH64_MOPS { AARCH64, "mops" },
+	AARCH64_D128 { AARCH64, "d128" },
+	AARCH64_GCS { AARCH64, "gcs" },
 	// mips
 	MIPS_MIPS1 { MIPS, "mips1" },
 	MIPS_MIPS2 { MIPS, "mips2" },
@@ -335,21 +424,30 @@ enum Feature : ushort (FeatureFamily family, String name)
 	// powerpc
 	POWERPC_64BIT { POWERPC, "64bit" },
 	POWERPC_SPE { POWERPC, "spe" },
-	// wasm
+	// wasm: every std.Target.wasm feature, in Zig declaration order (allFeaturesList order,
+	// which generateSystemDefines iterates for __wasm_<name>__). Plan 14 stage 0.
+	WASM_ATOMICS { WASM, "atomics" },
 	WASM_BULK_MEMORY { WASM, "bulk_memory" },
 	WASM_BULK_MEMORY_OPT { WASM, "bulk_memory_opt" },
 	WASM_CALL_INDIRECT_OVERLONG { WASM, "call_indirect_overlong" },
+	WASM_EXCEPTION_HANDLING { WASM, "exception_handling" },
 	WASM_EXTENDED_CONST { WASM, "extended_const" },
+	WASM_FP16 { WASM, "fp16" },
+	WASM_MULTIMEMORY { WASM, "multimemory" },
 	WASM_MULTIVALUE { WASM, "multivalue" },
 	WASM_MUTABLE_GLOBALS { WASM, "mutable_globals" },
+	WASM_NONTRAPPING_BULK_MEMORY_LEN0 { WASM, "nontrapping_bulk_memory_len0" },
 	WASM_NONTRAPPING_FPTOINT { WASM, "nontrapping_fptoint" },
 	WASM_REFERENCE_TYPES { WASM, "reference_types" },
+	WASM_RELAXED_SIMD { WASM, "relaxed_simd" },
 	WASM_SIGN_EXT { WASM, "sign_ext" },
 	WASM_SIMD128 { WASM, "simd128" },
+	WASM_TAIL_CALL { WASM, "tail_call" },
+	WASM_WIDE_ARITHMETIC { WASM, "wide_arithmetic" },
 }
 
 <* Bit set over `Feature` (Zig Cpu.Feature.Set). *>
-const usz FEATURE_WORDS = 5;
+const usz FEATURE_WORDS = 6;
 
 struct FeatureSet
 {
