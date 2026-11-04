@@ -1,0 +1,89 @@
+// stage: preprocessor (plan 13) -- //test/migration:macro_regression
+//
+// Curated test/cases fixtures run through test/migration/pp_probe in the
+// runner's normal fixture mode (manifest, expected diagnostics and
+// expanded/ goldens are the oracle; exit codes are not gated).
+//
+// Selection rule: the case must need only macro expansion and conditional
+// preprocessing -- no #include/#embed/#pragma (plan 15), no predefined or
+// builtin macros such as __LINE__, __STDC__, __has_* (plan 14), no target
+// options. pp_probe fails loudly when a case strays outside that.
+
+// --- recursion blocking: self / mutual recursion, hidesets
+recursive call non-expanded parens.c
+recursive func macro.c
+recursive object macro.c
+macro self definition.c
+macro expands to self after pasting.c
+macro re-expansion.c
+macro expansion disabled.c
+rparen hideset in argument expansion.c
+deferred macro expansion.c
+lazy macro.c
+unspecified expansion.c
+standard-redefinition-reexamination-example.c
+
+// --- nested function-like calls and argument collection
+nested macro call.c
+function macro expansion.c
+X macro.c
+apply pasted macro name.c
+macro expansion exhaustion.c
+macro unbalanced parens call.c
+whitespace macro arguments.c
+incorrect macro arg count.c
+zero argument macro.c
+indirect macro invocation wrong arg count.c
+
+// --- empty arguments and placemarkers
+placeholder tokens pasting.c
+standard-placeholder-example.c
+empty macro block expansion.c
+
+// --- variadics, GNU comma deletion and __VA_OPT__
+var args macro functions.c
+gnu variadic macros.c
+empty va args comma delete c99.c
+token paste delete comma gnu.c
+empty variadic paste.c
+__VA_OPT__.c
+
+// --- stringify and token pasting (including invalid paste)
+stringify invalid escape.c
+standard-concatenation-strings-example.c
+macro token pasting order.c
+object macro token pasting.c
+paste operator whitespace.c
+repeated paste macro argument.c
+preserve comments paste whitespace.c
+preserve comments in macros.c
+macro definition errors.c
+
+// --- whitespace, comments and -E pretty printing
+macro whitespace.c
+object macro expansion.c
+digraph pretty print.c
+multiline comment.c
+preserve comments.c
+debug dump macro names.c
+debug dump macros and results.c
+debug dump macros.c
+
+// --- conditionals: nesting, inactive branches, #elifdef, errors
+nested #ifs.c
+#ifdef.c
+#elifndef.c
+#elifndef error.c
+#if constant expression.c
+null directives with #if.c
+macro argument evaluation.c
+
+// --- unterminated constructs
+unmatched macro paren.c
+unterminated macro function at eof gcc.c
+unterminated macro function at eof clang.c
+nested unterminated macro gcc.c
+nested unterminated macro clang.c
+// a `syntax` case whose translation unit is empty after preprocessing
+// (pp_probe -fsyntax-only); it is the corpus's unterminated-conditional case
+unterminated comment in preprocessor expression.c

@@ -32,3 +32,33 @@ c3_test(
     tags = ["manual"],
     deps = [":runner_lib"],
 )
+
+# Plan 13.6: in-memory preprocessing CLI (`pp_probe -fno-color-diagnostics
+# <file> -E -P [args]`) for the runner. Its second module holds the
+# macro_regression test body.
+c3_binary(
+    name = "pp_probe",
+    srcs = ["pp_probe.c3"],
+    deps = [
+        ":runner_lib",
+        "//:aro_c3_lib",
+    ],
+)
+
+# Runs macro_regression_cases.txt through the runner with pp_probe in normal
+# fixture mode. Manual until the plan 13 stage-1 branches (expansion, paste,
+# directives, pp-expr, hideset) are merged: before that every case fails.
+c3_test(
+    name = "macro_regression",
+    srcs = ["pp_probe.c3"],
+    data = [
+        "macro_regression_cases.txt",
+        ":pp_probe",
+        "//:test_cases",
+    ],
+    tags = ["manual"],
+    deps = [
+        ":runner_lib",
+        "//:aro_c3_lib",
+    ],
+)
