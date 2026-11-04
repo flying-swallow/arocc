@@ -75,3 +75,6 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Modules may import each other cyclically, and a module may add methods to another module's type (`fn KeyFloat.add(...)` in `aro::float_value`); callers must import the defining module.
 - A doc-comment (`<* ... *>`) line that starts with `@name(` is parsed as a custom contract ("Expected a string description"); start such lines with a word (`Zig @round(...)`).
 - `uint128 * (ulong_a - 1)` is rejected ("widening ... done in more than one way"); cast the subtraction: `(uint128)(a - 1)`.
+- A compound `float16` expression (`a * c + b * d`) is evaluated in `float` and rounded to half only at the end; Zig rounds after every operation. Round each step (assign or return through a `float16` function).
+- Small-int arithmetic is promoted to `int`: `(ushort_val << 1) >> 11` keeps the shifted-out bit. Cast back (`(ushort)(x << 1)`) where Zig's fixed-width wrap matters.
+- Observed (not minimised): `KeyComplex r = cond ? annex_g::complex_float_mul(..) : annex_g::complex_float_div(..);` lost `r.cf64[1]` at -O0; an `if`/`else` assignment works.
