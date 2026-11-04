@@ -35,14 +35,24 @@ import aro::value_interner, aro::float_value;
 <* Zig `copysign(if (isInf(v)) @as(T, 1.0) else @as(T, 0.0), v)`. *>
 fn KeyFloat box(KeyFloat v)
 {
-	KeyFloat mag = v.is_inf() ? float_value::one(v.tag) : float_value::zero(v.tag);
+	// if/else, not `?:`: c3c 0.8.5 miscompiles ternaries on KeyFloat at -O0.
+	KeyFloat mag;
+	if (v.is_inf())
+	{
+		mag = float_value::one(v.tag);
+	}
+	else
+	{
+		mag = float_value::zero(v.tag);
+	}
 	return mag.copysign(v);
 }
 
 <* Zig `if (isNan(v)) v = copysign(@as(T, 0.0), v);` *>
 fn KeyFloat nan_to_zero(KeyFloat v)
 {
-	return v.is_nan() ? float_value::zero(v.tag).copysign(v) : v;
+	if (v.is_nan()) return float_value::zero(v.tag).copysign(v);
+	return v;
 }
 
 <*

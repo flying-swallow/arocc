@@ -3,9 +3,11 @@
 // OWNER: plan 09 stage 1 agent 09.3 `value-ops`. Stage 0 (contract) fixed `Value`
 // and the signatures below. Float/complex operations (floatToInt, intToFloat,
 // floatCast, toFloat, imag, realPart/imaginaryPart, isInf/isNan/isInfSign,
-// complexConj, the float branches of add/sub/mul/div/compare) and
-// `print`/`printString` belong to plan 10 and later; until then the float
-// branches of the operations below end in `unreachable("plan 10: ...")`.
+// complexConj, the float branches of add/sub/mul/div/compare and the float /
+// complex arms of print) live in aro::float_value (plan 10: float_value.c3,
+// float_print.c3, annex_g.c3); the operations below forward to it, and thin
+// wrappers with the Zig names are at the end of this file. `printString` (the
+// `.bytes` arm of print) is not ported yet.
 // Exception: `is_zero` inspects float/complex bit patterns directly (Zig
 // `data == 0`), because it needs no float arithmetic.
 //
@@ -30,7 +32,8 @@
 //   - Bytes values never take part in arithmetic: add/sub yield NONE.
 //   - Running out of memory panics; Zig's `!Value` (OOM only) is plain `Value`.
 module aro::value;
-import aro::compilation, aro::value_interner, aro::bigint, aro::type_store, aro::lang_opts;
+import aro::compilation, aro::value_interner, aro::bigint, aro::type_store, aro::lang_opts, aro::float_value;
+import std::core::dstring;
 
 <* Zig `null` from toInt: none, not an int, or does not fit. *>
 excuse NO_INT;
@@ -363,7 +366,7 @@ fn char[] Value.to_bytes(self, Compilation* comp)
 fn bool Value.add(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) unreachable("plan 10: float/complex Value.add");
+	if (scalar_kind.is_float()) return float_value::add(res, lhs, rhs, qt, comp);
 
 	InternerKey lhs_key = comp.interner.get(lhs.ref());
 	InternerKey rhs_key = comp.interner.get(rhs.ref());
@@ -419,7 +422,7 @@ fn bool Value.decrement(&res, Value val, QualType qt, Compilation* comp) => res.
 fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ulong elem_size = 0)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) unreachable("plan 10: float/complex Value.sub");
+	if (scalar_kind.is_float()) return float_value::sub(res, lhs, rhs, qt, comp);
 
 	InternerKey lhs_key = comp.interner.get(lhs.ref());
 	InternerKey rhs_key = comp.interner.get(rhs.ref());
@@ -478,7 +481,7 @@ fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ul
 fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) unreachable("plan 10: float/complex Value.mul");
+	if (scalar_kind.is_float()) return float_value::mul(res, lhs, rhs, qt, comp);
 
 	BigIntSpace lhs_space;
 	BigIntSpace rhs_space;
@@ -509,7 +512,7 @@ fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 fn bool Value.div(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) unreachable("plan 10: float/complex Value.div");
+	if (scalar_kind.is_float()) return float_value::div(res, lhs, rhs, qt, comp);
 
 	BigIntSpace lhs_space;
 	BigIntSpace rhs_space;
@@ -745,15 +748,17 @@ fn bool? shallow_compare(Value lhs, CompareOperator op, Value rhs)
 	return NOT_COMPARABLE~;
 }
 
-<* Value.compare (int part; float/complex branches are plan 10). *>
+<* Value.compare (float/complex branches: float_value::compare). *>
 fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 {
 	if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
 
 	InternerKey lhs_key = comp.interner.get(lhs.ref());
 	InternerKey rhs_key = comp.interner.get(rhs.ref());
-	if (lhs_key.tag == FLOAT || rhs_key.tag == FLOAT) unreachable("plan 10: float Value.compare");
-	if (lhs_key.tag == COMPLEX || rhs_key.tag == COMPLEX) unreachable("plan 10: complex Value.compare");
+	if (lhs_key.tag == FLOAT || rhs_key.tag == FLOAT || lhs_key.tag == COMPLEX || rhs_key.tag == COMPLEX)
+	{
+		return float_value::compare(lhs, op, rhs, comp);
+	}
 
 	BigIntSpace lhs_space;
 	BigIntSpace rhs_space;
@@ -848,4 +853,109 @@ fn Value elem(Value arr, Value index, Compilation* comp)
 	char[] b = key.bytes;
 	if ((sz)index_int > b.len) return NONE;
 	return int_u64(b[index_int], comp);
+}
+
+// ---------------------------------------------------------------------------
+// Float / complex operations (plan 10). Thin wrappers with the Zig names over
+// aro::float_value, which holds the implementations.
+// ---------------------------------------------------------------------------
+
+<* Value.floatToInt *>
+fn FloatToIntChangeKind Value.float_to_int(&v, QualType dest_ty, Compilation* comp) => float_value::float_to_int(v, dest_ty, comp);
+
+<* Value.intToFloat *>
+fn void Value.int_to_float(&v, QualType dest_ty, Compilation* comp) => float_value::int_to_float(v, dest_ty, comp);
+
+<* Value.floatCast *>
+fn void Value.float_cast(&v, QualType dest_ty, Compilation* comp) => float_value::float_cast(v, dest_ty, comp);
+
+<* Value.toFloat(T) with T given as a width tag. *>
+fn KeyFloat Value.to_float(self, KeyFloatTag dest, Compilation* comp) => float_value::to_float(self, dest, comp);
+
+<* Value.imag(T) with T given as a width tag. *>
+fn KeyFloat Value.imag(self, KeyFloatTag dest, Compilation* comp) => float_value::imag(self, dest, comp);
+
+<* Value.realPart *>
+fn Value Value.real_part(self, Compilation* comp) => float_value::real_part(self, comp);
+
+<* Value.imaginaryPart *>
+fn Value Value.imaginary_part(self, Compilation* comp) => float_value::imaginary_part(self, comp);
+
+<* Value.complexConj *>
+fn Value complex_conj(Value val, QualType qt, Compilation* comp) => float_value::complex_conj(val, qt, comp);
+
+<* Value.isInf *>
+fn bool Value.is_inf(self, Compilation* comp) => float_value::is_inf(self, comp);
+
+<* Value.isNan *>
+fn bool Value.is_nan(self, Compilation* comp) => float_value::is_nan(self, comp);
+
+<* Value.isInfSign *>
+fn IsInfKind Value.is_inf_sign(self, Compilation* comp) => float_value::is_inf_sign(self, comp);
+
+// ---------------------------------------------------------------------------
+// Printing
+// ---------------------------------------------------------------------------
+
+<* Zig `NestedPrint` (only `.pointer`): returned by print for pointer values. *>
+struct NestedPrint
+{
+	uint node;
+	Value offset;
+}
+
+<*
+ Value.print: appends `v` (of type `qt`) to `w`. Returns true and sets `*nested`
+ for a pointer value (Zig `?NestedPrint` non-null); the caller prints the base
+ and then calls print_pointer. The `.bytes` arm (Zig printString) is not ported
+ yet and is unreachable.
+ @require !self.is_none()
+*>
+fn bool Value.print(self, QualType qt, Compilation* comp, DString w, NestedPrint* nested = null)
+{
+	if (qt.is(comp, BOOL))
+	{
+		w.append_string(self.is_zero(comp) ? "false" : "true");
+		return false;
+	}
+	InternerKey key = comp.interner.get(self.ref());
+	switch (key.tag)
+	{
+		case NULL:
+			w.append_string("nullptr_t");
+		case INT:
+			switch (key.int_val.tag)
+			{
+				case U64: w.appendf("%d", key.int_val.u64);
+				case I64: w.appendf("%d", key.int_val.i64);
+				case BIG_INT:
+					String text = key.int_val.big_int.to_string_alloc(comp.gpa, 10, false);
+					defer alloc::free(comp.gpa, text.ptr);
+					w.append_string(text);
+			}
+		case FLOAT:
+			float_value::print_float(key.float_val, w);
+		case COMPLEX:
+			float_value::print_complex(key.complex_val, w);
+		case POINTER:
+			if (nested) *nested = { .node = key.pointer.node, .offset = from_ref(key.pointer.offset) };
+			return true;
+		case BYTES:
+			unreachable("Value.print of bytes: printString is not ported yet");
+		default:
+			unreachable("Value.print of a non-value key");
+	}
+	return false;
+}
+
+<* Value.printPointer: "&" ++ base, then the offset (in ptrdiff_t) unless it is zero. *>
+fn void print_pointer(Value offset, String base, Compilation* comp, DString w)
+{
+	w.append_char('&');
+	w.append_string(base);
+	if (!offset.is_zero(comp))
+	{
+		bool nested = offset.print(comp.type_store.ptrdiff, comp, w);
+		assert(!nested);
+	}
 }

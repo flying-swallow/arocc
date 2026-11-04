@@ -502,7 +502,12 @@ fn ulong f64_round_half_away(ulong bits)
 }
 
 <* Zig @as(f64, @floatCast(x)); f64 itself is passed through (KeyFloat.cast of the same tag is the identity). *>
-fn KeyFloat print_to_f64(KeyFloat f) => f.tag == F64 ? f : f.cast(F64);
+fn KeyFloat print_to_f64(KeyFloat f)
+{
+	// if, not `?:`: c3c 0.8.5 miscompiles ternaries on KeyFloat at -O0.
+	if (f.tag == F64) return f;
+	return f.cast(F64);
+}
 
 <* Zig @round(@as(f64, @floatCast(x)) * scale) / scale, every step an f64 operation. *>
 fn ulong print_scaled(KeyFloat f, ulong scale_bits)

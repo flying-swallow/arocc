@@ -115,13 +115,13 @@
 //   - One or two NaN operands -> the first NaN operand (lhs if NaN, else rhs),
 //     quieted, sign and payload kept. (SSE and compiler-rt; for f80 the x87 rule
 //     is "larger significand wins" when both are NaN - confirm with vectors.)
-//   - Narrowing cast (@floatCast to a smaller width): sign kept, quiet bit set,
-//     the top payload bits kept (compiler-rt truncf.zig, SSE cvtsd2ss agree).
-//   - Widening cast: sign kept, payload shifted up. The quiet bit is set by SSE
-//     (f32->f64) and x87 loads (any -> f80), but KEPT AS IS by compiler-rt
-//     extendf.zig (f16 -> f32/f64, any -> f128). Signaling NaNs never arise from
-//     C source in Aro (__builtin_nan sets the quiet bit), so this only matters
-//     for vectors.
+//   - Casts (@floatCast, observed with Zig 0.17.0 on x86_64-linux, see
+//     test/c3/float_conversion_tests.c3): sign kept; narrowing keeps the top
+//     payload bits, widening shifts the payload up. EVERY cast sets the quiet
+//     bit (a signaling NaN is quieted), including the widening f16 -> f32/f64,
+//     EXCEPT a cast to f128, which keeps the quiet bit as is (compiler-rt
+//     __extend*ftf2). Signaling NaNs never arise from C source in Aro
+//     (__builtin_nan sets the quiet bit), so this only matters for vectors.
 //   - std.math.nan(T) (used by __builtin_nan) is the POSITIVE quiet NaN STD_NAN_*.
 // f80 encodings: the explicit integer bit (bit 63 of `lo`) must be 1 for normal,
 // inf and NaN values. Unnormals, pseudo-infinities and pseudo-NaNs (exponent != 0,
@@ -537,8 +537,7 @@ fn KeyFloat KeyFloat.div(self, KeyFloat rhs)
 // NaN through casts (observed with Zig 0.17.0 on x86_64-linux, see
 // test/c3/float_conversion_tests.c3): a cast to F128 keeps a NaN's quiet bit as
 // is (compiler-rt __extend*ftf2); every other cast sets it, including the
-// widening f16 -> f32/f64 (the header's "Widening cast" rule says compiler-rt
-// keeps the bit for f16 -> f32/f64; the reference binary quiets it).
+// widening f16 -> f32/f64 (see the header's "Casts" rule).
 
 <*
  Zig @floatCast(x) to `dest` (also used for exact widening): round to nearest
