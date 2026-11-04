@@ -73,3 +73,6 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - A type name needs a lowercase letter: `struct A` is parsed as a constant (`Abc` works).
 - `float128` literals are folded at double precision (`(float128)0.1` is the widened double); build f128 constants from bits.
 - Modules may import each other cyclically, and a module may add methods to another module's type (`fn KeyFloat.add(...)` in `aro::float_value`); callers must import the defining module.
+- A compound `float16` expression (`a * c + b * d`) is evaluated in `float` and rounded to half only at the end; Zig rounds after every operation. Round each step (assign or return through a `float16` function).
+- Small-int arithmetic is promoted to `int`: `(ushort_val << 1) >> 11` keeps the shifted-out bit. Cast back (`(ushort)(x << 1)`) where Zig's fixed-width wrap matters.
+- Observed (not minimised): `KeyComplex r = cond ? annex_g::complex_float_mul(..) : annex_g::complex_float_div(..);` lost `r.cf64[1]` at -O0; an `if`/`else` assignment works.
