@@ -51,3 +51,4 @@ c3_test(name = "macro_expand_manual_tests", srcs = ["macro_expand_manual_tests.c
 c3_test(name = "predefined_macros_x86_tests", srcs = ["predefined_macros_x86_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "pp_builtin_macros_tests", srcs = ["pp_builtin_macros_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "predefined_macros_other_tests", srcs = ["predefined_macros_other_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_feature_queries_tests", srcs = ["pp_feature_queries_tests.c3"], deps = ["//:aro_c3_lib"])
