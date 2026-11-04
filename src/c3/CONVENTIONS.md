@@ -67,3 +67,9 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Integer limits are `long::min`, `ulong::max`, `usz::max`, and the byte size is `usz::size`; `long.min` and `usz.sizeof` do not compile.
 - Integer literal suffixes such as `1u64` are rejected ("not a valid literal"). Write `(ulong)1 << 40`; plain `1 << 40` is an `int` shift and is a compile error.
 - `if (catch x = f())` declares a new `x`; it cannot assign to an existing variable (shadowing error). Assign to a `T?` local first, then `if (catch tmp)`.
+- Two doc-comment blocks (`<* ... *>`) in a row on one declaration are a compile error; merge them.
+- `Enum.from_ordinal(i)` does not exist; use `Enum::values[i]`.
+- `@clz` / `@ctz` need compile-time constants; at run time use the methods `x.clz()` / `x.ctz()` (they work on `uint128`).
+- A type name needs a lowercase letter: `struct A` is parsed as a constant (`Abc` works).
+- `float128` literals are folded at double precision (`(float128)0.1` is the widened double); build f128 constants from bits.
+- Modules may import each other cyclically, and a module may add methods to another module's type (`fn KeyFloat.add(...)` in `aro::float_value`); callers must import the defining module.
