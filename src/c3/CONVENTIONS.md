@@ -85,3 +85,4 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Constants of a `typedef`'d integer type need an explicit cast (`const Precedence P = (Precedence)1;`).
 - `if (c) a; else b;` without braces is a compile error when there is an `else`.
 - `union` and `macro` are keywords, so they cannot be method or parameter names (Zig `Hideset.union` is `union_of`).
+- The variable of `if (catch f = x) { ... } else { ... }` is still in scope in the `else` branch, so a nested `catch f` there is a shadowing error; use another name.
