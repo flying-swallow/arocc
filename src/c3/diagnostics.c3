@@ -312,6 +312,11 @@ struct DiagnosticTemplate
 	bool has_opt;
 	Option opt;
 	bool extension;
+	<*
+	 Zig Preprocessor.Diagnostic `show_in_system_headers`: report even when
+	 warnings in system headers are suppressed. Defaults to false (zero).
+	*>
+	bool show_in_system_headers;
 }
 
 <* Build a message from a template with already formatted `text` and no location. *>

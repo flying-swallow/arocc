@@ -42,3 +42,4 @@ c3_test(name = "pp_contract_tests", srcs = ["pp_contract_tests.c3"], deps = ["//
 c3_test(name = "hideset_tests", srcs = ["hideset_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "pp_expression_tests", srcs = ["pp_expression_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "macro_paste_tests", srcs = ["macro_paste_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_directives_tests", srcs = ["pp_directives_tests.c3"], deps = ["//:aro_c3_lib"])
