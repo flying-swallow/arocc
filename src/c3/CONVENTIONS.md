@@ -82,3 +82,6 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - A conditional `c ? 1 : 0` is an `int` and does not convert implicitly to `uint128` in arithmetic (`x + (c ? 1 : 0)`); assign it to a `uint128` local first.
 - A module name may be at most 31 characters (`module text_literal_semantics_manual_tests;` is rejected); shorten test module names.
 - An enum value's name: `e.nameof` does not compile; format it with `string::tformat("%s", e)` (or `io::printf`).
+- Constants of a `typedef`'d integer type need an explicit cast (`const Precedence P = (Precedence)1;`).
+- `if (c) a; else b;` without braces is a compile error when there is an `else`.
+- `union` and `macro` are keywords, so they cannot be method or parameter names (Zig `Hideset.union` is `union_of`).
