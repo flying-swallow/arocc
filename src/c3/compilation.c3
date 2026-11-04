@@ -6,6 +6,7 @@ module aro::compilation;
 import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, aro::type_store, std::collections::list;
 import aro::value_interner;
 import aro::builtins;
+import aro::code_gen_options, std::time;
 
 excuse FILE_TOO_BIG;
 
@@ -69,7 +70,70 @@ struct Compilation
 	Interner interner;
 	<* Created builtin function types, keyed by name (Zig `builtins`). *>
 	Builtins builtins;
+
+	<* Zig `environment` (values borrowed; empty by default, Zig `.{}`). *>
+	Environment environment;
+	<*
+	 Wall clock for SourceEpoch.system (Zig `Io.Clock.real.now(io)`); SYSTEM_CLOCK
+	 by default. Tests and the probe pass fixed_clock() for determinism.
+	*>
+	WallClock clock;
+	<* Zig `code_gen_options` (starts as code_gen_options::DEFAULT). *>
+	CodeGenOptions code_gen_options;
+	<* Zig `cmodel` (std.builtin.CodeModel, starts as DEFAULT). *>
+	CodeModel cmodel;
 }
+
+// ---------------------------------------------------------------------------
+// Environment and clock (plan 14 stage 0)
+
+<*
+ Zig `Compilation.Environment`: the environment variables aro reads. Only
+ the fields some port reads are present; `has_*` false is Zig `null`.
+ Values are borrowed (Zig: "Does not copy values").
+*>
+struct Environment
+{
+	<*
+	 SOURCE_DATE_EPOCH: UNIX timestamp to be used instead of the current date
+	 and time in the __DATE__ and __TIME__ macros, and instead of the file
+	 modification time in the __TIMESTAMP__ macro. Parsed by
+	 Compilation.source_epoch (pp_builtin_macros.c3).
+	*>
+	bool has_source_date_epoch;
+	String source_date_epoch;
+}
+
+<* Zig `Environment.sourceEpoch` max_timestamp: Dec 31 9999 23:59:59. *>
+const ulong MAX_SOURCE_EPOCH_TIMESTAMP = 253402300799;
+
+<*
+ Seconds since the UNIX epoch (Zig `Io.Clock.real.now(io).toSeconds()`, an
+ i64 truncated toward zero). A fault is treated like Zig's failed u64 cast
+ (InvalidEpoch).
+*>
+alias ClockNowFn = fn long? (void* ctx);
+
+<* Clock source; `ctx` is passed to `now`. *>
+struct WallClock
+{
+	void* ctx;
+	ClockNowFn now;
+}
+
+<* The host's real-time clock (std::time::now is microseconds since the epoch). *>
+fn long? system_clock_now(void* ctx) => (long)time::now() / 1_000_000;
+
+const WallClock SYSTEM_CLOCK = { null, &system_clock_now };
+
+<* Reads *(long*)ctx. *>
+fn long? fixed_clock_now(void* ctx) => *(long*)ctx;
+
+<* A clock that always reads `*seconds` (borrowed; must outlive the compilation's use of it). *>
+fn WallClock fixed_clock(long* seconds) => { seconds, &fixed_clock_now };
+
+<* Read `clock` (Zig `Io.Clock.real.now(io).toSeconds()`). *>
+fn long? Compilation.now_seconds(&self) => self.clock.now(self.clock.ctx);
 
 <*
  Initialize an empty compilation. All owned memory comes from `gpa`.
@@ -81,6 +145,9 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 {
 	*self = { .gpa = gpa, .arena = arena, .ms_cwd_source_id = source::UNUSED_ID, .diagnostics = diagnostics };
 	self.langopts = lang_opts::DEFAULT;
+	self.clock = SYSTEM_CLOCK;
+	self.code_gen_options = code_gen_options::DEFAULT;
+	self.cmodel = DEFAULT;
 	// Zig's `Target.default` is the host (builtin); an undescribable host is a build configuration error.
 	self.target = target::native()!!;
 	if (!diagnostics)
