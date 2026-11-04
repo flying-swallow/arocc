@@ -48,3 +48,4 @@ c3_test(name = "pp_print_tests", srcs = ["pp_print_tests.c3"], deps = ["//:aro_c
 c3_test(name = "predefined_contract_tests", srcs = ["predefined_contract_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "macro_expand_tests", srcs = ["macro_expand_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "macro_expand_manual_tests", srcs = ["macro_expand_manual_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "predefined_macros_x86_tests", srcs = ["predefined_macros_x86_tests.c3"], deps = ["//:aro_c3_lib"])
