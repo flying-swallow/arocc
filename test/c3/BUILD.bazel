@@ -9,6 +9,7 @@ c3_test(name = "tokenizer_tests", srcs = ["tokenizer_tests.c3"], deps = ["//:aro
 c3_test(name = "target_tests", srcs = ["target_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "toolchain_discovery_tests", srcs = ["toolchain_discovery_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "type_store_tests", srcs = ["type_store_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "tree_contract_tests", srcs = ["tree_contract_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "generate_def_tests", srcs = ["generate_def_tests.c3"], deps = ["//tools:generate_def_lib"])
 c3_test(name = "def_emit_tests", srcs = ["def_emit_tests.c3", "data/def_emit_x86.c3"], deps = ["//tools:generate_def_lib"])
 c3_test(name = "builtins_lookup_tests", srcs = ["builtins_lookup_tests.c3", "data/builtin_defs_sample.c3"], deps = ["//:aro_c3_lib"])
