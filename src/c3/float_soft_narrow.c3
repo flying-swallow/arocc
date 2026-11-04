@@ -353,24 +353,25 @@ fn bool narrow_less_than(KeyFloat a, KeyFloat b)
 }
 
 <*
- Zig @max(a, b) on floats (LLVM maxnum): if exactly one operand is NaN the other
- is returned; if both are NaN a NaN is returned (DEFAULT_NAN rules do not apply;
- return `self` quieted). Operands that compare equal (including +0 vs -0, which
- Zig leaves unspecified; Annex G only passes absolute values) return `self`.
- Otherwise the larger value.
+ Zig @max(a, b) on floats (observed with Zig 0.17.0, annex_helpers.txt): if
+ exactly one operand is NaN the other is returned; if both are NaN the rhs is
+ returned unchanged (not quieted). +0 vs -0: f32/f64 return the lhs, f16/f80/f128
+ return +0 (Zig leaves this unspecified; Annex G only passes absolute values).
+ Otherwise the larger value (equal values: the lhs).
  @require self.tag == other.tag : "operands must have the same width"
 *>
 fn KeyFloat KeyFloat.max(self, KeyFloat other)
 {
 	// No `?:` on KeyFloat values: c3c 0.8.5 miscompiles it (see CONVENTIONS.md).
-	bool a_nan = self.is_nan();
-	bool b_nan = other.is_nan();
-	if (a_nan)
+	if (self.is_nan()) return other; // with two NaNs: the rhs, unchanged (observed)
+	if (other.is_nan()) return self;
+	if (self.is_zero() && other.is_zero())
 	{
-		if (b_nan) return self.quiet();
-		return other;
+		// Observed: f32/f64 (SSE) return the lhs; f16/f80/f128 return +0 if either is +0.
+		if (self.tag == F32 || self.tag == F64) return self;
+		if (self.signbit()) return other;
+		return self;
 	}
-	if (b_nan) return self;
 	if (narrow_less_than(self, other)) return other;
 	return self;
 }

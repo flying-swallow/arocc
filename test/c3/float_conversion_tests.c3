@@ -178,13 +178,16 @@ fn void cast_from_f80_and_f128_observed() @test
 
 fn void cast_nan_observed() @test
 {
-	// observed (Zig 0.17.0): signaling NaNs through @floatCast. Every cast sets the
-	// quiet bit except a cast to f128, which keeps it clear (compiler-rt
-	// __extend*ftf2). The payload moves with the fraction's top bits.
+	// observed (Zig 0.17.0): signaling NaNs through @floatCast. The quiet bit is set
+	// except by any -> f128, f16 -> f32, f16 -> f80 and f128 -> f80 (compiler-rt
+	// routines that keep it). The payload moves with the fraction's top bits.
+	// f16 -> f32/f80 follow the canonical `-mcpu=baseline` run of
+	// test/c3/data/float_values (nan.txt); an F16C host (`-mcpu=native`,
+	// vcvtph2ps) quiets them, which is what this test first recorded.
 	KeyFloat h = raw(F16, 0x7C01);
-	check_bits(h.cast(F32), F32, 0x7FC0_2000);
+	check_bits(h.cast(F32), F32, 0x7F80_2000);
 	check_bits(h.cast(F64), F64, 0x7FF8_0400_0000_0000);
-	check_bits(h.cast(F80), F80, u128(0x7FFF, 0xC020_0000_0000_0000));
+	check_bits(h.cast(F80), F80, u128(0x7FFF, 0x8020_0000_0000_0000));
 	check_bits(h.cast(F128), F128, u128(0x7FFF_0040_0000_0000, 0));
 	KeyFloat s = raw(F32, 0x7F80_0001);
 	check_bits(s.cast(F16), F16, 0x7E00);

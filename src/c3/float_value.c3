@@ -107,20 +107,23 @@
 // IEEE implementation, match the reference and document it (CONVENTIONS rule:
 // "Match current behavior even when it differs").
 //
-// NaN rules (source-derived from the above; the vectors agent must confirm each,
-// and a confirmed difference changes these constants, not the call sites):
+// NaN rules (confirmed by the Zig 0.17.0 vectors in test/c3/data/float_values,
+// canonical configuration `-fllvm -mcpu=baseline`; see its README):
 //   - Invalid operation (0/0, inf-inf, 0*inf) -> DEFAULT_NAN_* below:
 //     f16/f32/f64 negative quiet NaN (x86 SSE), f80 negative "real indefinite"
 //     (x87), f128 POSITIVE quiet NaN (compiler-rt).
-//   - One or two NaN operands -> the first NaN operand (lhs if NaN, else rhs),
-//     quieted, sign and payload kept. (SSE and compiler-rt; for f80 the x87 rule
-//     is "larger significand wins" when both are NaN - confirm with vectors.)
-//   - Casts (@floatCast, observed with Zig 0.17.0 on x86_64-linux, see
-//     test/c3/float_conversion_tests.c3): sign kept; narrowing keeps the top
-//     payload bits, widening shifts the payload up. EVERY cast sets the quiet
-//     bit (a signaling NaN is quieted), including the widening f16 -> f32/f64,
-//     EXCEPT a cast to f128, which keeps the quiet bit as is (compiler-rt
-//     __extend*ftf2). Signaling NaNs never arise from C source in Aro
+//   - One or two NaN operands, f16/f32/f64/f128 -> the first NaN operand (lhs if
+//     NaN, else rhs), quieted, sign and payload kept. Exception: f128 `a - NaN`
+//     (only the rhs a NaN) returns that NaN with its sign FLIPPED (__subtf3 is
+//     __addtf3(a, -b)); f16 `a - NaN` does not flip.
+//   - Two NaN operands, f80 (x87): order-independent, result quieted: (1) a quiet
+//     NaN beats a signaling NaN; (2) otherwise the larger 64-bit significand
+//     wins (sign ignored); (3) on a tie the POSITIVE NaN wins.
+//   - Casts: sign kept, payload aligned at the top of the fraction. The quiet
+//     bit is SET (a signaling NaN is quieted) by every cast except those done by
+//     a compiler-rt routine that keeps it: any -> f128, f16 -> f32, f16 -> f80
+//     and f128 -> f80. In particular f16 -> f64 quiets (__extendhfsf2 then SSE
+//     cvtss2sd). Signaling NaNs never arise from C source in Aro
 //     (__builtin_nan sets the quiet bit), so this only matters for vectors.
 //   - std.math.nan(T) (used by __builtin_nan) is the POSITIVE quiet NaN STD_NAN_*.
 // f80 encodings: the explicit integer bit (bit 63 of `lo`) must be 1 for normal,
@@ -534,22 +537,56 @@ fn KeyFloat KeyFloat.div(self, KeyFloat rhs)
 // f128_mul / f128_div for parseFloat's fast path and the narrow/wide dispatchers
 // for the Value-level arithmetic.
 //
-// NaN through casts (observed with Zig 0.17.0 on x86_64-linux, see
-// test/c3/float_conversion_tests.c3): a cast to F128 keeps a NaN's quiet bit as
-// is (compiler-rt __extend*ftf2); every other cast sets it, including the
-// widening f16 -> f32/f64 (see the header's "Casts" rule).
+// NaN through casts (observed with Zig 0.17.0 on x86_64-linux, LLVM backend,
+// baseline CPU; test/c3/data/float_values/nan.txt): sign kept, payload aligned
+// at the top of the fraction. The quiet bit is set by every cast EXCEPT those
+// that go through a compiler-rt routine that keeps it: any -> f128
+// (__extend*ftf2), f16 -> f32 (__extendhfsf2), f16 -> f80 (__extendhfxf2) and
+// f128 -> f80 (__trunctfxf2). f16 -> f64 is __extendhfsf2 then SSE cvtss2sd,
+// which quiets.
+//
+// Non-canonical f80 sources (exponent != 0, integer bit 0: unnormal,
+// pseudo-infinity, pseudo-NaN): to f32/f64 the x87 `fstp` raises invalid and
+// gives the default NaN; to f16 compiler-rt __truncxfhf2 ignores the integer bit
+// (0x3fff4000.. is 1.5); to f128 __extendxftf2 is what to_f128 models.
+
+fn bool cast_keeps_nan_quiet_bit(KeyFloatTag src, KeyFloatTag dest)
+{
+	switch
+	{
+		case dest == F128: return true;
+		case src == F16 && (dest == F32 || dest == F80): return true;
+		case src == F128 && dest == F80: return true;
+		default: return false;
+	}
+}
 
 <*
  Zig @floatCast(x) to `dest` (also used for exact widening): round to nearest
  even once, overflow -> +-inf, underflow -> subnormal or signed zero, sign of
- zero kept. NaN: sign and the top payload bits kept; the quiet bit is set
- unless `dest` is F128 (observed, see above). Same tag returns `self` unchanged.
+ zero kept. NaN: sign and the top payload bits kept; the quiet bit per
+ cast_keeps_nan_quiet_bit. Non-canonical f80 sources as described above. Same
+ tag returns `self` unchanged.
 *>
 fn KeyFloat KeyFloat.cast(self, KeyFloatTag dest)
 {
 	if (self.tag == dest) return self;
-	KeyFloat r = from_f128(self.to_f128(), dest);
-	if (dest != F128) r = r.quiet();
+	KeyFloat src = self;
+	if (src.tag == F80 && (src.f80.hi & 0x7FFF) != 0 && (src.f80.lo >> 63) == 0)
+	{
+		if (dest == F32 || dest == F64) return default_nan(dest);
+		if (dest == F16) src.f80.lo |= (ulong)1 << 63;
+	}
+	if (src.tag == F16 && dest == F32 && src.is_nan())
+	{
+		// __extendhfsf2: the fraction (quiet bit included) moves up unchanged.
+		// from_f128 always quiets a narrow NaN, so this pair is done here.
+		uint bits = 0x7F80_0000 | ((uint)(src.f16 & 0x03FF) << 13);
+		if (src.signbit()) bits |= 0x8000_0000;
+		return f32_value(bits);
+	}
+	KeyFloat r = from_f128(src.to_f128(), dest);
+	if (!cast_keeps_nan_quiet_bit(src.tag, dest)) r = r.quiet();
 	return r;
 }
 
