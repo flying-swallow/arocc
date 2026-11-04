@@ -37,3 +37,4 @@ c3_test(name = "text_literal_semantics_manual_tests", srcs = ["text_literal_sema
 c3_test(name = "text_literal_tests", srcs = ["text_literal_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "number_value_tests", srcs = ["number_value_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "number_value_manual_tests", srcs = ["number_value_manual_tests.c3"], tags = ["manual"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_contract_tests", srcs = ["pp_contract_tests.c3"], deps = ["//:aro_c3_lib"])

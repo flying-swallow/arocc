@@ -81,3 +81,6 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - `cond ? x : y` on a struct holding an anonymous union (`KeyFloat`) is miscompiled at -O0: the result's upper union bytes are garbage (f128 `hi`). Use `if` + separate `return`/assignment; a ternary on the union member type itself (`F128Bits`) works.
 - A conditional `c ? 1 : 0` is an `int` and does not convert implicitly to `uint128` in arithmetic (`x + (c ? 1 : 0)`); assign it to a `uint128` local first.
 - A module name may be at most 31 characters (`module text_literal_semantics_manual_tests;` is rejected); shorten test module names.
+- Constants of a `typedef`'d integer type need an explicit cast (`const Precedence P = (Precedence)1;`).
+- `if (c) a; else b;` without braces is a compile error when there is an `else`.
+- `union` and `macro` are keywords, so they cannot be method or parameter names (Zig `Hideset.union` is `union_of`).
