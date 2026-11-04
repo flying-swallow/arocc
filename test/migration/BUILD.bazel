@@ -47,7 +47,7 @@ c3_binary(
 
 # Runs macro_regression_cases.txt through the runner with pp_probe in normal
 # fixture mode. Manual until the plan 13 stage-1 branches (expansion, paste,
-# directives, pp-expr, hideset) are merged: before that every case fails.
+# directives, pp-expr, hideset) are merged; all of them are now.
 c3_test(
     name = "macro_regression",
     srcs = ["pp_probe.c3"],
@@ -56,7 +56,6 @@ c3_test(
         ":pp_probe",
         "//:test_cases",
     ],
-    tags = ["manual"],
     deps = [
         ":runner_lib",
         "//:aro_c3_lib",

@@ -88,3 +88,4 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - `HashMap{K, V}` rejects a `typedef`'d integer key ("No .hash function found on the key"); key by the underlying integer (`HashMap{uint, V}` with `(uint)node`).
 - `aro::tokens` and `aro::type_store` both export `TokenIndex`; a module importing both must write `tokens::TokenIndex` (ambiguity error otherwise).
 - The variable of `if (catch f = x) { ... } else { ... }` is still in scope in the `else` branch, so a nested `catch f` there is a shadowing error; use another name.
+- Imports at the top of a test file do not carry into a later `module X @test;` section; repeat the imports.

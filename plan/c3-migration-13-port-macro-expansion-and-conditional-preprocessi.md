@@ -1,6 +1,6 @@
 ---
 title: 'C3 migration 13 [Preprocessor]: port macro expansion and conditional preprocessing'
-state: waiting
+state: complete
 depends_on:
 - c3-migration-03-port-the-fixture-runner-and-add-differential-gat
 - c3-migration-05-port-diagnostic-state-and-rendering
@@ -31,3 +31,9 @@ Rules: [PARALLEL.md](PARALLEL.md). Each agent owns only the files listed for it.
 - **13.6 `probe`**: owns `src/c3/pp_print.c3`, `test/migration/pp_probe.c3`, macro fixture list. prettyPrintTokens, in-memory probe CLI, curated fixture list for `macro_regression`.
 
 **Stage 2: integrator (1 agent, serial).** Assemble the preprocessor main loop, write `test/c3/preprocessor_tests.c3`, register targets, run `//test/c3:preprocessor_tests` and `//test/migration:macro_regression`, and check that negative tests free their expansions.
+
+## Completion notes
+
+- Ported across `tokens.c3`, `preprocessor.c3`, `pp_diagnostics.c3`, `hideset.c3`, `pp_expression.c3`, `macro_expand.c3`, `macro_paste.c3`, `pp_directives.c3` and `pp_print.c3`. The unit test targets are `hideset_tests`, `pp_expression_tests`, `macro_expand_tests` (+ `macro_expand_manual_tests`), `macro_paste_tests`, `pp_directives_tests`, `pp_print_tests` and `pp_contract_tests`.
+- `//test/migration:macro_regression` runs 61 `test/cases` expand fixtures through `test/migration/pp_probe` in normal fixture mode. All 61 pass. It uses the fixtures' own goldens; no Zig executable was run.
+- `#include`, `#include_next`, `#embed`, `#pragma` and builtin macros report an explicit "not supported yet by the C3 port" error until plans 14 and 15 replace the providers.
