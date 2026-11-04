@@ -39,3 +39,4 @@ c3_test(name = "number_value_tests", srcs = ["number_value_tests.c3"], deps = ["
 c3_test(name = "number_value_manual_tests", srcs = ["number_value_manual_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "literal_tests", srcs = ["literal_tests.c3"], data = glob(["data/literals/*.txt"]), deps = ["//:aro_c3_lib"])
 c3_test(name = "pp_contract_tests", srcs = ["pp_contract_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_expression_tests", srcs = ["pp_expression_tests.c3"], deps = ["//:aro_c3_lib"])
