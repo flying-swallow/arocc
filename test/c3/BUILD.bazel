@@ -31,3 +31,5 @@ c3_test(name = "float_wide_tests", srcs = ["float_wide_tests.c3"], deps = ["//:a
 c3_test(name = "float_value_tests", srcs = ["float_value_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "float_vector_tests", srcs = ["float_vector_tests.c3"], data = glob(["data/float_values/*.txt"]), deps = ["//:aro_c3_lib"])
 c3_test(name = "literal_contract_tests", srcs = ["literal_contract_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "number_value_tests", srcs = ["number_value_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "number_value_manual_tests", srcs = ["number_value_manual_tests.c3"], tags = ["manual"], deps = ["//:aro_c3_lib"])
