@@ -78,3 +78,4 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - A compound `float16` expression (`a * c + b * d`) is evaluated in `float` and rounded to half only at the end; Zig rounds after every operation. Round each step (assign or return through a `float16` function).
 - Small-int arithmetic is promoted to `int`: `(ushort_val << 1) >> 11` keeps the shifted-out bit. Cast back (`(ushort)(x << 1)`) where Zig's fixed-width wrap matters.
 - Observed (not minimised): `KeyComplex r = cond ? annex_g::complex_float_mul(..) : annex_g::complex_float_div(..);` lost `r.cf64[1]` at -O0; an `if`/`else` assignment works.
+- `cond ? x : y` on a struct holding an anonymous union (`KeyFloat`) is miscompiled at -O0: the result's upper union bytes are garbage (f128 `hi`). Use `if` + separate `return`/assignment; a ternary on the union member type itself (`F128Bits`) works.
