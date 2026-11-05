@@ -61,3 +61,61 @@ c3_test(
         "//:aro_c3_lib",
     ],
 )
+
+# Preprocessing-only regression gate for include/embed directives and the
+# existing macro corpus. Expected results come from the frozen fixture
+# manifests; this does not claim an executable Zig reference run.
+c3_test(
+    name = "preprocessor_regression",
+    srcs = ["preprocessor_regression.c3"],
+    data = [
+        "macro_regression_cases.txt",
+        "predefined_macro_cases.txt",
+        "include_embed_regression_cases.txt",
+        ":pp_probe",
+        "//:test_cases",
+    ],
+    deps = [
+        ":runner_lib",
+        "//:aro_c3_lib",
+    ],
+)
+
+# Stable runfile tree for focused include/embed integration. Keeping the
+# binary and empty embed inputs beside the source makes filesystem behavior
+# explicit and independent of the frozen Zig fixture corpus.
+filegroup(
+    name = "preprocessor_fixture_tree",
+    srcs = glob(["preprocessor_fixtures/**"]),
+)
+
+c3_test(
+    name = "preprocessor_integration",
+    srcs = ["preprocessor_integration.c3"],
+    data = [
+        ":pp_probe",
+        ":preprocessor_fixture_tree",
+    ],
+    deps = [
+        ":runner_lib",
+        "//:aro_c3_lib",
+    ],
+)
+
+# Predefined macros are generated from target/language state and then expanded
+# through the ordinary preprocessor path. Expected vectors are source-derived
+# until a compatible pinned Zig executable is available.
+c3_test(
+    name = "predefined_macro_regression",
+    srcs = ["predefined_macro_regression.c3", "pp_probe.c3"],
+    data = [
+        "predefined_macro_cases.txt",
+        "predefined_macro_vectors.txt",
+        ":pp_probe",
+        "//:test_cases",
+    ],
+    deps = [
+        ":runner_lib",
+        "//:aro_c3_lib",
+    ],
+)

@@ -18,9 +18,8 @@
 //    aro::UNSUPPORTED.
 //  - Attribute existence (__has_attribute, __has_declspec_attribute,
 //    vendor-qualified __has_c_attribute) goes through attribute_exists,
-//    which returns aro::UNSUPPORTED until plan 16's aro::attribute lands
-//    (Zig Attribute.Namespaced.fromString != null); the integrator replaces
-//    its body.
+//    which uses plan 16's aro::attribute namespaced tables (the Zig
+//    Attribute.Namespaced.fromString behavior).
 //  - _Pragma / __pragma: validation (DIAG_PRAGMA_OPERATOR_STRING_LITERAL,
 //    and __pragma's empty-argument DIAG_UNKNOWN_PRAGMA) is here; the pragma
 //    itself (Zig pragmaOperator / msPragmaOperator) is plan 15 and returns
@@ -34,7 +33,7 @@
 //    EmbedArgIterator.next does) when deciding that there are no parameters.
 module aro::preprocessor;
 import aro::source, aro::tokens, aro::tokenizer, aro::compilation, aro::diagnostics, aro::target;
-import aro::lang_opts, aro::builtins;
+import aro::lang_opts, aro::builtins, aro::attribute;
 import std::collections::list;
 
 <* Zig `error.ExpectedStringLiteral` from pasteStringsUnsafe. *>
@@ -66,12 +65,23 @@ enum AttrQuerySyntax : char
 }
 
 <*
- Zig `Attribute.Namespaced.fromString(syntax, vendor, name) != null`
- (`vendor` "" means null). Plan 16 provides the attribute tables; until the
- integrator wires them this returns aro::UNSUPPORTED.
- OWNER: 14.5 (body replaced at integration with plan 16).
+ Zig `Attribute.Namespaced.fromString(syntax, vendor, name) != null`.
+ Empty vendor means no vendor was specified.
 *>
-fn bool? attribute_exists(AttrQuerySyntax syntax, String vendor, String name) => aro::UNSUPPORTED~;
+fn bool attribute_exists(AttrQuerySyntax syntax, String vendor, String name)
+{
+	AttributeSyntax attr_syntax;
+	switch (syntax)
+	{
+		case STANDARD: attr_syntax = attribute::STANDARD;
+		case GNU: attr_syntax = attribute::GNU;
+		case DECLSPEC: attr_syntax = attribute::DECLSPEC;
+	}
+	bool has_vendor = vendor.len != 0;
+	Namespaced? found = attribute::namespaced_from_string(attr_syntax, has_vendor, vendor, name);
+	if (catch found) return false;
+	return true;
+}
 
 <*
  Zig `features.hasFeature(comp, ext)`: attribute_normalize(ext) looked up in

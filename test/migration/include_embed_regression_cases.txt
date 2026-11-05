@@ -1,0 +1,32 @@
+// stage: preprocessing (plan 15) -- //test/migration:preprocessor_regression
+//
+// Source-derived selection from test/cases manifests and their expanded/
+// goldens. These cases need no parser: expand cases are compared with their
+// frozen expanded golden, while expand_error and syntax cases check the
+// manifest diagnostics and exit behavior. This is fixture coverage, not
+// execution of the unavailable Zig reference.
+
+// Include lookup and preprocessing-only include diagnostics.
+__has_include.c result=pass
+clang __INCLUDE_LEVEL__.c result=pass
+empty computed include.c result=pass
+self_include.c result=pass
+
+// Malformed #embed directive diagnostics. Successful embedding has no
+// preprocessing-only fixture: #embed.c leaves C declarations/expressions for
+// the parser, even though its embed/empty, embed data, and embed byte assets
+// cover empty, binary, and parameter behavior in the source fixture.
+colon after #embed.c result=pass
+
+// Deliberate omissions from the frozen corpus/probe intersection:
+// - include flag, include_next, include_next_mixed, idirafter shadows include,
+//   and the guard/pragma-once fixtures leave C tokens for the parser. The
+//   pragma-once cases also use #pragma, unsupported by pp_probe.
+// - #embed.c covers empty/binary inputs, limit/prefix/suffix, __has_embed,
+//   and malformed parameters, but emits C tokens and is parser-bound. No
+//   fixture isolates successful #embed expansion as a preprocessing-only
+//   result; the missing setup is such a fixture (or parser support).
+// - The frozen fixtures have no dedicated include/embed EOF or preprocessing
+//   depth diagnostic case beyond self_include.c's nested-include-depth error.
+//   pragma without terminating newline is parser-bound and uses unsupported
+//   #pragma, so pp_probe cannot measure that behavior.

@@ -7,10 +7,10 @@
 // `stringify` (13.4) and #if / #elif use `expr`, which runs
 // expand_macro_exhaustive (13.3) and PpExprParser (13.2).
 //
-// #include / #include_next / #embed / #pragma call the plan-15 placeholders
-// in preprocessor.c3. While they return aro::UNSUPPORTED this file reports
-// DIAG_DIRECTIVE_UNSUPPORTED ("'#include' is not supported yet") at the
-// directive and then propagates aro::UNSUPPORTED, so nothing silently succeeds.
+// #include / #include_next / #embed / #pragma dispatch to the plan-15
+// implementations in preprocessor.c3. Unsupported provider services still
+// propagate explicitly; file lookup and directive faults are not relabeled as
+// unsupported directives.
 //
 // Deviations from Zig (each marked at the point of use):
 //  - DIAG_DIRECTIVE_UNSUPPORTED is a C3-only record (plans 14/15 remove its uses).
@@ -151,8 +151,8 @@ fn void? Preprocessor.surface_unsupported(&self, Location loc, String what, faul
  unterminated comment errors; poisoned identifiers error; others go to
  expand_macro. At eof: UNTERMINATED_CONDITIONAL_DIRECTIVE when nested,
  DIAG_NEWLINE_EOF if the buffer does not end in '\n'.
- #include / #include_next / #embed / #pragma: DIAG_DIRECTIVE_UNSUPPORTED and
- aro::UNSUPPORTED while their plan-15 placeholders are unsupported.
+ #include / #include_next / #embed / #pragma: file lookup, include markers,
+ embed byte tokens, and pragma handling are implemented by plan 15.
  @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, aro::UNSUPPORTED
 *>
 fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)

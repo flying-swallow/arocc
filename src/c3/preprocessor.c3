@@ -18,8 +18,8 @@
 //       reporting (err/err_raw/err_loc/fatal), the output token list
 //       (add_token, expansion_entries), token slices (tok_slice,
 //       expanded_slice), unescape_ucn, the shared ExpandBuf ownership helpers,
-//       preprocess/preprocess_sources/tokenize wrappers and the plan-15
-//       placeholders (include/embed/pragma -> aro::UNSUPPORTED).
+//       preprocess/preprocess_sources/tokenize wrappers and bounded plan-15
+//       include/embed/pragma handling.
 //   pp_diagnostics.c3 (stage 0, data)
 //       Every Preprocessor/Diagnostic.zig record as DIAG_* constants.
 //   pp_directives.c3 (13.5 `directives`)
@@ -54,12 +54,12 @@
 // via add_tokens_from_expand_buf -> add_token. The eof token is returned and
 // the caller (preprocess_sources / the probe) appends it.
 //
-// Providers. Things later plans implement are reached only through
-// `BuiltinProvider` (plan 14: source epoch, builtin object macros such as
-// __FILE__/__LINE__, builtin function macros such as __has_include / _Pragma)
-// and `FileProvider` (plan 15: include/embed lookup, mtimes). Their defaults
-// return aro::UNSUPPORTED; nothing silently succeeds. #include, #include_next,
-// #embed and #pragma also return aro::UNSUPPORTED until plan 15.
+// Providers. Builtin macros use the plan-14 `BUILTINS` provider by default;
+// callers may still inject a provider explicitly. FileProvider (plan 15)
+// remains independently injected for include/embed lookup and mtimes. Its
+// default returns aro::UNSUPPORTED; nothing silently succeeds. Macro-expanded
+// #include/#embed filenames and all standard #embed parameters use these hooks.
+// Dependency recording requires a Compilation dependency sink.
 //
 // Faults: compilation::FATAL_ERROR (a fatal diagnostic), STOP_PREPROCESSING
 // (Zig error.StopPreprocessing: only from includes/pragmas, plan 15) and
@@ -71,12 +71,15 @@
 //  - Zig's `err(loc: anytype, ...)` is three functions: err (expanded token,
 //    reports through its expansion locations), err_raw (tokenizer token) and
 //    err_loc (plain location). Arguments are diagnostics::DiagArg values.
-//  - Zig's `dep_file` and `comp.getPragma` are behind FileProvider / plan 15.
+//  - C3 Compilation has no dependency-file field: an optional caller-owned
+//    sink records the base source, resolved include paths, successful
+//    `__has_include` results, and the filename spelling used by #embed.
+//    `comp.getPragma` is unavailable.
 //  - `?SourceEpoch` options are `has_source_epoch` + `source_epoch`; without
-//    one, init asks the BuiltinProvider (unsupported until plan 14).
+//    one, init asks the BuiltinProvider.
 module aro::preprocessor;
 import aro::source, aro::tokenizer, aro::tokens, aro::hideset, aro::compilation, aro::diagnostics;
-import aro::lang_opts, aro::string_interner, aro::text_literal;
+import aro::lang_opts, aro::string_interner, aro::text_literal, aro::dep_file;
 import std::collections::list, std::collections::map, std::core::mem::allocators, std::io, std::hash::fnv32a;
 
 // ---------------------------------------------------------------------------
@@ -460,7 +463,7 @@ alias ExpandBuiltinObjFn = fn void? (void* ctx, Preprocessor* pp, BuiltinObject 
 *>
 alias ExpandBuiltinFuncFn = fn void? (void* ctx, Preprocessor* pp, BuiltinFunc kind, TokenWithExpansionLocs macro_tok, RawToken raw, MacroArguments* expanded_args, EvalContext eval_ctx, ExpandBuf* buf);
 
-<* Builtin macro services (plan 14). The default returns aro::UNSUPPORTED from every hook. *>
+<* Builtin macro services (plan 14). *>
 struct BuiltinProvider
 {
 	void* ctx;
@@ -539,6 +542,8 @@ struct InitOptions
 	bool add_builtin_macros;
 	<* Path prefixes to replace when expanding __FILE__ (borrowed). *>
 	PathReplacement[] path_replacements;
+	<* Optional Make/NMake dependency sink; the caller owns it. *>
+	dep_file::DepFile* dependencies;
 }
 
 <* Zig `InitOptions.testing` (base_file is Zig `undefined`; here the unused id). *>
@@ -580,7 +585,7 @@ struct Preprocessor
 	uint generated_line;
 	<* Newlines consumed while collecting macro arguments, re-emitted with preserve_whitespace. *>
 	uint add_expansion_nl;
-	char include_depth;
+	uint include_depth;
 	<* __COUNTER__ *>
 	uint counter;
 	<* Location of the token whose expansion is in progress (Zig `undefined` until set). *>
@@ -589,6 +594,8 @@ struct Preprocessor
 	StringTable poisoned_identifiers;
 	<* Map from SourceId (as uint) to the macro name in the `#ifndef` guarding that source. Names borrowed from the source buffer. *>
 	HashMap{uint, String} include_guards;
+	<* Source IDs encountered through an active `#pragma once`. *>
+	HashMap{uint, bool} pragma_once_sources;
 
 	<*
 	 Store KEYWORD_DEFINE and KEYWORD_UNDEF tokens (preprocessor debug dump
@@ -616,6 +623,8 @@ struct Preprocessor
 	PathReplacement[] path_replacements;
 	<* File used for __BASE_FILE__ macro. *>
 	SourceId base_file;
+	<* Optional caller-owned dependency sink. *>
+	dep_file::DepFile* dependencies;
 
 	BuiltinProvider builtins;
 	FileProvider files;
@@ -628,7 +637,7 @@ struct Preprocessor
  belongs to plan 15 and is not called. On failure everything is released.
  @return? compilation::FATAL_ERROR, aro::UNSUPPORTED
 *>
-fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, BuiltinProvider builtins = UNSUPPORTED_BUILTINS, FileProvider files = UNSUPPORTED_FILES)
+fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, BuiltinProvider builtins = BUILTINS, FileProvider files = UNSUPPORTED_FILES)
 {
 	Allocator gpa = comp.gpa;
 	*self = {
@@ -639,6 +648,7 @@ fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, Builti
 		.source_epoch = options.source_epoch,
 		.base_file = options.base_file,
 		.path_replacements = options.path_replacements,
+		.dependencies = options.dependencies,
 		.builtins = builtins,
 		.files = files,
 	};
@@ -650,6 +660,7 @@ fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, Builti
 	self.char_buf.init(gpa);
 	self.poisoned_identifiers.init(gpa);
 	self.include_guards.init(gpa);
+	self.pragma_once_sources.init(gpa);
 	self.top_expansion_buf.init(gpa);
 	self.hideset.init(comp);
 	self.m_times.init(gpa);
@@ -676,6 +687,7 @@ fn void Preprocessor.free(&self)
 	self.char_buf.free();
 	self.poisoned_identifiers.free();
 	self.include_guards.free();
+	self.pragma_once_sources.free();
 	self.top_expansion_buf.free(); // elements may alias arrays already moved to `tokens`
 	self.hideset.free();
 	foreach (e : self.expansion_entries) tokens::free_expansion_locs(gpa, e.locs);
@@ -1099,6 +1111,7 @@ fn void? Preprocessor.preprocess_sources(&self, PreprocessSources sources)
 *>
 fn TokenWithExpansionLocs? Preprocessor.preprocess(&self, Source src)
 {
+	if (self.dependencies && src.id == self.base_file) self.dependencies.add_dependency(src.path);
 	TokenWithExpansionLocs? eof = self.preprocess_extra(src);
 	if (catch f = eof)
 	{
@@ -1278,30 +1291,296 @@ fn TokenWithExpansionLocs[] get_paste_args(TokenWithExpansionLocs[] args)
 }
 
 // ---------------------------------------------------------------------------
-// Plan 15 placeholders (include / embed / pragma). They consume nothing and
-// return aro::UNSUPPORTED so callers stop explicitly.
+// Plan-15 directive support. Header names are expanded before parsing, as
+// required by #include's preprocessing-token form.
 
 <*
  Zig `include(tokenizer, which)`: #include / #include_next. Plan 15.
- @return? aro::UNSUPPORTED
+ @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, FILE_NOT_FOUND
 *>
-fn void? Preprocessor.include(&self, Tokenizer* tokenizer, WhichInclude which) => aro::UNSUPPORTED~;
+fn void? Preprocessor.include(&self, Tokenizer* tokenizer, WhichInclude which)
+{
+	// Collect and expand the complete directive tail. This also lets a
+	// function-like macro consume its arguments from this line.
+	ExpandBuf header;
+	header.init(self.comp.gpa);
+	defer free_expand_buf(self.comp.gpa, &header);
+	while (true)
+	{
+		RawToken raw = tokenizer.next();
+		if (raw.id == NL || raw.id == EOF) break;
+		header.push(tokens::from_raw(raw));
+	}
+	if (header.len() == 0)
+	{
+		self.err_loc({ .id = tokenizer.source, .byte_offset = tokenizer.index, .line = tokenizer.line }, DIAG_EXPECTED_FILENAME)!;
+		return;
+	}
+	self.hideset.clear_retaining_capacity();
+	if (catch f = self.expand_macro_exhaustive(tokenizer, &header, 0, header.len(), NON_EXPR)) return f~;
+	TokenIterator it = { .toks = header.array_view() };
+	TokenWithExpansionLocs first_tok;
+	if (!it.next_no_ws(&first_tok))
+	{
+		self.err_loc({ .id = tokenizer.source, .byte_offset = tokenizer.index, .line = tokenizer.line }, DIAG_EXPECTED_FILENAME)!;
+		return;
+	}
+	String first_text = self.expanded_slice(first_tok);
+	RawToken first = { .id = first_tok.id, .source = first_tok.loc.id, .start = first_tok.loc.byte_offset, .end = first_tok.loc.byte_offset + (uint)first_text.len, .line = first_tok.loc.line };
+	String filename_text;
+	IncludeType include_type;
+	if (first_tok.id == STRING_LITERAL)
+	{
+	String literal = first_text;
+		if (literal.len < 2) { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+		filename_text = literal[1 .. literal.len - 1];
+		include_type = QUOTES;
+	}
+	else if (first_tok.id == MACRO_STRING)
+	{
+	String literal = first_text;
+		// MACRO_STRING's expanded slice excludes the closing '>'.
+		if (literal.len < 1 || literal[0] != '<') { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+		filename_text = literal[1 .. literal.len];
+		include_type = ANGLE_BRACKETS;
+	}
+	else if (first_tok.id == ANGLE_BRACKET_LEFT)
+	{
+		self.char_buf.clear();
+		bool closed = false;
+		while (it.next_no_ws(&first_tok))
+		{
+			if (first_tok.id == ANGLE_BRACKET_RIGHT) { closed = true; break; }
+			self.char_buf.push_all(self.expanded_slice(first_tok));
+		}
+		if (!closed) { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+		filename_text = self.char_buf.array_view();
+		include_type = ANGLE_BRACKETS;
+	}
+	else { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+	if (it.next_no_ws(&first_tok))
+	{
+		String extra_text = self.expanded_slice(first_tok);
+		RawToken extra = { .id = first_tok.id, .source = first_tok.loc.id, .start = first_tok.loc.byte_offset, .end = first_tok.loc.byte_offset + (uint)extra_text.len, .line = first_tok.loc.line };
+		self.err_raw(extra, DIAG_EXTRA_TOKENS_DIRECTIVE_END)!;
+	}
+	Source? found = self.files.find_include(self.files.ctx, self, filename_text, first, include_type, which);
+	if (catch f = found)
+	{
+		if (f == FILE_NOT_FOUND) self.fatal_not_found(tokens::from_raw(first), filename_text)!;
+		return f~;
+	}
+	Source src = found;
+	if (self.include_depth >= MAX_INCLUDE_DEPTH)
+	{
+		self.err_raw(first, DIAG_TOO_MANY_INCLUDES)!;
+		return STOP_PREPROCESSING~;
+	}
+	if (try once = self.pragma_once_sources.get((uint)src.id)) return;
+	if (try guard = self.include_guards.get((uint)src.id))
+	{
+		if (self.defines.get(guard) != null) return;
+	}
+	if (self.dependencies) self.dependencies.add_dependency(src.path);
+	self.include_depth++;
+	defer self.include_depth--;
+	TokenCount token_state = self.get_token_count();
+	self.add_include_start(src.id)!;
+	TokenWithExpansionLocs? eof = self.preprocess_extra(src);
+	if (catch f = eof)
+	{
+		// A depth-limit error stops the current included file only. Drop all
+		// tokens emitted by it, as Zig does before returning to its includer.
+		if (f == STOP_PREPROCESSING)
+		{
+			self.set_token_count(token_state);
+			return;
+		}
+		return f~;
+	}
+	self.add_include_resume(tokenizer.source, tokenizer.index, tokenizer.line)!;
+}
 
 <*
- Zig `embed(tokenizer)`: #embed. Plan 15.
- @return? aro::UNSUPPORTED
+ #embed supports macro-expanded header names and limit/prefix/suffix/if_empty
+ parameters, in any order.
+ @return? compilation::FATAL_ERROR, FILE_NOT_FOUND
 *>
-fn void? Preprocessor.embed(&self, Tokenizer* tokenizer) => aro::UNSUPPORTED~;
+fn void? Preprocessor.embed(&self, Tokenizer* tokenizer)
+{
+	ExpandBuf args;
+	args.init(self.comp.gpa);
+	defer free_expand_buf(self.comp.gpa, &args);
+	while (true)
+	{
+		RawToken raw = tokenizer.next();
+		if (raw.id == NL || raw.id == EOF) break;
+		args.push(tokens::from_raw(raw));
+	}
+	if (args.len() == 0)
+	{
+		self.err_loc({ .id = tokenizer.source, .byte_offset = tokenizer.index, .line = tokenizer.line }, DIAG_EXPECTED_FILENAME)!;
+		return;
+	}
+	self.hideset.clear_retaining_capacity();
+	if (catch f = self.expand_macro_exhaustive(tokenizer, &args, 0, args.len(), NON_EXPR)) return f~;
+	TokenIterator it = { .toks = args.array_view() };
+	TokenWithExpansionLocs first_tok;
+	if (!it.next_no_ws(&first_tok))
+	{
+		self.err_loc({ .id = tokenizer.source, .byte_offset = tokenizer.index, .line = tokenizer.line }, DIAG_EXPECTED_FILENAME)!;
+		return;
+	}
+	String first_text = self.expanded_slice(first_tok);
+	RawToken first = { .id = first_tok.id, .source = first_tok.loc.id, .start = first_tok.loc.byte_offset, .end = first_tok.loc.byte_offset + (uint)first_text.len, .line = first_tok.loc.line };
+	String filename_text;
+	IncludeType include_type;
+	if (first_tok.id == STRING_LITERAL)
+	{
+		if (first_text.len < 2) { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+		filename_text = first_text[1 .. first_text.len - 1];
+		include_type = QUOTES;
+	}
+	else if (first_tok.id == MACRO_STRING)
+	{
+		if (first_text.len < 1 || first_text[0] != '<') { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+		filename_text = first_text[1 .. first_text.len];
+		include_type = ANGLE_BRACKETS;
+	}
+	else if (first_tok.id == ANGLE_BRACKET_LEFT)
+	{
+		self.char_buf.clear();
+		bool closed = false;
+		while (it.next_no_ws(&first_tok))
+		{
+			if (first_tok.id == ANGLE_BRACKET_RIGHT) { closed = true; break; }
+			self.char_buf.push_all(self.expanded_slice(first_tok));
+		}
+		if (!closed) { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+		filename_text = self.char_buf.array_view();
+		include_type = ANGLE_BRACKETS;
+	}
+	else { self.err_raw(first, DIAG_EXPECTED_FILENAME)!; return; }
+	ulong limit = EMBED_UNLIMITED;
+	TokenWithExpansionLocs[] expanded = args.array_view();
+	TokenWithExpansionLocs[] prefix;
+	TokenWithExpansionLocs[] suffix;
+	TokenWithExpansionLocs[] if_empty;
+	bool seen_limit = false;
+	bool seen_prefix = false;
+	bool seen_suffix = false;
+	bool seen_if_empty = false;
+	while (it.next_no_ws(&first_tok))
+	{
+		String param = self.expanded_slice(first_tok);
+		char order;
+		if (param == "limit") order = 1;
+		else if (param == "prefix") order = 2;
+		else if (param == "suffix") order = 3;
+		else if (param == "if_empty") order = 4;
+		else { self.err_raw(first, DIAG_UNKNOWN_EMBED_PARAM, { diagnostics::arg_str(param) })!; break; }
+		bool duplicate = (order == 1 && seen_limit) || (order == 2 && seen_prefix) || (order == 3 && seen_suffix) || (order == 4 && seen_if_empty);
+		if (duplicate)
+		{
+			self.err_raw(first, DIAG_DUPLICATE_EMBED_PARAM, { diagnostics::arg_str(param) })!;
+		}
+		else if (order == 1) seen_limit = true;
+		else if (order == 2) seen_prefix = true;
+		else if (order == 3) seen_suffix = true;
+		else seen_if_empty = true;
+		if (!it.next_no_ws(&first_tok) || first_tok.id != L_PAREN)
+		{
+			self.err_raw(first, DIAG_EMBED_PARAM_ARGS)!;
+			break;
+		}
+		if (!it.next_no_ws(&first_tok)) { self.err_raw(first, DIAG_EMBED_PARAM_ARGS)!; break; }
+		sz begin = it.i - 1;
+		int depth = 0;
+		bool closed = first_tok.id == R_PAREN;
+		if (first_tok.id == L_PAREN) depth++;
+		while (it.i < expanded.len)
+		{
+			if (closed) break;
+			TokenWithExpansionLocs t = expanded[it.i++];
+			if (t.id == WHITESPACE || t.id == MACRO_WS) continue;
+			if (t.id == L_PAREN) depth++;
+			if (t.id == R_PAREN)
+			{
+				if (depth == 0) { closed = true; break; }
+				depth--;
+			}
+		}
+		if (!closed) { self.err_raw(first, DIAG_EMBED_PARAM_ARGS)!; break; }
+		sz end = it.i - 1;
+		if (order == 1)
+		{
+			uint parsed_limit;
+			if (end != begin + 1 || expanded[begin].id != PP_NUM || !parse_u32_decimal(self.expanded_slice(expanded[begin]), &parsed_limit)) self.err_raw(first, DIAG_INVALID_EMBED_LIMIT)!;
+			else if (!duplicate) limit = parsed_limit;
+		}
+		else if (!duplicate && order == 2) prefix = expanded[begin .. end];
+		else if (!duplicate && order == 3) suffix = expanded[begin .. end];
+		else if (!duplicate && order == 4) if_empty = expanded[begin .. end];
+	}
+	char[]? found = self.files.find_embed(self.files.ctx, self, filename_text, first.source, include_type, limit);
+	if (catch f = found)
+	{
+		if (f == FILE_NOT_FOUND) self.fatal_not_found(tokens::from_raw(first), filename_text)!;
+		return f~;
+	}
+	char[] bytes = found;
+	defer alloc::free(self.comp.gpa, bytes.ptr);
+	if (bytes.len == 0 && seen_if_empty)
+	{
+		foreach (tok : if_empty) self.add_token({ .id = tok.id, .loc = tok.loc })!;
+		return;
+	}
+	foreach (tok : prefix) self.add_token({ .id = tok.id, .loc = tok.loc })!;
+	foreach (i, byte : bytes)
+	{
+		if (i != 0)
+		{
+			uint comma_at = (uint)self.comp.generated_buf.len();
+			self.gen_text(",");
+			self.add_token({ .id = COMMA, .loc = { .id = source::GENERATED_ID, .byte_offset = comma_at } })!;
+		}
+		String num = string::tformat("%d", byte);
+		uint at = (uint)self.comp.generated_buf.len();
+		self.gen_text(num);
+		self.add_token(self.make_generated_token(at, EMBED_BYTE, tokens::from_raw(first)))!;
+	}
+	foreach (tok : suffix) self.add_token({ .id = tok.id, .loc = tok.loc })!;
+}
 
 <*
- Zig `pragma(tokenizer, pragma_tok, expand_buf)` (#pragma line collection)
- followed by addTokensFromExpandBuf / evalPragma. Plan 15.
- @return? aro::UNSUPPORTED
+ Collect a #pragma line for addTokensFromExpandBuf / eval_pragma. The
+ callback registry is not part of the current C3 Compilation API.
+ @return? compilation::FATAL_ERROR
 *>
-fn void? Preprocessor.pragma(&self, Tokenizer* tokenizer, TokenWithExpansionLocs pragma_tok, ExpandBuf* expand_buf) => aro::UNSUPPORTED~;
+fn void? Preprocessor.pragma(&self, Tokenizer* tokenizer, TokenWithExpansionLocs pragma_tok, ExpandBuf* expand_buf)
+{
+	RawToken name = tokenizer.next_no_ws();
+	if (name.id == NL || name.id == EOF) return;
+	if (name.id.is_macro_identifier() && self.tok_slice(name) == "once")
+	{
+		self.pragma_once_sources.set((uint)tokenizer.source, true);
+		self.expect_nl(tokenizer)!;
+		return;
+	}
+	expand_buf.push(pragma_tok);
+	expand_buf.push(tokens::from_raw(name));
+	while (true)
+	{
+		RawToken tok = tokenizer.next();
+		if (tok.id == EOF) break;
+		expand_buf.push(tokens::from_raw(tok));
+		if (tok.id == NL) break;
+	}
+}
 
 <*
- Zig `evalPragma(name_tok, pragma_start)`: run a pragma's preprocessor callback. Plan 15.
- @return? aro::UNSUPPORTED
+ No pragma callback registry is available in C3 yet; unknown pragmas remain
+ in the preprocessor token stream, matching Zig's default handler.
+ @return? compilation::FATAL_ERROR
 *>
-fn void? Preprocessor.eval_pragma(&self, TokenWithExpansionLocs name_tok, TokenIndex pragma_start) => aro::UNSUPPORTED~;
+fn void? Preprocessor.eval_pragma(&self, TokenWithExpansionLocs name_tok, TokenIndex pragma_start) { }

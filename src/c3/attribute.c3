@@ -20,7 +20,8 @@
 //  - Zig `Namespaced` (union(enum)) is `Namespaced`: an `AttrNamespace` plus
 //    an anonymous union of the per-vendor enums (ARO has no members).
 //
-// Stage 0 (contract): types and signatures only.
+// Attribute payload types and name resolution are implemented here. Parser
+// argument construction and application remain in the later parser port.
 module aro::attribute;
 import aro::tokens, aro::tokenizer, aro::value, aro::target, aro::type_store;
 
@@ -815,13 +816,34 @@ struct Namespaced
 <* Zig `==` on `Namespaced`: same namespace and same member value. *>
 fn bool Namespaced.eq(self, Namespaced other)
 {
-	unreachable("stage 0 stub");
+	if (self.ns != other.ns) return false;
+	switch (self.ns)
+	{
+		case STANDARD: return self.standard == other.standard;
+		case GNU: return self.gnu == other.gnu;
+		case CLANG: return self.clang == other.clang;
+		case DECLSPEC: return self.declspec == other.declspec;
+		case MSVC: return self.msvc == other.msvc;
+		case RISCV: return self.riscv == other.riscv;
+		case KEYWORD: return self.keyword == other.keyword;
+		case ARO: return true;
+	}
 }
 
 <* Zig `@tagName` of the active member (the attribute's spelling); "" for ARO. *>
 fn String Namespaced.name(self)
 {
-	unreachable("stage 0 stub");
+	switch (self.ns)
+	{
+		case STANDARD: return self.standard.name;
+		case GNU: return self.gnu.name;
+		case CLANG: return self.clang.name;
+		case DECLSPEC: return self.declspec.name;
+		case MSVC: return self.msvc.name;
+		case RISCV: return self.riscv.name;
+		case KEYWORD: return self.keyword.name;
+		case ARO: return "";
+	}
 }
 
 <*
@@ -836,7 +858,47 @@ fn String Namespaced.name(self)
 *>
 fn Namespaced? namespaced_from_string(AttributeSyntax syntax, bool has_vendor, String vendor, String name_raw)
 {
-	unreachable("stage 0 stub");
+	String name = normalize(name_raw);
+	if (syntax == KEYWORD) unreachable("keyword syntax uses namespaced_from_keyword");
+	if (syntax == STANDARD)
+	{
+		if (!has_vendor)
+		{
+			foreach (v : AttrStandard::values) if (v.name == name) return { .ns = STANDARD, .standard = v };
+			return UNKNOWN_ATTRIBUTE~;
+		}
+		String ven = normalize(vendor);
+		StandardVendor? sv = null;
+		foreach (v : StandardVendor::values) if (v.name == ven) { sv = v; break; }
+		if (sv == null || sv!! == ARO) return UNKNOWN_ATTRIBUTE~;
+		switch (sv!!)
+		{
+			case GNU:
+				foreach (v : AttrGnu::values) if (v.name == name) return { .ns = GNU, .gnu = v };
+				break;
+			case CLANG:
+				foreach (v : AttrClang::values) if (v.name == name) return { .ns = CLANG, .clang = v };
+				break;
+			case MSVC:
+				foreach (v : AttrMsvc::values) if (v.name == name) return { .ns = MSVC, .msvc = v };
+				break;
+			case RISCV:
+				foreach (v : AttrRiscv::values) if (v.name == name) return { .ns = RISCV, .riscv = v };
+				break;
+			case ARO: return UNKNOWN_ATTRIBUTE~;
+		}
+		return UNKNOWN_ATTRIBUTE~;
+	}
+	if (syntax == GNU)
+	{
+		assert(!has_vendor);
+		foreach (v : AttrGnu::values) if (v.name == name) return { .ns = GNU, .gnu = v };
+		foreach (v : AttrClang::values) if (v.name == name) return { .ns = CLANG, .clang = v };
+		return UNKNOWN_ATTRIBUTE~;
+	}
+	assert(syntax == DECLSPEC && !has_vendor);
+	foreach (v : AttrDeclspec::values) if (v.name == name) return { .ns = DECLSPEC, .declspec = v };
+	return UNKNOWN_ATTRIBUTE~;
 }
 
 <*
@@ -851,25 +913,66 @@ fn Namespaced? namespaced_from_string(AttributeSyntax syntax, bool has_vendor, S
 *>
 fn Namespaced namespaced_from_keyword(TokenId id)
 {
-	unreachable("stage 0 stub");
+	AttrKeyword keyword;
+	switch (id)
+	{
+		case KEYWORD_ALIGNAS: keyword = _ALIGNAS;
+		case KEYWORD_C23_ALIGNAS: keyword = ALIGNAS;
+		case KEYWORD_NORETURN: keyword = NORETURN;
+		case KEYWORD_ASM:
+		case KEYWORD_ASM1:
+		case KEYWORD_ASM2: keyword = ASM_LABEL;
+		case KEYWORD_NONNULL: keyword = NONNULL;
+		case KEYWORD_NULL_UNSPECIFIED: keyword = NULL_UNSPECIFIED;
+		case KEYWORD_NULLABLE_RESULT: keyword = NULLABLE_RESULT;
+		case KEYWORD_NULLABLE: keyword = NULLABLE;
+		case KEYWORD_FORCEINLINE: keyword = __FORCEINLINE;
+		case KEYWORD_FORCEINLINE2: keyword = _FORCEINLINE;
+		case KEYWORD_STDCALL: keyword = __STDCALL;
+		case KEYWORD_STDCALL2: keyword = _STDCALL;
+		case KEYWORD_THISCALL: keyword = __THISCALL;
+		case KEYWORD_THISCALL2: keyword = _THISCALL;
+		case KEYWORD_VECTORCALL: keyword = __VECTORCALL;
+		case KEYWORD_VECTORCALL2: keyword = _VECTORCALL;
+		case KEYWORD_FASTCALL: keyword = __FASTCALL;
+		case KEYWORD_FASTCALL2: keyword = _FASTCALL;
+		case KEYWORD_REGCALL: keyword = _REGCALL;
+		case KEYWORD_CDECL: keyword = __CDECL;
+		case KEYWORD_CDECL2: keyword = _CDECL;
+		case KEYWORD_PTR64: keyword = PTR64;
+		case KEYWORD_PTR32: keyword = PTR32;
+		case KEYWORD_SPTR: keyword = SPTR;
+		case KEYWORD_UPTR: keyword = UPTR;
+		default: unreachable("not an attribute keyword");
+	}
+	return { .ns = KEYWORD, .keyword = keyword };
 }
 
 <* Zig `hasIdentifierArg`: GNU access/mode/format and DECLSPEC spectre. *>
 fn bool Namespaced.has_identifier_arg(self)
 {
-	unreachable("stage 0 stub");
+	switch (self.ns)
+	{
+		case GNU: return self.gnu == ACCESS || self.gnu == MODE || self.gnu == FORMAT;
+		case DECLSPEC: return self.declspec == SPECTRE;
+		default: return false;
+	}
 }
 
 <* Zig `normalize`: strip a leading and trailing "__" when name.len >= 4. *>
 fn String normalize(String name)
 {
-	unreachable("stage 0 stub");
+	if (name.len >= 4 && name.starts_with("__") && name.ends_with("__")) return name[2 : name.len - 4];
+	return name;
 }
 
 <* Zig `Visibility.opts.map`: default, hidden, internal (-> HIDDEN), protected. *>
 fn Visibility? visibility_from_string(String s)
 {
-	unreachable("stage 0 stub");
+	if (s == "default") return DEFAULT;
+	if (s == "hidden" || s == "internal") return HIDDEN;
+	if (s == "protected") return PROTECTED;
+	return null;
 }
 
 // ---------------------------------------------------------------------------

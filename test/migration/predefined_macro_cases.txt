@@ -1,0 +1,4 @@
+// Source-derived vectors in predefined_macro_vectors.txt; no executable Zig
+// differential inventory is claimed.
+predefined macro vector.c
+invalid epoch.c

@@ -57,6 +57,11 @@ struct Compilation
 
 	<* If not UNUSED_ID, the directory containing this source is searched for includes (MS extension). *>
 	SourceId ms_cwd_source_id;
+	<* Explicit base directory for CLI-relative includes; never inferred from process cwd. *>
+	String cwd;
+	IncludeDir[] include_dirs;
+	String[] embed_dirs;
+	IncludeFileServices include_files;
 
 	<* Language options; starts as `lang_opts::DEFAULT` (Zig `langopts: LangOpts = .{}`). *>
 	LangOpts langopts;
@@ -82,6 +87,20 @@ struct Compilation
 	CodeGenOptions code_gen_options;
 	<* Zig `cmodel` (std.builtin.CodeModel, starts as DEFAULT). *>
 	CodeModel cmodel;
+}
+
+enum IncludeKind : char { QUOTE, NORMAL, FRAMEWORK, SYSTEM, SYSTEM_FRAMEWORK, AFTER }
+
+struct IncludeDir { IncludeKind kind; String path; }
+alias IncludeExistsFn = fn bool(void* ctx, String path);
+<* Returns an owned byte slice allocated from `a`, truncated to `limit` when finite. *>
+alias IncludeReadFn = fn char[]? (void* ctx, Allocator a, String path, ulong limit);
+alias IncludeMTimeFn = fn ulong? (void* ctx, String path);
+struct IncludeFileServices {
+	void* ctx;
+	IncludeExistsFn exists;
+	IncludeReadFn read;
+	IncludeMTimeFn mtime;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +196,8 @@ fn void Compilation.free(&self)
 		if (src.splice_locs.len) alloc::free(gpa, src.splice_locs.ptr);
 	}
 	foreach (&al : self.source_aliases) alloc::free(gpa, al.path.ptr);
+	if (self.include_dirs.ptr) alloc::free(gpa, self.include_dirs.ptr);
+	if (self.embed_dirs.ptr) alloc::free(gpa, self.embed_dirs.ptr);
 	self.sources.free();
 	self.source_paths.free();
 	self.source_aliases.free();

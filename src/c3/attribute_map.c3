@@ -23,7 +23,6 @@
 //  - Attribute args other than the tags in `AttrReprTag` are Zig
 //    `@panic("TODO")` in `put`; keep that as unreachable.
 //
-// Stage 0 (contract): types and signatures only.
 module aro::attribute_map;
 import aro::attribute, aro::tokens, aro::type_store, aro::compilation, aro::tree;
 import std::collections::list, std::collections::map;
@@ -102,13 +101,19 @@ struct AttributeMap
 
 fn void AttributeMap.init(&self, Allocator gpa)
 {
-	unreachable("stage 0 stub");
+	*self = { .gpa = gpa };
+	self.attributes.init(gpa);
+	self.extra.init(gpa);
+	self.decl_attrs.init(gpa);
 }
 
 <* Zig `deinit`; resets to `{}`. *>
 fn void AttributeMap.free(&self)
 {
-	unreachable("stage 0 stub");
+	self.attributes.free();
+	self.extra.free();
+	self.decl_attrs.free();
+	*self = {};
 }
 
 <*
@@ -127,19 +132,112 @@ fn void AttributeMap.free(&self)
 *>
 fn AttrRef AttributeMap.put(&self, Attribute attribute)
 {
-	unreachable("stage 0 stub");
+	AttributeArgs args = attribute.args;
+	AttrRepr repr = { .tag = PACKED, .data = attribute.tok, .syntax = attribute.syntax, .name = attribute.name };
+	switch (args.tag)
+	{
+		case PACKED: repr.tag = PACKED;
+		case HOT: repr.tag = HOT;
+		case COLD: repr.tag = COLD;
+		case CONST: repr.tag = CONST;
+		case TRANSPARENT_UNION: repr.tag = TRANSPARENT_UNION;
+		case DESIGNATED_INIT: repr.tag = DESIGNATED_INIT;
+		case FALLTHROUGH: repr.tag = FALLTHROUGH;
+		case NORETURN: repr.tag = NORETURN;
+		case ALWAYS_INLINE: repr.tag = ALWAYS_INLINE;
+		case GNU_INLINE: repr.tag = GNU_INLINE;
+		case WEAK: repr.tag = WEAK;
+		case SELECTANY: repr.tag = SELECTANY;
+		case INTERNAL_LINKAGE: repr.tag = INTERNAL_LINKAGE;
+		case UNSEQUENCED: repr.tag = UNSEQUENCED;
+		case REPRODUCIBLE: repr.tag = REPRODUCIBLE;
+		case UNUSED: repr.tag = UNUSED;
+		case ALIGNMENT:
+			if (args.alignment.has_alignment) { repr.tag = ALIGNMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.extra.push(args.alignment.alignment); }
+			else repr.tag = ALIGNMENT_NULL;
+		case DEPRECATED:
+			if (args.deprecated.has_replacement) { repr.tag = DEPRECATED_REPLACEMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); self.put_string(args.deprecated.replacement); }
+			else if (args.deprecated.has_msg) { repr.tag = DEPRECATED_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); }
+			else repr.tag = DEPRECATED;
+		case UNAVAILABLE:
+			if (args.unavailable.has_msg) { repr.tag = UNAVAILABLE_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.unavailable.msg); }
+			else repr.tag = UNAVAILABLE;
+		case WARNING: repr.tag = WARNING; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warning);
+		case ERROR: repr.tag = ERROR; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.error_msg);
+		case WARN_UNUSED_RESULT:
+			if (args.warn_unused_result.has_msg) { repr.tag = WARN_UNUSED_RESULT_MSG; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warn_unused_result.msg); }
+			else repr.tag = WARN_UNUSED_RESULT;
+		case NONNULL:
+			if (!args.nonnull.len) repr.tag = NONNULL_ZERO;
+			else { repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); if (args.nonnull.len == 1) { repr.tag = NONNULL_ONE; self.extra.push(args.nonnull[0]); } else { repr.tag = NONNULL; self.extra.push((uint)args.nonnull.len); foreach (v : args.nonnull) self.extra.push(v); } }
+		case VISIBILITY:
+			switch (args.visibility) { case DEFAULT: repr.tag = VISIBILITY_DEFAULT; case HIDDEN: repr.tag = VISIBILITY_HIDDEN; case PROTECTED: repr.tag = VISIBILITY_PROTECTED; }
+		case CLEANUP: repr.tag = CLEANUP; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.extra.push((uint)args.cleanup.function);
+		case SECTION: repr.tag = SECTION; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.section);
+		default: unreachable("unsupported attribute map payload");
+	}
+	uint index = (uint)self.attributes.len();
+	self.attributes.push(repr);
+	return (AttrRef)index;
 }
 
 <* Zig `get`: decode the attribute stored at `ref` (inverse of `put`). *>
 fn Attribute AttributeMap.get(&self, AttrRef ref)
 {
-	unreachable("stage 0 stub");
+	AttrRepr r = self.attributes[(uint)ref];
+	Attribute result = { .name = r.name, .syntax = r.syntax, .tok = (TokenIndex)r.data, .args = { .tag = PACKED } };
+	uint next;
+	switch (r.tag)
+	{
+		case PACKED: result.args.tag = PACKED;
+		case HOT: result.args.tag = HOT;
+		case COLD: result.args.tag = COLD;
+		case CONST: result.args.tag = CONST;
+		case TRANSPARENT_UNION: result.args.tag = TRANSPARENT_UNION;
+		case DESIGNATED_INIT: result.args.tag = DESIGNATED_INIT;
+		case FALLTHROUGH: result.args.tag = FALLTHROUGH;
+		case NORETURN: result.args.tag = NORETURN;
+		case ALWAYS_INLINE: result.args.tag = ALWAYS_INLINE;
+		case GNU_INLINE: result.args.tag = GNU_INLINE;
+		case WEAK: result.args.tag = WEAK;
+		case SELECTANY: result.args.tag = SELECTANY;
+		case INTERNAL_LINKAGE: result.args.tag = INTERNAL_LINKAGE;
+		case UNSEQUENCED: result.args.tag = UNSEQUENCED;
+		case REPRODUCIBLE: result.args.tag = REPRODUCIBLE;
+		case UNUSED: result.args.tag = UNUSED;
+		case ALIGNMENT_NULL: result.args.tag = ALIGNMENT; result.args.alignment = { .has_alignment = false };
+		case ALIGNMENT: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = ALIGNMENT; result.args.alignment = { .has_alignment = true, .alignment = self.extra[r.data + 1] };
+		case DEPRECATED: result.args.tag = DEPRECATED;
+		case DEPRECATED_REASON: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = DEPRECATED; result.args.deprecated = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
+		case DEPRECATED_REPLACEMENT: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = DEPRECATED; result.args.deprecated = { .has_msg = true, .msg = self.get_string(r.data + 1, &next), .has_replacement = true, .replacement = self.get_string(next, &next) };
+		case UNAVAILABLE: result.args.tag = UNAVAILABLE; result.args.unavailable = { .has_msg = false };
+		case UNAVAILABLE_REASON: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = UNAVAILABLE; result.args.unavailable = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
+		case WARNING: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = WARNING; result.args.warning = self.get_string(r.data + 1, &next);
+		case ERROR: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = ERROR; result.args.error_msg = self.get_string(r.data + 1, &next);
+		case WARN_UNUSED_RESULT: result.args.tag = WARN_UNUSED_RESULT; result.args.warn_unused_result = { .has_msg = false };
+		case WARN_UNUSED_RESULT_MSG: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = WARN_UNUSED_RESULT; result.args.warn_unused_result = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
+		case NONNULL_ZERO: result.args.tag = NONNULL; result.args.nonnull = self.extra.slice()[0 .. 0];
+		case NONNULL_ONE: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = NONNULL; result.args.nonnull = self.extra.slice()[r.data + 1 .. r.data + 2];
+		case NONNULL: result.tok = (TokenIndex)self.extra[r.data]; uint n = self.extra[r.data + 1]; result.args.tag = NONNULL; result.args.nonnull = self.extra.slice()[r.data + 2 .. r.data + 2 + n];
+		case VISIBILITY_DEFAULT: result.args.tag = VISIBILITY; result.args.visibility = DEFAULT;
+		case VISIBILITY_HIDDEN: result.args.tag = VISIBILITY; result.args.visibility = HIDDEN;
+		case VISIBILITY_PROTECTED: result.args.tag = VISIBILITY; result.args.visibility = PROTECTED;
+		case CLEANUP: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = CLEANUP; result.args.cleanup = { .function = (NodeIndex)self.extra[r.data + 1] };
+		case SECTION: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = SECTION; result.args.section = self.get_string(r.data + 1, &next);
+	}
+	return result;
 }
 
 <* Zig `putString`: append [len, bytes padded to whole words] to `extra`. *>
 fn void AttributeMap.put_string(&self, String str)
 {
-	unreachable("stage 0 stub");
+	uint len = (uint)str.len;
+	self.extra.push(len);
+	uint words = (len + 3) / 4;
+	uint start = (uint)self.extra.len();
+	for (uint i = 0; i < words; i++) self.extra.push(0);
+	char* bytes = (char*)&self.extra[start];
+	for (uint i = 0; i < len; i++) bytes[i] = str[i];
 }
 
 <*
@@ -148,7 +246,10 @@ fn void AttributeMap.put_string(&self, String str)
 *>
 fn String AttributeMap.get_string(&self, uint index, uint* next)
 {
-	unreachable("stage 0 stub");
+	uint len = self.extra[index];
+	uint words = (len + 3) / 4;
+	*next = index + 1 + words;
+	return ((char*)&self.extra[index + 1])[0 .. len];
 }
 
 <*
@@ -158,7 +259,9 @@ fn String AttributeMap.get_string(&self, uint index, uint* next)
 *>
 fn void AttributeMap.set_decl_attrs(&self, NodeIndex node, AttrRef[] refs)
 {
-	unreachable("stage 0 stub");
+	uint start = (uint)self.extra.len();
+	foreach (r : refs) self.extra.push((uint)r);
+	self.decl_attrs.set((uint)node, { .index = start, .len = (uint)refs.len });
 }
 
 <*
@@ -168,13 +271,20 @@ fn void AttributeMap.set_decl_attrs(&self, NodeIndex node, AttrRef[] refs)
 *>
 fn AttrRef[] AttributeMap.attrs(&self, NodeOptIndex node)
 {
-	unreachable("stage 0 stub");
+	NodeIndex? idx = node.unpack();
+	if (!idx) return self.extra.slice()[0 .. 0];
+	AttrSpan? maybe_span = self.decl_attrs.get((uint)idx!);
+	if (!maybe_span) return self.extra.slice()[0 .. 0];
+	AttrSpan span = maybe_span!;
+	return ((AttrRef*)self.extra.slice().ptr)[span.index .. span.index + span.len];
 }
 
 <* Zig `getAttribute`: the LAST attribute of `node` whose args tag is `tag`, else NO_ATTRIBUTE. *>
 fn Attribute? AttributeMap.get_attribute(&self, NodeOptIndex node, AttributeTag tag)
 {
-	unreachable("stage 0 stub");
+	AttrRef[] list = self.attrs(node);
+	for (usz i = list.len; i > 0; i--) { Attribute a = self.get(list[i - 1]); if (a.args.tag == tag) return a; }
+	return NO_ATTRIBUTE~;
 }
 
 <*
@@ -184,13 +294,16 @@ fn Attribute? AttributeMap.get_attribute(&self, NodeOptIndex node, AttributeTag 
 *>
 fn uint? AttributeMap.requested_alignment(&self, NodeOptIndex node, Compilation* comp)
 {
-	unreachable("stage 0 stub");
+	uint? max_value;
+	foreach (ref : self.attrs(node)) { Attribute a = self.get(ref); if (a.args.tag != ALIGNMENT) continue; uint v = a.args.alignment.has_alignment ? a.args.alignment.alignment : comp.target.default_alignment(); if (!max_value || max_value! < v) max_value = v; }
+	return max_value;
 }
 
 <* Zig `hasAttribute`: any attribute of `node` has args tag `tag`. *>
 fn bool AttributeMap.has_attribute(&self, NodeOptIndex node, AttributeTag tag)
 {
-	unreachable("stage 0 stub");
+	foreach (ref : self.attrs(node)) if (self.get(ref).args.tag == tag) return true;
+	return false;
 }
 
 <*
@@ -201,11 +314,21 @@ fn bool AttributeMap.has_attribute(&self, NodeOptIndex node, AttributeTag tag)
 *>
 fn Attribute? QualType.get_attribute(self, Tree* tree, AttributeTag tag)
 {
-	unreachable("stage 0 stub");
+	if (self.is_invalid()) return NO_ATTRIBUTE~;
+	Type t = self.get_type(tree.comp);
+	switch (t.tag)
+	{
+		case STRUCT: return tree.attr_map.get_attribute(t.record.decl_node, tag);
+		case UNION: return tree.attr_map.get_attribute(t.record.decl_node, tag);
+		case ENUM: return tree.attr_map.get_attribute((NodeOptIndex)t.enum_ty.decl_node, tag);
+		case TYPEOF: return t.type_of.base.get_attribute(tree, tag);
+		case TYPEDEF: return tree.attr_map.get_attribute((NodeOptIndex)t.type_def.decl_node, tag) ?? t.type_def.base.get_attribute(tree, tag);
+		default: return NO_ATTRIBUTE~;
+	}
 }
 
 <* TypeStore.zig `QualType.hasAttribute`. *>
 fn bool QualType.has_attribute(self, Tree* tree, AttributeTag tag)
 {
-	unreachable("stage 0 stub");
+	return @ok(self.get_attribute(tree, tag));
 }

@@ -459,19 +459,19 @@ fn void feature_and_extension_macros() @test
 	};
 }
 
-fn void attribute_queries_are_plan_16() @test
+fn void attribute_queries_use_shared_namespaced_tables() @test
 {
 	@with_pp("x86_64-linux-gnu"; Compilation* comp, Diagnostics* d, Preprocessor* pp)
 	{
-		// [source] contract: attribute_exists is aro::UNSUPPORTED until plan 16.
-		assert(@catch(expand_line(pp, HAS_ATTRIBUTE, "__has_attribute", "#if __has_attribute(aligned)")) == aro::UNSUPPORTED);
+		// [source-derived] shared Attribute.Namespaced tables recognize GNU attributes.
+		test::eq(ex(pp, HAS_ATTRIBUTE, "__has_attribute", "#if __has_attribute(aligned)"), "1\n");
 		// [fixture builtin macro errors.c:1:21] diagnosed before the attribute lookup.
 		test::eq(ex(pp, HAS_ATTRIBUTE, "__has_attribute", "#if __has_attribute(42)"), "0\n");
 		msg(d, 0, "builtin feature check macro requires a parenthesized identifier", 1, 21);
 		// [fixture no declspec.c] without -fdeclspec the answer is 0.
 		test::eq(ex(pp, HAS_DECLSPEC_ATTRIBUTE, "__has_declspec_attribute", "#if __has_declspec_attribute(noreturn)"), "0\n");
 		comp.langopts.declspec_attrs = true;
-		assert(@catch(expand_line(pp, HAS_DECLSPEC_ATTRIBUTE, "__has_declspec_attribute", "#if __has_declspec_attribute(noreturn)")) == aro::UNSUPPORTED);
+		test::eq(ex(pp, HAS_DECLSPEC_ATTRIBUTE, "__has_declspec_attribute", "#if __has_declspec_attribute(noreturn)"), "1\n");
 		check(d.messages.len(), 1);
 	};
 }
@@ -491,8 +491,8 @@ fn void has_c_attribute() @test
 		test::eq(ex(pp, HAS_C_ATTRIBUTE, "__has_c_attribute", "#if __has_c_attribute(reproducible)"), "202207L\n");
 		test::eq(ex(pp, HAS_C_ATTRIBUTE, "__has_c_attribute", "#if __has_c_attribute(foo)"), "0\n");
 		check(d.messages.len(), 0);
-		// [source] vendor form goes to attribute_exists (plan 16).
-		assert(@catch(expand_line(pp, HAS_C_ATTRIBUTE, "__has_c_attribute", "#if __has_c_attribute(gnu::packed)")) == aro::UNSUPPORTED);
+		// [source-derived] vendor-qualified lookup uses the shared GNU table.
+		test::eq(ex(pp, HAS_C_ATTRIBUTE, "__has_c_attribute", "#if __has_c_attribute(gnu::packed)"), "1\n");
 		// [source] '::' first, a dangling vendor, two names, empty.
 		test::eq(ex(pp, HAS_C_ATTRIBUTE, "__has_c_attribute", "#if __has_c_attribute(::foo)"), "0\n");
 		msg(d, 0, "builtin feature check macro requires a parenthesized identifier", 1, 23);

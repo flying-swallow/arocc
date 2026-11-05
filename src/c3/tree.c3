@@ -1085,7 +1085,15 @@ struct Node
 *>
 fn bool Node.is_implicit(&self)
 {
-	unreachable("stage 0 stub");
+	switch (self.kind)
+	{
+		case ARRAY_FILLER_EXPR: case DEFAULT_INIT_EXPR: case COND_DUMMY_EXPR: case COMPOUND_ASSIGN_DUMMY_EXPR: return true;
+		case RETURN_STMT: return self.return_stmt.operand == IMPLICIT;
+		case CAST: return self.cast.implicit;
+		case VARIABLE: return self.variable.implicit;
+		case TYPEDEF: return self.type_def.implicit;
+		default: return false;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,19 +1136,29 @@ struct Tree
 *>
 fn void Tree.init(&self, Compilation* comp, TreeToken[] tokens)
 {
-	unreachable("stage 0 stub");
+	*self = { .comp = comp, .tokens = tokens };
+	self.nodes.init(comp.gpa);
+	self.extra.init(comp.gpa);
+	self.root_decls.init(comp.gpa);
+	self.value_map.init(comp.gpa);
+	self.attr_map.init(comp.gpa);
 }
 
 <* Zig `deinit`: frees nodes, extra, root_decls, value_map and attr_map; resets to `{}`. *>
 fn void Tree.free(&self)
 {
-	unreachable("stage 0 stub");
+	self.nodes.free(); self.extra.free(); self.root_decls.free(); self.value_map.free(); self.attr_map.free();
+	*self = {};
 }
 
 <* Zig `addNode`: append a new repr slot and `set_node` it; returns its index. *>
 fn NodeIndex Tree.add_node(&self, Node node)
 {
-	unreachable("stage 0 stub");
+	NodeRepr repr = {};
+	self.nodes.push(repr);
+	usz index = self.nodes.len() - 1;
+	self.set_node(node, index);
+	return (NodeIndex)(uint)index;
 }
 
 <*
@@ -1152,7 +1170,15 @@ fn NodeIndex Tree.add_node(&self, Node node)
 *>
 fn void Tree.set_node(&self, Node node, usz index)
 {
-	unreachable("stage 0 stub");
+	assert(index < self.nodes.len());
+	NodeRepr repr = {};
+	repr.tok = 0;
+	switch (node.kind.family)
+	{
+		case DECL: self.encode_decl(node, &repr);
+		case STMT: case EXPR: self.encode_expr_stmt(node, &repr);
+	}
+	self.nodes[index] = repr;
 }
 
 <*
@@ -1162,25 +1188,30 @@ fn void Tree.set_node(&self, Node node, usz index)
 *>
 fn Node NodeIndex.get(self, Tree* tree)
 {
-	unreachable("stage 0 stub");
+	NodeTag tag = tree.nodes[(usz)self].tag;
+	switch (tag.kind.family)
+	{
+		case DECL: return tree.decode_decl(self);
+		case STMT: case EXPR: return tree.decode_expr_stmt(self);
+	}
 }
 
 <* Zig `Node.Index.tok`: the node's main token. *>
 fn tokens::TokenIndex NodeIndex.tok(self, Tree* tree)
 {
-	unreachable("stage 0 stub");
+	return tree.nodes[(usz)self].tok;
 }
 
 <* Zig `Node.Index.loc`: `tree.tokens[index.tok(tree)].loc`. *>
 fn Location NodeIndex.loc(self, Tree* tree)
 {
-	unreachable("stage 0 stub");
+	return tree.tokens[(usz)self.tok(tree)].loc;
 }
 
 <* Zig `Node.Index.qt`: `qt_or_null` or `type_store::VOID`. *>
 fn QualType NodeIndex.qt(self, Tree* tree)
 {
-	unreachable("stage 0 stub");
+	return self.qt_or_null(tree) ?? type_store::VOID;
 }
 
 <*
@@ -1194,35 +1225,59 @@ fn QualType NodeIndex.qt(self, Tree* tree)
 *>
 fn QualType? NodeIndex.qt_or_null(self, Tree* tree)
 {
-	unreachable("stage 0 stub");
+	NodeTag tag = self.tag(tree);
+	switch (tag)
+	{
+		case EMPTY_DECL: case STATIC_ASSERT: case COMPOUND_STMT: case COMPOUND_STMT_THREE:
+		case IF_STMT: case IF_INIT: case IF_FULL: case SWITCH_STMT: case CASE_STMT: case DEFAULT_STMT:
+		case WHILE_STMT: case DO_WHILE_STMT: case FOR_FULL: case FOR_INIT_COND: case FOR_INIT_INCR:
+		case FOR_COND_INCR: case FOR_INIT: case FOR_COND: case FOR_INCR: case FOR_EVER: case GOTO_STMT:
+		case COMPUTED_GOTO_STMT: case CONTINUE_STMT: case BREAK_STMT: case ASM_STMT:
+		case ASM_STMT_VOLATILE: case ASM_STMT_INLINE: case ASM_STMT_INLINE_VOLATILE:
+		case ASM_STMT_SIMPLE: case DECL_STMT_THREE: case DECL_STMT: case NULL_STMT: case LABELED_STMT:
+		case GLOBAL_ASM: case GENERIC_ASSOCIATION_EXPR: case GENERIC_DEFAULT_EXPR:
+		case BUILTIN_VA_ARG_PACK: return NO_QT~;
+		case BUILTIN_VA_ARG_PACK_LEN: case BUILTIN_TYPES_COMPATIBLE_P: return type_store::INT;
+		default: return (QualType)tree.nodes[(usz)self].data[0];
+	}
 }
 
 <* The storage tag of a node (Zig `tree.nodes.items(.tag)[index]`). *>
 fn NodeTag NodeIndex.tag(self, Tree* tree)
 {
-	unreachable("stage 0 stub");
+	return tree.nodes[(usz)self].tag;
 }
 
 <* Zig `addExtra`: append `data` to `extra`; returns its start index and length. *>
 fn ExtraSpan Tree.add_extra(&self, NodeIndex[] data)
 {
-	unreachable("stage 0 stub");
+	uint start = (uint)self.extra.len();
+	foreach (item : data) self.extra.push(item);
+	return { .index = start, .len = (uint)data.len };
 }
 
 <* Zig `tokSlice`: the token's fixed lexeme, else its source text (`comp.loc_slice`). *>
 fn String Tree.tok_slice(&self, tokens::TokenIndex tok_i)
 {
-	unreachable("stage 0 stub");
+	TreeToken tok = self.tokens[(usz)tok_i];
+	String? fixed = tok.id.lexeme();
+	if (fixed != null) return fixed!;
+	Source src = self.comp.get_source(tok.loc.id);
+	Tokenizer scanner;
+	scanner.init(src.buf, source::GENERATED_ID, self.comp.langopts, src.splice_locs);
+	scanner.index = tok.loc.byte_offset;
+	Token span = scanner.next();
+	return src.buf[(usz)span.start..(usz)span.end];
 }
 
 <* Zig `tree.value_map.get(node)`: the constant value recorded for a node (fault NOT_FOUND). *>
 fn Value? Tree.value_of(&self, NodeIndex node)
 {
-	unreachable("stage 0 stub");
+	return self.value_map.get((uint)node);
 }
 
 <* Zig `tree.value_map.put(gpa, node, val)`. *>
 fn void Tree.set_value(&self, NodeIndex node, Value val)
 {
-	unreachable("stage 0 stub");
+	self.value_map.set((uint)node, val);
 }

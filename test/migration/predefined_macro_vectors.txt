@@ -1,0 +1,10 @@
+Source-derived vector plan (pending executable comparison with the pinned Zig reference):
+
+predefined macro vector.c selects x86_64-unknown-linux-gnu independent of the
+host, selects the x86_64_v3 CPU, and sets SOURCE_DATE_EPOCH=0. It checks __LINE__, incrementing
+__COUNTER__, __INCLUDE_LEVEL__, __DATE__/__TIME__, source-name expansion,
+__STDC__/__STDC_VERSION__, pointer size, x86_64 and AVX2 target defines. The
+case's expanded golden is the explicit expected output for this vector.
+
+The existing invalid epoch.c fixture also runs here. It expects the exact
+SOURCE_DATE_EPOCH diagnostic when the environment contains `abc`.

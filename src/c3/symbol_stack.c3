@@ -15,9 +15,9 @@
 //    re-pushed, as in Zig (`active_len`).
 //  - Hash maps are keyed by `(uint)StringId`.
 //
-// Stage 0 (contract): types and signatures only.
+// Full port of the lexical scope and declaration conflict behavior.
 module aro::symbol_stack;
-import aro::compilation, aro::string_interner, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
+import aro::compilation, aro::lang_opts, aro::string_interner, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
 import std::collections::list, std::collections::map;
 
 <* Zig `null` from `get` / `lookup` / `findSymbol`. *>
@@ -109,25 +109,39 @@ struct SymbolStack
 
 fn void SymbolStack.init(&self, Allocator gpa)
 {
-	unreachable("stage 0 stub");
+	*self = { .gpa = gpa };
+	self.scopes.init(gpa);
 }
 
 <* Zig `deinit`. @require self.active_len == 0 : "all scopes should have been popped" *>
 fn void SymbolStack.free(&self)
 {
-	unreachable("stage 0 stub");
+	assert(self.active_len == 0);
+	foreach (&scope : self.scopes) { scope.vars.free(); scope.tags.free(); }
+	self.scopes.free();
+	*self = {};
 }
 
 <* Zig `pushScope`: reuse (and clear) a retained scope, or append a new one. *>
 fn void SymbolStack.push_scope(&self)
 {
-	unreachable("stage 0 stub");
+	if (self.active_len == self.scopes.len()) {
+		Scope scope = {};
+		scope.vars.init(self.gpa);
+		scope.tags.init(self.gpa);
+		self.scopes.push(scope);
+	} else {
+		self.scopes[(sz)self.active_len].vars.clear();
+		self.scopes[(sz)self.active_len].tags.clear();
+	}
+	self.active_len += 1;
 }
 
 <* Zig `popScope`. *>
 fn void SymbolStack.pop_scope(&self)
 {
-	unreachable("stage 0 stub");
+	assert(self.active_len > 0);
+	self.active_len -= 1;
 }
 
 <*
@@ -138,13 +152,28 @@ fn void SymbolStack.pop_scope(&self)
 *>
 fn bool? SymbolStack.find_typedef(&self, SymbolContext* ctx, StringId name, tokens::TokenIndex name_tok, bool no_type_yet, Symbol* out)
 {
-	unreachable("stage 0 stub");
+	Symbol? found = self.lookup(name, VARS);
+	if (!@ok(found)) found = self.lookup(name, TAGS);
+	if (!@ok(found)) return false;
+	Symbol prev = @unwrap(found);
+	switch (prev.kind) {
+		case TYPEDEF: *out = prev; return true;
+		case STRUCT:
+		case UNION:
+		case ENUM:
+			if (no_type_yet) return false;
+			SymbolDiag d = prev.kind == STRUCT ? MUST_USE_STRUCT : prev.kind == UNION ? MUST_USE_UNION : MUST_USE_ENUM;
+			ctx.err(ctx.ctx, name_tok, d, {}, {})!;
+			*out = prev;
+			return true;
+		default: return false;
+	}
 }
 
 <* Zig `findSymbol`: `lookup(name, VARS)`. *>
 fn Symbol? SymbolStack.find_symbol(&self, StringId name)
 {
-	unreachable("stage 0 stub");
+	return self.lookup(name, VARS);
 }
 
 <*
@@ -156,19 +185,35 @@ fn Symbol? SymbolStack.find_symbol(&self, StringId name)
 *>
 fn bool? SymbolStack.find_tag(&self, SymbolContext* ctx, StringId name, TokenId kind, tokens::TokenIndex name_tok, TokenId next_tok_id, Symbol* out)
 {
-	unreachable("stage 0 stub");
+	Symbol? prev = next_tok_id == tokenizer::SEMICOLON ? self.get(name, TAGS) : self.lookup(name, TAGS);
+	if (!@ok(prev)) return false;
+	Symbol sym = @unwrap(prev);
+	if ((sym.kind == ENUM && kind == tokenizer::KEYWORD_ENUM) || (sym.kind == STRUCT && kind == tokenizer::KEYWORD_STRUCT) || (sym.kind == UNION && kind == tokenizer::KEYWORD_UNION)) { *out = sym; return true; }
+	if (!@ok(self.get(name, TAGS))) return false;
+	ctx.err(ctx.ctx, name_tok, WRONG_TAG, {}, {})!;
+	ctx.err(ctx.ctx, sym.tok, PREVIOUS_DEFINITION, {}, {})!;
+	return false;
 }
 
 <* Zig `get`: `name` in the innermost scope's `kind` namespace. *>
 fn Symbol? SymbolStack.get(&self, StringId name, ScopeKind kind)
 {
-	unreachable("stage 0 stub");
+	if (self.active_len == 0) return Symbol?;
+	Scope* scope = &self.scopes[(sz)(self.active_len - 1)];
+	return kind == VARS ? scope.vars.get((uint)name) : scope.tags.get((uint)name);
 }
 
 <* Zig `lookup`: `name` in the nearest active scope, starting at the innermost. *>
 fn Symbol? SymbolStack.lookup(&self, StringId name, ScopeKind kind)
 {
-	unreachable("stage 0 stub");
+	usz i = self.active_len;
+	while (i > 0) {
+		i -= 1;
+		Scope* scope = &self.scopes[(sz)i];
+		Symbol? found = kind == VARS ? scope.vars.get((uint)name) : scope.tags.get((uint)name);
+		if (@ok(found)) return found;
+	}
+	return Symbol?;
 }
 
 <*
@@ -177,7 +222,18 @@ fn Symbol? SymbolStack.lookup(&self, StringId name, ScopeKind kind)
 *>
 fn void SymbolStack.define(&self, Symbol symbol)
 {
-	unreachable("stage 0 stub");
+	assert(self.active_len > 0);
+	Scope* scope = &self.scopes[(sz)(self.active_len - 1)];
+	switch (symbol.kind) {
+		case TYPEDEF:
+		case ENUMERATION:
+		case DECL:
+		case DEF:
+		case CONSTEXPR: scope.vars.put((uint)symbol.name, symbol);
+		case STRUCT:
+		case UNION:
+		case ENUM: scope.tags.put((uint)symbol.name, symbol);
+	}
 }
 
 <*
@@ -190,7 +246,26 @@ fn void SymbolStack.define(&self, Symbol symbol)
 *>
 fn NodeOptIndex? SymbolStack.define_typedef(&self, SymbolContext* ctx, StringId name, QualType qt, tokens::TokenIndex tok, NodeIndex node)
 {
-	unreachable("stage 0 stub");
+	NodeOptIndex old = type_store::NODE_NULL;
+	if (try prev = self.get(name, VARS)) switch (prev.kind) {
+		case TYPEDEF:
+			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) {
+				if (qt.is_invalid()) return type_store::NODE_NULL;
+				Type a = qt.get(ctx.comp, TYPEDEF)!;
+				Type b = prev.qt.get(ctx.comp, TYPEDEF)!;
+				ctx.err(ctx.ctx, tok, REDEFINITION_OF_TYPEDEF, a.type_def.base, b.type_def.base)!;
+				if (prev.tok != 0) ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			} else old = prev.node;
+		case ENUMERATION:
+		case DECL:
+		case DEF:
+		case CONSTEXPR:
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
+			ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+		default: unreachable("invalid ordinary symbol kind");
+	}
+	self.define({ .kind = TYPEDEF, .name = name, .tok = tok, .qt = qt, .node = node, .val = {} });
+	return old;
 }
 
 <*
@@ -203,13 +278,36 @@ fn NodeOptIndex? SymbolStack.define_typedef(&self, SymbolContext* ctx, StringId 
 *>
 fn NodeOptIndex? SymbolStack.define_symbol(&self, SymbolContext* ctx, StringId name, QualType qt, tokens::TokenIndex tok, NodeIndex node, Value val, bool constexpr)
 {
-	unreachable("stage 0 stub");
+	NodeOptIndex old = type_store::NODE_NULL;
+	if (try prev = self.get(name, VARS)) switch (prev.kind) {
+		case ENUMERATION:
+			if (qt.is_invalid()) return type_store::NODE_NULL;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
+			ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+		case DECL:
+			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) {
+				if (qt.is_invalid()) return type_store::NODE_NULL;
+				ctx.err(ctx.ctx, tok, REDEFINITION_INCOMPATIBLE, {}, {})!;
+				ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			} else { if (prev.node != type_store::NODE_NULL) ctx.set_tentative_decl_definition(ctx.ctx, prev.node, node); old = prev.node; }
+		case DEF:
+		case CONSTEXPR:
+			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return type_store::NODE_NULL; ctx.err(ctx.ctx, tok, REDEFINITION, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!; }
+		case TYPEDEF:
+			if (qt.is_invalid()) return type_store::NODE_NULL;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
+			ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+	default: unreachable("invalid ordinary symbol kind");
+	}
+	self.define({ .kind = constexpr ? CONSTEXPR : DEF, .name = name, .tok = tok, .qt = qt, .node = node, .val = val });
+	return old;
 }
 
 <* Zig `getPtr`: the named symbol in the innermost scope. @require the symbol exists *>
 fn Symbol* SymbolStack.get_ptr(&self, StringId name, ScopeKind kind)
 {
-	unreachable("stage 0 stub");
+	Scope* scope = &self.scopes[(sz)(self.active_len - 1)];
+	return kind == VARS ? scope.vars.get_ptr((uint)name)! : scope.tags.get_ptr((uint)name)!;
 }
 
 <*
@@ -222,7 +320,29 @@ fn Symbol* SymbolStack.get_ptr(&self, StringId name, ScopeKind kind)
 *>
 fn NodeOptIndex? SymbolStack.declare_symbol(&self, SymbolContext* ctx, StringId name, QualType qt, tokens::TokenIndex tok, NodeIndex node)
 {
-	unreachable("stage 0 stub");
+	NodeOptIndex old = type_store::NODE_NULL;
+	if (try prev = self.get(name, VARS)) switch (prev.kind) {
+		case ENUMERATION:
+			if (qt.is_invalid()) return type_store::NODE_NULL;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
+			ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+		case DECL:
+			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) { if (qt.is_invalid()) return type_store::NODE_NULL; ctx.err(ctx.ctx, tok, REDEFINITION_INCOMPATIBLE, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!; }
+			else { if (prev.node != type_store::NODE_NULL) ctx.set_tentative_decl_definition(ctx.ctx, node, prev.node); old = prev.node; }
+		case DEF:
+		case CONSTEXPR:
+			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) { if (qt.is_invalid()) return type_store::NODE_NULL; ctx.err(ctx.ctx, tok, REDEFINITION_INCOMPATIBLE, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!; }
+			else { if (prev.node != type_store::NODE_NULL) ctx.set_tentative_decl_definition(ctx.ctx, node, prev.node); return type_store::NODE_NULL; }
+		case TYPEDEF:
+			if (qt.is_invalid()) return type_store::NODE_NULL;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
+			ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+	default: unreachable("invalid ordinary symbol kind");
+	}
+	self.define({ .kind = DECL, .name = name, .tok = tok, .qt = qt, .node = node, .val = {} });
+	if (self.active_len > 1 && !ctx.comp.langopts.standard.at_least(C23) && qt.is(ctx.comp, FUNC))
+		self.scopes[0].vars.put((uint)name, { .kind = DECL, .name = name, .tok = tok, .qt = qt, .node = node, .val = {}, .out_of_scope = true });
+	return old;
 }
 
 <*
@@ -233,7 +353,19 @@ fn NodeOptIndex? SymbolStack.declare_symbol(&self, SymbolContext* ctx, StringId 
 *>
 fn void? SymbolStack.define_param(&self, SymbolContext* ctx, StringId name, QualType qt, tokens::TokenIndex tok, NodeIndex node)
 {
-	unreachable("stage 0 stub");
+	if (try prev = self.get(name, VARS)) switch (prev.kind) {
+		case ENUMERATION:
+		case DECL:
+		case DEF:
+		case CONSTEXPR:
+			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return; ctx.err(ctx.ctx, tok, REDEFINITION_OF_PARAMETER, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!; return; }
+		case TYPEDEF:
+			if (qt.is_invalid()) return;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
+			ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+		default: unreachable("invalid ordinary symbol kind");
+	}
+	self.define({ .kind = DEF, .name = name, .tok = tok, .qt = qt, .node = node, .val = {} });
 }
 
 <*
@@ -243,7 +375,13 @@ fn void? SymbolStack.define_param(&self, SymbolContext* ctx, StringId name, Qual
 *>
 fn bool? SymbolStack.define_tag(&self, SymbolContext* ctx, StringId name, TokenId kind, tokens::TokenIndex tok, Symbol* out)
 {
-	unreachable("stage 0 stub");
+	Symbol? got = self.get(name, TAGS);
+	if (!@ok(got)) return false;
+	Symbol prev = @unwrap(got);
+	if ((prev.kind == ENUM && kind == tokenizer::KEYWORD_ENUM) || (prev.kind == STRUCT && kind == tokenizer::KEYWORD_STRUCT) || (prev.kind == UNION && kind == tokenizer::KEYWORD_UNION)) { *out = prev; return true; }
+	ctx.err(ctx.ctx, tok, WRONG_TAG, {}, {})!;
+	ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+	return false;
 }
 
 <*
@@ -254,5 +392,18 @@ fn bool? SymbolStack.define_tag(&self, SymbolContext* ctx, StringId name, TokenI
 *>
 fn void? SymbolStack.define_enumeration(&self, SymbolContext* ctx, StringId name, QualType qt, tokens::TokenIndex tok, Value val, NodeIndex node)
 {
-	unreachable("stage 0 stub");
+	if (try prev = self.get(name, VARS)) switch (prev.kind) {
+		case ENUMERATION:
+			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return; ctx.err(ctx.ctx, tok, REDEFINITION, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!; return; }
+		case DECL:
+		case DEF:
+		case CONSTEXPR:
+			if (qt.is_invalid()) return;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!; return;
+		case TYPEDEF:
+			if (qt.is_invalid()) return;
+			ctx.err(ctx.ctx, tok, REDEFINITION_DIFFERENT_SYM, {}, {})!; ctx.err(ctx.ctx, prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+		default: unreachable("invalid ordinary symbol kind");
+	}
+	self.define({ .kind = ENUMERATION, .name = name, .tok = tok, .qt = qt, .node = node, .val = val });
 }
