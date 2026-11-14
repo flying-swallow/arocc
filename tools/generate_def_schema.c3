@@ -5,7 +5,7 @@
 // tools/builtins_schema.md.
 //
 // Invariants:
-// - The generator links only std plus src/c3/builtin_properties.c3 (never
+// - The generator links only std plus src/builtin_properties.c3 (never
 //   aro_c3_lib, which depends on the generator's output).
 // - A DefFile borrows the input buffer: every String in it (names, param_str,
 //   features, DefDiag.detail) is a slice of `input` and is valid only while

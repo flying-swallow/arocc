@@ -5,7 +5,7 @@ unions, and related types. The files derive from [mahkoh/repr-c](https://github.
 the generation code lives in the
 [arocc-test-gen fork](https://github.com/TwoClocks/repr-c/tree/arocc-test-gen/repr/arocc).
 They are derivative works under GPLv3; each file includes its SPDX identifier.
-The C3 implementation is `test/migration/record_runner.c3`. The Zig
+The C3 implementation is `src/tests/migration/record_runner.c3`. The Zig
 `test/record_runner.zig` is retained as a legacy/reference implementation.
 
 ## Fixture structure
@@ -51,9 +51,9 @@ BAZEL=bazel
 BAZEL_ROOT=/path/to/writable/bazel-root
 
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg \
-  //test/migration:record_runner_tests //test/migration:record_regression
+  //src/tests/migration:record_runner_tests //src/tests/migration:record_regression
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt \
-  //test/migration:record_runner_tests //test/migration:record_regression
+  //src/tests/migration:record_runner_tests //src/tests/migration:record_regression
 ```
 
 There is no runner option to filter a single target or define. To reproduce a

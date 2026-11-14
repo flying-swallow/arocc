@@ -1,0 +1,66 @@
+# Direct typed-IR probe cases. Run each command with the standalone ir_probe
+# binary built from ir_probe.c3. Expectations below are source-derived from
+# src/backend/ir.c3 and ir_renderer.c3; no compatible reference executable
+# was used, so these are not executable differential parity claims.
+#
+# Format: <class> <scenario> <expected boundary>
+# `supported` means typed IR construction and dump complete. It does not mean
+# machine-code generation succeeds.
+
+supported scalar        ir_probe scalar                    typed-ir=build dump=complete renderer=not-requested
+supported control-flow  ir_probe control-flow              typed-ir=build dump=complete renderer=not-requested
+supported ast-scalar    ir_probe ast-scalar                typed-ir=gen_ir dump=complete renderer=not-requested
+supported ast-control-flow ir_probe ast-control-flow        typed-ir=gen_ir dump=complete renderer=not-requested
+negative renderer       ir_probe renderer-fail              typed-ir=build dump=complete renderer=LOWER_FAIL errors=1 message="TODO implement lowering functions"
+negative type           ir_probe unsupported-complex-type   typed-ir=build dump=fatal-unsupported-COMPLEX_TY
+negative node           ir_probe invalid-symbol-body        typed-ir=build dump=fatal-invalid-SYMBOL-body-position
+
+# AST-built gen_ir fatal boundaries, source-derived from src/aro/CodeGen.zig
+# and src/codegen.c3 / codegen_nodes.c3. Each referenced test checks the
+# FATAL_ERROR result, exact diagnostic text, and fixture cleanup. These are
+# C3 source-derived checks, not executable Zig parity claims.
+negative type           codegen_tests.gen_ir_rejects_union_type             gen_ir=fatal diagnostic="TODO lower union types"
+negative type           codegen_tests.gen_ir_rejects_complex_type           gen_ir=fatal diagnostic="TODO lower complex types"
+negative type           codegen_tests.gen_ir_rejects_atomic_type             gen_ir=fatal diagnostic="TODO lower atomic types"
+negative type           codegen_tests.gen_ir_rejects_block_type              gen_ir=fatal diagnostic="TODO lower blocks"
+negative type           codegen_tests.gen_ir_rejects_vla_type                gen_ir=fatal diagnostic="TODO VLAs"
+negative type           codegen_tests.gen_ir_rejects_struct_bitfield_type    gen_ir=fatal diagnostic="TODO lower struct bitfields"
+negative type           codegen_tests.gen_ir_rejects_nullptr_type             gen_ir=fatal diagnostic="TODO lower nullptr_t"
+negative node           codegen_tests.gen_ir_rejects_top_level_variable_node gen_ir=fatal diagnostic="TODO CodeGen.genVar\n"
+negative node           codegen_tests.gen_ir_rejects_global_assembly          gen_ir=fatal diagnostic="TODO global assembly"
+negative node           codegen_tests.gen_ir_rejects_switch_case_range         gen_ir=fatal diagnostic="TODO CodeGen.genStmt case range\n"
+negative node           codegen_tests.gen_ir_rejects_unimplemented_statement_nodes gen_ir=fatal diagnostic="TODO CodeGen.genStmt {kind}\n"
+# Statement kinds: goto_stmt, computed_goto_stmt, asm_stmt, nullptr_literal.
+negative node           codegen_tests.gen_ir_rejects_unimplemented_expression_nodes gen_ir=fatal diagnostic="TODO CodeGen.genExpr {kind}\n"
+# Expression kinds: addr_of_label, imag_expr, real_expr, sizeof_expr,
+# builtin_va_arg_pack, builtin_va_arg_pack_len.
+negative cast           codegen_tests.gen_ir_rejects_unimplemented_cast_kinds gen_ir=fatal diagnostic="TODO CodeGen gen CastKind {kind}\n"
+# Cast kinds: bitcast, pointer_to_int, bool_to_float, bool_to_pointer,
+# int_to_float, complex_int_to_complex_float, int_to_pointer, float_to_int,
+# complex_float_to_complex_int, complex_int_cast, complex_int_to_real,
+# real_to_complex_int, float_cast, complex_float_cast, complex_float_to_real,
+# real_to_complex_float, null_to_pointer, union_cast, vector_splat,
+# atomic_to_non_atomic, non_atomic_to_atomic.
+negative lvalue         codegen_tests.gen_ir_rejects_unimplemented_lvalue_nodes gen_ir=fatal diagnostic="TODO CodeGen.genLval {kind}\n"
+# Lvalue kinds: member_access_expr, member_access_ptr_expr, array_access_expr.
+negative lvalue         codegen_tests.gen_ir_rejects_unimplemented_lvalue_nodes gen_ir=fatal diagnostic="TODO CodeGen.compound_literal_expr static or thread_local\n"
+# Compound literal lvalue modes: static storage and thread_local storage.
+negative initializer    codegen_tests.gen_ir_rejects_unimplemented_initializer_nodes gen_ir=fatal diagnostic="TODO CodeGen.genInitializer {kind}\n"
+# Initializer kinds: array_init_expr, struct_init_expr, union_init_expr,
+# array_filler_expr, default_init_expr.
+negative initializer    codegen_tests.gen_ir_rejects_string_array_initializer_memcpy gen_ir=fatal diagnostic="TODO memcpy\n"
+negative builtin        codegen_tests.gen_ir_rejects_builtin_call             gen_ir=fatal builtin=__builtin_trap diagnostic="TODO CodeGen.genBuiltinCall __builtin_trap\n"
+
+# Frontend gap: Parser.parse currently has no top-level declaration grammar
+# callback in the default adapter. These cases build typed IR directly and do
+# not claim source C declarations or statements were parsed or lowered.
+# Fatal inventory audit: all explicit `self.fail` / TODO-return paths in
+# src/codegen.c3 and codegen_nodes.c3 with corresponding Zig `c.fail` paths
+# are covered above. Shared dispatches enumerate every rejected kind. Existing
+# union, complex, atomic, block, VLA, bitfield, and genVar probes are retained.
+# None of the explicit fatal boundaries was left untested: Tree payloads and
+# TypeStore constructors support all of these direct fixtures. Zig `unreachable`
+# branches are not fatal diagnostic boundaries and are outside this inventory.
+# Renderer boundary: x86 lowering returns LOWER_FAIL and records "TODO
+# implement lowering functions" once per declaration, in declaration order.
+# Repeated failure names replace their message in place; zero-decl IR succeeds.

@@ -20,7 +20,7 @@ Bazel generates the builtin tables as part of this build. Building
 when it runs the generator. The checked-in `.def` files remain the inputs to
 this C3 generation step. If a group is added or removed, update the declared
 inputs in the root `BUILD.bazel` and the `BuiltinGroup` enum in
-`src/c3/builtin_properties.c3`.
+`src/builtin_properties.c3`.
 
 ## Optional legacy Zig/Clang TableGen refresh
 

@@ -1,3 +1,25 @@
+## Layout
+
+`test/` holds fixtures only (one Bazel package, `//test`). Test code lives in
+`src/tests` (unit tests), `src/tests/migration` (C3 runners, probes, regression
+and native drivers) and `src/tests/fuzz`.
+
+| Path | Contents | Used by |
+|---|---|---|
+| `cases/` | integration corpus (manifest-driven `.c` cases, goldens) | `test/runner.zig`, `//src/tests/migration:frontend_regression`, … |
+| `records/` | record-layout corpus | `test/record_runner.zig`, `//src/tests/migration:record_regression` |
+| `unit/` | number/float/literal vectors, `profiling_stub.c` | `//src/tests:*_vector_tests`, `literal_tests`, `profiling_*_tests` |
+| `regression/<area>/` | `cases.txt` (+ `fixtures/`) per area | `//src/tests/migration:<area>_regression` |
+| `native/` | native IR backend cases, backend CLI sources | `//src/tests/migration:native_*` |
+| `reference/` | `baseline.json`, reference-gate results and logs | `//src/tests/migration:reference_regression`, `run_reference_gate.py` |
+| `portability/` | runfiles path containing a space | `//src/tests/migration:runfiles_portability_integration` |
+| `fuzz/` | fuzz corpus, `main.c`, `fuzz_lib.zig` | `//src/tests/fuzz:*`, `build.zig` |
+| `zig/` | Zig reference probes (`*_probe.zig`, `bigint_vectors.zig`) | vector regeneration |
+| `runner.zig`, `record_runner.zig` | Zig reference harness | `build.zig` |
+
+Single fixture files are addressable as `//test:<path>`; directories have
+filegroups (`//test:test_cases`, `//test:regression_<area>_fixtures`, …).
+
 ## Integration fixtures
 
 The C fixtures under `test/cases` drive the integration runner. A case is a
@@ -75,12 +97,12 @@ the C3 test runner and disables ANSI colors in `test.log`:
 
 ```sh
 # Run only tests whose name contains "generic" (--test-filter).
-bazel test //test/c3:parser_expression_tests --test_filter=generic
+bazel test //src/tests:parser_expression_tests --test_filter=generic
 # Pass runner flags through: show output, skip leak checks, log level.
-bazel test //test/c3:parser_expression_tests --test_output=all \
+bazel test //src/tests:parser_expression_tests --test_output=all \
   --test_arg=--test-show-output --test_arg=--test-noleak
 # Run the test binary directly with the same launcher.
-bazel run //test/c3:parser_expression_tests -- --test-filter generic
+bazel run //src/tests:parser_expression_tests -- --test-filter generic
 ```
 
 The public suites are `//test:unit`, `//test:integration`, `//test:records`,
@@ -90,10 +112,10 @@ separate replay target, so it is not the default full-suite command. Replay
 and AFL targets are opt-in:
 
 ```sh
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //test/fuzz:replay_test
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //src/tests/fuzz:replay_test
 # AFLplusplus is needed only for this target; AFL_CC names afl-clang-fast.
 env C3C="$C3C" AFL_CC=/path/to/afl-clang-fast "$BAZEL" --output_user_root="$BAZEL_ROOT" test \
-  --action_env=AFL_CC //test/fuzz:afl_fuzz
+  --action_env=AFL_CC //src/tests/fuzz:afl_fuzz
 ```
 
 The profiling feature tests are part of `//test:unit`. The enabled variant
@@ -103,8 +125,8 @@ not require an external Tracy client library.
 The runner unit tests are part of `//test:unit`; they can also be run alone:
 
 ```sh
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //test/migration:runner_tests
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt //test/migration:runner_tests
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //src/tests/migration:runner_tests
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt //src/tests/migration:runner_tests
 ```
 
 The manual reference comparison needs a reference compiler executable. An
@@ -112,7 +134,7 @@ optional `ARO_REFERENCE_CASES_DIR` points it at a frozen fixture directory:
 
 ```sh
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test \
-  //test/migration:reference_regression \
+  //src/tests/migration:reference_regression \
   --test_env=ARO_REFERENCE_EXE=/absolute/path/to/reference/arocc \
   --test_env=ARO_REFERENCE_CASES_DIR=/path/to/frozen-worktree/test/cases
 ```
@@ -127,7 +149,7 @@ cat > /tmp/focused-cases.txt <<'EOF'
 unknown pragmas.c
 EOF
 
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" run -c dbg //test/migration:runner -- \
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" run -c dbg //src/tests/migration:runner -- \
   --cases /tmp/focused-cases.txt /absolute/path/to/arocc test/cases
 ```
 
@@ -187,15 +209,15 @@ list by itself can intentionally select only a subset.
 See [record_readme.md](record_readme.md) for the fixture format, target/define
 reproduction, and record report interpretation.
 
-`//test/migration:record_regression` runs the C3 record runner against
+`//src/tests/migration:record_regression` runs the C3 record runner against
 `test/records`. The runner parses every `// MAPPING|...` comment and executes
 each supported target/define tuple. Run the focused record targets with:
 
 ```sh
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg \
-  //test/migration:record_runner_tests //test/migration:record_regression
+  //src/tests/migration:record_runner_tests //src/tests/migration:record_regression
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt \
-  //test/migration:record_runner_tests //test/migration:record_regression
+  //src/tests/migration:record_runner_tests //src/tests/migration:record_regression
 ```
 
 The record port currently runs the full mapping inventory; it has no CLI option
@@ -259,15 +281,15 @@ The pinned Zig reference gate can be reproduced with:
 
 ```sh
 # Legacy/reference Zig gate; not the current C3/Bazel suite.
-python3 test/migration/run_reference_gate.py \
+python3 src/tests/migration/run_reference_gate.py \
   --source-tree /path/to/frozen-worktree \
   --zig /path/to/zig-0.18.0-dev.828+9da287565
 ```
 
 This helper runs the historical `build`, `test-unit`, `test-integration`,
 `test-record`, and `test-fmt` Zig commands and writes its results to
-`test/migration/reference-results.json`. The C3 Bazel target
-`//test/migration:reference_regression` is a separate, manual target requiring
+`test/reference/reference-results.json`. The C3 Bazel target
+`//src/tests/migration:reference_regression` is a separate, manual target requiring
 `ARO_REFERENCE_EXE`; it is not a Zig invocation.
 
 ### Legacy/reference Zig fuzzing with AFLplusplus

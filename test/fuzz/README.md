@@ -20,8 +20,8 @@ malformed/stress cases.
 Use the pinned local compiler explicitly when running Bazel:
 
 ```sh
-C3C=/home/michaelpollind/opt/c3/c3c bazel --batch --output_user_root=/tmp/arocc-fuzz-bazel-dbg-final test --experimental_collect_system_network_usage=false -c dbg //test/fuzz:replay_test --test_output=errors
-C3C=/home/michaelpollind/opt/c3/c3c bazel --batch --output_user_root=/tmp/arocc-fuzz-bazel-opt-final test --experimental_collect_system_network_usage=false -c opt //test/fuzz:replay_test --test_output=errors
+C3C=/home/michaelpollind/opt/c3/c3c bazel --batch --output_user_root=/tmp/arocc-fuzz-bazel-dbg-final test --experimental_collect_system_network_usage=false -c dbg //src/tests/fuzz:replay_test --test_output=errors
+C3C=/home/michaelpollind/opt/c3/c3c bazel --batch --output_user_root=/tmp/arocc-fuzz-bazel-opt-final test --experimental_collect_system_network_usage=false -c opt //src/tests/fuzz:replay_test --test_output=errors
 ```
 
 The compiler used for this work is C3 0.8.6 pre-release, Git revision
@@ -30,16 +30,16 @@ exercises only this C3 implementation; it is not executable parity evidence
 against the preserved Zig source.
 
 On 2026-11-12 UTC (2026-11-11 America/Los_Angeles), the debug and optimized commands both analyzed
-`//test/fuzz:replay_test`, then failed while compiling the C3 library. The
+`//src/tests/fuzz:replay_test`, then failed while compiling the C3 library. The
 pinned compiler reported syntax errors in the concurrently modified,
-out-of-ticket `src/c3/type_builder.c3` at lines 385, 434, 549, and 606. Neither
+out-of-ticket `src/type_builder.c3` at lines 385, 434, 549, and 606. Neither
 configuration ran the replay test. An earlier attempt also failed while
 computing the repository mapping because fetching `rules_shell/0.8.0` from the
 Bazel Central Registry returned `Operation not permitted`.
 
 ## Current parser limit
 
-`src/c3/parser_declaration.c3` provides callback wiring, but the declaration,
+`src/parser_declaration.c3` provides callback wiring, but the declaration,
 type-name, typed-type-name, and local-declaration callbacks are not implemented
 in the current port. `fuzz_lib.c3` currently binds an empty
 `DeclarationParser`, so valid and malformed inputs exercise preprocessing and
@@ -64,7 +64,7 @@ Install AFL++ with `afl-clang-fast` and `afl-fuzz` available, then build and
 run the instrumented C harness for a bounded 10-second campaign:
 
 ```sh
-AFL_CC=/absolute/path/to/afl-clang-fast C3C=/home/michaelpollind/opt/c3/c3c bazel --batch --output_user_root=/tmp/arocc-fuzz-bazel-output build --experimental_collect_system_network_usage=false --action_env=AFL_CC //test/fuzz:afl_fuzz
+AFL_CC=/absolute/path/to/afl-clang-fast C3C=/home/michaelpollind/opt/c3/c3c bazel --batch --output_user_root=/tmp/arocc-fuzz-bazel-output build --experimental_collect_system_network_usage=false --action_env=AFL_CC //src/tests/fuzz:afl_fuzz
 afl-fuzz -i test/fuzz/corpus -o /tmp/arocc-fuzz-afl-out -V 10 -- bazel-bin/test/fuzz/afl_fuzz
 ```
 

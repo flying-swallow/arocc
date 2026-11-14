@@ -1,0 +1,13 @@
+# Direct AST assembly data and error cases. Expected text and diagnostic
+# fragments are source-derived from src/backend/assembly_x86_64.c3. This
+# adapter selects Tree fixtures and does not claim executable Zig parity.
+integer_scalars.c
+bool_scalars.c
+float_scalars.c
+storage_defaults.c
+storage_options.c
+string_array.c
+ascii_array.c
+unsupported_array_init.c exit=1
+unsupported_bitint.c exit=1
+unsupported_pointer.c exit=1
