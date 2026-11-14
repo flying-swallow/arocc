@@ -64,7 +64,10 @@ fn String print(Preprocessor* pp, DumpMode mode = RESULT_ONLY)
 	return out.str_view();
 }
 
-fn bool drop_pragma(void* ctx, Preprocessor* pp, tokens::TokenIndex start_idx) => false;
+<* Pragma handler that drops its tokens from -E output. *>
+struct DropPragma (pragma::IPragma) { bool unused; }
+
+fn bool DropPragma.preserve_tokens(&self, Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic => false;
 
 fn void escapes() @test
 {
@@ -211,8 +214,9 @@ fn void registered_pragma_can_be_dropped() @test
 {
 	@with_pp(; Compilation* comp, Preprocessor* pp)
 	{
-		pragma::Handler h = { .preserve_tokens = &drop_pragma };
-		assert(comp.pragmas.add("foo", h));
+		DropPragma h;
+		bool added = comp.pragmas.add("foo", &h);
+		assert(added);
 		Source s = add_src(comp, "p.c", "#pragma foo\nx\n");
 		Tokenizer tz;
 		tz.init(s.buf, s.id, comp.langopts);

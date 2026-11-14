@@ -112,10 +112,10 @@ fn void print_string_utf32() @test
 
 fn void diag_templates() @test
 {
-	test::eq(TextSemanticsDiag.UNSUPPORTED_STR_CAT.template().fmt, "unsupported string literal concatenation");
-	test::eq(TextSemanticsDiag.EMPTY_CHAR_LITERAL_ERROR.template().fmt, "empty character constant");
-	test::eq(TextSemanticsDiag.UNTERMINATED_CHAR_LITERAL_ERROR.template().fmt, "missing terminating ' character");
-	assert(TextSemanticsDiag.UNSUPPORTED_STR_CAT.template().kind == ERROR);
+	test::eq(TextSemanticsDiag.UNSUPPORTED_STR_CAT.fmt, "unsupported string literal concatenation");
+	test::eq(TextSemanticsDiag.EMPTY_CHAR_LITERAL_ERROR.fmt, "empty character constant");
+	test::eq(TextSemanticsDiag.UNTERMINATED_CHAR_LITERAL_ERROR.fmt, "missing terminating ' character");
+	assert(TextSemanticsDiag.UNSUPPORTED_STR_CAT.kind == ERROR);
 }
 
 fn void char_literal_empty_and_unterminated() @test

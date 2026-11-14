@@ -4,7 +4,7 @@
 module record_layout_tests;
 import aro::type_store, aro::target, aro::compilation, aro::lang_opts;
 import aro::attribute, aro::attribute_map, aro::tokens;
-import std::io, std::core::mem::allocators;
+import std::io, std::core::mem::allocators, std::math;
 
 const Host HOST = { X86_64, LINUX, GNU };
 const NodeOptIndex DECL = (NodeOptIndex)1;
@@ -172,13 +172,9 @@ fn void empty_flexible_nested_and_overflow() @test
 		r = type_store::compute(fs[..], DECL, false, comp, am, 0)!!;
 		check_layout(r, 64, 64, 64, 8); check(fs[0].layout.offset_bits, 0); check(fs[1].layout.offset_bits, 64);
 		ulong? overflow = type_store::record_align_forward(ulong::max, 8);
-		if (catch f = overflow) { assert(f == type_store::OVERFLOW); } else { assert(false, "alignment overflow must be reported"); }
-		ulong? add_overflow = type_store::checked_add(ulong::max, 1);
-		if (catch add_fault = add_overflow) { assert(add_fault == type_store::OVERFLOW); } else { assert(false, "addition overflow must be reported"); }
-		ulong? mul_overflow = type_store::checked_mul(ulong::max, 8);
-		if (catch mul_fault = mul_overflow) { assert(mul_fault == type_store::OVERFLOW); } else { assert(false, "multiplication overflow must be reported"); }
-		uint? align_overflow = type_store::alignment_bits(0x2000_0000);
-		if (catch align_fault = align_overflow) { assert(align_fault == type_store::OVERFLOW); } else { assert(false, "alignment conversion overflow must be reported"); }
+		if (catch f = overflow) { assert(f == math::OVERFLOW); } else { assert(false, "alignment overflow must be reported"); }
+		uint? align_overflow = ((uint)0x2000_0000).overflow_mul(8);
+		if (catch align_fault = align_overflow) { assert(align_fault == math::OVERFLOW); } else { assert(false, "alignment conversion overflow must be reported"); }
 	};
 }
 

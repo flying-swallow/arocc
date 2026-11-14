@@ -3,55 +3,46 @@
 // Port of src/aro/record_layout.zig. Record sizes and alignments are kept in
 // bits and come from the explicit Compilation target, never the host ABI.
 module aro::type_store;
-import aro::compilation, aro::attribute_map, aro::target, aro::lang_opts;
-
-excuse OVERFLOW;
+import aro::compilation, aro::attribute_map, aro::target, aro::lang_opts, std::math;
 
 const ulong BITS_PER_BYTE = 8;
 
-struct OngoingBitfield { ulong size_bits; ulong unused_size_bits; }
+struct OngoingBitfield
+{
+	ulong size_bits; ulong unused_size_bits;
+}
 
+<*
+@require alignment != 0 && (alignment & (alignment - 1)) == 0: `alignment must be a power of two.`
+*>
 fn ulong? record_align_forward(ulong value, ulong alignment)
 {
-	assert(alignment != 0 && (alignment & (alignment - 1)) == 0, "alignment must be a power of two");
-	if (value > ulong::max - (alignment - 1)) return OVERFLOW~;
+	if (value > ulong::max - (alignment - 1)) return math::OVERFLOW~;
 	return (value + alignment - 1) & ~(alignment - 1);
-}
-
-fn ulong? checked_add(ulong a, ulong b)
-{
-	if (a > ulong::max - b) return OVERFLOW~;
-	return a + b;
-}
-
-fn ulong? checked_mul(ulong a, ulong b)
-{
-	if (b != 0 && a > ulong::max / b) return OVERFLOW~;
-	return a * b;
-}
-
-fn uint? alignment_bits(uint alignment)
-{
-	if (alignment > 0x1FFF_FFFF) return OVERFLOW~;
-	return alignment * 8;
 }
 
 fn RecordLayout? compute_layout(QualType qt, Compilation* comp)
 {
 	uint requested = 0;
-	if (comp.langopts.emulate == MSVC) { uint? a = msvc_required_alignment(qt, comp); if (try v = a) requested = alignment_bits(v)!; }
-	else { uint? a = qt.requested_alignment(comp); if (try v = a) requested = alignment_bits(v)!; }
+	if (comp.langopts.emulate == MSVC)
+	{
+		uint? a = msvc_required_alignment(qt, comp); if (try v = a) requested = v.overflow_mul(8)!;
+	}
+	else
+	{
+		uint? a = qt.requested_alignment(comp); if (try v = a) requested = v.overflow_mul(8)!;
+	}
 	Type ty = qt.base(comp).ty;
 	if (ty.tag == STRUCT || ty.tag == UNION)
 	{
 		RecordLayout r = ty.record.layout;
 		return { .size_bits = r.size_bits, .pointer_alignment_bits = max(requested, r.pointer_alignment_bits), .field_alignment_bits = max(requested, r.field_alignment_bits), .required_alignment_bits = max(requested, r.required_alignment_bits) };
 	}
-	uint bits = alignment_bits(qt.alignof(comp))!;
+	uint bits = qt.alignof(comp).overflow_mul(8)!;
 	ulong size = 0;
 	ulong? optional_size = qt.sizeof_or_null(comp);
 	if (try s = optional_size) size = s;
-	return { .size_bits = checked_mul(size, 8)!, .pointer_alignment_bits = bits, .field_alignment_bits = bits, .required_alignment_bits = max(requested, (uint)8) };
+	return { .size_bits = size.overflow_mul(8)!, .pointer_alignment_bits = bits, .field_alignment_bits = bits, .required_alignment_bits = max(requested, (uint)8) };
 }
 
 fn uint? msvc_required_alignment(QualType qt, Compilation* comp)
@@ -68,7 +59,10 @@ fn uint? msvc_required_alignment(QualType qt, Compilation* comp)
 		default: break;
 	}
 	uint? own = qt.requested_alignment(comp);
-	if (try o = own) { if (try c = child) return max(o, c); return o; }
+	if (try o = own)
+	{
+		if (try c = child) return max(o, c); return o;
+	}
 	return child;
 }
 
@@ -99,8 +93,8 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 	if (sysv)
 	{
 		ulong size_bits = 0;
-		uint aligned_bits = alignment_bits(requested)!;
-		uint max_bits = alignment_bits(pragma_pack)!;
+		uint aligned_bits = requested.overflow_mul(8)!;
+		uint max_bits = pragma_pack.overflow_mul(8)!;
 		OngoingBitfield ongoing = {};
 		bool has_ongoing = false;
 		foreach (&field : fields)
@@ -110,7 +104,7 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 			bool bitfield = field.bit_width != BIT_WIDTH_NULL;
 			bool named = field.name_tok != (TokenIndex)0;
 			bool field_packed = packed || am.has_attribute(field.field_decl, PACKED);
-			uint anno = 0; uint? oa = am.requested_alignment(field.field_decl, comp); if (try a = oa) anno = alignment_bits(a)!;
+			uint anno = 0; uint? oa = am.requested_alignment(field.field_decl, comp); if (try a = oa) anno = a.overflow_mul(8)!;
 			ulong field_align = layout.field_alignment_bits;
 			ulong offset;
 			ulong field_size = layout.size_bits;
@@ -154,19 +148,25 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 						ongoing = { .size_bits = layout.size_bits, .unused_size_bits = layout.size_bits - width };
 						has_ongoing = true;
 						offset = record_align_forward(size_bits, field_align)!;
-						size_bits = checked_add(offset, layout.size_bits)!; field_size = width;
+						size_bits = offset.overflow_add(layout.size_bits)!; field_size = width;
 					}
 				}
 				else
 				{
 					has_ongoing = false;
 					offset = 0; if (!is_union) offset = record_align_forward(size_bits, field_align)!;
-					size_bits = max(size_bits, checked_add(offset, field_size)!);
+					size_bits = max(size_bits, offset.overflow_add(field_size)!);
 				}
 				// The Zig implementation returns an empty FieldLayout for unnamed
 				// bitfields after using their internal offset for subsequent fields.
-				if (named || !bitfield) { field.layout = { .offset_bits = offset, .size_bits = field_size }; }
-				else { field.layout = {}; }
+				if (named || !bitfield)
+				{
+					field.layout = { .offset_bits = offset, .size_bits = field_size };
+				}
+				else
+				{
+					field.layout = {};
+				}
 				continue;
 			}
 			if (!bitfield)
@@ -175,7 +175,7 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 				field_align = max(field_align, anno);
 				if (max_bits != 0) field_align = min(field_align, max_bits);
 				offset = 0; if (!is_union) offset = record_align_forward(size_bits, field_align)!;
-				size_bits = max(size_bits, checked_add(offset, field_size)!);
+				size_bits = max(size_bits, offset.overflow_add(field_size)!);
 				has_ongoing = false;
 				aligned_bits = max(aligned_bits, (uint)field_align);
 			}
@@ -192,7 +192,10 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 				}
 				ulong annotation = 1; if (anno != 0) annotation = anno;
 				ulong bit_align = 1;
-				if (width == 0) { bit_align = max(ty_align, annotation); }
+				if (width == 0)
+				{
+					bit_align = max(ty_align, annotation);
+				}
 				else
 				{
 					ulong first = size_bits; if (is_union) first = 0;
@@ -213,19 +216,34 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 				}
 				ulong first = size_bits; if (is_union) first = 0;
 				offset = record_align_forward(first, bit_align)!;
-				size_bits = max(size_bits, checked_add(offset, width)!);
+				size_bits = max(size_bits, offset.overflow_add(width)!);
 				if (named || comp.target.unnamed_field_affects_alignment())
 				{
 					ulong inherited = max(ty_align, annotation);
-					if (width == 0) { inherited = max(ty_align, annotation); }
-				else if (max_bits != 0) { inherited = min(inherited, max_bits); }
-				else if (field_packed) { inherited = annotation; }
+					if (width == 0)
+					{
+						inherited = max(ty_align, annotation);
+					}
+					else if (max_bits != 0)
+					{
+						inherited = min(inherited, max_bits);
+					}
+					else if (field_packed)
+					{
+						inherited = annotation;
+					}
 					aligned_bits = max(aligned_bits, (uint)inherited);
 				}
 				field_size = width;
 			}
-		if (named || !bitfield) { field.layout = { .offset_bits = offset, .size_bits = field_size }; }
-		else { field.layout = {}; }
+			if (named || !bitfield)
+			{
+				field.layout = { .offset_bits = offset, .size_bits = field_size };
+			}
+			else
+			{
+				field.layout = {};
+			}
 		}
 		size_bits = record_align_forward(size_bits, aligned_bits)!;
 		return { .size_bits = size_bits, .field_alignment_bits = aligned_bits, .pointer_alignment_bits = aligned_bits, .required_alignment_bits = 8 };
@@ -236,7 +254,7 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 fn RecordLayout? compute_msvc(RecordField[] fields, NodeOptIndex decl, bool is_union, Compilation* comp, AttributeMap* am, bool packed, uint requested, uint pragma_pack)
 {
 	// MSVC distinguishes the record's required, pointer, and field alignment.
-	uint req = alignment_bits(requested)!;
+	uint req = requested.overflow_mul(8)!;
 	uint ptr_align = req;
 	uint field_align = req;
 	uint input_cap = 0;
@@ -246,7 +264,7 @@ fn RecordLayout? compute_msvc(RecordField[] fields, NodeOptIndex decl, bool is_u
 	}
 	else if (pragma_pack != 0)
 	{
-		input_cap = alignment_bits(pragma_pack)!;
+		input_cap = pragma_pack.overflow_mul(8)!;
 	}
 	bool has_cap;
 	uint cap = msvc_pragma_pack(comp, input_cap, &has_cap);
@@ -258,13 +276,13 @@ fn RecordLayout? compute_msvc(RecordField[] fields, NodeOptIndex decl, bool is_u
 	{
 		if (field.qt.is_invalid()) continue;
 		RecordLayout layout = compute_layout(field.qt, comp)!;
-		uint annotation = 0; uint? oa = am.requested_alignment(field.field_decl, comp); if (try a = oa) annotation = alignment_bits(a)!;
+		uint annotation = 0; uint? oa = am.requested_alignment(field.field_decl, comp); if (try a = oa) annotation = a.overflow_mul(8)!;
 		uint required = max(layout.required_alignment_bits, annotation);
 		bool bitfield = field.bit_width != BIT_WIDTH_NULL;
 		if (!bitfield) req = max(req, required);
 		ulong fa = layout.field_alignment_bits;
 		if (has_cap) fa = min(fa, cap);
-		uint? type_alignment = field.qt.requested_alignment(comp); if (try a = type_alignment) fa = max(fa, alignment_bits(a)!);
+		uint? type_alignment = field.qt.requested_alignment(comp); if (try a = type_alignment) fa = max(fa, a.overflow_mul(8)!);
 		if (am.has_attribute(field.field_decl, PACKED)) fa = 8;
 		fa = max(fa, required);
 		ulong offset;
@@ -280,18 +298,36 @@ fn RecordLayout? compute_msvc(RecordField[] fields, NodeOptIndex decl, bool is_u
 				field.layout = { .offset_bits = offset, .size_bits = width };
 				continue;
 			}
-			if (width == 0 && !has_ongoing) { field.layout = { .offset_bits = size, .size_bits = 0 }; continue; }
-			if (width == 0) { has_ongoing = false; }
-			else { ongoing = { .size_bits = layout.size_bits, .unused_size_bits = layout.size_bits - width }; has_ongoing = true; }
-			if (is_union) { offset = 0; size = max(size, layout.size_bits); }
+			if (width == 0 && !has_ongoing)
+			{
+				field.layout = { .offset_bits = size, .size_bits = 0 }; continue;
+			}
+			if (width == 0)
+			{
+				has_ongoing = false;
+			}
+			else
+			{
+				ongoing = { .size_bits = layout.size_bits, .unused_size_bits = layout.size_bits - width }; has_ongoing = true;
+			}
+			if (is_union)
+			{
+				offset = 0; size = max(size, layout.size_bits);
+			}
 			else
 			{
 				uint p_align = (uint)fa; if (has_cap) p_align = min(cap, (uint)fa);
 				ptr_align = max(ptr_align, p_align);
 				field_align = max(field_align, (uint)fa);
 				offset = record_align_forward(size, fa)!;
-				if (width == 0) { size = offset; }
-				else { size = checked_add(offset, layout.size_bits)!; }
+				if (width == 0)
+				{
+					size = offset;
+				}
+				else
+				{
+					size = offset.overflow_add(layout.size_bits)!;
+				}
 			}
 			field.layout = { .offset_bits = offset, .size_bits = width };
 		}
@@ -300,14 +336,26 @@ fn RecordLayout? compute_msvc(RecordField[] fields, NodeOptIndex decl, bool is_u
 			has_regular = true; has_ongoing = false;
 			ptr_align = max(ptr_align, (uint)fa); field_align = max(field_align, (uint)fa);
 			offset = 0; if (!is_union) offset = record_align_forward(size, fa)!;
-			size = max(size, checked_add(offset, fsize)!);
+			size = max(size, offset.overflow_add(fsize)!);
 			field.layout = { .offset_bits = offset, .size_bits = fsize };
 		}
 	}
 	if (size == 0)
 	{
-		if (is_union) { if (has_regular) { size = field_align; } else { size = 32; } }
-		else { size = max(req, (uint)32); ptr_align = min(ptr_align, (uint)size); }
+		if (is_union)
+		{
+			if (has_regular)
+			{
+				size = field_align;
+			} else
+			{
+				size = 32;
+			}
+		}
+		else
+		{
+			size = max(req, (uint)32); ptr_align = min(ptr_align, (uint)size);
+		}
 	}
 	size = record_align_forward(size, ptr_align)!;
 	return { .size_bits = size, .field_alignment_bits = field_align, .pointer_alignment_bits = ptr_align, .required_alignment_bits = req };

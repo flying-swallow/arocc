@@ -514,7 +514,7 @@ fn bool? Preprocessor.handle_builtin_macro(&self, BuiltinFunc builtin, TokenWith
 				self.err(invalid, PpDiag.BUILTIN_MISSING_R_PAREN, "builtin feature-check macro")!;
 				return false;
 			}
-			return identifier.id == IDENTIFIER || identifier.id == EXTENDED_IDENTIFIER;
+			return identifier.id.is_identifier();
 		case HAS_INCLUDE:
 		case HAS_INCLUDE_NEXT:
 			if (eval_ctx != EXPR)

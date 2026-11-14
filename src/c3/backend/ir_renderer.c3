@@ -1,6 +1,6 @@
 // Text dump, lowering status and object rendering for the index-based C3 IR.
 module aro::backend::ir;
-import aro::diagnostics, aro::value_interner, aro::float_value, aro::backend::object, aro::target, std::collections::list, std::core::dstring, std::io;
+import aro::diagnostics, aro::value_interner, aro::float_value, aro::backend::object, aro::backend::x86_64, aro::target, std::collections::list, std::core::dstring, std::io;
 
 // Lowering failure fault reported by Renderer.fail (Zig Renderer.Error.LowerFail).
 excuse LOWER_FAIL;
@@ -30,8 +30,63 @@ fn void? IrDumpRole.write(self, Terminal term, String text)
 
 fn void? Ir.dump(&self, Terminal term)
 {
-	foreach (&decl : self.decls) self.dump_decl(decl, decl.name, term)!;
+	foreach (&decl : self.decls)
+	{
+		switch (decl.kind)
+		{
+			case FUNCTION: self.dump_decl(decl, decl.name, term)!;
+			case GLOBAL: self.dump_global(decl, term)!;
+		}
+	}
 	if (&term.writer.flush) term.writer.flush()!;
+}
+
+fn String DataSection.dump_name(self)
+{
+	switch (self)
+	{
+		case EXTERN: return "extern";
+		case DATA: return "data";
+		case RODATA: return "rodata";
+		case BSS: return "bss";
+		case COMMON: return "common";
+	}
+}
+
+fn void? Ir.dump_global(&self, Decl* decl, Terminal term)
+{
+	OutStream w = term.writer;
+	if (!decl.is_definition())
+	{
+		IrDumpRole.INSTRUCTION.write(term, "extern ")!;
+		IrDumpRole.REFERENCE.apply(term)!; io::fprintf(w, "@%s", decl.name)!; term.set_color(diagnostics::Color.RESET)!;
+		if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, " internal")!;
+		io::write_all(w, "\n\n")!;
+		return;
+	}
+	IrDumpRole.INSTRUCTION.write(term, "global ")!;
+	IrDumpRole.REFERENCE.apply(term)!; io::fprintf(w, "@%s", decl.name)!; term.set_color(diagnostics::Color.RESET)!;
+	io::fprintf(w, " size %d align %d %s", decl.global.size, decl.global.align, decl.global.section.dump_name())!;
+	if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, " internal")!;
+	if (decl.global.tentative) io::write_all(w, " tentative")!;
+	if (decl.global.own_section) io::write_all(w, " own_section")!;
+	bool has_data = decl.global.section != DataSection.BSS && decl.global.section != DataSection.COMMON;
+	if (has_data)
+	{
+		io::write_all(w, " {\n    bytes ")!;
+		IrDumpRole.LITERAL.apply(term)!; self.write_escaped_bytes(decl.global.bytes, term)!; term.set_color(diagnostics::Color.RESET)!;
+		w.write_byte('\n')!;
+		foreach (relocation : decl.global.relocs)
+		{
+			io::fprintf(w, "    reloc %d @%s", relocation.offset, relocation.symbol)!;
+			if (relocation.addend > 0) io::fprintf(w, " + %d", relocation.addend)!;
+			if (relocation.addend < 0) io::fprintf(w, " - %d", -relocation.addend)!;
+			w.write_byte('\n')!;
+		}
+		io::write_all(w, "}\n\n")!;
+		return;
+	}
+	io::write_all(w, "\n\n")!;
 }
 
 fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
@@ -44,9 +99,18 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 	for (uint i = 0; i < n; i++) { refs[i] = uint::max; labels[i] = uint::max; }
 	OutStream w = term.writer;
 	if (!decl.body.len) return;
-	Ref last = decl.body[decl.body.len - 1];
-	Ref ret_value = decl.instructions[(sz)last].data.ref;
-	self.write_type(decl.instructions[(sz)ret_value].ty, term)!;
+	value_interner::InternerRef return_ty = value_interner::REF_VOID;
+	foreach (ref : decl.body)
+	{
+		Inst inst = decl.instructions[(sz)ref];
+		if (inst.tag == RET && inst.data.ref != NONE)
+		{
+			return_ty = decl.instructions[(sz)inst.data.ref].ty;
+			break;
+		}
+	}
+	if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, "internal ")!;
+	self.write_type(return_ty, term)!;
 	IrDumpRole.REFERENCE.apply(term)!; io::fprintf(w, " @%s", name)!; term.set_color(diagnostics::Color.RESET)!;
 	w.write_byte('(')!;
 	uint ref_count = 0; uint body_start = 0;
@@ -103,7 +167,9 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case ALLOC:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++;
 				io::write_all(w, "alloc ")!; IrDumpRole.ATTRIBUTE.apply(term)!; io::write_all(w, "size ")!; IrDumpRole.LITERAL.apply(term)!; io::fprintf(w, "%d", inst.data.alloc.size)!;
-				IrDumpRole.ATTRIBUTE.apply(term)!; io::write_all(w, " align ")!; IrDumpRole.LITERAL.apply(term)!; io::fprintf(w, "%d\n", inst.data.alloc.align)!;
+				IrDumpRole.ATTRIBUTE.apply(term)!; io::write_all(w, " align ")!; IrDumpRole.LITERAL.apply(term)!; io::fprintf(w, "%d", inst.data.alloc.align)!;
+				if (inst.data.alloc.is_volatile) { IrDumpRole.ATTRIBUTE.apply(term)!; io::write_all(w, " volatile")!; }
+				w.write_byte('\n')!;
 			case CALL:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "call ")!;
 				self.write_ref(decl, refs, inst.data.call.func, term)!; term.set_color(diagnostics::Color.RESET)!; w.write_byte('(')!;
@@ -119,25 +185,32 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case TRUNC:
 			case ZEXT:
 			case SEXT:
-				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", tag_name(inst.tag))!;
+				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", inst.tag.name)!;
 				self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
 			case BIT_OR:
 			case BIT_XOR:
 			case BIT_AND:
 			case BIT_SHL:
-			case BIT_SHR:
+			case BIT_ASHR:
+			case BIT_LSHR:
 			case CMP_EQ:
 			case CMP_NE:
-			case CMP_LT:
-			case CMP_LTE:
-			case CMP_GT:
-			case CMP_GTE:
+			case CMP_SLT:
+			case CMP_SLTE:
+			case CMP_SGT:
+			case CMP_SGTE:
+			case CMP_ULT:
+			case CMP_ULTE:
+			case CMP_UGT:
+			case CMP_UGTE:
 			case ADD:
 			case SUB:
 			case MUL:
-			case DIV:
-			case MOD:
-				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", tag_name(inst.tag))!;
+			case SDIV:
+			case UDIV:
+			case SREM:
+			case UREM:
+				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", inst.tag.name)!;
 				self.write_ref(decl, refs, inst.data.bin.lhs, term)!; term.set_color(diagnostics::Color.RESET)!; io::write_all(w, ", ")!;
 				self.write_ref(decl, refs, inst.data.bin.rhs, term)!; w.write_byte('\n')!;
 			case CONSTANT:
@@ -189,25 +262,29 @@ fn void? Ir.write_value(&self, value_interner::InternerRef val, Terminal term)
 		case FLOAT:
 			DString number; number.init(self.allocator); defer number.free();
 			float_value::print_float(key.float_val, &number); io::write_all(term.writer, number.str_view())!;
-		case BYTES:
-			term.writer.write_byte('"')!;
-			foreach (b : key.bytes)
-			{
-				switch (b)
-				{
-					case '\n': io::write_all(term.writer, "\\n")!;
-					case '\r': io::write_all(term.writer, "\\r")!;
-					case '\t': io::write_all(term.writer, "\\t")!;
-					case '\\': io::write_all(term.writer, "\\\\")!;
-					case '"': io::write_all(term.writer, "\\\"")!;
-					default:
-						if (b >= 0x20 && b <= 0x7E) { term.writer.write_byte(b)!; }
-						else { io::fprintf(term.writer, "\\x%02x", b)!; }
-				}
-			}
-			term.writer.write_byte('"')!;
+		case BYTES: self.write_escaped_bytes(key.bytes, term)!;
 		default: unreachable();
 	}
+}
+
+fn void? Ir.write_escaped_bytes(&self, char[] bytes, Terminal term)
+{
+	term.writer.write_byte('"')!;
+	foreach (b : bytes)
+	{
+		switch (b)
+		{
+			case '\n': io::write_all(term.writer, "\\n")!;
+			case '\r': io::write_all(term.writer, "\\r")!;
+			case '\t': io::write_all(term.writer, "\\t")!;
+			case '\\': io::write_all(term.writer, "\\\\")!;
+			case '"': io::write_all(term.writer, "\\\"")!;
+			default:
+				if (b >= 0x20 && b <= 0x7E) { term.writer.write_byte(b)!; }
+				else { io::fprintf(term.writer, "\\x%02x", b)!; }
+		}
+	}
+	term.writer.write_byte('"')!;
 }
 
 fn void? Ir.write_ref(&self, Decl* decl, uint[] refs, Ref ref, Terminal term)
@@ -228,36 +305,6 @@ fn void? Ir.write_new_ref(&self, Decl* decl, uint[] refs, uint index, Ref ref, T
 fn void? Ir.write_label(&self, Decl* decl, uint[] labels, Ref ref, Terminal term)
 {
 	IrDumpRole.REFERENCE.apply(term)!; io::fprintf(term.writer, "%s.%d", decl.instructions[(sz)ref].data.label, labels[(sz)ref])!;
-}
-
-fn String tag_name(InstTag tag)
-{
-	switch (tag)
-	{
-		case BIT_OR: return "bit_or";
-		case BIT_XOR: return "bit_xor";
-		case BIT_AND: return "bit_and";
-		case BIT_SHL: return "bit_shl";
-		case BIT_SHR: return "bit_shr";
-		case CMP_EQ: return "cmp_eq";
-		case CMP_NE: return "cmp_ne";
-		case CMP_LT: return "cmp_lt";
-		case CMP_LTE: return "cmp_lte";
-		case CMP_GT: return "cmp_gt";
-		case CMP_GTE: return "cmp_gte";
-		case ADD: return "add";
-		case SUB: return "sub";
-		case MUL: return "mul";
-		case DIV: return "div";
-		case MOD: return "mod";
-		case LOAD: return "load";
-		case BIT_NOT: return "bit_not";
-		case NEGATE: return "negate";
-		case TRUNC: return "trunc";
-		case ZEXT: return "zext";
-		case SEXT: return "sext";
-		default: unreachable();
-	}
 }
 
 <* One failure record: `name` borrows the decl name from the Ir, `message` is owned by the list. *>
@@ -320,13 +367,9 @@ struct Renderer
  Record a failure for `name`, formatting `format` with `args`. Zig `Renderer.fail`.
  @return? LOWER_FAIL
 *>
-fn void? Renderer.fail(&self, String name, String format, args...)
+fn void? Renderer.fail(&self, String name, String format, args...) @format(2)
 {
-	DString text;
-	text.init(self.gpa);
-	defer text.free();
-	text.appendf(format, ...args)!!;
-	self.errors.put(name, text.copy_str(self.gpa));
+	self.errors.put(name, string::format(self.gpa, format, ...args));
 	return LOWER_FAIL~;
 }
 
@@ -357,7 +400,8 @@ fn void? Renderer.render_x86(&self)
 {
 	foreach (&decl : self.ir.decls)
 	{
-		fault f = @catch(self.fail(decl.name, "TODO implement lowering functions"));
+		String message = decl.kind == DeclKind.GLOBAL ? "TODO lower global data" : "TODO implement lowering functions";
+		fault f = @catch(self.fail(decl.name, message));
 		if (f)
 		{
 			if (f != LOWER_FAIL) return f~;
@@ -395,4 +439,45 @@ fn object::Object*? render(Ir* ir, Allocator gpa, target::Target target, ErrorLi
 		return f~;
 	}
 	return obj;
+}
+
+<*
+ C3 addition: render `ir` into an object for `target`, transferring recorded
+ failures into `errors` and destroying the object if rendering fails.
+ @return? LOWER_FAIL, object::UNSUPPORTED_FORMAT
+*>
+fn object::Object*? render_object(Ir* ir, Allocator gpa, target::Target target, ErrorList* errors, bool spill_all = false)
+{
+	switch (target.cpu.arch)
+	{
+		case X86_64: break;
+		default:
+			errors.put("", string::format(errors.allocator, "TODO: lowering Ir for %s", target.cpu.arch.name));
+			return LOWER_FAIL~;
+	}
+	object::Object* obj = object::create(gpa, target)!;
+	fault f = @catch(x86_64::render_object(ir, obj, errors, spill_all));
+	if (f)
+	{
+		obj.deinit();
+		return f~;
+	}
+	return obj;
+}
+
+<*
+ C3 addition: lower `ir` to GNU assembler text for `target` (x86_64 only),
+ recording per-function failures in the initialized `errors`, which are kept
+ on both success and failure. The text is allocated with `gpa`.
+ @return? LOWER_FAIL
+*>
+fn String? render_asm(Ir* ir, Allocator gpa, target::Target target, ErrorList* errors, bool spill_all = false)
+{
+	switch (target.cpu.arch)
+	{
+		case X86_64: return x86_64::render_asm(ir, gpa, errors, spill_all);
+		default:
+			errors.put("", string::format(errors.allocator, "TODO: lowering Ir for %s", target.cpu.arch.name));
+			return LOWER_FAIL~;
+	}
 }

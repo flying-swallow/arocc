@@ -194,9 +194,10 @@ fn uint Ctx.col(&self, uint tok, uint offset)
 	return loc.expand(&self.comp).col;
 }
 
-fn void Ctx.add_returned(&self, uint tok, DiagnosticTemplate t)
+<* Record a returned diagnostic enum value (NumberValueDiag, TextSemanticsDiag) with its fmt as text. *>
+macro void Ctx.add_returned(&self, uint tok, t)
 {
-	self.returned.push({ .tok = tok, .col = self.col(tok, 0), .text = t.fmt, .kind = t.kind, .has_opt = t.has_opt, .opt = t.opt, .extension = t.extension });
+	self.returned.push({ .tok = tok, .col = self.col(tok, 0), .text = t.fmt, .kind = t.kind, .has_opt = t.meta.has_opt, .opt = t.meta.opt, .extension = t.meta.extension });
 }
 
 <* Reported messages (by token source) followed by the returned diagnostics. *>
@@ -512,7 +513,7 @@ fn String op_number(Ctx* c, String lit, Typed* typed = null)
 		return "fail";
 	}
 	NumberValue v = number_value::number_value(&c.comp, parsed);
-	foreach (d : v.diags.slice()) c.add_returned(0, d.template());
+	foreach (d : v.diags.slice()) c.add_returned(0, d);
 	if (typed) *typed = { true, v.qt, v.val };
 	Compilation* comp = &c.comp;
 	return string::tformat("%s %s %s %s %s %s %s", prefix_name(parsed.prefix), suffix_name(parsed.suffix), pct(parsed.bytes),
@@ -526,7 +527,7 @@ fn String op_pp_number(Ctx* c, String lit)
 	NumberLiteralResult? parsed = p.parse();
 	if (catch f = parsed) return "fail";
 	PpNumberValue v = number_value::pp_int_value(parsed);
-	foreach (d : v.diags.slice()) c.add_returned(0, d.template());
+	foreach (d : v.diags.slice()) c.add_returned(0, d);
 	if (v.rejected) return "rejected";
 	if (v.is_signed) return string::tformat("signed %s", hex_signed(v.signed));
 	return string::tformat("unsigned 0x%x", v.unsigned);
@@ -554,7 +555,7 @@ fn String op_char(Ctx* c, String tok, Typed* typed = null)
 	{
 		CharLiteral r = text_literal_semantics::char_literal(comp, id, tok, loc, {})!!;
 		assert(r.has_diag);
-		c.add_returned(0, r.diag.template());
+		c.add_returned(0, r.diag);
 		if (typed) *typed = { true, r.qt, r.val };
 		return string::tformat("char %s unsigned 0x0", type_name(comp, r.qt));
 	}
@@ -597,7 +598,7 @@ fn String op_string(Ctx* c, String[] toks, Typed* typed = null)
 	{
 		if (f == text_literal::CANNOT_CONCAT)
 		{
-			c.add_returned((uint)idx, TextSemanticsDiag.UNSUPPORTED_STR_CAT.template());
+			c.add_returned((uint)idx, TextSemanticsDiag.UNSUPPORTED_STR_CAT);
 			return string::tformat("cannot_concat %d", idx);
 		}
 		assert(f == text_literal::PARSING_FAILED);
@@ -1191,7 +1192,8 @@ macro @with_ctx(String cfg; @body(Ctx* c))
 	defer ta.free();
 	{
 		Ctx c;
-		assert(c.init(&ta, cfg)!!);
+		bool init_ok = c.init(&ta, cfg)!!;
+		assert(init_ok);
 		c.diags.state.enable_all_warnings = false; // the default visibility
 		@body(&c);
 		c.free();

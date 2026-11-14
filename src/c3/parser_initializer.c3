@@ -4,20 +4,36 @@
 module aro::parser;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::init_list;
 import aro::parser_result, aro::value, aro::parser_diagnostics, aro::parser_expression, aro::string_interner;
+import aro::bigint;
 import std::collections::list, std::core::dstring;
 
 
-alias AssignmentExpression = fn parser_result::Result?(void* context, Parser* parser, bool eval);
-alias IntegerConstantExpression = fn parser_result::Result?(void* context, Parser* parser, ConstDeclFoldingMode folding);
-
-<* Initializer's only grammar dependencies. Both callbacks must leave the parser
-   positioned at the first token after their expression. *>
+<* Initializer's only grammar dependencies: `grammar`'s assignment and integer
+   constant productions, which must leave the parser at the first token after
+   their expression. *>
 struct InitializerParser
 {
 	Parser* parser;
-	void* context;
-	AssignmentExpression assignment_expression;
-	IntegerConstantExpression integer_constant_expression;
+	IExpressionGrammar grammar;
+}
+
+struct InitializerRangeSegment
+{
+	sz path_index;
+	ulong start_index;
+	ulong end_index;
+}
+
+fn parser_result::Result? InitializerParser.assign_expr(&self, bool eval)
+{
+	if (!&self.grammar.assignment_expression) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return self.grammar.assignment_expression(self.parser, eval);
+}
+
+fn parser_result::Result? InitializerParser.integer_const_expr(&self, ConstDeclFoldingMode mode)
+{
+	if (!&self.grammar.integer_constant_expression) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return self.grammar.integer_constant_expression(self.parser, mode, true);
 }
 
 fn bool InitializerParser.at(self, tokenizer::TokenId id) => self.parser.is_at(id);
@@ -28,7 +44,7 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 	if (!self.at(tokenizer::TokenId.L_BRACE))
 	{
 		tokens::TokenIndex tok = p.tok_i;
-		parser_result::Result? parsed = self.assignment_expression(self.context, p, eval);
+		parser_result::Result? parsed = self.assign_expr(eval);
 		if (catch __fault = parsed)
 		{
 			if (__fault == parser_expression::NO_EXPRESSION)
@@ -52,7 +68,7 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 		}
 		else if (!target.is_invalid())
 		{
-			if (!(result.coerce_scalar(p, target, tok)!))
+			if (!(result.coerce_scalar(p, target, tok, parser_result::CoercionContext.INITIALIZATION)!))
 			{
 				result.qt = type_store::INVALID;
 				result.val = value::NONE;
@@ -70,6 +86,15 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 	List{ulong} cursor_path;
 	cursor_path.init(p.comp.gpa, 1);
 	defer cursor_path.free();
+	List{InitializerRangeSegment} range_segments;
+	range_segments.init(p.comp.gpa, 0);
+	defer range_segments.free();
+	List{ulong} range_values;
+	range_values.init(p.comp.gpa, 0);
+	defer range_values.free();
+	List{ulong} range_designator_path;
+	range_designator_path.init(p.comp.gpa, 0);
+	defer range_designator_path.free();
 	cursor_path.push(0);
 	bool warned_excess = false;
 	bool first = true;
@@ -83,12 +108,10 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 		}
 		first = false;
 		ulong index = cursor_path.len() > 0 ? cursor_path[0] : 0;
-		ulong range_end_index = 0;
-		bool has_range = false;
+		range_segments.clear();
 		type_store::QualType child_qt = self.child_type(target, index);
 		type_store::QualType designated_qt = target;
 		init_list::InitList* selected = &il;
-		init_list::InitList* range_parent = &il;
 		bool designated = false;
 		while (self.at(tokenizer::TokenId.L_BRACKET) || self.at(tokenizer::TokenId.PERIOD))
 		{
@@ -97,22 +120,27 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			if (self.at(tokenizer::TokenId.L_BRACKET))
 			{
 				tokens::TokenIndex bracket = p.tok_i;
-				range_parent = selected;
 				p.advance();
-				parser_result::Result? index_expr = self.integer_constant_expression(self.context, p, ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
-				if (catch __fault = index_expr) return __fault~;
-				parser_result::Result index_result = index_expr;
-				if (catch p.expect_closing(tokenizer::TokenId.R_BRACKET, bracket)) return PARSING_FAILED~;
+				tokens::TokenIndex index_tok = p.tok_i;
+				parser_result::Result index_result = self.integer_const_expr(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
 				if (index_result.val.is_none())
 				{
-					self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR, bracket)!;
+					self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR, index_tok)!;
 					return PARSING_FAILED~;
 				}
 				if (try converted = index_result.val.to_usz(p.comp)) { index = (ulong)converted; }
 				else
 				{
-					self.parser.err(parser_diagnostics::ParserDiag.NEGATIVE_ARRAY_DESIGNATOR, bracket + 1,
-						self.parser.fmt_value(index_result.val, index_result.qt))!;
+					if (value::compare(index_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+					{
+						self.parser.err(parser_diagnostics::ParserDiag.NEGATIVE_ARRAY_DESIGNATOR, bracket + 1,
+							self.parser.fmt_value(index_result.val, index_result.qt))!;
+					}
+					else
+					{
+						self.parser.err(parser_diagnostics::ParserDiag.OOB_ARRAY_DESIGNATOR, bracket + 1,
+							self.parser.fmt_value(index_result.val, index_result.qt))!;
+					}
 					return PARSING_FAILED~;
 				}
 				if (!designated_qt.is_invalid() && !designated_qt.is(p.comp, type_store::TypeTag.ARRAY))
@@ -121,35 +149,76 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 						self.parser.fmt_qt(designated_qt))!;
 					return PARSING_FAILED~;
 				}
-				if (try arr = designated_qt.get(p.comp, type_store::TypeTag.ARRAY))
+				bool this_range = self.at(tokenizer::TokenId.ELLIPSIS);
+				ulong range_end_index = 0;
+				tokens::TokenIndex range_end_tok = 0;
+				parser_result::Result end_result;
+				end_result.val = value::NONE;
+				if (this_range)
 				{
-					if ((arr.array.len.kind == type_store::ArrayLenKind.FIXED || arr.array.len.kind == type_store::ArrayLenKind.STATIC) && index >= arr.array.len.len)
+					p.advance();
+					range_end_tok = p.tok_i;
+					parser_result::Result range_end = self.integer_const_expr(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
+					end_result = range_end;
+					if (end_result.val.is_none())
 					{
-						self.parser.err(parser_diagnostics::ParserDiag.OOB_ARRAY_DESIGNATOR, bracket + 1,
-							self.parser.fmt_value(index_result.val, index_result.qt))!;
+						self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR, range_end_tok)!;
 						return PARSING_FAILED~;
 					}
+					if (try converted_end = end_result.val.to_usz(p.comp)) { range_end_index = (ulong)converted_end; }
+					else
+					{
+						if (value::compare(end_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+						{
+							self.parser.err(parser_diagnostics::ParserDiag.NEGATIVE_ARRAY_DESIGNATOR, range_end_tok,
+								self.parser.fmt_value(end_result.val, end_result.qt))!;
+						}
+						else
+						{
+							self.parser.err(parser_diagnostics::ParserDiag.OOB_ARRAY_DESIGNATOR, range_end_tok,
+								self.parser.fmt_value(end_result.val, end_result.qt))!;
+						}
+						return PARSING_FAILED~;
+					}
+				}
+				if (catch p.expect_closing(tokenizer::TokenId.R_BRACKET, bracket)) return PARSING_FAILED~;
+				if (try arr = designated_qt.get(p.comp, type_store::TypeTag.ARRAY))
+				{
+					if (arr.array.len.kind == type_store::ArrayLenKind.FIXED || arr.array.len.kind == type_store::ArrayLenKind.STATIC)
+					{
+						if (index >= arr.array.len.len)
+						{
+							self.parser.err(parser_diagnostics::ParserDiag.OOB_ARRAY_DESIGNATOR, bracket + 1,
+								self.parser.fmt_value(index_result.val, index_result.qt))!;
+							return PARSING_FAILED~;
+						}
+						if (this_range && range_end_index >= arr.array.len.len)
+						{
+							self.parser.err(parser_diagnostics::ParserDiag.OOB_ARRAY_DESIGNATOR, range_end_tok,
+								self.parser.fmt_value(end_result.val, end_result.qt))!;
+							return PARSING_FAILED~;
+						}
+					}
+				}
+				if (this_range && range_end_index < index)
+				{
+					self.parser.emit_parser_diag(parser_diagnostics::ParserDiag.OOB_ARRAY_DESIGNATOR,
+						"array designator range end precedes its start", range_end_tok)!;
+					return PARSING_FAILED~;
 				}
 				child_qt = self.child_type(designated_qt, index);
 				designated_qt = child_qt;
 				selected = selected.find(index);
 				cursor_path.push(index);
-				if (self.at(tokenizer::TokenId.ELLIPSIS))
+				if (this_range)
 				{
 					// The canonical AST has no range node, so the parsed initializer is
 					// copied to each sparse child in the selected interval below.
-					p.advance();
-					parser_result::Result? range_end = self.integer_constant_expression(self.context, p, ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
-					if (catch __fault = range_end) return __fault~;
-					parser_result::Result end_result = range_end;
-					if (end_result.val.is_none())
-					{
-						self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR, p.tok_i - 1)!;
-						return PARSING_FAILED~;
-					}
-					if (try converted_end = end_result.val.to_usz(p.comp)) { range_end_index = (ulong)converted_end; }
-					else { return PARSING_FAILED~; }
-					has_range = true;
+					range_segments.push({
+						.path_index = cursor_path.len() - 1,
+						.start_index = index,
+						.end_index = range_end_index,
+					});
 				}
 			}
 			else
@@ -179,11 +248,24 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 				cursor_path.push(index);
 			}
 		}
+		if (range_segments.len() > 0)
+		{
+			range_designator_path.clear();
+			foreach (path_index : cursor_path) range_designator_path.push(path_index);
+		}
+		bool range_start_initialized = false;
+		if (range_segments.len() > 0)
+		{
+			init_list::InitList* range_start = &il;
+			foreach (path_index : range_designator_path) range_start = range_start.find(path_index);
+			range_start_initialized = range_start.has_initializer();
+		}
 		if (designated)
 		{
 			if (self.at(tokenizer::TokenId.EQUAL)) { p.advance(); }
 			else { self.parser.err(parser_diagnostics::ParserDiag.GNU_MISSING_EQ_DESIGNATOR, p.tok_i)!; }
 		}
+		tokens::TokenIndex initializer_tok = p.tok_i;
 		// Only a braced element needs its own child slot. A plain expression is
 		// stored at this list or at a deeper scalar path; an unconditional find
 		// here leaves an empty placeholder, which then counts as a prior initializer.
@@ -220,14 +302,12 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 				child.free();
 				child.init(p.comp.gpa);
 			}
-			parser_result::Result? nested = self.parse_into(child, brace_qt, eval);
-			if (catch __fault = nested) return __fault~;
+			parser_result::Result nested = self.parse_into(child, brace_qt, eval)!;
 		}
 		else
 		{
 			tokens::TokenIndex expr_tok = p.tok_i;
-			parser_result::Result? parsed = self.assignment_expression(self.context, p, eval);
-			if (catch __fault = parsed) return __fault~;
+			parser_result::Result parsed = self.assign_expr(eval)!;
 			parser_result::Result result = parsed;
 			if (!designated && !self.is_aggregate(target) && !il.node.is_null())
 			{
@@ -239,21 +319,93 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			}
 			else if (catch self.find_scalar_initializer(&il, target, result, expr_tok, &cursor_path, 0, &warned_excess)) { return PARSING_FAILED~; }
 		}
-		if (has_range && range_end_index > index)
+		if (range_segments.len() > 0)
 		{
 			// GNU range initialization repeats the parsed value for each selected
 			// element. Keep storage sparse for ordinary designators; ranges are
-			// materialized because the canonical AST has no range node.
-			type_store::NodeOptIndex repeated_node = child.node;
-			tokens::TokenIndex repeated_tok = child.tok;
-			for (ulong repeated = index + 1; repeated <= range_end_index; repeated++)
+			// materialized because the canonical AST has no range node. Snapshot
+			// the entire selected subtree before inserting siblings can move its
+			// sparse-list storage.
+			init_list::InitList source_copy;
+			source_copy.init(p.comp.gpa);
+			defer source_copy.free();
+			// Parsing the value can grow sparse child lists and invalidate cached
+			// pointers. Re-resolve the full designated path before copying.
+			init_list::InitList* range_source = &il;
+			foreach (path_index : range_designator_path) range_source = range_source.find(path_index);
+			source_copy.copy_from(*range_source);
+
+			range_values.clear();
+			foreach (segment : range_segments) range_values.push(segment.start_index);
+			List{ulong} destination_path;
+			destination_path.init(p.comp.gpa, range_designator_path.len());
+			defer destination_path.free();
+			foreach (path_index : range_designator_path) destination_path.push(path_index);
+			bool source_destination = true;
+			bool range_override_reported = range_start_initialized;
+			while (true)
 			{
-				init_list::InitList* repeated_child = range_parent.find(repeated);
-				repeated_child.node = repeated_node;
-				repeated_child.tok = repeated_tok;
+				for (sz i = 0; i < range_segments.len(); i++)
+				{
+					destination_path[range_segments[i].path_index] = range_values[i];
+				}
+				if (!source_destination)
+				{
+					init_list::InitList* destination = &il;
+					foreach (path_index : destination_path) destination = destination.find(path_index);
+					if (destination.has_initializer() && !range_override_reported)
+					{
+						tokens::TokenIndex previous_tok = destination.previous_initializer_tok();
+						self.parser.err(parser_diagnostics::ParserDiag.INITIALIZER_OVERRIDES, initializer_tok)!;
+						self.parser.err(parser_diagnostics::ParserDiag.PREVIOUS_INITIALIZER, previous_tok)!;
+						range_override_reported = true;
+					}
+					destination.free();
+					destination.init(p.comp.gpa);
+					destination.copy_from(source_copy);
+				}
+				source_destination = false;
+
+				bool advanced = false;
+				for (sz i = range_segments.len(); i > 0; i--)
+				{
+					sz segment_index = i - 1;
+					if (range_values[segment_index] < range_segments[segment_index].end_index)
+					{
+						range_values[segment_index]++;
+						for (sz reset_index = segment_index + 1; reset_index < range_segments.len(); reset_index++)
+						{
+							range_values[reset_index] = range_segments[reset_index].start_index;
+						}
+						advanced = true;
+						break;
+					}
+				}
+				if (!advanced) break;
 			}
+
+			// Continue after the final destination in designator order: all
+			// earlier ranged coordinates are at their ends, then advance the
+			// deepest ranged coordinate by one. Any suffix after that range is
+			// not part of the next cursor position.
+			sz last_segment_index = range_segments.len() - 1;
+			sz continuation_path_index = range_segments[last_segment_index].path_index;
 			cursor_path.clear();
-			cursor_path.push(range_end_index == ulong::max ? ulong::max : range_end_index + 1);
+			for (sz path_index = 0; path_index < continuation_path_index; path_index++)
+			{
+				ulong continuation_index = range_designator_path[path_index];
+				for (sz segment_index = 0; segment_index < range_segments.len(); segment_index++)
+				{
+					if (range_segments[segment_index].path_index == path_index)
+					{
+						continuation_index = range_segments[segment_index].end_index;
+						break;
+					}
+				}
+				cursor_path.push(continuation_index);
+			}
+			ulong last_end_index = range_segments[last_segment_index].end_index;
+			cursor_path.push(last_end_index == ulong::max ? ulong::max : last_end_index + 1);
 			continue;
 		}
 	}
@@ -418,8 +570,7 @@ fn bool? InitializerParser.find_scalar_initializer(&self, init_list::InitList* i
 		}
 		type_store::QualType child_qt = self.child_type(qt, index);
 		init_list::InitList* child = il.find(index);
-		bool? maybe_complete = self.find_scalar_initializer(child, child_qt, result, tok, path, depth + 1, warned_excess);
-		if (catch __fault = maybe_complete) return __fault~;
+		bool maybe_complete = self.find_scalar_initializer(child, child_qt, result, tok, path, depth + 1, warned_excess)!;
 		if (il.tok == 0) il.tok = tok;
 		if (!maybe_complete) return false;
 		if (index < ulong::max) (*path)[(sz)depth] = index + 1;
@@ -437,7 +588,7 @@ fn bool? InitializerParser.find_scalar_initializer(&self, init_list::InitList* i
 fn void? InitializerParser.store_initializer_result(&self, init_list::InitList* il, type_store::QualType qt, parser_result::Result result, tokens::TokenIndex tok, bool coerce)
 {
 	Parser* p = self.parser;
-	if (coerce && !qt.is_invalid() && !result.coerce_scalar(p, qt, tok)!) result.qt = type_store::INVALID;
+	if (coerce && !qt.is_invalid() && !result.coerce_scalar(p, qt, tok, parser_result::CoercionContext.INITIALIZATION)!) result.qt = type_store::INVALID;
 	if (il.has_initializer() && !qt.is_invalid())
 	{
 		self.parser.err(parser_diagnostics::ParserDiag.INITIALIZER_OVERRIDES, tok)!;
@@ -454,6 +605,19 @@ fn void? InitializerParser.store_initializer_result(&self, init_list::InitList* 
 fn bool InitList.has_initializer(self)
 {
 	return !self.node.is_null() || self.items.len() != 0;
+}
+
+<* Copy a sparse initializer subtree, including the source tokens used for
+   later override diagnostics. The destination must be empty. *>
+fn void InitList.copy_from(&self, init_list::InitList source)
+{
+	self.node = source.node;
+	self.tok = source.tok;
+	foreach (entry : source.items)
+	{
+		init_list::InitList* child = self.find(entry.index);
+		child.copy_from(entry.child);
+	}
 }
 
 fn tokens::TokenIndex InitList.previous_initializer_tok(self)
@@ -480,9 +644,7 @@ fn type_store::QualType InitializerParser.field_type(self, type_store::QualType 
 
 fn parser_result::Result? InitializerParser.parse_into(&self, init_list::InitList* out, type_store::QualType target, bool eval)
 {
-	parser_result::Result? maybe_parsed = self.parse(target, eval);
-	if (catch __fault = maybe_parsed) return __fault~;
-	parser_result::Result parsed = maybe_parsed;
+	parser_result::Result parsed = self.parse(target, eval)!;
 	out.node = parsed.node.pack();
 	out.tok = parsed.node.tok(&self.parser.tree);
 	return parsed;

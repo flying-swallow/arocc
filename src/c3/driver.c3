@@ -6,11 +6,12 @@ import aro::compilation, aro::target, aro::code_gen_options, aro::toolchain, aro
 import aro::toolchain::discovery;
 import aro::source, aro::preprocessor, aro::predefined_macros, aro::parser, aro::parser_frontend, aro::tree;
 import aro::driver_exec, aro::driver_tempfiles;
-import aro::backend::assembly, aro::backend::ir, aro::backend::object, aro::codegen;
+import aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::codegen;
 import aro::host_process;
 import aro::include_search, aro::dep_file, aro::diagnostics, aro::pragma;
-import aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message;
+import aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message, aro::pragmas::pack;
 import aro::toolchain::gcc_version, aro::toolchain::multilib;
+import aro::value_interner;
 import std::io, std::io::file, std::io::path, std::io::os, std::os::env;
 import std::collections::list;
 import std::core::dstring, std::core::string;
@@ -23,7 +24,25 @@ excuse CLI_INCLUDE_NOT_FOUND;
 struct ArgumentResult { ParseAction action; uint input_count; }
 struct PicPolicy { PicLevel level; bool is_pie; }
 
-const String USAGE_FORMAT = "Usage %s: [options] file..\n\nGeneral options:\n  --help      Print this message\n  --version   Print aro version\n\nPreprocessor options:\n  -C                      Do not discard comments\n  -CC                     Do not discard comments, including in macro expansions\n  -dM                     Output #define directives for all the macros defined during the execution of the preprocessor\n  -dD                     Like -dM except that it outputs both the #define directives and the result of preprocessing\n  -dN                     Like -dD, but emit only the macro names, not their expansions.\n  -D <macro>=<value>      Define <macro> to <value> (defaults to 1)\n  -E                      Only run the preprocessor\n  -fdollars-in-identifiers\n                          Allow '$' in identifiers\n  -fno-dollars-in-identifiers\n                          Disallow '$' in identifiers\n  -M                      Output dependency file instead of preprocessing result\n  -MD                     Like -M except -E is not implied\n  -MF <file>              Write dependency file to <file>\n  -MV                     Use NMake/Jom format for dependency file\n  -P, --no-line-commands  Disable linemarker output in -E mode\n\nCompile options:\n  -c, --compile           Only run preprocess, compile, and assemble steps\n  -darwin-target-variant-triple\n                          Specify the darwin target variant triple\n  -fapple-kext            Use Apple's kernel extensions ABI\n  -fexperimental-bounds-safety\n                          Enable experimental clang-style bounds safety attributes (INCOMPLETE)\n  -fno-experimental-bounds-safety\n                          Disable experimental clang-style bounds safety attributes\n  -fchar8_t               Enable char8_t (enabled by default in C23 and later)\n  -fno-char8_t            Disable char8_t (disabled by default for pre-C23)\n  -fcolor-diagnostics     Enable colors in diagnostics\n  -fno-color-diagnostics  Disable colors in diagnostics\n  -fcommon                Place uninitialized global variables in a common block\n  -fno-common             Place uninitialized global variables in the BSS section of the object file\n  -fdeclspec              Enable support for __declspec attributes\n  -fgnuc-version=<value>  Controls value of __GNUC__ and related macros. Set to 0 or empty to disable them.\n  -fno-declspec           Disable support for __declspec attributes\n  -ffp-eval-method=[source|double|extended]\n                          Evaluation method to use for floating-point arithmetic\n  -ffreestanding          Compilation in a freestanding environment\n  -fgnu-inline-asm        Enable GNU style inline asm (default: enabled)\n  -fno-gnu-inline-asm     Disable GNU style inline asm\n  -fhosted                Compilation in a hosted environment\n  -fms-extensions         Enable support for Microsoft extensions\n  -fno-ms-extensions      Disable support for Microsoft extensions\n  -g                      Generate debug information\n  -fmacro-backtrace-limit=<limit>\n                          Set limit on how many macro expansion traces are shown in errors (default 6)\n  -fnative-half-type      Use the native half type for __fp16 instead of promoting to float\n  -fnative-half-arguments-and-returns\n                          Allow half-precision function arguments and return values\n  -fpic                   Generate position-independent code (PIC) suitable for use in a shared library, if supported for the target machine\n  -fPIC                   Similar to -fpic but avoid any limit on the size of the global offset table\n  -fpie                   Similar to -fpic, but the generated position-independent code can only be linked into executables\n  -fPIE                   Similar to -fPIC, but the generated position-independent code can only be linked into executables\n  -frwpi                  Generate read-write position independent code (ARM only)\n  -fno-rwpi               Disable generate read-write position independent code (ARM only).\n  -fropi                  Generate read-only position independent code (ARM only)\n  -fno-ropi               Disable generate read-only position independent code (ARM only).\n  -fshort-enums           Use the narrowest possible integer type for enums\n  -fno-short-enums        Use \"int\" as the tag type for enums\n  -fsigned-char           \"char\" is signed\n  -fno-signed-char        \"char\" is unsigned\n  -fsyntax-only           Only run the preprocessor, parser, and semantic analysis stages\n  -funsigned-char         \"char\" is unsigned\n  -fno-unsigned-char      \"char\" is signed\n  -fuse-line-directives   Use `#line <num>` linemarkers in preprocessed output\n  -fno-use-line-directives\n                          Use `# <num>` linemarkers in preprocessed output\n  -fvisibility=[default|hidden|internal|protected]\n                          Set the default ELF image symbol visibility to the specified option—all symbols are marked with this unless overridden within the code\n  -fblocks                Enable support for clang's Blocks language extension\n  -fno-blocks             Disable support for clang's Blocks language extension\n  -iquote <dir>           Add directory to QUOTE include search path\n  -I <dir>                Add directory to include search path\n  -idirafter <dir>        Add directory to AFTER include search path\n  -isystem <dir>          Add directory to SYSTEM include search path\n  -F <dir>                Add directory to macOS framework search path\n  -iframework <dir>       Add directory to SYSTEM macOS framework search path\n  --embed-dir=<dir>       Add directory to `#embed` search path\n  --emulate=[clang|gcc|msvc]\n                          Select which C compiler to emulate (default clang)\n  -imacros <file>         Include macros from <file> before parsing\n  -include <file>         Process <file> as if `#include \"file\"` appeared as the first line of the primary source file.\n  -mabicalls              Enable SVR4-style position-independent code (Mips only)\n  -mno-abicalls           Disable SVR4-style position-independent code (Mips only)\n  -mcmodel=<code-model>   Generate code for the given code model\n  -mcpu [cpu]             Specify target CPU and feature set\n  -mkernel                Enable kernel development mode\n  -nobuiltininc           Do not search the compiler's builtin directory for include files\n  -resource-dir <dir>     Override the path to the compiler's builtin resource directory\n  -nostdinc, --no-standard-includes\n                          Do not search the standard system directories or compiler builtin directories for include files.\n  -nostdlibinc            Do not search the standard system directories for include files, but do search compiler builtin include directories\n  -o <file>               Write output to <file>\n  -pedantic               Warn on language extensions\n  -pedantic-errors        Error on language extensions\n  --rtlib=<arg>           Compiler runtime library to use (libgcc or compiler-rt)\n  -std=<standard>         Specify language standard\n  -S, --assemble          Only run preprocess and compilation steps\n  --sysroot=<dir>         Use dir as the logical root directory for headers and libraries (not fully implemented)\n  --target=<value>        Generate code for the given target\n  -U <macro>              Undefine <macro>\n  -undef                  Do not predefine any system-specific macros. Standard predefined macros remain defined.\n  -w                      Ignore all warnings\n  -Werror                 Treat all warnings as errors\n  -Werror=<warning>       Treat warning as error\n  -W<warning>             Enable the specified warning\n  -Wno-<warning>          Disable the specified warning\n\nLink options:\n  -fuse-ld=[bfd|gold|lld|mold]\n                          Use specific linker\n  -nodefaultlibs          Do not use the standard system libraries when linking.\n  -nolibc                 Do not use the C library or system libraries tightly coupled with it when linking.\n  -nostdlib               Do not use the standard system startup files or libraries when linking\n  -nostartfiles           Do not use the standard system startup files when linking.\n  -pie                    Produce a dynamically linked position independent executable on targets that support it.\n  --ld-path=<path>        Use linker specified by <path>\n  -r                      Produce a relocatable object as output.\n  -rdynamic               Pass the flag -export-dynamic to the ELF linker, on targets that support it.\n  -s                      Remove all symbol table and relocation information from the executable.\n  -shared                 Produce a shared object which can then be linked with other objects to form an executable.\n  -shared-libgcc          On systems that provide libgcc as a shared library, force the use of the shared version\n  -static                 On systems that support dynamic linking, this overrides -pie and prevents linking with the shared libraries.\n  -static-libgcc          On systems that provide libgcc as a shared library, force the use of the static version\n  -static-pie             Produce a static position independent executable on targets that support it.\n  --unwindlib=<arg>       Unwind library to use (\"none\", \"libgcc\", or \"libunwind\") If not specified, will match runtime library\n\nDebug options:\n  --verbose-ast           Dump produced AST to stdout\n  --verbose-pp            Dump preprocessor state\n  --verbose-ir            Dump ir to stdout\n  --verbose-linker-args   Dump linker args to stdout\n\n\n";
+struct WholeProgram
+{
+	ir::Ir program;
+	List{String} origins;
+}
+
+fn void WholeProgram.init(&self, Allocator allocator, value_interner::Interner* interner)
+{
+	self.program.init(allocator, interner);
+	self.origins.init(allocator);
+}
+
+fn void WholeProgram.free(&self)
+{
+	self.program.free();
+	self.origins.free();
+}
+
+const String USAGE_FORMAT = "Usage %s: [options] file..\n\nGeneral options:\n  --help      Print this message\n  --version   Print aro version\n\nPreprocessor options:\n  -C                      Do not discard comments\n  -CC                     Do not discard comments, including in macro expansions\n  -dM                     Output #define directives for all the macros defined during the execution of the preprocessor\n  -dD                     Like -dM except that it outputs both the #define directives and the result of preprocessing\n  -dN                     Like -dD, but emit only the macro names, not their expansions.\n  -D <macro>=<value>      Define <macro> to <value> (defaults to 1)\n  -E                      Only run the preprocessor\n  -fdollars-in-identifiers\n                          Allow '$' in identifiers\n  -fno-dollars-in-identifiers\n                          Disallow '$' in identifiers\n  -M                      Output dependency file instead of preprocessing result\n  -MD                     Like -M except -E is not implied\n  -MF <file>              Write dependency file to <file>\n  -MV                     Use NMake/Jom format for dependency file\n  -P, --no-line-commands  Disable linemarker output in -E mode\n\nCompile options:\n  -c, --compile           Only run preprocess, compile, and assemble steps\n  -darwin-target-variant-triple\n                          Specify the darwin target variant triple\n  -fapple-kext            Use Apple's kernel extensions ABI\n  -fexperimental-bounds-safety\n                          Enable experimental clang-style bounds safety attributes (INCOMPLETE)\n  -fno-experimental-bounds-safety\n                          Disable experimental clang-style bounds safety attributes\n  -fchar8_t               Enable char8_t (enabled by default in C23 and later)\n  -fno-char8_t            Disable char8_t (disabled by default for pre-C23)\n  -fcolor-diagnostics     Enable colors in diagnostics\n  -fno-color-diagnostics  Disable colors in diagnostics\n  -fcommon                Place uninitialized global variables in a common block\n  -fno-common             Place uninitialized global variables in the BSS section of the object file\n  -fwhole-program         Compile all inputs into one IR module and object; forces IR generation at every -O level\n  -fno-whole-program      Compile each input translation unit separately\n  -fintegrated-as         Use the integrated object emitter for IR output\n  -fno-integrated-as      Clear the explicit integrated object emitter request\n  -fdeclspec              Enable support for __declspec attributes\n  -fgnuc-version=<value>  Controls value of __GNUC__ and related macros. Set to 0 or empty to disable them.\n  -fno-declspec           Disable support for __declspec attributes\n  -ffp-eval-method=[source|double|extended]\n                          Evaluation method to use for floating-point arithmetic\n  -ffreestanding          Compilation in a freestanding environment\n  -fgnu-inline-asm        Enable GNU style inline asm (default: enabled)\n  -fno-gnu-inline-asm     Disable GNU style inline asm\n  -fhosted                Compilation in a hosted environment\n  -fms-extensions         Enable support for Microsoft extensions\n  -fno-ms-extensions      Disable support for Microsoft extensions\n  -g                      Generate debug information\n  -fmacro-backtrace-limit=<limit>\n                          Set limit on how many macro expansion traces are shown in errors (default 6)\n  -fnative-half-type      Use the native half type for __fp16 instead of promoting to float\n  -fnative-half-arguments-and-returns\n                          Allow half-precision function arguments and return values\n  -fpic                   Generate position-independent code (PIC) suitable for use in a shared library, if supported for the target machine\n  -fPIC                   Similar to -fpic but avoid any limit on the size of the global offset table\n  -fpie                   Similar to -fpic, but the generated position-independent code can only be linked into executables\n  -fPIE                   Similar to -fPIC, but the generated position-independent code can only be linked into executables\n  -frwpi                  Generate read-write position independent code (ARM only)\n  -fno-rwpi               Disable generate read-write position independent code (ARM only).\n  -fropi                  Generate read-only position independent code (ARM only)\n  -fno-ropi               Disable generate read-only position independent code (ARM only).\n  -fshort-enums           Use the narrowest possible integer type for enums\n  -fno-short-enums        Use \"int\" as the tag type for enums\n  -fsigned-char           \"char\" is signed\n  -fno-signed-char        \"char\" is unsigned\n  -fsyntax-only           Only run the preprocessor, parser, and semantic analysis stages\n  -funsigned-char         \"char\" is unsigned\n  -fno-unsigned-char      \"char\" is signed\n  -fuse-line-directives   Use `#line <num>` linemarkers in preprocessed output\n  -fno-use-line-directives\n                          Use `# <num>` linemarkers in preprocessed output\n  -fvisibility=[default|hidden|internal|protected]\n                          Set the default ELF image symbol visibility to the specified option—all symbols are marked with this unless overridden within the code\n  -fblocks                Enable support for clang's Blocks language extension\n  -fno-blocks             Disable support for clang's Blocks language extension\n  -iquote <dir>           Add directory to QUOTE include search path\n  -I <dir>                Add directory to include search path\n  -idirafter <dir>        Add directory to AFTER include search path\n  -isystem <dir>          Add directory to SYSTEM include search path\n  -F <dir>                Add directory to macOS framework search path\n  -iframework <dir>       Add directory to SYSTEM macOS framework search path\n  --embed-dir=<dir>       Add directory to `#embed` search path\n  --emulate=[clang|gcc|msvc]\n                          Select which C compiler to emulate (default clang)\n  -imacros <file>         Include macros from <file> before parsing\n  -include <file>         Process <file> as if `#include \"file\"` appeared as the first line of the primary source file.\n  -mabicalls              Enable SVR4-style position-independent code (Mips only)\n  -mno-abicalls           Disable SVR4-style position-independent code (Mips only)\n  -mcmodel=<code-model>   Generate code for the given code model\n  -mcpu [cpu]             Specify target CPU and feature set\n  -mkernel                Enable kernel development mode\n  -nobuiltininc           Do not search the compiler's builtin directory for include files\n  -resource-dir <dir>     Override the path to the compiler's builtin resource directory\n  -nostdinc, --no-standard-includes\n                          Do not search the standard system directories or compiler builtin directories for include files.\n  -nostdlibinc            Do not search the standard system directories for include files, but do search compiler builtin include directories\n  -o <file>               Write output to <file>\n  -pedantic               Warn on language extensions\n  -pedantic-errors        Error on language extensions\n  --rtlib=<arg>           Compiler runtime library to use (libgcc or compiler-rt)\n  -std=<standard>         Specify language standard\n  -S, --assemble          Only run preprocess and compilation steps\n  --sysroot=<dir>         Use dir as the logical root directory for headers and libraries (not fully implemented)\n  --target=<value>        Generate code for the given target\n  -U <macro>              Undefine <macro>\n  -undef                  Do not predefine any system-specific macros. Standard predefined macros remain defined.\n  -w                      Ignore all warnings\n  -Werror                 Treat all warnings as errors\n  -Werror=<warning>       Treat warning as error\n  -W<warning>             Enable the specified warning\n  -Wno-<warning>          Disable the specified warning\n\nLink options:\n  -fuse-ld=[bfd|gold|lld|mold]\n                          Use specific linker\n  -nodefaultlibs          Do not use the standard system libraries when linking.\n  -nolibc                 Do not use the C library or system libraries tightly coupled with it when linking.\n  -nostdlib               Do not use the standard system startup files or libraries when linking\n  -nostartfiles           Do not use the standard system startup files when linking.\n  -pie                    Produce a dynamically linked position independent executable on targets that support it.\n  --ld-path=<path>        Use linker specified by <path>\n  -r                      Produce a relocatable object as output.\n  -rdynamic               Pass the flag -export-dynamic to the ELF linker, on targets that support it.\n  -s                      Remove all symbol table and relocation information from the executable.\n  -shared                 Produce a shared object which can then be linked with other objects to form an executable.\n  -shared-libgcc          On systems that provide libgcc as a shared library, force the use of the shared version\n  -static                 On systems that support dynamic linking, this overrides -pie and prevents linking with the shared libraries.\n  -static-libgcc          On systems that provide libgcc as a shared library, force the use of the static version\n  -static-pie             Produce a static position independent executable on targets that support it.\n  --unwindlib=<arg>       Unwind library to use (\"none\", \"libgcc\", or \"libunwind\") If not specified, will match runtime library\n\nDebug options:\n  --verbose-ast           Dump produced AST to stdout\n  --verbose-pp            Dump preprocessor state\n  --verbose-ir            Dump ir to stdout\n  --verbose-linker-args   Dump linker args to stdout\n  --x86-64-spill-all      Spill all values in x86-64 lowering\n\n\n";
 
 fn String usage_text(Allocator a, String program_name)
 {
@@ -78,6 +97,220 @@ fn bool parse_u32_decimal(String s, uint* out)
 	return true;
 }
 
+fn void parse_warning_option(DriverOptions* opts, String arg)
+{
+	if (arg == "-Werror" || arg == "-Wno-error" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers") return;
+	if (arg.starts_with("-Werror=")) { opts.warning_policies.push({ .name = arg[8..], .mode = ERROR }); return; }
+	if (arg.starts_with("-Wno-error=")) { opts.warning_policies.push({ .name = arg[11..], .mode = WARNING }); return; }
+	if (arg.starts_with("-Wno-")) { opts.warning_policies.push({ .name = arg[5..], .mode = OFF }); return; }
+	opts.warning_policies.push({ .name = arg[2..], .mode = WARNING });
+}
+
+<* Parse one bounded group of options to keep driver argument parsing shallow. *>
+fn bool? parse_frontend_flag_set_a(DriverOptions* opts, String arg, Diagnostics* sink)
+{
+	if (arg == "-E") { opts.only_preprocess = true; }
+	else if (arg == "-fsyntax-only") { opts.only_syntax = true; }
+	else if (arg == "-fno-syntax-only") { opts.only_syntax = false; }
+	else if (arg == "-c" || arg == "--compile") { opts.only_compile = true; }
+	else if (arg == "-S" || arg == "--assemble") { opts.only_preprocess_and_compile = true; }
+	else if (arg == "-P" || arg == "--no-line-commands") { opts.line_commands = false; }
+	else if (arg == "-fuse-line-directives") { opts.use_line_directives = true; }
+	else if (arg == "-fno-use-line-directives") { opts.use_line_directives = false; }
+	else if (arg == "-undef") { opts.no_system_defines = true; }
+	else if (arg == "-C" || arg == "--comments") { opts.preserve_comments = true; }
+	else if (arg == "-CC" || arg == "--comments-in-macros") { opts.preserve_comments = true; opts.preserve_comments_in_macros = true; }
+	else if (arg == "--verbose-ast") { opts.verbose_ast = true; }
+	else if (arg == "--verbose-pp") { opts.verbose_pp = true; }
+	else if (arg == "--verbose-ir") { opts.verbose_ir = true; }
+	else if (arg == "--verify-ir") { opts.verify_ir = true; }
+	else if (arg == "--x86-64-spill-all") { opts.x86_64_spill_all = true; }
+	else if (arg == "--verbose-linker-args") { opts.verbose_linker_args = true; }
+	else { return false; }
+	return true;
+}
+<* Parse one bounded group of options to keep driver argument parsing shallow. *>
+fn bool? parse_frontend_flag_set_b(DriverOptions* opts, String arg, Diagnostics* sink)
+{
+	if (arg == "-fapple-kext") { opts.apple_kext = true; }
+	else if (arg == "-fcommon") { opts.common = true; }
+	else if (arg == "-fno-common") { opts.common = false; }
+	else if (arg == "-fintegrated-as") { opts.integrated_as = true; }
+	else if (arg == "-fno-integrated-as") { opts.integrated_as = false; }
+	else if (arg == "-fwhole-program") { opts.whole_program = true; }
+	else if (arg == "-fno-whole-program") { opts.whole_program = false; }
+	else if (arg == "-fshort-enums") { opts.short_enums = true; opts.has_short_enums = true; }
+	else if (arg == "-fno-short-enums") { opts.short_enums = false; opts.has_short_enums = true; }
+	else if (arg == "-fms-extensions") { opts.ms_extensions = true; opts.has_ms_extensions = true; }
+	else if (arg == "-fno-ms-extensions") { opts.ms_extensions = false; opts.has_ms_extensions = true; }
+	else if (arg == "-fdeclspec") { opts.declspec_attrs = true; opts.has_declspec_attrs = true; }
+	else if (arg == "-fno-declspec") { opts.declspec_attrs = false; opts.has_declspec_attrs = true; }
+	else if (arg == "-fdollars-in-identifiers") { opts.dollars_in_identifiers = true; opts.has_dollars_in_identifiers = true; }
+	else if (arg == "-fno-dollars-in-identifiers") { opts.dollars_in_identifiers = false; opts.has_dollars_in_identifiers = true; }
+	else if (arg == "-fdigraphs") { opts.digraphs = true; opts.has_digraphs = true; }
+	else if (arg == "-fno-digraphs") { opts.digraphs = false; opts.has_digraphs = true; }
+	else if (arg == "-fgnu-inline-asm") { opts.gnu_asm = true; opts.has_gnu_asm = true; }
+	else if (arg == "-fno-gnu-inline-asm") { opts.gnu_asm = false; opts.has_gnu_asm = true; }
+	else if (arg == "-fexperimental-bounds-safety") { opts.bounds_safety = CLANG; opts.has_bounds_safety = true; }
+	else if (arg == "-fno-experimental-bounds-safety") { opts.bounds_safety = NONE; opts.has_bounds_safety = true; }
+	else if (arg == "-fchar8_t") { opts.char8_t_override = ON; opts.has_char8_t_override = true; }
+	else if (arg == "-fno-char8_t") { opts.char8_t_override = OFF; opts.has_char8_t_override = true; }
+	else if (arg == "-fnative-half-type") { opts.use_native_half_type = true; }
+	else if (arg == "-fnative-half-arguments-and-returns") { opts.allow_half_args_returns = true; }
+	else if (arg == "-fblocks") { opts.has_blocks = true; opts.blocks = true; }
+	else if (arg == "-fno-blocks") { opts.has_blocks = true; opts.blocks = false; }
+	else if (arg == "-pthread") { opts.pthread = true; }
+	else if (arg == "-fvisibility=default") { opts.visibility = DEFAULT; opts.has_visibility = true; }
+	else if (arg == "-fvisibility=hidden") { opts.visibility = HIDDEN; opts.has_visibility = true; }
+	else if (arg == "-fvisibility=protected") { opts.visibility = PROTECTED; opts.has_visibility = true; }
+	else if (arg.starts_with("-fvisibility="))
+	{
+		String value = arg[13..];
+		if (sink == null) return INVALID_ARGUMENT~;
+		add_driver_fatal(opts.a, sink, "unsupported value '%s'' in '%s'", value, arg)!;
+	}
+	else { return false; }
+	return true;
+}
+<* Parse one bounded group of options to keep driver argument parsing shallow. *>
+fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics* sink)
+{
+	if (arg == "-fsigned-char" || arg == "-fno-unsigned-char") { opts.char_signedness = SIGNED; opts.has_char_signedness = true; }
+	else if (arg == "-funsigned-char" || arg == "-fno-signed-char") { opts.char_signedness = UNSIGNED; opts.has_char_signedness = true; }
+	else if (arg == "-ffreestanding") { opts.hosted = false; opts.has_hosted = true; }
+	else if (arg == "-fhosted") { opts.hosted = true; opts.has_hosted = true; }
+	else if (arg == "-fmacro-backtrace-limit=" || arg.starts_with("-fmacro-backtrace-limit="))
+	{
+		String value = arg[24..];
+		uint limit;
+		if (!parse_u32_decimal(value, &limit))
+		{
+			if (sink == null) return INVALID_ARGUMENT~;
+			add_driver_error(opts.a, sink, "-fmacro-backtrace-limit takes a number argument")!;
+		}
+		else { opts.macro_backtrace_limit = limit == 0 ? uint::max : limit; opts.has_macro_backtrace_limit = true; }
+	}
+	else if (arg == "-fgnuc-version=" || arg.starts_with("-fgnuc-version="))
+	{
+		String value = arg == "-fgnuc-version=" ? "0" : arg[15..];
+		gcc_version::GccVersion parsed_version = gcc_version::parse(value);
+		if (parsed_version.major < 0)
+		{
+			if (sink == null) return INVALID_ARGUMENT~;
+			add_driver_fatal(opts.a, sink, "invalid value '%s' in '-fgnuc-version=%s'", value, value)!;
+		}
+		else { opts.gnuc_version = value; opts.has_gnuc_version = true; }
+	}
+	else if (arg.starts_with("-ffp-eval-method="))
+	{
+		String value = arg[17..];
+		if (value == "source") { opts.fp_eval_method = SOURCE; opts.has_fp_eval_method = true; }
+		else if (value == "double") { opts.fp_eval_method = DOUBLE; opts.has_fp_eval_method = true; }
+		else if (value == "extended") { opts.fp_eval_method = EXTENDED; opts.has_fp_eval_method = true; }
+		else
+		{
+			if (sink == null) return INVALID_ARGUMENT~;
+		add_driver_error(opts.a, sink, "unsupported argument '%s' to option '-ffp-eval-method='; expected 'source', 'double', or 'extended'", value)!;
+		}
+	}
+	else if (arg.starts_with("--emulate="))
+	{
+		String value = arg[10..];
+		if (value == "clang") { opts.emulate = CLANG; }
+		else if (value == "gcc") { opts.emulate = GCC; }
+		else if (value == "msvc") { opts.emulate = MSVC; }
+		else
+		{
+			if (sink == null) return INVALID_ARGUMENT~;
+			add_driver_error(opts.a, sink, "invalid compiler '%s'", arg)!;
+		}
+		if (value == "clang" || value == "gcc" || value == "msvc") opts.has_emulate = true;
+	}
+	else if (arg == "-fuse-ld=") { opts.has_use_linker = false; opts.use_linker = ""; }
+	else if (arg.starts_with("-fuse-ld=")) { opts.has_use_linker = true; opts.use_linker = arg[9..]; }
+	else if (arg.starts_with("--ld-path=")) { opts.has_linker_path = true; opts.linker_path = arg[10..]; }
+	else if (arg.starts_with("--rtlib="))
+	{
+		String value = arg[8..];
+		if (value == "compiler-rt" || value == "libgcc" || value == "platform") { opts.has_rtlib = true; opts.rtlib = value; }
+		else if (sink == null) { return INVALID_ARGUMENT~; }
+		else { add_driver_error(opts.a, sink, "invalid runtime library name '%s'", value)!; }
+	}
+	else if (arg.starts_with("--unwindlib="))
+	{
+		String value = arg[12..];
+		if (value == "" || value == "none" || value == "platform" || value == "libunwind" || value == "libgcc") { opts.has_unwindlib = true; opts.unwindlib = value; }
+		else if (sink == null) { return INVALID_ARGUMENT~; }
+		else { add_driver_error(opts.a, sink, "invalid unwind library name  '%s'", value)!; }
+	}
+	else if (arg.starts_with("-flto"))
+	{
+		String mode = arg[5..];
+		if (mode.len == 0 || mode == "=auto" || mode == "=full" || mode == "=jobserver" || mode == "=thin")
+		{
+			if (sink != null) add_driver_warning(opts.a, sink, "lto not supported")!;
+		}
+		else if (sink == null) { return INVALID_ARGUMENT~; }
+		else { add_driver_fatal(opts.a, sink, "invalid lto mode: '%s'", arg)!; }
+	}
+	else if (arg == "-fno-lto" || arg == "-frandom-seed=" || arg.starts_with("-frandom-seed=")) { /* accepted, no effect */ }
+	else if (arg == "-mkernel") { opts.kernel = true; }
+	else if (arg == "-fropi") { opts.ropi = true; }
+	else if (arg == "-fno-ropi") { opts.ropi = false; }
+	else if (arg == "-frwpi") { opts.rwpi = true; }
+	else if (arg == "-fno-rwpi") { opts.rwpi = false; }
+	else if (arg == "-g") { opts.debug_format = "dwarf32"; opts.has_debug_format = true; }
+	else if (arg == "-g0") { opts.debug_format = "strip"; opts.has_debug_format = true; }
+	else if (arg == "-gcodeview") { opts.debug_format = "codeview"; opts.has_debug_format = true; }
+	else if (arg == "-gdwarf32") { opts.debug_format = "dwarf32"; opts.has_debug_format = true; }
+	else if (arg == "-gdwarf64") { opts.debug_format = "dwarf64"; opts.has_debug_format = true; }
+	else if (arg == "-gdwarf" || arg == "-gdwarf-2" || arg == "-gdwarf-3" || arg == "-gdwarf-4" || arg == "-gdwarf-5")
+	{
+		opts.debug_format = "dwarf32"; opts.has_debug_format = true;
+		if (arg == "-gdwarf-2") { opts.dwarf_version = 2; opts.has_dwarf_version = true; }
+		else if (arg == "-gdwarf-3") { opts.dwarf_version = 3; opts.has_dwarf_version = true; }
+		else if (arg == "-gdwarf-4") { opts.dwarf_version = 4; opts.has_dwarf_version = true; }
+		else if (arg == "-gdwarf-5") { opts.dwarf_version = 5; opts.has_dwarf_version = true; }
+	}
+	else if (arg == "-nobuiltininc") { opts.nobuiltininc = true; }
+	else if (arg == "-nostdinc" || arg == "--no-standard-includes") { opts.nostdinc = true; }
+	else if (arg == "-nostdlibinc") { opts.nostdlibinc = true; }
+	else if (arg == "-nostdlib") { opts.no_standard_libraries = true; opts.nostdlib = true; }
+	else if (arg == "-nodefaultlibs") { opts.no_standard_libraries = true; opts.nodefaultlibs = true; }
+	else if (arg == "-nolibc") { opts.no_standard_libraries = true; opts.nolibc = true; }
+	else if (arg == "-nostartfiles") { opts.no_standard_libraries = true; opts.nostartfiles = true; }
+	else if (arg == "-shared") { opts.shared = true; }
+	else if (arg == "-shared-libgcc") { opts.shared_libgcc = true; }
+	else if (arg == "-static-libgcc") { opts.static_libgcc = true; }
+	else if (arg == "-static-pie") { opts.static_pie = true; }
+	else if (arg == "-static") { opts.static_link = true; }
+	else if (arg == "-pie") { opts.has_pie = true; opts.pie = true; }
+	else if (arg == "-no-pie" || arg == "-nopie") { opts.has_pie = true; opts.pie = false; }
+	else if (arg == "-r") { opts.relocatable = true; }
+	else if (arg == "-rdynamic") { opts.rdynamic = true; }
+	else if (arg == "-s") { opts.strip = true; }
+	else if (arg == "-Werror") { opts.warnings_as_errors = true; }
+	else if (arg == "-w") { opts.ignore_warnings = true; }
+	else if (arg == "-mdynamic-no-pic") { opts.dynamic_nopic = true; }
+	else if (arg == "-mabicalls") { opts.has_mabicalls = true; opts.mabicalls = true; }
+	else if (arg == "-mno-abicalls") { opts.has_mabicalls = true; opts.mabicalls = false; }
+	else if (arg == "-fpic") { opts.pic = PIC; opts.pic_arg = arg; }
+	else if (arg == "-fPIC") { opts.pic = PIC_LARGE; opts.pic_arg = arg; }
+	else if (arg == "-fpie") { opts.pic = PIE; opts.pic_arg = arg; }
+	else if (arg == "-fPIE") { opts.pic = PIE_LARGE; opts.pic_arg = arg; }
+	else if (arg == "-fno-pic" || arg == "-fno-PIC" || arg == "-fno-pie" || arg == "-fno-PIE") { opts.pic = NO_PIC; opts.pic_arg = arg; }
+	else { return false; }
+	return true;
+}
+<* Dispatch frontend and code-generation options to bounded option groups. *>
+fn bool? parse_frontend_flag(DriverOptions* opts, String arg, Diagnostics* sink)
+{
+	if (parse_frontend_flag_set_a(opts, arg, sink)!) return true;
+	if (parse_frontend_flag_set_b(opts, arg, sink)!) return true;
+	if (parse_frontend_flag_set_c(opts, arg, sink)!) return true;
+	return false;
+}
+
 <* Parse arguments (including argv[0]) into caller-owned reusable state.
  Recognized source paths and option values are borrowed from args. Unknown
  options are retained as diagnostics-free parse failures instead of silently
@@ -93,178 +326,7 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		String arg = args[i];
 		if (arg == "--help" || arg == "-h") { opts.action = HELP; result.action = HELP; result.input_count = (uint)opts.inputs.len(); return result; }
 		if (arg == "--version") { opts.action = VERSION; result.action = VERSION; result.input_count = (uint)opts.inputs.len(); return result; }
-		if (arg == "-E") { opts.only_preprocess = true; }
-		else if (arg == "-fsyntax-only") { opts.only_syntax = true; }
-		else if (arg == "-fno-syntax-only") { opts.only_syntax = false; }
-		else if (arg == "-c" || arg == "--compile") { opts.only_compile = true; }
-		else if (arg == "-S" || arg == "--assemble") { opts.only_preprocess_and_compile = true; }
-		else if (arg == "-P" || arg == "--no-line-commands") { opts.line_commands = false; }
-		else if (arg == "-fuse-line-directives") { opts.use_line_directives = true; }
-		else if (arg == "-fno-use-line-directives") { opts.use_line_directives = false; }
-		else if (arg == "-undef") { opts.no_system_defines = true; }
-		else if (arg == "-C" || arg == "--comments") { opts.preserve_comments = true; }
-		else if (arg == "-CC" || arg == "--comments-in-macros") { opts.preserve_comments = true; opts.preserve_comments_in_macros = true; }
-		else if (arg == "--verbose-ast") { opts.verbose_ast = true; }
-		else if (arg == "--verbose-pp") { opts.verbose_pp = true; }
-		else if (arg == "--verbose-ir") { opts.verbose_ir = true; }
-		else if (arg == "--verbose-linker-args") { opts.verbose_linker_args = true; }
-		else if (arg == "-fapple-kext") { opts.apple_kext = true; }
-		else if (arg == "-fcommon") { opts.common = true; }
-		else if (arg == "-fno-common") { opts.common = false; }
-		else if (arg == "-fshort-enums") { opts.short_enums = true; opts.has_short_enums = true; }
-		else if (arg == "-fno-short-enums") { opts.short_enums = false; opts.has_short_enums = true; }
-		else if (arg == "-fms-extensions") { opts.ms_extensions = true; opts.has_ms_extensions = true; }
-		else if (arg == "-fno-ms-extensions") { opts.ms_extensions = false; opts.has_ms_extensions = true; }
-		else if (arg == "-fdeclspec") { opts.declspec_attrs = true; opts.has_declspec_attrs = true; }
-		else if (arg == "-fno-declspec") { opts.declspec_attrs = false; opts.has_declspec_attrs = true; }
-		else if (arg == "-fdollars-in-identifiers") { opts.dollars_in_identifiers = true; opts.has_dollars_in_identifiers = true; }
-		else if (arg == "-fno-dollars-in-identifiers") { opts.dollars_in_identifiers = false; opts.has_dollars_in_identifiers = true; }
-		else if (arg == "-fdigraphs") { opts.digraphs = true; opts.has_digraphs = true; }
-		else if (arg == "-fno-digraphs") { opts.digraphs = false; opts.has_digraphs = true; }
-		else if (arg == "-fgnu-inline-asm") { opts.gnu_asm = true; opts.has_gnu_asm = true; }
-		else if (arg == "-fno-gnu-inline-asm") { opts.gnu_asm = false; opts.has_gnu_asm = true; }
-		else if (arg == "-fexperimental-bounds-safety") { opts.bounds_safety = CLANG; opts.has_bounds_safety = true; }
-		else if (arg == "-fno-experimental-bounds-safety") { opts.bounds_safety = NONE; opts.has_bounds_safety = true; }
-		else if (arg == "-fchar8_t") { opts.char8_t_override = ON; opts.has_char8_t_override = true; }
-		else if (arg == "-fno-char8_t") { opts.char8_t_override = OFF; opts.has_char8_t_override = true; }
-		else if (arg == "-fnative-half-type") { opts.use_native_half_type = true; }
-		else if (arg == "-fnative-half-arguments-and-returns") { opts.allow_half_args_returns = true; }
-		else if (arg == "-fblocks") { opts.has_blocks = true; opts.blocks = true; }
-		else if (arg == "-fno-blocks") { opts.has_blocks = true; opts.blocks = false; }
-		else if (arg == "-pthread") { opts.pthread = true; }
-		else if (arg == "-fvisibility=default") { opts.visibility = DEFAULT; opts.has_visibility = true; }
-		else if (arg == "-fvisibility=hidden") { opts.visibility = HIDDEN; opts.has_visibility = true; }
-		else if (arg == "-fvisibility=protected") { opts.visibility = PROTECTED; opts.has_visibility = true; }
-		else if (arg.starts_with("-fvisibility="))
-		{
-			String value = arg[13..];
-			if (sink == null) return INVALID_ARGUMENT~;
-			add_driver_fatal(opts.a, sink, "unsupported value '%s'' in '%s'", value, arg)!;
-		}
-		else if (arg == "-fsigned-char" || arg == "-fno-unsigned-char") { opts.char_signedness = SIGNED; opts.has_char_signedness = true; }
-		else if (arg == "-funsigned-char" || arg == "-fno-signed-char") { opts.char_signedness = UNSIGNED; opts.has_char_signedness = true; }
-		else if (arg == "-ffreestanding") { opts.hosted = false; opts.has_hosted = true; }
-		else if (arg == "-fhosted") { opts.hosted = true; opts.has_hosted = true; }
-		else if (arg == "-fmacro-backtrace-limit=" || arg.starts_with("-fmacro-backtrace-limit="))
-		{
-			String value = arg[24..];
-			uint limit;
-			if (!parse_u32_decimal(value, &limit))
-			{
-				if (sink == null) return INVALID_ARGUMENT~;
-				add_driver_error(opts.a, sink, "-fmacro-backtrace-limit takes a number argument")!;
-			}
-			else { opts.macro_backtrace_limit = limit == 0 ? uint::max : limit; opts.has_macro_backtrace_limit = true; }
-		}
-		else if (arg == "-fgnuc-version=" || arg.starts_with("-fgnuc-version="))
-		{
-			String value = arg == "-fgnuc-version=" ? "0" : arg[15..];
-			gcc_version::GccVersion parsed_version = gcc_version::parse(value);
-			if (parsed_version.major < 0)
-			{
-				if (sink == null) return INVALID_ARGUMENT~;
-				add_driver_fatal(opts.a, sink, "invalid value '%s' in '-fgnuc-version=%s'", value, value)!;
-			}
-			else { opts.gnuc_version = value; opts.has_gnuc_version = true; }
-		}
-		else if (arg.starts_with("-ffp-eval-method="))
-		{
-			String value = arg[17..];
-			if (value == "source") { opts.fp_eval_method = SOURCE; opts.has_fp_eval_method = true; }
-			else if (value == "double") { opts.fp_eval_method = DOUBLE; opts.has_fp_eval_method = true; }
-			else if (value == "extended") { opts.fp_eval_method = EXTENDED; opts.has_fp_eval_method = true; }
-			else
-			{
-				if (sink == null) return INVALID_ARGUMENT~;
-			add_driver_error(opts.a, sink, "unsupported argument '%s' to option '-ffp-eval-method='; expected 'source', 'double', or 'extended'", value)!;
-			}
-		}
-		else if (arg.starts_with("--emulate="))
-		{
-			String value = arg[10..];
-			if (value == "clang") { opts.emulate = CLANG; }
-			else if (value == "gcc") { opts.emulate = GCC; }
-			else if (value == "msvc") { opts.emulate = MSVC; }
-			else
-			{
-				if (sink == null) return INVALID_ARGUMENT~;
-				add_driver_error(opts.a, sink, "invalid compiler '%s'", arg)!;
-			}
-			if (value == "clang" || value == "gcc" || value == "msvc") opts.has_emulate = true;
-		}
-		else if (arg == "-fuse-ld=") { opts.has_use_linker = false; opts.use_linker = ""; }
-		else if (arg.starts_with("-fuse-ld=")) { opts.has_use_linker = true; opts.use_linker = arg[9..]; }
-		else if (arg.starts_with("--ld-path=")) { opts.has_linker_path = true; opts.linker_path = arg[10..]; }
-		else if (arg.starts_with("--rtlib="))
-		{
-			String value = arg[8..];
-			if (value == "compiler-rt" || value == "libgcc" || value == "platform") { opts.has_rtlib = true; opts.rtlib = value; }
-			else if (sink == null) { return INVALID_ARGUMENT~; }
-			else { add_driver_error(opts.a, sink, "invalid runtime library name '%s'", value)!; }
-		}
-		else if (arg.starts_with("--unwindlib="))
-		{
-			String value = arg[12..];
-			if (value == "" || value == "none" || value == "platform" || value == "libunwind" || value == "libgcc") { opts.has_unwindlib = true; opts.unwindlib = value; }
-			else if (sink == null) { return INVALID_ARGUMENT~; }
-			else { add_driver_error(opts.a, sink, "invalid unwind library name  '%s'", value)!; }
-		}
-		else if (arg.starts_with("-flto"))
-		{
-			String mode = arg[5..];
-			if (mode.len == 0 || mode == "=auto" || mode == "=full" || mode == "=jobserver" || mode == "=thin")
-			{
-				if (sink != null) add_driver_warning(opts.a, sink, "lto not supported")!;
-			}
-			else if (sink == null) { return INVALID_ARGUMENT~; }
-			else { add_driver_fatal(opts.a, sink, "invalid lto mode: '%s'", arg)!; }
-		}
-		else if (arg == "-fno-lto" || arg == "-frandom-seed=" || arg.starts_with("-frandom-seed=")) { /* accepted, no effect */ }
-		else if (arg == "-mkernel") { opts.kernel = true; }
-		else if (arg == "-fropi") { opts.ropi = true; }
-		else if (arg == "-fno-ropi") { opts.ropi = false; }
-		else if (arg == "-frwpi") { opts.rwpi = true; }
-		else if (arg == "-fno-rwpi") { opts.rwpi = false; }
-		else if (arg == "-g") { opts.debug_format = "dwarf32"; opts.has_debug_format = true; }
-		else if (arg == "-g0") { opts.debug_format = "strip"; opts.has_debug_format = true; }
-		else if (arg == "-gcodeview") { opts.debug_format = "codeview"; opts.has_debug_format = true; }
-		else if (arg == "-gdwarf32") { opts.debug_format = "dwarf32"; opts.has_debug_format = true; }
-		else if (arg == "-gdwarf64") { opts.debug_format = "dwarf64"; opts.has_debug_format = true; }
-		else if (arg == "-gdwarf" || arg == "-gdwarf-2" || arg == "-gdwarf-3" || arg == "-gdwarf-4" || arg == "-gdwarf-5")
-		{
-			opts.debug_format = "dwarf32"; opts.has_debug_format = true;
-			if (arg == "-gdwarf-2") { opts.dwarf_version = 2; opts.has_dwarf_version = true; }
-			else if (arg == "-gdwarf-3") { opts.dwarf_version = 3; opts.has_dwarf_version = true; }
-			else if (arg == "-gdwarf-4") { opts.dwarf_version = 4; opts.has_dwarf_version = true; }
-			else if (arg == "-gdwarf-5") { opts.dwarf_version = 5; opts.has_dwarf_version = true; }
-		}
-		else if (arg == "-nobuiltininc") { opts.nobuiltininc = true; }
-		else if (arg == "-nostdinc" || arg == "--no-standard-includes") { opts.nostdinc = true; }
-		else if (arg == "-nostdlibinc") { opts.nostdlibinc = true; }
-		else if (arg == "-nostdlib") { opts.no_standard_libraries = true; opts.nostdlib = true; }
-		else if (arg == "-nodefaultlibs") { opts.no_standard_libraries = true; opts.nodefaultlibs = true; }
-		else if (arg == "-nolibc") { opts.no_standard_libraries = true; opts.nolibc = true; }
-		else if (arg == "-nostartfiles") { opts.no_standard_libraries = true; opts.nostartfiles = true; }
-		else if (arg == "-shared") { opts.shared = true; }
-		else if (arg == "-shared-libgcc") { opts.shared_libgcc = true; }
-		else if (arg == "-static-libgcc") { opts.static_libgcc = true; }
-		else if (arg == "-static-pie") { opts.static_pie = true; }
-		else if (arg == "-static") { opts.static_link = true; }
-		else if (arg == "-pie") { opts.has_pie = true; opts.pie = true; }
-		else if (arg == "-no-pie" || arg == "-nopie") { opts.has_pie = true; opts.pie = false; }
-		else if (arg == "-r") { opts.relocatable = true; }
-		else if (arg == "-rdynamic") { opts.rdynamic = true; }
-		else if (arg == "-s") { opts.strip = true; }
-		else if (arg == "-Werror") { opts.warnings_as_errors = true; }
-		else if (arg == "-w") { opts.ignore_warnings = true; }
-		else if (arg == "-mdynamic-no-pic") { opts.dynamic_nopic = true; }
-		else if (arg == "-mabicalls") { opts.has_mabicalls = true; opts.mabicalls = true; }
-		else if (arg == "-mno-abicalls") { opts.has_mabicalls = true; opts.mabicalls = false; }
-		else if (arg == "-fpic") { opts.pic = PIC; opts.pic_arg = arg; }
-		else if (arg == "-fPIC") { opts.pic = PIC_LARGE; opts.pic_arg = arg; }
-		else if (arg == "-fpie") { opts.pic = PIE; opts.pic_arg = arg; }
-		else if (arg == "-fPIE") { opts.pic = PIE_LARGE; opts.pic_arg = arg; }
-		else if (arg == "-fno-pic" || arg == "-fno-PIC" || arg == "-fno-pie" || arg == "-fno-PIE") { opts.pic = NO_PIC; opts.pic_arg = arg; }
+		if (parse_frontend_flag(opts, arg, sink)!) { i++; continue; }
 		else if (arg.starts_with("-D")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.defines.push(v); opts.macro_effects.push({ .kind = DEFINE, .value = v }); }
 		else if (arg.starts_with("-U")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.undefs.push(v); opts.macro_effects.push({ .kind = UNDEFINE, .value = v }); }
 		else if (arg.starts_with("-I")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.includes.push({ .kind = NORMAL, .path = v }); }
@@ -315,11 +377,7 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		}
 		else if (arg.starts_with("-W"))
 		{
-			if (arg == "-Werror" || arg == "-Wno-error" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers") { /* global warning state is replayed from argv */ }
-			else if (arg.starts_with("-Werror=")) { opts.warning_policies.push({ .name = arg[8..], .mode = ERROR }); }
-			else if (arg.starts_with("-Wno-error=")) { opts.warning_policies.push({ .name = arg[11..], .mode = WARNING }); }
-			else if (arg.starts_with("-Wno-")) { opts.warning_policies.push({ .name = arg[5..], .mode = OFF }); }
-			else { opts.warning_policies.push({ .name = arg[2..], .mode = WARNING }); }
+			parse_warning_option(opts, arg);
 		}
 		else if (arg == "-") { opts.inputs.push(arg); }
 		else if (arg.starts_with("-f") || arg.starts_with("-m"))
@@ -364,6 +422,8 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 		comp.darwin_target_variant = target::parse_triple(opts.darwin_variant_triple, h)!;
 		comp.has_darwin_target_variant = true;
 	}
+	// Match src/aro/Driver.zig:855 after resolving the target and Darwin variant.
+	comp.langopts.set_target_options(&comp.target);
 	if (opts.has_standard) comp.langopts.set_standard(opts.standard)!;
 	if (opts.has_emulate || opts.has_target_triple)
 	{
@@ -548,6 +608,7 @@ fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null
 		|| (t.os.tag == IOS && t.os.is_at_least_or_false(IOS, { 6, 0, 0 }))
 		|| (t.os.tag == MACCATALYST && t.os.is_at_least_or_false(MACCATALYST, { 6, 0, 0 }));
 	if ((opts.kernel || opts.apple_kext) && kernel_abi_os) { pic = false; pie = false; }
+	if ((opts.kernel || opts.apple_kext) && t.os.tag == IOS && !t.os.is_at_least_or_false(IOS, { 6, 0, 0 })) level_two = false;
 
 	if (opts.dynamic_nopic)
 	{
@@ -616,29 +677,17 @@ fn preprocessor::DumpMode FrontendOptions.dump_mode(&self)
 
 fn void? add_driver_error(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	DString text;
-	text.init(a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	return d.add({ .kind = ERROR, .text = text.str_view() });
+	@pool() { return d.add({ .kind = ERROR, .text = string::tformat(fmt, ...args) }); };
 }
 
 fn void? add_driver_fatal(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	DString text;
-	text.init(a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	return d.add({ .kind = FATAL_ERROR, .text = text.str_view() });
+	@pool() { return d.add({ .kind = FATAL_ERROR, .text = string::tformat(fmt, ...args) }); };
 }
 
 fn void? add_driver_warning(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	DString text;
-	text.init(a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	return d.add({ .kind = WARNING, .text = text.str_view() });
+	@pool() { return d.add({ .kind = WARNING, .text = string::tformat(fmt, ...args) }); };
 }
 
 <* Split driver-only switches from the shared option parser. *>
@@ -720,12 +769,14 @@ fn void install_default_file_services(Compilation* comp)
 
 fn void install_default_pragmas(Compilation* comp)
 {
-	pragma::Handler? gcc_handler = comp.pragmas.get("GCC");
+	pragma::IPragma? gcc_handler = comp.pragmas.get("GCC");
 	if (catch gcc_handler) comp.pragmas.add("GCC", gcc::make_handler(comp.gpa));
-	pragma::Handler? once_handler = comp.pragmas.get("once");
+	pragma::IPragma? once_handler = comp.pragmas.get("once");
 	if (catch once_handler) comp.pragmas.add("once", once::handler(comp.gpa));
-	pragma::Handler? message_handler = comp.pragmas.get("message");
+	pragma::IPragma? message_handler = comp.pragmas.get("message");
 	if (catch message_handler) comp.pragmas.add("message", message::handler());
+	pragma::IPragma? pack_handler = comp.pragmas.get("pack");
+	if (catch pack_handler) comp.pragmas.add("pack", pack::make_handler(comp.gpa));
 }
 
 fn char[]? read_stdin(Allocator a, File* input)
@@ -812,8 +863,7 @@ fn bool? configure_toolchain(Compilation* comp, DriverOptions* opts,
 	toolchain::Options* tc_opts, toolchain::Toolchain* tc, List{IncludeDir}* all_includes,
 	List{String}* owned_include_paths, Diagnostics* sink)
 {
-	ParseEffect[]? effects = apply_options(opts, comp, tc_opts, sink);
-	if (catch f = effects) return f~;
+	ParseEffect[] effects = apply_options(opts, comp, tc_opts, sink)!;
 	(void)effects;
 
 	String path_env = comp.environment.has_path ? comp.environment.path : (env::get_var(tmem, "PATH") ?? "");
@@ -952,35 +1002,9 @@ fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* 
 		return 1;
 	}
 	String output_name = output_opt;
-	if (comp.code_gen_options.optimization_level == code_gen_options::OptimizationLevel.O0)
-	{
-		assembly::Assembly? assembly_opt = assembly::gen_asm(ast);
-		if (catch f = assembly_opt)
-		{
-			if (f != compilation::FATAL_ERROR) (void)add_driver_fatal(comp.gpa, d, "Assembly codegen not supported");
-			return 1;
-		}
-		assembly::Assembly generated = assembly_opt;
-		defer generated.free();
-		if (opts.only_preprocess_and_compile)
-		{
-			return write_backend_output(comp, d, output_name, generated.data.str_view(), generated.text.str_view());
-		}
-
-		String? assembly_name_opt = temp_files.get_random_filename(".s");
-		if (catch f = assembly_name_opt)
-		{
-			(void)add_driver_fatal(comp.gpa, d, "unable to create temporary assembly file name: %s", f);
-			return 1;
-		}
-		String assembly_name = assembly_name_opt;
-		if (write_backend_output(comp, d, assembly_name, generated.data.str_view(), generated.text.str_view()) != 0) return 1;
-		if (catch f = invoke_assembler(comp, d, tc, assembly_name, output_name)) return 1;
-		if (opts.only_compile) return 0;
-		if (link_mode) link_objects.push(output_name);
-		return 0;
-	}
-
+	// Every -O level uses the same AST -> IR -> x86_64 pipeline; -O0 just runs
+	// no IR passes (`ir_opt::run`), as GCC gates its optimization passes on
+	// `optimize`. Zig arocc instead sends -O0 to its data-only assembly stub.
 	ir::Ir? ir_opt = codegen::gen_ir(ast, pp);
 	if (catch f = ir_opt)
 	{
@@ -989,19 +1013,21 @@ fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* 
 	}
 	ir::Ir generated_ir = ir_opt;
 	defer generated_ir.free();
-	if (opts.verbose_ir)
-	{
-		diagnostics::Terminal term = { .writer = io::stdout(), .mode = diagnostics::ColorMode.NO_COLOR };
-		if (catch generated_ir.dump(term))
-		{
-			(void)add_driver_fatal(comp.gpa, d, "unable to write Ir dump");
-			return 1;
-		}
-	}
-	ir::ErrorList errors;
-	errors.init(comp.gpa);
-	defer errors.free();
-	object::Object*? object_opt = ir::render(&generated_ir, comp.gpa, comp.target, &errors);
+	return emit_ir_output(comp, d, opts, tc, temp_files, link_objects, output_name, &generated_ir, link_mode);
+}
+
+fn bool use_object_emitter(Compilation* comp, DriverOptions* opts, bool link_mode)
+{
+	if (opts.only_preprocess_and_compile) return false;
+	return opts.integrated_as || (link_mode && comp.target.os.tag == target::OsTag.LINUX &&
+		opts.nostdlib && opts.static_link && !opts.shared && !opts.static_pie);
+}
+
+fn int emit_ir_object(Compilation* comp, Diagnostics* d, DriverOptions* opts,
+	List{String}* link_objects, String output_name, ir::Ir* generated_ir, bool link_mode,
+	ir::ErrorList* errors)
+{
+	object::Object*? object_opt = ir::render_object(generated_ir, comp.gpa, comp.target, errors, opts.x86_64_spill_all);
 	if (catch f = object_opt)
 	{
 		if (f == ir::LOWER_FAIL)
@@ -1017,30 +1043,214 @@ fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* 
 	}
 	object::Object* generated_object = object_opt;
 	defer generated_object.deinit();
-
-	File? output_file_opt = file::open(output_name, "wb");
-	if (catch f = output_file_opt)
+	// in-process link hook
+	File? output_opt = file::open(output_name, "wb");
+	if (catch f = output_opt)
 	{
-		(void)add_driver_fatal(comp.gpa, d, "unable to create output file '%s': %s", output_name, f);
+		(void)add_driver_error(comp.gpa, d, "unable to create output file '%s': %s", output_name, f);
 		return 1;
 	}
-	File output = output_file_opt;
+	File output = output_opt;
 	defer (void)output.close();
 	if (catch f = object::finish(generated_object, &output))
 	{
-		(void)add_driver_fatal(comp.gpa, d, "could not output to object file '%s': %s", output_name, f);
+		(void)add_driver_error(comp.gpa, d, "unable to write output file '%s': %s", output_name, f);
 		return 1;
 	}
-	if (opts.only_compile || opts.only_preprocess_and_compile) return 0;
+	if (opts.only_compile) return 0;
 	if (link_mode) link_objects.push(output_name);
 	return 0;
+}
+
+fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
+	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
+	List{String}* link_objects, String output_name, ir::Ir* generated_ir, bool link_mode)
+{
+	ir::ErrorList errors;
+	errors.init(comp.gpa);
+	defer errors.free();
+	fault opt_fault = @catch(ir_opt::run(generated_ir,
+		{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program, .verify = opts.verify_ir },
+		&errors));
+	if (opt_fault)
+	{
+		String error_value = errors.len() == 0 ? "unknown IR optimization error" : errors.message_at(0);
+		(void)add_driver_fatal(comp.gpa, d, "IR optimization failed: %s", error_value);
+		return 1;
+	}
+	if (opts.verbose_ir)
+	{
+		diagnostics::Terminal term = { .writer = io::stdout(), .mode = diagnostics::ColorMode.NO_COLOR };
+		if (catch generated_ir.dump(term))
+		{
+			(void)add_driver_fatal(comp.gpa, d, "unable to write Ir dump");
+			return 1;
+		}
+	}
+	if (use_object_emitter(comp, opts, link_mode))
+	{
+		return emit_ir_object(comp, d, opts, link_objects, output_name, generated_ir, link_mode, &errors);
+	}
+	// C3 deviation: Zig renders the Ir straight to an object (its x86 renderer is
+	// a stub). The port lowers it to assembly text and reuses the assembler path,
+	// so -S writes assembly and -c / linking go through the system `as`.
+	String? asm_opt = ir::render_asm(generated_ir, comp.gpa, comp.target, &errors, opts.x86_64_spill_all);
+	if (catch f = asm_opt)
+	{
+		if (f == ir::LOWER_FAIL)
+		{
+			String error_value = errors.len() == 0 ? "unknown lowering error" : errors.message_at(0);
+			(void)add_driver_fatal(comp.gpa, d, "unable to render Ir to machine code: %s", error_value);
+		}
+		else
+		{
+			(void)add_driver_fatal(comp.gpa, d, "unable to render Ir to machine code: %s", f);
+		}
+		return 1;
+	}
+	String asm_text = asm_opt;
+	defer alloc::free(comp.gpa, asm_text.ptr);
+	return finish_assembly(comp, d, opts, tc, temp_files, link_objects, output_name, link_mode, asm_text, "");
+}
+
+<*
+ Write generated assembly (`data` then `text`): to `output_name` for -S, else
+ through a temporary .s file and the assembler to `output_name`, which is then
+ queued for linking in link mode.
+*>
+fn int finish_assembly(Compilation* comp, Diagnostics* d, DriverOptions* opts,
+	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
+	List{String}* link_objects, String output_name, bool link_mode, String data, String text)
+{
+	if (opts.only_preprocess_and_compile) return write_backend_output(comp, d, output_name, data, text);
+
+	String? assembly_name_opt = temp_files.get_random_filename(".s");
+	if (catch f = assembly_name_opt)
+	{
+		(void)add_driver_fatal(comp.gpa, d, "unable to create temporary assembly file name: %s", f);
+		return 1;
+	}
+	String assembly_name = assembly_name_opt;
+	if (write_backend_output(comp, d, assembly_name, data, text) != 0) return 1;
+	if (catch f = invoke_assembler(comp, d, tc, assembly_name, output_name)) return 1;
+	if (opts.only_compile) return 0;
+	if (link_mode) link_objects.push(output_name);
+	return 0;
+}
+
+fn bool merge_conflicts(ir::Decl* existing, ir::Decl* incoming)
+{
+	if (existing.name != incoming.name) return false;
+	if (existing.linkage == ir::Linkage.INTERNAL || incoming.linkage == ir::Linkage.INTERNAL) return false;
+	if (existing.kind == ir::DeclKind.GLOBAL && incoming.kind == ir::DeclKind.GLOBAL)
+	{
+		return existing.is_definition() && incoming.is_definition() &&
+			!existing.global.tentative && !incoming.global.tentative;
+	}
+	if (existing.kind == ir::DeclKind.FUNCTION && incoming.kind == ir::DeclKind.FUNCTION)
+	{
+		return existing.is_definition() && incoming.is_definition();
+	}
+	return false;
+}
+
+enum GlobalMergeResult : char
+{
+	NOT_APPLICABLE,
+	KEEP_EXISTING,
+	REPLACE_EXISTING,
+}
+
+fn GlobalMergeResult merge_global_declarations(ir::Decl* existing, ir::Decl* incoming)
+{
+	if (existing.kind != ir::DeclKind.GLOBAL || incoming.kind != ir::DeclKind.GLOBAL ||
+		existing.name != incoming.name || existing.linkage == ir::Linkage.INTERNAL ||
+		incoming.linkage == ir::Linkage.INTERNAL)
+	{
+		return GlobalMergeResult.NOT_APPLICABLE;
+	}
+
+	bool existing_definition = existing.is_definition();
+	bool incoming_definition = incoming.is_definition();
+	if (!existing_definition && incoming_definition) { return GlobalMergeResult.REPLACE_EXISTING; }
+	if (existing.global.tentative && incoming_definition && !incoming.global.tentative)
+	{
+		return GlobalMergeResult.REPLACE_EXISTING;
+	}
+	if (existing.global.tentative && incoming.global.tentative)
+	{
+		if (incoming.global.size > existing.global.size) existing.global.size = incoming.global.size;
+		if (incoming.global.align > existing.global.align) existing.global.align = incoming.global.align;
+	}
+	return GlobalMergeResult.KEEP_EXISTING;
+}
+
+fn int merge_tu(Compilation* comp, Diagnostics* d, WholeProgram* wp,
+	tree::Tree* ast, preprocessor::Preprocessor* pp, int tu_id, Source main_source)
+{
+	uint errors_before = d.errors;
+	ir::Ir? generated_opt = codegen::gen_ir(ast, pp, tu_id);
+	if (catch f = generated_opt)
+	{
+		if (f != compilation::FATAL_ERROR) (void)add_driver_fatal(comp.gpa, d, "unable to generate Ir: %s", f);
+		return 1;
+	}
+	ir::Ir generated = generated_opt;
+	defer generated.free();
+	ir::Ir accepted;
+	accepted.init(comp.gpa, &comp.interner);
+	defer accepted.free();
+
+	for (usz incoming_index = 0; incoming_index < (usz)generated.decls.len(); incoming_index++)
+	{
+		ir::Decl* incoming = &generated.decls.array_view()[incoming_index];
+		bool duplicate = false;
+		bool handled_global = false;
+		bool incoming_moved = false;
+		for (usz existing_index = 0; existing_index < (usz)wp.program.decls.len(); existing_index++)
+		{
+			ir::Decl* existing = &wp.program.decls.array_view()[existing_index];
+			if (merge_conflicts(existing, incoming))
+			{
+				String origin = wp.origins.array_view()[existing_index];
+				(void)add_driver_error(comp.gpa, d,
+					"multiple definitions of '%s' (in '%s' and '%s')",
+					incoming.name, origin, main_source.path);
+				duplicate = true;
+				break;
+			}
+			GlobalMergeResult merge_result = merge_global_declarations(existing, incoming);
+			if (merge_result == GlobalMergeResult.NOT_APPLICABLE) continue;
+			handled_global = true;
+			if (merge_result == GlobalMergeResult.REPLACE_EXISTING)
+			{
+				ir::Decl old = *existing;
+				*existing = *incoming;
+				old.free();
+				wp.origins.array_view()[existing_index] = main_source.path;
+				incoming_moved = true;
+			}
+			break;
+		}
+		if (duplicate || (handled_global && !incoming_moved)) incoming.free();
+		if (!duplicate && !handled_global)
+		{
+			accepted.decls.push(*incoming);
+			wp.origins.push(main_source.path);
+		}
+	}
+	// Accepted declarations have moved to `accepted`; duplicate declarations
+	// were freed above. Prevent `generated.free()` from visiting either group.
+	generated.decls.clear();
+	wp.program.take_decls(&accepted);
+	return d.errors == errors_before ? 0 : 1;
 }
 
 fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, FrontendOptions* extra,
 	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
 	List{String}* link_objects, bool link_mode,
 	Source main_source, Source builtin_source, Source command_line_source,
-	Source[] imacros, Source[] implicit_includes)
+	Source[] imacros, Source[] implicit_includes, WholeProgram* wp = null, int tu_id = -1)
 {
 	comp.generated_buf.clear();
 	uint errors_before = d.errors;
@@ -1125,10 +1335,15 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 				return 1;
 			}
 			File output = output_file;
-			defer (void)output.close();
 			if (catch f = pp.pretty_print_tokens(&output, dump_mode))
 			{
+				(void)output.close();
 				(void)add_driver_error(comp.gpa, d, "unable to write result: %s", f);
+				return 1;
+			}
+			if (catch f = output.close())
+			{
+				(void)add_driver_error(comp.gpa, d, "unable to close result file '%s': %s", opts.output_name, f);
 				return 1;
 			}
 		}
@@ -1137,7 +1352,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 			(void)add_driver_error(comp.gpa, d, "unable to write result: %s", f);
 			return 1;
 		}
-		return d.errors == errors_before ? 0 : 1;
+		return 0;
 	}
 
 	parser::Parser p;
@@ -1166,6 +1381,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 	print_diagnostics_stats(d);
 	if (d.errors != errors_before) return 1;
 	if (opts.only_syntax) return 0;
+	if (wp != null) return merge_tu(comp, d, wp, &result, &pp, tu_id, main_source);
 	return process_backend_source(comp, d, opts, tc, temp_files, link_objects, main_source, &result, &pp, link_mode);
 }
 
@@ -1234,7 +1450,8 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		return 1;
 	}
 	bool link_mode = !(opts.only_preprocess || opts.only_syntax || opts.only_compile || opts.only_preprocess_and_compile);
-	if (opts.has_output_name && opts.inputs.len() != 1 && !link_mode)
+	bool whole_program = opts.whole_program && !(opts.only_preprocess || opts.only_syntax || opts.dependency_only);
+	if (opts.has_output_name && opts.inputs.len() != 1 && !link_mode && !whole_program)
 	{
 		(void)add_driver_fatal(comp.gpa, d, "cannot specify -o when generating multiple output files");
 		return 1;
@@ -1315,6 +1532,15 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	link_objects.init(comp.gpa);
 	defer link_objects.free();
 	link_objects.push_all(opts.link_objects.array_view());
+	WholeProgram wp;
+	wp.init(comp.gpa, &comp.interner);
+	defer wp.free();
+	if (whole_program && (comp.target.ofmt != target::ObjectFormat.ELF || comp.target.cpu.arch != target::Arch.X86_64))
+	{
+		(void)add_driver_fatal(comp.gpa, d, "unsupported target %s-%s-%s, currently only x86-64 elf is supported",
+			comp.target.cpu.arch.name, comp.target.os.tag.name, comp.target.abi.name);
+		return 1;
+	}
 
 	if (opts.has_standard) comp.langopts.set_standard(opts.standard)!!;
 	Source? command_line_opt = make_command_line_source(comp, &opts);
@@ -1362,8 +1588,12 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	}
 
 	int status = 0;
+	int tu_id = 0;
+	Source output_source = {};
 	foreach (input_path : opts.inputs)
 	{
+		int this_tu_id = tu_id;
+		tu_id++;
 		char[]? input_bytes;
 		if (input_path == "-") { input_bytes = read_stdin(comp.gpa, stdin_file); }
 		else if (try existing = comp.find_source(input_path)) { input_bytes = existing.buf.copy(comp.gpa); }
@@ -1384,13 +1614,26 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 			status = 1;
 			continue;
 		}
+		if (this_tu_id == 0) output_source = source_opt;
 		int file_status = process_source(comp, d, &opts, &extra,
 			&tc, &temp_files, &link_objects, link_mode, source_opt, builtin_source,
-			command_line_source, imacros.array_view(), implicit_includes.array_view());
+			command_line_source, imacros.array_view(), implicit_includes.array_view(),
+			whole_program ? &wp : null, this_tu_id);
 		if (file_status != 0) status = file_status;
 	}
 	if (d.errors != errors_before_run) return 1;
 	if (status != 0) return status;
+	if (whole_program)
+	{
+		String? output_opt = temp_files.get_out_file_name(&opts, output_source, comp.target);
+		if (catch f = output_opt)
+		{
+			(void)add_driver_fatal(comp.gpa, d, "unable to create output file name: %s", f);
+			return 1;
+		}
+		if (emit_ir_output(comp, d, &opts, &tc, &temp_files, &link_objects,
+			output_opt, &wp.program, link_mode) != 0) return 1;
+	}
 	if (link_mode)
 	{
 		if (catch f = invoke_linker(comp, d, &tc, &opts, link_objects.array_view()))
@@ -1399,8 +1642,8 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 			return 1;
 		}
 	}
-	// main.zig:102 exits 1 whenever any error was recorded. Non-fatal ERRORs from
-	// link-time policy (for example nopie with static-pie) must count too.
+	// Zig Debug -E exits with status 1 after printing diagnostics. Other modes
+	// follow main.zig:102, including non-fatal link-time policy errors.
 	if (d.errors != errors_before_run) return 1;
 	return status;
 }

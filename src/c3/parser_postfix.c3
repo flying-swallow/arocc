@@ -5,17 +5,34 @@
 module aro::parser_postfix;
 import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::parser_diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::compilation, aro::lang_opts;
-import aro::string_interner;
+import aro::string_interner, aro::bigint;
+import aro::builtins, aro::builtin_defs::common;
 import std::collections::list;
 
 excuse PARSING_FAILED;
 <* The optional builtin-call hook does not recognize this callee and wants ordinary call handling. *>
 excuse NO_BUILTIN_CALL;
 
+<* Whether `callee` names one of the overflow builtins with custom raw-argument checks. *>
+fn bool is_overflow_builtin_callee(parser::Parser* p, type_store::NodeIndex callee)
+{
+	tree::Node callee_node = callee.get(&p.tree);
+	if (callee_node.kind != tree::NodeKind.BUILTIN_REF) return false;
+	String name = p.tree.tok_slice(callee_node.builtin_ref.name_tok);
+	if (try expanded = p.comp.builtins.find(name))
+	{
+		return expanded.tag == common::TAG___BUILTIN_ADD_OVERFLOW ||
+			expanded.tag == common::TAG___BUILTIN_SUB_OVERFLOW ||
+			expanded.tag == common::TAG___BUILTIN_MUL_OVERFLOW;
+	}
+	return false;
+}
+
+// Callback shapes used by CallbackParts.
 alias PrimaryExpression = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
 alias NestedExpression = fn parser_result::Result?(void* context, parser::Parser* p, tokens::Precedence min_prec, bool eval);
-alias BuiltinCallDispatcher = fn parser_result::Result?(void* context, parser::Parser* p,
-	type_store::NodeIndex callee, tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval);
+alias CompoundLiteralExpression = fn parser_result::Result?(void* context, parser::Parser* p,
+	tokens::TokenIndex opening_tok, type_store::QualType qt, bool eval);
 
 <* Parsed statement-expression compound. `qt` is the type of the final
    expression statement, or void when the compound has no final expression. *>
@@ -37,26 +54,87 @@ struct AttributeDeclSpanCheckpoint
 	uint len;
 }
 
+<* GNU statement expressions `({ ... })`, supplied by the statement grammar. *>
+interface IStatementExpressionBody
+{
+	<* Parse the compound statement starting at the current `{` and return its
+	   node plus the type of its final expression statement (void when none).
+	   Must leave the parser at the token after the matching `}`. *>
+	fn StatementExpressionBodyResult? parse_statement_expression_body(parser::Parser* p, bool eval);
+}
+
 struct PostfixParser
 {
 	parser::Parser* parser;
-	void* context;
-	<* Optional context for nested expression callbacks; an unset value falls
-	   back to the shared callback context. *>
-	void* expression_context;
-	PrimaryExpression primary;
-	NestedExpression expression;
-	void* statement_expression_context;
-	StatementExpressionBodyParser statement_expression_body;
-	bool has_statement_expression_body;
-	void* builtin_call_context;
-	BuiltinCallDispatcher builtin_call;
-	bool has_builtin_call;
+	<* `parse_primary` and `parse_nested` productions. *>
+	parser::IExpressionParts parts;
+	<* Statement expressions; null when `({` is not a statement expression. *>
+	IStatementExpressionBody statement_body;
+	<* Builtin-call semantic checking; null when calls are never builtins. *>
+	parser::IBuiltinCall builtin_call;
 }
 
-fn void* PostfixParser.nested_expression_context(&self)
+fn parser_result::Result? PostfixParser.primary(&self, bool eval)
 {
-	return self.expression_context != null ? self.expression_context : self.context;
+	parser::IExpressionParts g = self.parts;
+	if (!g || !&g.parse_primary) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return g.parse_primary(self.parser, eval);
+}
+
+fn parser_result::Result? PostfixParser.nested(&self, tokens::Precedence min_prec, bool eval)
+{
+	parser::IExpressionParts g = self.parts;
+	if (!g || !&g.parse_nested) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return g.parse_nested(self.parser, min_prec, eval);
+}
+
+<*
+ An IExpressionParts / IStatementExpressionBody over plain callbacks, for
+ focused grammar tests and embedders that supply individual productions. A
+ null callback is HOOK_ABSENT. `expression_context`, when set, is passed to
+ `nested` instead of `context`.
+*>
+struct CallbackParts (parser::IExpressionParts, IStatementExpressionBody)
+{
+	void* context;
+	void* expression_context;
+	PrimaryExpression operand;
+	PrimaryExpression primary;
+	NestedExpression nested;
+	CompoundLiteralExpression compound_literal;
+	void* statement_expression_context;
+	StatementExpressionBodyParser statement_expression_body;
+}
+
+fn parser_result::Result? CallbackParts.parse_operand(&self, parser::Parser* p, bool eval) @dynamic
+{
+	if (!self.operand) return parser::HOOK_ABSENT~;
+	return self.operand(self.context, p, eval);
+}
+
+fn parser_result::Result? CallbackParts.parse_primary(&self, parser::Parser* p, bool eval) @dynamic
+{
+	if (!self.primary) return parser::HOOK_ABSENT~;
+	return self.primary(self.context, p, eval);
+}
+
+fn parser_result::Result? CallbackParts.parse_nested(&self, parser::Parser* p, tokens::Precedence min_prec, bool eval) @dynamic
+{
+	if (!self.nested) return parser::HOOK_ABSENT~;
+	return self.nested(self.expression_context ? self.expression_context : self.context, p, min_prec, eval);
+}
+
+fn parser_result::Result? CallbackParts.parse_compound_literal(&self, parser::Parser* p, tokens::TokenIndex opening_tok,
+	type_store::QualType qt, bool eval) @dynamic
+{
+	if (!self.compound_literal) return parser::HOOK_ABSENT~;
+	return self.compound_literal(self.context, p, opening_tok, qt, eval);
+}
+
+fn StatementExpressionBodyResult? CallbackParts.parse_statement_expression_body(&self, parser::Parser* p, bool eval) @dynamic
+{
+	if (!self.statement_expression_body) return parser::HOOK_ABSENT~;
+	return self.statement_expression_body(self.statement_expression_context, p, eval);
 }
 
 <* Helper for a primary-expression callback after it has recognized and parsed
@@ -67,9 +145,7 @@ fn parser_result::Result? PostfixParser.parse_compound_literal(&self, tokens::To
 	parser::Parser* p = self.parser;
 	parser::InitContext context = p.init_context;
 	if (storage == tree::CompoundLiteralStorageClass.STATIC || thread_local || !p.function_context.active) { context = parser::InitContext.STATIC; }
-	parser_result::Result? maybe_initializer = p.parse_initializer_with_context(qt, context, eval);
-	if (catch caught_fault = maybe_initializer) return caught_fault~;
-	parser_result::Result initializer = maybe_initializer;
+	parser_result::Result initializer = p.parse_initializer_with_context(qt, context, eval)!;
 	type_store::NodeIndex literal = p.compound_literal_node(l_paren, qt, initializer.node, storage, thread_local);
 	// A scalar compound literal has its initializer's constant value: the braced
 	// scalar keeps the value on its converted node. Array, record, complex and
@@ -155,9 +231,7 @@ fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens
 	defer if (!completed) self.restore_statement_expression_state(saved_scope_depth,
 		saved_extension_suppressed, saved_attribute_count, saved_attribute_extra_count, &saved_decl_attrs);
 
-	StatementExpressionBodyResult? maybe_body = self.statement_expression_body(self.statement_expression_context, p, eval);
-	if (catch f = maybe_body) return f~;
-	StatementExpressionBodyResult body = maybe_body;
+	StatementExpressionBodyResult body = self.statement_body.parse_statement_expression_body(p, eval)!;
 	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
 	completed = true;
 
@@ -173,10 +247,10 @@ fn bool starts_va_arg_pack_argument(parser::Parser* p)
 {
 	usz lookahead = 0;
 	while (p.is_at(tokenizer::TokenId.L_PAREN, lookahead)) lookahead++;
-	parser::TokenIndexOption maybe_index = p.peek_index(lookahead);
-	if (!maybe_index.has_value) return false;
-	tokens::TreeToken token = p.tree.tokens[(usz)maybe_index.value];
-	return token.id == tokenizer::TokenId.IDENTIFIER && p.tree.tok_slice(maybe_index.value) == "__builtin_va_arg_pack";
+	tokens::TokenIndex? index = p.peek_index(lookahead);
+	if (catch index) return false;
+	tokens::TreeToken token = p.tree.tokens[(usz)index];
+	return token.id == tokenizer::TokenId.IDENTIFIER && p.tree.tok_slice(index) == "__builtin_va_arg_pack";
 }
 
 <* C default argument promotions for variadic and old-style calls. *>
@@ -221,6 +295,238 @@ fn value::Value string_subscript_value(parser::Parser* p, parser_result::Result 
 	return value::NONE;
 }
 
+<* Check the operand rules shared by postfix increment and decrement. *>
+fn bool? check_postfix_update_operand(parser::Parser* p, parser_result::Result operand, tokens::TokenIndex op_tok)
+{
+	if (operand.qt.is_invalid()) return true;
+	type_store::ScalarKind scalar_kind = operand.qt.scalar_kind(p.comp);
+	if (scalar_kind == type_store::ScalarKind.VOID_POINTER)
+	{
+		p.err(parser_diagnostics::ParserDiag.GNU_POINTER_ARITH, op_tok)!;
+	}
+	if (scalar_kind == type_store::ScalarKind.NONE)
+	{
+		p.err(parser_diagnostics::ParserDiag.INVALID_ARGUMENT_UN, op_tok, p.fmt_qt(operand.qt))!;
+	}
+	if (!scalar_kind.is_real)
+	{
+		p.err(parser_diagnostics::ParserDiag.COMPLEX_PREFIX_POSTFIX_OP, op_tok, p.fmt_qt(operand.qt))!;
+	}
+
+	bool is_const;
+	if (!p.tree.is_lval_extra(operand.node, &is_const) || is_const || operand.qt.is_const)
+	{
+		p.emit_parser_diag(parser_diagnostics::ParserDiag.NOT_ASSIGNABLE, "expression is not assignable", op_tok)!;
+		return false;
+	}
+
+	type_store::QualType value_qt = operand.qt.non_atomic(p.comp);
+	if (try pointer = value_qt.get(p.comp, type_store::TypeTag.POINTER))
+	{
+		if (p.comp.langopts.bounds_safety == lang_opts::BoundsSafety.CLANG &&
+			pointer.pointer.bounds == type_store::PointerBounds.SINGLE)
+		{
+			p.emit_parser_diag(parser_diagnostics::ParserDiag.POINTER_ARITH_SINGLE,
+				"pointer arithmetic on single pointer is out of bounds; consider adding '__counted_by'", op_tok)!;
+			return false;
+		}
+
+		type_store::QualType pointee = pointer.pointer.child;
+		if (pointee.is(p.comp, type_store::TypeTag.VOID)) return true;
+		if (pointee.is(p.comp, type_store::TypeTag.FUNC))
+		{
+			p.err(parser_diagnostics::ParserDiag.INVALID_ARGUMENT_UN, op_tok, p.fmt_qt(operand.qt))!;
+			return false;
+		}
+		if (pointee.has_incomplete_size(p.comp))
+		{
+			p.err(parser_diagnostics::ParserDiag.PTR_ARITHMETIC_INCOMPLETE, op_tok, p.fmt_qt(pointee))!;
+			return false;
+		}
+		return true;
+	}
+
+	// Parser.zig reports invalid/complex operand diagnostics above but still builds the
+	// postfix node for a modifiable lvalue, preserving recovery and the original value.
+	return true;
+}
+
+<* Build a postfix update node while retaining the operand's prior value on its node. *>
+fn void make_postfix_update(parser::Parser* p, parser_result::Result* operand,
+	tree::NodeKind kind, tokens::TokenIndex op_tok)
+{
+	operand.save_value(p);
+	operand.qt = operand.qt.non_atomic(p.comp).unqualified();
+	operand.node = p.tree.add_node({ .kind = kind, .unary = {
+		.qt = operand.qt, .operand = operand.node, .op_tok = op_tok,
+	} });
+}
+
+<*
+ Zig `checkArrayBounds`: diagnose a constant `index` outside a fixed-length `array`
+ (or an array a pointer decayed from). `array` and `index` are the operands before
+ conversion, so the array type and node survive decay. Clang `__single` pointer rules
+ are separate (check_single_subscript).
+*>
+fn void? check_subscript_bounds(parser::Parser* p, parser_result::Result index, parser_result::Result array,
+	tokens::TokenIndex bracket)
+{
+	if (index.val.is_none()) return;
+	if (try len = array.qt.array_len(p.comp))
+	{
+		if (len == 0) return;
+		if (len == 1)
+		{
+			// A trailing one-element member acts as an old-style flexible array member.
+			tree::Node array_expr = array.node.get(&p.tree);
+			if (array_expr.kind == tree::NodeKind.MEMBER_ACCESS_EXPR || array_expr.kind == tree::NodeKind.MEMBER_ACCESS_PTR_EXPR)
+			{
+				type_store::QualType base_qt = array_expr.member_access.base.qt(&p.tree);
+				if (try base_ptr = base_qt.get(p.comp, type_store::TypeTag.POINTER)) base_qt = base_ptr.pointer.child;
+				if (try record = base_qt.get_record(p.comp))
+				{
+					if ((usz)array_expr.member_access.member_index + 1 == record.fields.len)
+					{
+						if (!index.val.is_zero(p.comp))
+						{
+							p.err(parser_diagnostics::ParserDiag.OLD_STYLE_FLEXIBLE_STRUCT, bracket, p.fmt_value(index.val, index.qt))!;
+						}
+						return;
+					}
+				}
+			}
+		}
+		ulong index_int = index.val.to_u64(p.comp) ?? ulong::max;
+		if (index.qt.signedness(p.comp) == lang_opts::Signedness.UNSIGNED)
+		{
+			if (index_int >= len)
+			{
+				p.err(parser_diagnostics::ParserDiag.ARRAY_AFTER, bracket, p.fmt_value(index.val, index.qt))!;
+			}
+		}
+		else if (value::compare(index.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+		{
+			p.err(parser_diagnostics::ParserDiag.ARRAY_BEFORE, bracket, p.fmt_value(index.val, index.qt))!;
+		}
+		else if (index_int >= len)
+		{
+			p.err(parser_diagnostics::ParserDiag.ARRAY_AFTER, bracket, p.fmt_value(index.val, index.qt))!;
+		}
+	}
+}
+
+<*
+ Clang bounds-safety: subscripting a `__single` pointer is in bounds only at a constant
+ index of 0. `base` is the raw pointer operand and `index` the raw integer operand, both
+ before decay and promotion. The check keys on the raw pointer type, so a fixed array
+ (which only decays to a pointer) is never treated as `__single`. Any other index,
+ constant or not, reports SINGLE_REQUIRES_ZERO_INDEX at `bracket`.
+*>
+fn void? check_single_subscript(parser::Parser* p, parser_result::Result base, parser_result::Result index,
+	tokens::TokenIndex bracket)
+{
+	if (p.comp.langopts.bounds_safety != lang_opts::BoundsSafety.CLANG) return;
+	if (try pointer = base.qt.get(p.comp, type_store::TypeTag.POINTER))
+	{
+		if (pointer.pointer.bounds != type_store::PointerBounds.SINGLE) return;
+		if (index.val.is_zero(p.comp)) return;
+		p.err(parser_diagnostics::ParserDiag.SINGLE_REQUIRES_ZERO_INDEX, bracket)!;
+	}
+}
+
+<*
+ Zig `suffixExpr` `.l_bracket` after the closing `]` is consumed. Decays both operands,
+ then takes the pointer, array or vector side as base in either order (integer index).
+ Invalid roles are reported at `bracket` and the access node is still built, as in
+ Parser.zig. Element types with no size are rejected; `void` keeps the GNU extension.
+ A valid integer index gets C integer promotion once the roles are known. Clang
+ `__single` bases are checked against the raw operands (check_single_subscript).
+*>
+fn parser_result::Result? PostfixParser.array_subscript(&self, parser_result::Result array_before,
+	parser_result::Result index_before, tokens::TokenIndex bracket)
+{
+	parser::Parser* p = self.parser;
+	parser_result::Result ptr = array_before;
+	parser_result::Result index = index_before;
+	ptr.value_conversion(p);
+	index.value_conversion(p);
+
+	bool swapped = false;
+	bool has_element = false;
+	if (try ptr_ty = ptr.qt.get(p.comp, type_store::TypeTag.POINTER))
+	{
+		ptr.qt = ptr_ty.pointer.child;
+		has_element = true;
+		if (index.qt.is_real_int(p.comp))
+		{
+			check_subscript_bounds(p, index_before, array_before, bracket)!;
+			check_single_subscript(p, array_before, index_before, bracket)!;
+		}
+		else
+		{
+			p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket)!;
+		}
+	}
+	else if (try index_ty = index.qt.get(p.comp, type_store::TypeTag.POINTER))
+	{
+		index.qt = index_ty.pointer.child;
+		has_element = true;
+		if (ptr.qt.is_real_int(p.comp))
+		{
+			check_subscript_bounds(p, array_before, index_before, bracket)!;
+			check_single_subscript(p, index_before, array_before, bracket)!;
+		}
+		else
+		{
+			p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket)!;
+		}
+		// Integer on the left, pointer on the right: the pointer becomes the base.
+		parser_result::Result swap_tmp = ptr;
+		ptr = index;
+		index = swap_tmp;
+		swapped = true;
+	}
+	else if (try vec_ty = ptr.qt.get(p.comp, type_store::TypeTag.VECTOR))
+	{
+		// Vector elements are addressed from the unconverted vector operand.
+		ptr = array_before;
+		ptr.qt = vec_ty.vector.elem;
+		has_element = true;
+		if (!index.qt.is_real_int(p.comp))
+		{
+			p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket)!;
+		}
+	}
+	else if (!index.qt.is_invalid() && !ptr.qt.is_invalid())
+	{
+		p.err(parser_diagnostics::ParserDiag.INVALID_SUBSCRIPT, bracket)!;
+	}
+
+	// C integer promotion of a valid integer index, after roles are known so both operand
+	// orders and vector bases get it. Raw operands above still feed folding and bounds checks.
+	if (has_element && index.qt.is_real_int(p.comp)) index.usual_unary_conversion(p, bracket)!;
+
+	if (has_element && !ptr.qt.is_invalid() && !ptr.qt.is(p.comp, type_store::TypeTag.VOID) &&
+		ptr.qt.has_incomplete_size(p.comp))
+	{
+		p.err(parser_diagnostics::ParserDiag.PTR_ARITHMETIC_INCOMPLETE, bracket, p.fmt_qt(ptr.qt))!;
+		ptr.qt = type_store::INVALID;
+	}
+
+	// Fold `"literal"[k]` from the operands before decay (string_subscript_value).
+	value::Value subscript_val = swapped ? string_subscript_value(p, index_before, array_before)
+		: string_subscript_value(p, array_before, index_before);
+
+	ptr.save_value(p);
+	index.save_value(p);
+	ptr.node = p.tree.add_node({ .kind = tree::NodeKind.ARRAY_ACCESS_EXPR, .array_access = {
+		.l_bracket_tok = bracket, .qt = ptr.qt, .base = ptr.node, .index = index.node,
+	} });
+	ptr.val = subscript_val;
+	if (!subscript_val.is_none()) p.tree.set_value(ptr.node, subscript_val);
+	return ptr;
+}
+
 <* Member-name lookup state shared by the direct and anonymous-record searches. `base_qt` is
    the record named in NO_SUCH_MEMBER even when the search descends into an anonymous member. *>
 struct MemberLookup
@@ -232,32 +538,68 @@ struct MemberLookup
 }
 
 <*
+ Number of members named `target_name` reachable from `record`: direct fields plus the
+ matches inside each anonymous struct/union member, at every level. More than one is
+ ambiguous; zero is a missing member.
+*>
+fn usz member_match_count(compilation::Compilation* comp, type_store::Record record, string_interner::StringId target_name)
+{
+	usz count = 0;
+	foreach (field : record.fields)
+	{
+		if (field.name_tok == (type_store::TokenIndex)0)
+		{
+			if (try nested_record = field.qt.get_record(comp))
+			{
+				count += member_match_count(comp, nested_record, target_name);
+				continue;
+			}
+		}
+		if (target_name == field.name) count++;
+	}
+	return count;
+}
+
+<* Add the const/volatile/restrict qualifiers of `parent` to `qt`; `qt` keeps its own. *>
+fn type_store::QualType inherit_qualifiers(type_store::QualType qt, type_store::QualType parent)
+{
+	qt.is_const = qt.is_const || parent.is_const;
+	qt.is_volatile = qt.is_volatile || parent.is_volatile;
+	qt.is_restrict = qt.is_restrict || parent.is_restrict;
+	return qt;
+}
+
+<*
  Zig `fieldAccessExtra`: find `ctx.target_name` in `record`, descending into
  anonymous struct/union members that contain it. Each anonymous level is its own
  member access; `is_arrow` applies only to the outermost one because inner levels
- are reached through the value. A miss at the top level reports NO_SUCH_MEMBER.
+ are reached through the value. `record_qt` is the qualified record the member is read
+ through: every member type inherits its qualifiers, and each anonymous level passes its
+ qualified type down. The caller rejects ambiguous names first, so at most one path
+ matches. A miss at the top level reports NO_SUCH_MEMBER.
 *>
 fn parser_result::Result? field_access_extra(parser::Parser* p, type_store::NodeIndex base,
-	type_store::Record record, bool is_arrow, MemberLookup* ctx)
+	type_store::Record record, type_store::QualType record_qt, bool is_arrow, MemberLookup* ctx)
 {
 	for (usz i = 0; i < record.fields.len; i++)
 	{
 		type_store::RecordField field = record.fields[i];
+		type_store::QualType field_qt = inherit_qualifiers(field.qt, record_qt);
 		if (field.name_tok == (type_store::TokenIndex)0)
 		{
 			if (try nested_record = field.qt.get_record(p.comp))
 			{
 				if (!nested_record.has_field(p.comp, ctx.target_name)) continue;
 				type_store::NodeIndex inner = p.tree.add_node({ .kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
-					.member_access = { .qt = field.qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i } });
-				return field_access_extra(p, inner, nested_record, false, ctx);
+					.member_access = { .qt = field_qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i } });
+				return field_access_extra(p, inner, nested_record, field_qt, false, ctx);
 			}
 		}
 		if (ctx.target_name == field.name)
 		{
 			type_store::NodeIndex node = p.tree.add_node({ .kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
-				.member_access = { .qt = field.qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i } });
-			return { .node = node, .qt = field.qt, .val = value::NONE };
+				.member_access = { .qt = field_qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i } });
+			return { .node = node, .qt = field_qt, .val = value::NONE };
 		}
 	}
 	p.err(parser_diagnostics::ParserDiag.NO_SUCH_MEMBER, ctx.name_tok, p.tree.tok_slice(ctx.name_tok), p.fmt_qt(ctx.base_qt))!;
@@ -340,8 +682,12 @@ fn parser_result::Result? PostfixParser.field_access(&self, parser_result::Resul
 		.access_tok = access_tok,
 		.name_tok = name_tok,
 	};
-	parser_result::Result? maybe_member = field_access_extra(p, lhs.node, record, is_arrow, &ctx);
-	if (catch member_fault = maybe_member) return member_fault~;
+	if (member_match_count(p.comp, record, ctx.target_name) > 1)
+	{
+		p.err(parser_diagnostics::ParserDiag.AMBIGUOUS_MEMBER, name_tok, p.tree.tok_slice(name_tok))!;
+		return PARSING_FAILED~;
+	}
+	parser_result::Result maybe_member = field_access_extra(p, lhs.node, record, record_qt, is_arrow, &ctx)!;
 	lhs.save_value(p);
 	return maybe_member;
 }
@@ -358,7 +704,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 {
 	parser::Parser* p = self.parser;
 	parser_result::Result? maybe_lhs;
-	if (self.has_statement_expression_body && p.is_at(tokenizer::TokenId.L_PAREN) && p.is_at(tokenizer::TokenId.L_BRACE, 1))
+	if (self.statement_body && p.is_at(tokenizer::TokenId.L_PAREN) && p.is_at(tokenizer::TokenId.L_BRACE, 1))
 	{
 		tokens::TokenIndex l_paren = p.tok_i;
 		p.advance();
@@ -367,7 +713,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 	}
 	else
 	{
-		maybe_lhs = self.primary(self.context, p, eval);
+		maybe_lhs = self.primary(eval);
 	}
 	if (catch f = maybe_lhs) return f~;
 	parser_result::Result lhs = maybe_lhs;
@@ -377,50 +723,26 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 		if (id == tokenizer::TokenId.PLUS_PLUS || id == tokenizer::TokenId.MINUS_MINUS)
 		{
 			tokens::TokenIndex op_tok = p.tok_i;
-			bool is_const;
-			if (!p.tree.is_lval_extra(lhs.node, &is_const) || is_const) return PARSING_FAILED~;
 			p.advance();
-			lhs.save_value(p);
 			tree::NodeKind kind = id == tokenizer::TokenId.PLUS_PLUS ? tree::NodeKind.POST_INC_EXPR : tree::NodeKind.POST_DEC_EXPR;
-			lhs.node = p.tree.add_node({ .kind = kind, .unary = { .qt = lhs.qt, .operand = lhs.node, .op_tok = op_tok } });
+			if (lhs.qt.is_invalid())
+			{
+				lhs.val = value::NONE;
+				lhs.node = p.tree.add_node({ .kind = kind, .unary = { .qt = lhs.qt, .operand = lhs.node, .op_tok = op_tok } });
+				continue;
+			}
+			if (!(check_postfix_update_operand(p, lhs, op_tok)!)) return PARSING_FAILED~;
+			make_postfix_update(p, &lhs, kind, op_tok);
 			continue;
 		}
 		if (id == tokenizer::TokenId.L_BRACKET)
 		{
 			tokens::TokenIndex bracket = p.tok_i;
 			p.advance();
-			parser_result::Result? maybe_index = self.expression(self.nested_expression_context(), p, tokens::PREC_ANY, eval);
-			if (catch f = maybe_index) return f~;
-			parser_result::Result index = maybe_index;
-			if (catch f = self.expect(tokenizer::TokenId.R_BRACKET)) return f~;
-			value::Value subscript_val = string_subscript_value(p, lhs, index);
-			lhs.value_conversion(p);
-			index.value_conversion(p);
-			type_store::QualType elem;
-			if (try ptr = lhs.qt.get(p.comp, type_store::TypeTag.POINTER))
-			{
-				elem = ptr.pointer.child;
-			}
-			else if (try arr = lhs.qt.get(p.comp, type_store::TypeTag.ARRAY))
-			{
-				elem = arr.array.elem;
-			}
-			else if (try vec = lhs.qt.get(p.comp, type_store::TypeTag.VECTOR))
-			{
-				elem = vec.vector.elem;
-			}
-			else
-			{
-				return PARSING_FAILED~;
-			}
-			lhs.save_value(p);
-			index.save_value(p);
-			lhs.node = p.tree.add_node({ .kind = tree::NodeKind.ARRAY_ACCESS_EXPR, .array_access = {
-				.l_bracket_tok = bracket, .qt = elem, .base = lhs.node, .index = index.node,
-			} });
-			lhs.qt = elem;
-			lhs.val = subscript_val;
-			if (!subscript_val.is_none()) p.tree.set_value(lhs.node, subscript_val);
+			parser_result::Result index = self.nested(tokens::PREC_ANY, eval)!;
+			if (catch f = p.expect_closing(tokenizer::TokenId.R_BRACKET, bracket)) return f~;
+			parser_result::Result maybe_subscript = self.array_subscript(lhs, index, bracket)!;
+			lhs = maybe_subscript;
 			continue;
 		}
 		if (id == tokenizer::TokenId.L_PAREN)
@@ -442,6 +764,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			type_store::Func call_fn;
 			uint typed_params_len = 0xFFFF_FFFF;
 			type_store::FuncKind func_kind = type_store::FuncKind.NORMAL;
+			bool preserve_builtin_args = is_overflow_builtin_callee(p, lhs.node);
 			if (!function_qt.is_invalid())
 			{
 				if (!function_qt.is(p.comp, type_store::TypeTag.FUNC))
@@ -458,10 +781,10 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			List{type_store::NodeIndex} args;
 			args.init(p.comp.gpa);
 			defer args.free();
+			tokens::TokenIndex first_after = l_paren;
 			if (!self.at(tokenizer::TokenId.R_PAREN))
 			{
 				uint arg_index = 0;
-				tokens::TokenIndex first_after = l_paren;
 				while (true)
 				{
 					tokens::TokenIndex param_tok = p.tok_i;
@@ -476,7 +799,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 							.typed = arg_index < typed_params_len,
 						} : {};
 						defer p.va_arg_pack_call = old_pack_context;
-						maybe_arg = self.expression(self.nested_expression_context(), p, tokens::PREC_ASSIGN, eval);
+						maybe_arg = self.nested(tokens::PREC_ASSIGN, eval);
 					}
 					if (catch f = maybe_arg) return f~;
 					parser_result::Result arg = maybe_arg;
@@ -496,7 +819,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 						return PARSING_FAILED~;
 					}
 
-					if (!is_va_arg_pack && !function_qt.is_invalid() && arg_index < typed_params_len)
+					if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid() && arg_index < typed_params_len)
 					{
 						// Re-read the function type after parsing the expression; type-store
 						// growth may move its parameter slice.
@@ -506,14 +829,14 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 						{
 							arg.qt = type_store::INVALID;
 						}
-						else if (!arg.coerce_scalar(p, param.qt, param_tok)!)
+						else if (!arg.coerce_scalar(p, param.qt, param_tok, parser_result::CoercionContext.ARGUMENT)!)
 						{
 							p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_ARG, param_tok,
 								p.fmt_qt(arg.qt), p.fmt_qt(param.qt))!;
-							if (param.name_tok != 0) p.err(parser_diagnostics::ParserDiag.PARAMETER_HERE, param.name_tok)!;
+							if (param.name_tok != (type_store::TokenIndex)0) p.err(parser_diagnostics::ParserDiag.PARAMETER_HERE, (tokens::TokenIndex)param.name_tok)!;
 						}
 					}
-					else if (!is_va_arg_pack && !function_qt.is_invalid())
+					else if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid())
 					{
 						promote_call_argument(&arg, p, param_tok)!;
 					}
@@ -528,9 +851,9 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			}
 			tokens::TokenIndex r_paren = p.tok_i;
 			if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
-			if (self.has_builtin_call)
+			if (self.builtin_call)
 			{
-				parser_result::Result? maybe_builtin = self.builtin_call(self.builtin_call_context, p,
+				parser_result::Result? maybe_builtin = self.builtin_call.parse_builtin_call(p,
 					lhs.node, l_paren, args.array_view(), eval);
 				if (catch builtin_fault = maybe_builtin)
 				{
@@ -546,19 +869,20 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			bool args_ok = true;
 			if (!function_qt.is_invalid())
 			{
-				if (func_kind == type_store::FuncKind.NORMAL && args.len != (usz)typed_params_len)
+				if (func_kind == type_store::FuncKind.NORMAL && (usz)args.len() != (usz)typed_params_len)
 				{
-					tokens::TokenIndex tok = args.len < (usz)typed_params_len ? r_paren : first_after;
+					tokens::TokenIndex tok = (usz)args.len() < (usz)typed_params_len ? r_paren : first_after;
 					p.err(parser_diagnostics::ParserDiag.EXPECTED_ARGUMENTS, tok,
-						typed_params_len, (uint)args.len)!;
+						typed_params_len, (uint)args.len())!;
 					args_ok = false;
 				}
-				else if (func_kind == type_store::FuncKind.VARIADIC && args.len < (usz)typed_params_len)
+				else if (func_kind == type_store::FuncKind.VARIADIC && (usz)args.len() < (usz)typed_params_len)
 				{
 					p.err(parser_diagnostics::ParserDiag.EXPECTED_AT_LEAST_ARGUMENTS, r_paren,
-						typed_params_len, (uint)args.len)!;
+						typed_params_len, (uint)args.len())!;
+					args_ok = false;
 				}
-				else if (func_kind == type_store::FuncKind.OLD_STYLE && args.len != (usz)typed_params_len)
+				else if (func_kind == type_store::FuncKind.OLD_STYLE && (usz)args.len() != (usz)typed_params_len)
 				{
 					if (typed_params_len == 0)
 					{
@@ -567,7 +891,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 					else
 					{
 						p.err(parser_diagnostics::ParserDiag.EXPECTED_ARGUMENTS_OLD, first_after,
-							typed_params_len, (uint)args.len)!;
+							typed_params_len, (uint)args.len())!;
 					}
 				}
 			}
@@ -591,8 +915,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			{
 				lhs.value_conversion(p);
 			}
-			parser_result::Result? maybe_member = self.field_access(lhs, name_tok, is_arrow, access_tok);
-			if (catch member_fault = maybe_member) return member_fault~;
+			parser_result::Result maybe_member = self.field_access(lhs, name_tok, is_arrow, access_tok)!;
 			lhs = maybe_member;
 			continue;
 		}

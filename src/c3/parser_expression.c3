@@ -13,28 +13,25 @@ excuse NO_EXPRESSION;
 excuse NOT_FOLDABLE;
 
 // Source-derived assumption: Parser.zig's binaryExpr receives a fully typed
-// unary expression from unExpr. Keeping this boundary as a callback avoids
-// inventing identifier, cast, and postfix rules which belong to other grammar
-// productions.
-alias PrimaryExpression = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-<* Optional interception for language builtins that have custom grammar. A
-   callback returns NO_EXPRESSION when the identifier is not a specialized
-   builtin, allowing normal primary-expression resolution to continue. *>
-alias BuiltinPrimaryExpression = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-
+// unary expression from unExpr. Keeping this boundary as `parts.parse_operand`
+// avoids inventing identifier, cast, and postfix rules which belong to other
+// grammar productions.
 struct ExpressionParser
 {
 	parser::Parser* parser;
-	void* context;
-	PrimaryExpression primary_expression;
-	BuiltinPrimaryExpression builtin_primary_expression;
-	bool has_builtin_primary_expression;
+	<* `parse_operand`: the unary operand below the binary-operator engine. *>
+	parser::IExpressionParts parts;
+	<* Optional interception for language builtins that have custom grammar;
+	   null when there is none. NO_EXPRESSION lets normal primary-expression
+	   resolution continue. *>
+	parser::IBuiltinParser builtin;
 	bool primary_handles_parentheses;
 }
 
 <* The parser-owned expression composition keeps these callback contexts alive
-   while nested expressions recurse through PrimaryParser and PostfixParser. *>
-struct ParserExpressionComposition
+   while nested expressions recurse through PrimaryParser and PostfixParser.
+   As IBuiltinParser and IBuiltinCall it forwards to the Parser's handler. *>
+struct ParserExpressionComposition (parser::IBuiltinParser, parser::IBuiltinCall, parser::IExpressionParts, parser_postfix::IStatementExpressionBody)
 {
 	parser::Parser* parser;
 	ExpressionParser expression;
@@ -42,42 +39,31 @@ struct ParserExpressionComposition
 	parser_primary::PrimaryParser primary;
 }
 
-fn parser_result::Result? composed_nested_expression(void* context, parser::Parser* p,
-	tokens::Precedence min_prec, bool eval)
-{
-	ParserExpressionComposition* composition = (ParserExpressionComposition*)context;
-	return composition.expression.parse(min_prec, eval);
-}
+fn parser_result::Result? ParserExpressionComposition.parse_nested(&self, parser::Parser* p,
+	tokens::Precedence min_prec, bool eval) @dynamic
+	=> self.expression.parse(min_prec, eval);
 
-fn parser_result::Result? composed_primary_expression(void* context, parser::Parser* p, bool eval)
-{
-	ParserExpressionComposition* composition = (ParserExpressionComposition*)context;
-	return composition.primary.parse(eval);
-}
+fn parser_result::Result? ParserExpressionComposition.parse_primary(&self, parser::Parser* p, bool eval) @dynamic
+	=> self.primary.parse(eval);
 
-fn parser_result::Result? composed_postfix_expression(void* context, parser::Parser* p, bool eval)
-{
-	ParserExpressionComposition* composition = (ParserExpressionComposition*)context;
-	return composition.postfix.parse(eval);
-}
+fn parser_result::Result? ParserExpressionComposition.parse_operand(&self, parser::Parser* p, bool eval) @dynamic
+	=> self.postfix.parse(eval);
 
-fn parser_result::Result? composed_builtin_primary_expression(void* context, parser::Parser* p, bool eval)
+fn parser_result::Result? ParserExpressionComposition.parse_builtin_primary(&self, parser::Parser* p, bool eval) @dynamic
 {
 	return p.handler.handle_builtin_primary_expression(p, eval);
 }
 
-fn parser_result::Result? composed_builtin_call(void* context, parser::Parser* p,
-	type_store::NodeIndex callee, tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval)
+fn parser_result::Result? ParserExpressionComposition.parse_builtin_call(&self, parser::Parser* p,
+	type_store::NodeIndex callee, tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @dynamic
 {
 	return p.handler.handle_builtin_call(p, callee, l_paren, args, eval);
 }
 
-fn parser_postfix::StatementExpressionBodyResult? composed_statement_expression_body(void* context,
-	parser::Parser* p, bool eval)
+fn parser_postfix::StatementExpressionBodyResult? ParserExpressionComposition.parse_statement_expression_body(&self,
+	parser::Parser* p, bool eval) @dynamic
 {
-	type_store::NodeIndex? maybe_body = p.handler.handle_statement_expression_body(p, eval);
-	if (catch f = maybe_body) return f~;
-	type_store::NodeIndex body = maybe_body;
+	type_store::NodeIndex body = p.handler.handle_statement_expression_body(p, eval)!;
 	tree::Node compound = body.get(&p.tree);
 	if (compound.kind != tree::NodeKind.COMPOUND_STMT) return PARSING_FAILED~;
 	type_store::QualType result_qt = type_store::VOID;
@@ -89,35 +75,26 @@ fn parser_postfix::StatementExpressionBodyResult? composed_statement_expression_
 	return { .body = body, .qt = result_qt };
 }
 
-fn parser_result::Result? composed_compound_literal(void* context, parser::Parser* p,
-	tokens::TokenIndex opening_tok, type_store::QualType qt, bool eval)
+<* HOOK_ABSENT unless the parser's handler provides compound literals. *>
+fn parser_result::Result? ParserExpressionComposition.parse_compound_literal(&self, parser::Parser* p,
+	tokens::TokenIndex opening_tok, type_store::QualType qt, bool eval) @dynamic
 {
-	return p.handler.handle_compound_literal_primary(p, opening_tok, qt, eval);
+	parser::IParserHandler h = p.handler;
+	if (!h || !&h.handle_compound_literal_primary) return parser::HOOK_ABSENT~;
+	return h.handle_compound_literal_primary(p, opening_tok, qt, eval);
 }
 
 fn void ParserExpressionComposition.init(&self, parser::Parser* p)
 {
 	parser::IParserHandler h = p.handler;
 	self.parser = p;
-	self.expression = { .parser = p, .context = (void*)self,
-		.primary_expression = &composed_postfix_expression,
-		.builtin_primary_expression = &composed_builtin_primary_expression,
-		.has_builtin_primary_expression = h && &h.handle_builtin_primary_expression,
+	self.expression = { .parser = p, .parts = self,
+		.builtin = h && &h.handle_builtin_primary_expression ? (parser::IBuiltinParser)self : null,
 		.primary_handles_parentheses = true };
-	self.postfix = { .parser = p, .context = (void*)self, .expression_context = (void*)self,
-		.primary = &composed_primary_expression,
-		.expression = &composed_nested_expression,
-		.statement_expression_context = (void*)self,
-		.statement_expression_body = &composed_statement_expression_body,
-		.has_statement_expression_body = h && &h.handle_statement_expression_body,
-		.builtin_call_context = (void*)self,
-		.builtin_call = &composed_builtin_call,
-		.has_builtin_call = h && &h.handle_builtin_call };
-	self.primary = { .parser = p, .context = (void*)self,
-		.expression = &composed_nested_expression,
-		.compound_literal_context = (void*)self,
-		.compound_literal = &composed_compound_literal,
-		.has_compound_literal = h && &h.handle_compound_literal_primary };
+	self.postfix = { .parser = p, .parts = self,
+		.statement_body = h && &h.handle_statement_expression_body ? (parser_postfix::IStatementExpressionBody)self : null,
+		.builtin_call = h && &h.handle_builtin_call ? (parser::IBuiltinCall)self : null };
+	self.primary = { .parser = p, .parts = self };
 }
 
 fn parser_result::Result? parse_composed_expression(parser::Parser* p,
@@ -423,11 +400,10 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 			return PARSING_FAILED~;
 		}
 		type_store::QualType pointer_qt = p.comp.type_store.put(type_store::type_pointer(operand.qt));
+		value::Value address_val = parser_result::compute_offset(p, operand);
 		operand.node = p.tree.add_node({ .kind = tree::NodeKind.ADDR_OF_EXPR, .unary = { .qt = pointer_qt, .operand = operand.node, .op_tok = op_tok } });
 		operand.qt = pointer_qt;
-		// The parser has no declaration storage-duration hook, so do not claim
-		// an address constant for arbitrary lvalues.
-		operand.val = value::NONE;
+		operand.val = address_val;
 		return operand;
 	}
 	if (op == tokenizer::TokenId.ASTERISK)
@@ -473,9 +449,7 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 		{
 			tokens::TokenIndex paren_tok = p.tok_i;
 			p.advance();
-			parser::TypeNameProbe? maybe_probe = p.probe_typed_type_name();
-			if (catch probe_error = maybe_probe) return probe_error~;
-			parser::TypeNameProbe probe = maybe_probe;
+			parser::TypeNameProbe probe = p.probe_typed_type_name()!;
 			if (!probe.matched)
 			{
 				p.tok_i = paren_tok;
@@ -537,7 +511,7 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 		parser_result::Result operand = maybe_operand;
 		operand.value_conversion(p);
 		type_store::ScalarKind scalar_kind = operand.qt.scalar_kind(p.comp);
-		if (!scalar_kind.is_arithmetic())
+		if (!scalar_kind.is_arithmetic)
 		{
 			parser_diagnostics::ParserDiag diag = is_imag ? parser_diagnostics::ParserDiag.INVALID_IMAG : parser_diagnostics::ParserDiag.INVALID_REAL;
 			p.err_dyn(diag, op_tok, p.fmt_qt(operand.qt))!;
@@ -646,17 +620,19 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 		result.node = p.tree.add_node({ .kind = kind, .unary = { .qt = result.qt, .operand = result.node, .op_tok = op_tok } });
 		return result;
 	}
-	if (self.has_builtin_primary_expression &&
-		(op == tokenizer::TokenId.IDENTIFIER || op == tokenizer::TokenId.EXTENDED_IDENTIFIER))
+	if (self.builtin &&
+		(op.is_identifier()))
 	{
-		parser_result::Result? maybe_builtin = self.builtin_primary_expression(self.context, p, eval);
+		parser_result::Result? maybe_builtin = self.builtin.parse_builtin_primary(p, eval);
 		if (catch builtin_fault = maybe_builtin)
 		{
 			if (builtin_fault != NO_EXPRESSION) return builtin_fault~;
 		}
 		else { return maybe_builtin; }
 	}
-	return self.primary_expression(self.context, p, eval);
+	parser::IExpressionParts g = self.parts;
+	if (!g || !&g.parse_operand) { p.grammar_unavailable()!; return PARSING_FAILED~; }
+	return g.parse_operand(p, eval);
 }
 
 <* Zig `binaryExpr`: left associative operators recurse at next precedence;
@@ -665,9 +641,7 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 {
 	parser::Parser* p = self.parser;
 	uint prev_errors = p.diagnostics.errors;
-	parser_result::Result? maybe_lhs = self.unary_expr(eval);
-	if (catch f = maybe_lhs) return f~;
-	parser_result::Result lhs = maybe_lhs;
+	parser_result::Result lhs = self.unary_expr(eval)!;
 	while (!p.at_eof())
 	{
 		tokenizer::TokenId op = p.tree.tokens[(usz)p.tok_i].id;
@@ -773,21 +747,21 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 				}
 				else
 				{
-					bool then_ok = then_expr.coerce_scalar(p, common_pointer, op_tok)!;
-					bool else_ok = else_expr.coerce_scalar(p, common_pointer, op_tok)!;
+					bool then_ok = then_expr.coerce_scalar(p, common_pointer, op_tok, parser_result::CoercionContext.EXPRESSION)!;
+					bool else_ok = else_expr.coerce_scalar(p, common_pointer, op_tok, parser_result::CoercionContext.EXPRESSION)!;
 					if (!then_ok || !else_ok) return PARSING_FAILED~;
 				}
 			}
 			else if (then_expr.qt.is_pointer(p.comp) && else_expr.qt.is_int(p.comp))
 			{
-				if (!(else_expr.coerce_scalar(p, then_expr.qt, op_tok)!)) return invalid_binary(p, then_expr.qt, else_expr.qt, op_tok);
+				if (!(else_expr.coerce_scalar(p, then_expr.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!)) return invalid_binary(p, then_expr.qt, else_expr.qt, op_tok);
 			}
 			else if (else_expr.qt.is_pointer(p.comp) && then_expr.qt.is_int(p.comp))
 			{
-				if (!(then_expr.coerce_scalar(p, else_expr.qt, op_tok)!)) return invalid_binary(p, then_expr.qt, else_expr.qt, op_tok);
+				if (!(then_expr.coerce_scalar(p, else_expr.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!)) return invalid_binary(p, then_expr.qt, else_expr.qt, op_tok);
 			}
-			else if (then_expr.qt.is_pointer(p.comp) && else_expr.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { else_expr.coerce_scalar(p, then_expr.qt, op_tok)!; }
-			else if (else_expr.qt.is_pointer(p.comp) && then_expr.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { then_expr.coerce_scalar(p, else_expr.qt, op_tok)!; }
+			else if (then_expr.qt.is_pointer(p.comp) && else_expr.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { else_expr.coerce_scalar(p, then_expr.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!; }
+			else if (else_expr.qt.is_pointer(p.comp) && then_expr.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { then_expr.coerce_scalar(p, else_expr.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!; }
 			else if ((then_expr.qt.is_int(p.comp) || then_expr.qt.is_float(p.comp)) && (else_expr.qt.is_int(p.comp) || else_expr.qt.is_float(p.comp))) { convert_arithmetic_operands(&then_expr, &else_expr, p, op_tok)!; }
 			else if (!then_expr.qt.eql(else_expr.qt, p.comp)) { return invalid_binary(p, then_expr.qt, else_expr.qt, op_tok); }
 			// Both arms determine the conditional type, even when the condition
@@ -849,7 +823,7 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 			}
 			if (kind == tree::NodeKind.ASSIGN_EXPR)
 			{
-				if (!(rhs.coerce_scalar(p, lhs.qt, op_tok)!)) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+				if (!(rhs.coerce_scalar(p, lhs.qt, op_tok, parser_result::CoercionContext.ASSIGNMENT)!)) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
 			}
 			else
 			{
@@ -867,7 +841,7 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 					if (!calc_lhs.qt.is_int(p.comp) || !rhs.qt.is_int(p.comp))
 					{
 						if (kind == tree::NodeKind.BIT_AND_ASSIGN_EXPR || kind == tree::NodeKind.BIT_XOR_ASSIGN_EXPR || kind == tree::NodeKind.BIT_OR_ASSIGN_EXPR || kind == tree::NodeKind.MOD_ASSIGN_EXPR) { return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok); }
-						return invalid_binary(p, calc_lhs.qt, rhs.qt, op_tok);
+						return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 					}
 					if ((kind == tree::NodeKind.SHL_ASSIGN_EXPR || kind == tree::NodeKind.SHR_ASSIGN_EXPR) && eval && !rhs.val.is_none())
 					{
@@ -879,21 +853,22 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 					if (!(validate_pointer_arithmetic(p, calc_lhs.qt, op_tok)!)) return PARSING_FAILED~;
 					calc_lhs.value_conversion(p);
 					rhs.usual_unary_conversion(p, op_tok)!;
-					if (!rhs.qt.is_int(p.comp)) return invalid_binary(p, calc_lhs.qt, rhs.qt, op_tok);
+					if (!rhs.qt.is_int(p.comp)) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 				}
 				else if (kind == tree::NodeKind.SUB_ASSIGN_EXPR && calc_lhs.qt.is_pointer(p.comp))
 				{
 					if (!(validate_pointer_arithmetic(p, calc_lhs.qt, op_tok)!)) return PARSING_FAILED~;
 					calc_lhs.value_conversion(p);
 					rhs.usual_unary_conversion(p, op_tok)!;
-					if (!rhs.qt.is_int(p.comp)) return invalid_binary(p, calc_lhs.qt, rhs.qt, op_tok);
+					if (!rhs.qt.is_int(p.comp)) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 				}
 				else
 				{
 					calc_lhs.value_conversion(p);
 					rhs.value_conversion(p);
+					if ((!calc_lhs.qt.is_int(p.comp) && !calc_lhs.qt.is_float(p.comp)) || (!rhs.qt.is_int(p.comp) && !rhs.qt.is_float(p.comp))) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 					convert_arithmetic_operands(&calc_lhs, &rhs, p, op_tok)!;
-					if (!calc_lhs.qt.is_int(p.comp) && !calc_lhs.qt.is_float(p.comp)) return invalid_binary(p, calc_lhs.qt, rhs.qt, op_tok);
+					if (!calc_lhs.qt.is_int(p.comp) && !calc_lhs.qt.is_float(p.comp)) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 				}
 						if ((kind == tree::NodeKind.DIV_ASSIGN_EXPR || kind == tree::NodeKind.MOD_ASSIGN_EXPR) && eval && calc_lhs.qt.is_int(p.comp) && !rhs.val.is_none() && rhs.val.is_zero(p.comp))
 						{
@@ -920,7 +895,7 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 				calc_lhs.node = p.tree.add_node({ .kind = calc_kind, .binary = { .qt = calc_qt, .lhs = calc_lhs.node, .op_tok = op_tok, .rhs = rhs.node } });
 				calc_lhs.qt = calc_qt;
 				calc_lhs.val = value::NONE;
-				if (!(calc_lhs.coerce_scalar(p, lhs.qt.unqualified(), op_tok)!)) return invalid_binary(p, lhs.qt, calc_lhs.qt, op_tok);
+				if (!(calc_lhs.coerce_scalar(p, lhs.qt.unqualified(), op_tok, parser_result::CoercionContext.ASSIGNMENT)!)) return invalid_binary(p, lhs.qt, calc_lhs.qt, op_tok);
 				lhs.node = p.tree.add_node({ .kind = kind, .binary = { .qt = lhs.qt.unqualified(), .lhs = lhs.node, .op_tok = op_tok, .rhs = calc_lhs.node } });
 				lhs.qt = lhs.qt.unqualified();
 				lhs.val = value::NONE;
@@ -931,14 +906,14 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 		{
 			lhs.value_conversion(p);
 			rhs.value_conversion(p);
-			if (lhs.qt.scalar_kind(p.comp) == type_store::ScalarKind.NONE || rhs.qt.scalar_kind(p.comp) == type_store::ScalarKind.NONE) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+			if (lhs.qt.scalar_kind(p.comp) == type_store::ScalarKind.NONE || rhs.qt.scalar_kind(p.comp) == type_store::ScalarKind.NONE) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 		}
 		else if (kind == tree::NodeKind.SHL_EXPR || kind == tree::NodeKind.SHR_EXPR)
 		{
 			lhs.value_conversion(p); rhs.value_conversion(p);
 			lhs.usual_unary_conversion(p, op_tok)!;
 			rhs.usual_unary_conversion(p, op_tok)!;
-			if (!lhs.qt.is_int(p.comp) || !rhs.qt.is_int(p.comp)) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+			if (!lhs.qt.is_int(p.comp) || !rhs.qt.is_int(p.comp)) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 		}
 		else if (kind == tree::NodeKind.ADD_EXPR && ((lhs.qt.is_pointer(p.comp) && rhs.qt.is_int(p.comp)) || (rhs.qt.is_pointer(p.comp) && lhs.qt.is_int(p.comp))))
 		{
@@ -952,7 +927,7 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 			else
 			{
 				if (!rhs.qt.child_type(p.comp).is(p.comp, type_store::TypeTag.VOID) && !(validate_pointer_arithmetic(p, rhs.qt, op_tok)!)) return PARSING_FAILED~;
-				if (!compatible_pointees(lhs.qt, rhs.qt, p.comp)) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+				if (!compatible_pointees(lhs.qt, rhs.qt, p.comp)) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 			}
 		}
 		else if (kind == tree::NodeKind.BIT_AND_EXPR || kind == tree::NodeKind.BIT_OR_EXPR || kind == tree::NodeKind.BIT_XOR_EXPR || kind == tree::NodeKind.MOD_EXPR)
@@ -967,8 +942,8 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 			{
 				lhs.value_conversion(p); rhs.value_conversion(p);
 				convert_arithmetic_operands(&lhs, &rhs, p, op_tok)!;
-				if (!lhs.qt.is_int(p.comp) && !lhs.qt.is_float(p.comp)) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
-				if (!lhs.qt.scalar_kind(p.comp).is_real()) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+				if (!lhs.qt.is_int(p.comp) && !lhs.qt.is_float(p.comp)) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
+				if (!lhs.qt.scalar_kind(p.comp).is_real) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 			}
 			else if (lhs.qt.is_pointer(p.comp) && rhs.qt.is_pointer(p.comp))
 			{
@@ -989,10 +964,10 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 					common_child.is_volatile = lhs_child.is_volatile || rhs_child.is_volatile;
 					common_child.is_restrict = lhs_child.is_restrict || rhs_child.is_restrict;
 					type_store::QualType common_pointer = p.comp.type_store.put(type_store::type_pointer(common_child));
-					if (!lhs.coerce_scalar(p, common_pointer, op_tok)! || !rhs.coerce_scalar(p, common_pointer, op_tok)!) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+					if (!lhs.coerce_scalar(p, common_pointer, op_tok, parser_result::CoercionContext.EXPRESSION)! || !rhs.coerce_scalar(p, common_pointer, op_tok, parser_result::CoercionContext.EXPRESSION)!) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 				}
 			}
-			else { return invalid_binary(p, lhs.qt, rhs.qt, op_tok); }
+			else { return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok); }
 		}
 		else if (kind == tree::NodeKind.EQUAL_EXPR || kind == tree::NodeKind.NOT_EQUAL_EXPR)
 		{
@@ -1020,20 +995,20 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 					common_child.is_volatile = lhs_child.is_volatile || rhs_child.is_volatile;
 					common_child.is_restrict = lhs_child.is_restrict || rhs_child.is_restrict;
 					type_store::QualType common_pointer = p.comp.type_store.put(type_store::type_pointer(common_child));
-					if (!lhs.coerce_scalar(p, common_pointer, op_tok)! || !rhs.coerce_scalar(p, common_pointer, op_tok)!) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
+					if (!lhs.coerce_scalar(p, common_pointer, op_tok, parser_result::CoercionContext.EXPRESSION)! || !rhs.coerce_scalar(p, common_pointer, op_tok, parser_result::CoercionContext.EXPRESSION)!) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 				}
 			}
-			else if (lhs.qt.is_pointer(p.comp) && rhs.qt.is_int(p.comp) && rhs.val.is_zero(p.comp)) { rhs.coerce_scalar(p, lhs.qt, op_tok)!; }
-			else if (rhs.qt.is_pointer(p.comp) && lhs.qt.is_int(p.comp) && lhs.val.is_zero(p.comp)) { lhs.coerce_scalar(p, rhs.qt, op_tok)!; }
-			else if (lhs.qt.is_pointer(p.comp) && rhs.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { rhs.coerce_scalar(p, lhs.qt, op_tok)!; }
-			else if (rhs.qt.is_pointer(p.comp) && lhs.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { lhs.coerce_scalar(p, rhs.qt, op_tok)!; }
-			else { return invalid_binary(p, lhs.qt, rhs.qt, op_tok); }
+			else if (lhs.qt.is_pointer(p.comp) && rhs.qt.is_int(p.comp) && rhs.val.is_zero(p.comp)) { rhs.coerce_scalar(p, lhs.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!; }
+			else if (rhs.qt.is_pointer(p.comp) && lhs.qt.is_int(p.comp) && lhs.val.is_zero(p.comp)) { lhs.coerce_scalar(p, rhs.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!; }
+			else if (lhs.qt.is_pointer(p.comp) && rhs.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { rhs.coerce_scalar(p, lhs.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!; }
+			else if (rhs.qt.is_pointer(p.comp) && lhs.qt.is(p.comp, type_store::TypeTag.NULLPTR_T)) { lhs.coerce_scalar(p, rhs.qt, op_tok, parser_result::CoercionContext.EXPRESSION)!; }
+			else { return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok); }
 		}
 		else if (kind != tree::NodeKind.COMMA_EXPR)
 		{
 			lhs.value_conversion(p); rhs.value_conversion(p);
+			if ((!lhs.qt.is_int(p.comp) && !lhs.qt.is_float(p.comp)) || (!rhs.qt.is_int(p.comp) && !rhs.qt.is_float(p.comp))) return invalid_binary(p, original_lhs_qt, original_rhs_qt, op_tok);
 			convert_arithmetic_operands(&lhs, &rhs, p, op_tok)!;
-			if (!lhs.qt.is_int(p.comp) && !lhs.qt.is_float(p.comp)) return invalid_binary(p, lhs.qt, rhs.qt, op_tok);
 		}
 		else { lhs.value_conversion(p); rhs.value_conversion(p); }
 		// The result type follows the converted left operand except for comma
@@ -1138,32 +1113,33 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 }
 
 <* Parser.zig expression entry points, with the primary grammar supplied by the caller. *>
-fn parser_result::Result? parser::Parser.expr_with_primary(&self, void* context, PrimaryExpression primary_expression, bool eval = true)
+fn parser_result::Result? parser::Parser.expr_with_primary(&self, void* context, parser_postfix::PrimaryExpression primary_expression, bool eval = true)
 {
-	ExpressionParser parser = { .parser = self, .context = context, .primary_expression = primary_expression };
+	parser_postfix::CallbackParts parts = { .context = context, .operand = primary_expression };
+	ExpressionParser parser = { .parser = self, .parts = &parts };
 	return parser.parse(tokens::PREC_ANY, eval);
 }
 
 <* Expression entry point with custom builtin primary grammar. *>
-fn parser_result::Result? parser::Parser.expr_with_builtin_primary(&self, void* context, PrimaryExpression primary_expression,
-	BuiltinPrimaryExpression builtin_primary_expression, bool eval = true)
+fn parser_result::Result? parser::Parser.expr_with_builtin_primary(&self, void* context, parser_postfix::PrimaryExpression primary_expression,
+	parser::IBuiltinParser builtin, bool eval = true)
 {
-	ExpressionParser parser = { .parser = self, .context = context,
-		.primary_expression = primary_expression,
-		.builtin_primary_expression = builtin_primary_expression,
-		.has_builtin_primary_expression = true };
+	parser_postfix::CallbackParts parts = { .context = context, .operand = primary_expression };
+	ExpressionParser parser = { .parser = self, .parts = &parts, .builtin = builtin };
 	return parser.parse(tokens::PREC_ANY, eval);
 }
 
-fn parser_result::Result? parser::Parser.assign_expr_with_primary(&self, void* context, PrimaryExpression primary_expression, bool eval = true)
+fn parser_result::Result? parser::Parser.assign_expr_with_primary(&self, void* context, parser_postfix::PrimaryExpression primary_expression, bool eval = true)
 {
-	ExpressionParser parser = { .parser = self, .context = context, .primary_expression = primary_expression };
+	parser_postfix::CallbackParts parts = { .context = context, .operand = primary_expression };
+	ExpressionParser parser = { .parser = self, .parts = &parts };
 	return parser.parse(tokens::PREC_ASSIGN, eval);
 }
 
-fn parser_result::Result? parser::Parser.const_expr_with_primary(&self, void* context, PrimaryExpression primary_expression, bool eval = true, parser::ConstDeclFoldingMode folding_mode = parser::ConstDeclFoldingMode.FOLD_CONST_DECLS)
+fn parser_result::Result? parser::Parser.const_expr_with_primary(&self, void* context, parser_postfix::PrimaryExpression primary_expression, bool eval = true, parser::ConstDeclFoldingMode folding_mode = parser::ConstDeclFoldingMode.FOLD_CONST_DECLS)
 {
-	ExpressionParser parser = { .parser = self, .context = context, .primary_expression = primary_expression };
+	parser_postfix::CallbackParts parts = { .context = context, .operand = primary_expression };
+	ExpressionParser parser = { .parser = self, .parts = &parts };
 	parser::ConstDeclFoldingMode previous_mode = self.const_decl_folding;
 	defer self.const_decl_folding = previous_mode;
 	self.const_decl_folding = folding_mode;
@@ -1175,7 +1151,7 @@ fn parser_result::Result? parser::Parser.const_expr_with_primary(&self, void* co
 	return result;
 }
 
-fn parser_result::Result? parser::Parser.integer_const_expr_with_primary(&self, void* context, PrimaryExpression primary_expression, bool eval = true, parser::ConstDeclFoldingMode folding_mode = parser::ConstDeclFoldingMode.FOLD_CONST_DECLS)
+fn parser_result::Result? parser::Parser.integer_const_expr_with_primary(&self, void* context, parser_postfix::PrimaryExpression primary_expression, bool eval = true, parser::ConstDeclFoldingMode folding_mode = parser::ConstDeclFoldingMode.FOLD_CONST_DECLS)
 {
 	parser_result::Result? parsed = self.const_expr_with_primary(context, primary_expression, eval, folding_mode);
 	if (catch parsed_fault = parsed) return (parsed_fault == NO_EXPRESSION ? PARSING_FAILED : parsed_fault)~;
@@ -1198,6 +1174,17 @@ fn parser_result::Result? parser::Parser.expr(&self, bool eval = true)
 
 fn parser_result::Result? parser::Parser.assign_expr(&self, bool eval = true)
 {
+	return parse_composed_expression(self, tokens::PREC_ASSIGN, eval);
+}
+
+<* Parse an assignment expression with `folding_mode` active for constant
+   declaration references. The previous mode is restored on success and on
+   parse failure, the same way const_expr restores it. *>
+fn parser_result::Result? parser::Parser.assign_expr_with_folding(&self, bool eval, parser::ConstDeclFoldingMode folding_mode)
+{
+	parser::ConstDeclFoldingMode previous_mode = self.const_decl_folding;
+	defer self.const_decl_folding = previous_mode;
+	self.const_decl_folding = folding_mode;
 	return parse_composed_expression(self, tokens::PREC_ASSIGN, eval);
 }
 

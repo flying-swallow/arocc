@@ -238,7 +238,7 @@ fn bool is_known_difference(String line)
 // One vector
 // ---------------------------------------------------------------------------
 
-faultdef BAD_VECTOR;
+excuse BAD_VECTOR;
 
 <* Compute the result text of the vector with operand fields `f` (op first). *>
 fn String? VectorRun.compute(&self, String[] f)

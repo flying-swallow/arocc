@@ -303,6 +303,31 @@ fn void sections_symbols_and_relocation() @test
 	check(section_header(&elf, find_section(&elf, ".strtab")).align, 1);
 }
 
+fn void explicit_relocations_and_section_alignment() @test
+{
+	Object* obj = object::create(mem, elf_target())!!;
+	defer obj.deinit();
+	List{char}* data = object::get_section(obj, object::SECTION_DATA);
+	for (uint i = 0; i < 16; i++) data.push(0);
+	String external = object::declare_symbol(obj, object::SECTION_UNDEFINED, "reloc_target", true, object::Linkage.STRONG, object::SymbolType.EXTERNAL, 0, 0);
+	object::set_section_align(obj, object::SECTION_DATA, 8);
+	object::set_section_align(obj, object::SECTION_DATA, 4);
+	object::add_relocation(obj, external, object::SECTION_DATA, 0, 0, object::RelocKind.ABS64);
+	object::add_relocation(obj, external, object::SECTION_DATA, 8, 0, object::RelocKind.REX_GOTPCRELX);
+
+	BufferSink out;
+	out.init();
+	defer out.free();
+	object::finish(obj, &out)!!;
+	ElfView elf = decode_elf(out.bytes.str_view());
+	SectionHeader data_sh = section_header(&elf, find_section(&elf, ".data"));
+	check(data_sh.align, 8);
+	SectionHeader rela = section_header(&elf, find_section(&elf, ".rela.data"));
+	check(rela.size, 48);
+	check((uint)read_u64(&elf, rela.offset + 8), 1); // R_X86_64_64
+	check((uint)read_u64(&elf, rela.offset + 32), 42); // R_X86_64_REX_GOTPCRELX
+}
+
 fn void short_writes_are_retried() @test
 {
 	Object* obj = object::create(mem, elf_target())!!;

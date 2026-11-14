@@ -588,26 +588,27 @@ fn void owned_default_diagnostics() @test
 // ---------------------------------------------------------------------------
 // Templates
 
-fn String fmt_to(ByteWriter* bw, String fmt, DiagArg[] args)
+<* A diag enum in the shape `@message` expects, with a family-specific meta struct. *>
+struct TestMeta { bool has_opt; Option opt; bool extension; bool show_in_system_headers; bool extra; }
+enum TestDiag : ushort (String fmt, MessageKind kind, TestMeta meta)
 {
-	bw.index = 0;
-	diagnostics::format_args(bw, fmt, args)!!;
-	return bw.str_view();
+	PLAIN { "%s has %d of %d bits", WARNING, { .has_opt = true, .opt = Option.MICROSOFT_INCLUDE, .extra = true } },
 }
 
 fn void templates() @test
 {
-	ByteWriter bw;
-	bw.init(mem);
-	defer (void)bw.destroy();
-	check(fmt_to(&bw, compilation::DIAG_MS_SEARCH_RULE.fmt, { diagnostics::arg_str("dir/a.h") }),
-		"#include resolved using non-portable Microsoft search rules as: dir/a.h");
-	check(fmt_to(&bw, "{s} has {d} of {d} bits", { diagnostics::arg_str("x"), diagnostics::arg_int(-3), diagnostics::arg_uint(ulong::max) }),
-		"x has -3 of 18446744073709551615 bits");
-	check(fmt_to(&bw, "no args", {}), "no args");
-	check(fmt_to(&bw, "{d}", { diagnostics::arg_str("s") }),
-		"template `{s}` not found in format string `{d}` (this is a bug in arocc)s{d}");
-	// a template from a phase-specific table is used like Zig's Diagnostic constants
-	Message m = compilation::DIAG_CTRL_Z_EOF.message(compilation::DIAG_CTRL_Z_EOF.fmt);
-	assert(m.extension && m.kind == OFF && m.opt == MICROSOFT_END_OF_FILE);
+	@pool()
+	{
+		check(string::tformat(compilation::CompDiag.MS_SEARCH_RULE.fmt, "dir/a.h"),
+			"#include resolved using non-portable Microsoft search rules as: dir/a.h");
+		check(string::tformat(TestDiag.PLAIN.fmt, "x", -3, ulong::max), "x has -3 of 18446744073709551615 bits");
+	};
+	// A phase-specific enum value builds a Message like Zig's Diagnostic constants.
+	Message m = diagnostics::@message(compilation::CompDiag.CTRL_Z_EOF, compilation::CompDiag.CTRL_Z_EOF.fmt);
+	assert(m.extension && m.kind == OFF && m.opt == MICROSOFT_END_OF_FILE && !m.has_location);
+	check(m.text, "treating Ctrl-Z as end-of-file is a Microsoft extension");
+	// Any enum with fmt/kind/meta works, also a runtime value with a different meta type.
+	TestDiag d = TestDiag.PLAIN;
+	Message t = diagnostics::@message_at(d, "t", {});
+	assert(t.has_location && t.kind == WARNING && t.has_opt && t.opt == MICROSOFT_INCLUDE && !t.extension);
 }

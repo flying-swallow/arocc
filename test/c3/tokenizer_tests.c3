@@ -10,7 +10,7 @@
 // ("Tokenizer fuzz test") with a deterministic PRNG and checks the same
 // progress invariant.
 module tokenizer_tests;
-import aro::tokenizer, aro::lang_opts, aro::char_info, aro::source, aro::compilation;
+import aro::tokenizer, aro::tokens, aro::lang_opts, aro::char_info, aro::source, aro::compilation;
 import std::io, std::core::mem::allocators;
 
 <* test::eq for slices; numeric values are compared as long (test::eq rejects int vs uint). *>
@@ -795,4 +795,58 @@ fn void char_classes() @test
 	check(char_info::get_canonical_class(0x0301).value, 230);
 	test::eq(char_info::get_canonical_class(0x1E94A), CanonicalCombiningClass.NUKTA);
 	test::eq(char_info::get_canonical_class(0x41), CanonicalCombiningClass.NOT_REORDERED);
+}
+
+<* TokenId's associated values agree with each other and with Zig's spellings. *>
+fn void token_id_properties_are_consistent() @test
+{
+	foreach (id : TokenId::values)
+	{
+		TokenProps p = id.props;
+		// A token either has a fixed spelling, a variable one, or is a virtual marker.
+		assert(!(p.no_lexeme && p.virtual_marker), "%s", id);
+		if (p.no_lexeme || p.virtual_marker) assert(id.spelling == "", "%s has a spelling", id);
+		// Only variable-spelling tokens (and the __func__ family) describe themselves by category.
+		if (id.category.len) assert(p.no_lexeme || id.is_macro_identifier(), "%s", id);
+		// Directive keywords and string literals are subsets of the wider categories.
+		if (p.directive_keyword) assert(p.macro_identifier, "%s", id);
+		if (p.string_literal) assert(p.no_lexeme && id.symbol() == "a string literal", "%s", id);
+		// Every keyword token is a macro identifier with its own spelling.
+		if (id.ordinal >= TokenId.KEYWORD_AUTO.ordinal && id.ordinal <= TokenId.KEYWORD_NULL_UNSPECIFIED.ordinal &&
+			!(id.ordinal >= TokenId.KEYWORD_INCLUDE.ordinal && id.ordinal <= TokenId.KEYWORD_VA_OPT.ordinal))
+		{
+			assert(id.spelling.len > 0, "%s", id);
+		}
+	}
+	test::eq(TokenId.KEYWORD_ASM2.lexeme()!!, "__asm__");
+	test::eq(TokenId.INCOMPLETE_UCN.lexeme()!!, "\\");
+	test::eq(TokenId.PP_NUM.symbol(), "a number");
+	test::eq(TokenId.MACRO_PRETTY_FUNC.symbol(), "an identifier");
+	assert(@catch(TokenId.IDENTIFIER.lexeme()) == tokenizer::NO_LEXEME);
+	TokenId d = KEYWORD_DEFINED;
+	d.simplify_macro_keyword();
+	assert(d == KEYWORD_DEFINED);
+	d.simplify_macro_keyword_extra(true);
+	assert(d == IDENTIFIER);
+	TokenId inc = KEYWORD_INCLUDE;
+	inc.simplify_macro_keyword();
+	assert(inc == IDENTIFIER);
+	// Alternate keyword spellings resolve to one canonical keyword.
+	assert(TokenId.KEYWORD_ASM2.canonical() == KEYWORD_ASM && TokenId.KEYWORD_VOLATILE1.canonical() == KEYWORD_VOLATILE);
+	assert(TokenId.KEYWORD_INT.canonical() == KEYWORD_INT && TokenId.KEYWORD_TYPEOF_UNQUAL.canonical() == KEYWORD_TYPEOF_UNQUAL);
+	foreach (id : TokenId::values)
+	{
+		// A canonical keyword is itself canonical and spelled differently.
+		TokenId c = id.canonical();
+		assert(c.canonical() == c, "%s", id);
+		if (c != id) assert(id.spelling != c.spelling && id.props.macro_identifier && c.props.macro_identifier, "%s", id);
+		// Binary operators have a fixed spelling; char literals are never string literals.
+		if (id.props.binary_prec) assert(!id.props.no_lexeme, "%s", id);
+		assert(!(id.props.char_literal && id.props.string_literal), "%s", id);
+	}
+	test::eq((long)tokens::precedence(TokenId.ASTERISK), (long)tokens::PREC_MULTIPLICATIVE);
+	test::eq((long)tokens::precedence(TokenId.SEMICOLON), (long)tokens::PREC_INVALID);
+	lang_opts::LangOpts off = { .digraphs = OFF };
+	lang_opts::LangOpts on = { .digraphs = ON };
+	assert(TokenId.HASH_HASH.allows_digraphs(on) && !TokenId.HASH_HASH.allows_digraphs(off) && !TokenId.PLUS.allows_digraphs(on));
 }

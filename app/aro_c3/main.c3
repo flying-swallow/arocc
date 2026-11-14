@@ -7,6 +7,7 @@ import aro::host_process;
 import aro::pragmas::gcc;
 import aro::pragmas::message;
 import aro::pragmas::once;
+import aro::pragmas::pack;
 import std::io;
 import std::io::os;
 import std::io::path;
@@ -108,6 +109,7 @@ fn int main(String[] args)
 	comp.pragmas.add("GCC", gcc::make_handler(mem));
 	comp.pragmas.add("once", once::handler(mem));
 	comp.pragmas.add("message", message::handler());
+	comp.pragmas.add("pack", pack::make_handler(mem));
 
 	String cwd = (String)path::cwd(mem)!!;
 	comp.cwd = cwd;

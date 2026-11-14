@@ -1,4 +1,4 @@
-// #pragma message callback for the shared compilation pragma registry.
+// #pragma message handler for the shared compilation pragma registry.
 module aro::pragmas::message;
 import aro::pragma, aro::preprocessor, aro::tokens, aro::tokenizer, aro::diagnostics, aro::source;
 
@@ -9,12 +9,17 @@ enum MessageDiag : ushort (String fmt, diagnostics::MessageKind kind, diagnostic
 	PRAGMA_REQUIRES_STRING_LITERAL { "pragma %s requires string literal", ERROR, {} },
 }
 
-fn pragma::Handler handler()
+<* Zig pragmas/message.zig. Stateless, so one shared instance serves every registry. *>
+struct MessagePragma (pragma::IPragma)
 {
-	return { .ctx = null, .preprocess = &preprocess };
+	bool unused;
 }
 
-fn pragma::PragmaResult preprocess(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx)
+MessagePragma shared_handler @local;
+
+fn MessagePragma* handler() => &shared_handler;
+
+fn pragma::PragmaResult MessagePragma.preprocessor_handler(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic
 {
 	if ((sz)start_idx >= pp.tokens.len()) return pragma::PragmaResult.UNKNOWN;
 	TreeToken name_tok = pp.tokens[(sz)start_idx];

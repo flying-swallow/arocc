@@ -28,7 +28,8 @@ fn parser_result::Result? parse_const_primary(void* context, parser::Parser* p, 
 		NodeIndex ref = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
 			.decl_ref = { .qt = symbol.qt, .decl = symbol.node, .name_tok = tok } });
 		value::Value referenced = eval ? p.referenced_integer_constant(
-			symbol.val, symbol.qt.is_real_int(p.comp), tok) : value::NONE;
+			symbol.val, symbol.qt.is_real_int(p.comp),
+			symbol.kind == symbol_stack::SymbolKind.ENUMERATION, tok) : value::NONE;
 		result.init(ref, symbol.qt, referenced);
 	}
 	else
@@ -82,7 +83,7 @@ fn void constant_expression_stores_folded_value_and_restores_mode() @test
 		ConstContext context = {};
 		parser_result::Result result = p.const_expr_with_primary(&context, &parse_const_primary, true,
 			parser::ConstDeclFoldingMode.FOLD_CONST_DECLS)!!;
-		assert(result.node.tag(&p.tree) == tree::NodeTag.ADD_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		stored_value_equals(&p.tree, result.node, 4, &comp);
 		assert(p.const_decl_folding == parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING,
 			"const_expr did not restore the caller's folding mode");
@@ -290,7 +291,7 @@ fn void referenced_const_declaration_uses_extension_folding_mode() @test
 			"GNU folding mode should diagnose a referenced const declaration");
 		p.const_decl_folding = parser::ConstDeclFoldingMode.GNU_VLA_FOLDING_EXTENSION;
 		p.referenced_integer_constant(symbols.lookup(answer, symbol_stack::ScopeKind.VARS)!!.val,
-			true, p.tok_i);
+			true, false, p.tok_i);
 		assert(d.messages.len() == 2,
 			"GNU VLA folding mode should use the VLA-specific diagnostic");
 		p.tree.free();

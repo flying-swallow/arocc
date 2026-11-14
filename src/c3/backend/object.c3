@@ -38,6 +38,18 @@ enum SymbolType : char
 	EXTERNAL,
 }
 
+<* x86-64 ELF relocation kinds. AUTO preserves the writer's symbol-based choice. *>
+enum RelocKind : char (char value)
+{
+	AUTO { 0 },
+	PC32 { 2 },
+	PLT32 { 4 },
+	GOTPCREL { 9 },
+	GOTPCRELX { 41 },
+	REX_GOTPCRELX { 42 },
+	ABS64 { 1 },
+}
+
 <* Zig `std.builtin.GlobalLinkage`. *>
 enum Linkage : char
 {
@@ -96,6 +108,26 @@ fn List{char}* get_section(Object* object, Section section)
 	}
 }
 
+<* Set the requested alignment for a section, creating the section if needed. *>
+fn void set_section_align(Object* object, Section section, ulong alignment)
+{
+	switch (object.format)
+	{
+		case ELF: elf::set_section_align(object.implementation, section, alignment);
+		default: unreachable("unsupported object format in initialized object");
+	}
+}
+
+<* Copy a symbol name into object-owned storage; the returned bytes live until `deinit`. *>
+fn String copy_name(Object* object, String name)
+{
+	switch (object.format)
+	{
+		case ELF: return elf::copy_name(object.implementation, name);
+		default: unreachable("unsupported object format in initialized object");
+	}
+}
+
 <*
  Declare a symbol and return its stable name (generated when `has_name` is
  false). Generated names are owned by the object and live until `deinit`.
@@ -118,11 +150,11 @@ fn String declare_symbol(
 	}
 }
 
-fn void add_relocation(Object* object, String name, Section section, ulong address, long addend)
+fn void add_relocation(Object* object, String name, Section section, ulong address, long addend, RelocKind kind = RelocKind.AUTO)
 {
 	switch (object.format)
 	{
-		case ELF: elf::add_relocation(object.implementation, name, section, address, addend);
+		case ELF: elf::add_relocation(object.implementation, name, section, address, addend, kind);
 		default: unreachable("unsupported object format in initialized object");
 	}
 }

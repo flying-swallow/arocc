@@ -79,24 +79,71 @@ interface IAddressOfLabel
 	fn parser_result::Result? handle_address_of_label(Parser* p);
 }
 
-<* Optional token index with an explicit presence bit, so index zero is unambiguous. *>
-struct TokenIndexOption
+<*
+ Expression productions a sub-grammar (builtins, ...) borrows from its owner.
+ Both methods are optional; a missing method or a HOOK_ABSENT fault means the
+ owner does not provide that production.
+*>
+interface IExpressionGrammar
 {
-	bool has_value;
-	tokens::TokenIndex value;
+	<* Zig `expr`: a full expression, including the comma operator. *>
+	fn parser_result::Result? expression(Parser* p, bool eval) @optional;
+	<* Zig `assignExpr`. *>
+	fn parser_result::Result? assignment_expression(Parser* p, bool eval) @optional;
+	<* Zig `integerConstExpr` with the given const-declaration folding mode. *>
+	fn parser_result::Result? integer_constant_expression(Parser* p, ConstDeclFoldingMode mode, bool eval) @optional;
 }
 
-struct TreeTokenOption
+<*
+ Sub-expression productions the expression, postfix and primary grammars
+ borrow from their composition. Every method is optional; a missing method or
+ a HOOK_ABSENT fault means that production is unavailable.
+*>
+interface IExpressionParts
 {
-	bool has_value;
-	tokens::TreeToken value;
+	<* A unary operand for the binary-operator engine (the postfix grammar). *>
+	fn parser_result::Result? parse_operand(Parser* p, bool eval) @optional;
+	<* A primary expression for the postfix grammar. *>
+	fn parser_result::Result? parse_primary(Parser* p, bool eval) @optional;
+	<* A nested expression of at least precedence `min_prec`. *>
+	fn parser_result::Result? parse_nested(Parser* p, tokens::Precedence min_prec, bool eval) @optional;
+	<* Typed compound literal; starts at the `{`, `opening_tok` is the `(`. *>
+	fn parser_result::Result? parse_compound_literal(Parser* p, tokens::TokenIndex opening_tok,
+		type_store::QualType qt, bool eval) @optional;
 }
 
-struct TokenTextOption
+<* Calls to builtin functions with custom semantic checking, consulted by the
+   postfix grammar once a call's arguments are parsed. *>
+interface IBuiltinCall
 {
-	bool has_value;
-	String value;
+	<* Build the call to `callee`. parser_postfix::NO_BUILTIN_CALL when `callee`
+	   is not a builtin this handler checks, so the ordinary call path runs. *>
+	fn parser_result::Result? parse_builtin_call(Parser* p, type_store::NodeIndex callee,
+		tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval);
 }
+
+<* Language builtins with custom grammar (`__builtin_offsetof`, `__builtin_va_arg`, ...),
+   consulted by the expression grammar before ordinary primary expressions. *>
+interface IBuiltinParser
+{
+	<* Parse the builtin at `p.tok_i`. parser_expression::NO_EXPRESSION, consuming
+	   nothing, when the identifier is not a specialized builtin. *>
+	fn parser_result::Result? parse_builtin_primary(Parser* p, bool eval);
+}
+
+<* `IAsmParser.parse_asm_statement`: the current token is not an asm keyword (Zig `null`). *>
+excuse NOT_ASM;
+
+<* GNU asm statement grammar, installed by the statement parser's owner. *>
+interface IAsmParser
+{
+	<* Parse an asm statement at `p.tok_i`, consuming its trailing semicolon.
+	   NOT_ASM, consuming nothing, when the current token is not an asm keyword. *>
+	fn type_store::NodeIndex? parse_asm_statement(Parser* p);
+}
+
+<* No token at the requested lookahead (at/beyond EOF), or `eat` found a different token. *>
+excuse NO_TOKEN;
 
 <* Function metadata active while parsing a function body. The declaration
    owner supplies this after building the function declaration and type. *>
@@ -131,7 +178,7 @@ struct VaArgPackCallContext
 }
 
 <* A parser borrows its preprocessor and token storage; it owns its tree and symbol scopes. *>
-struct Parser
+struct Parser (symbol_stack::ISymbolHandler)
 {
 	preprocessor::Preprocessor* pp;
 	Compilation* comp;
@@ -232,11 +279,9 @@ fn void Parser.define_symbol(&self, symbol_stack::Symbol symbol)
 
 <* Bind the expression productions used by initializer grammar. Declaration
    callbacks and primary-expression callbacks can now share this entry point. *>
-fn void Parser.bind_initializer_parser(&self, void* context, AssignmentExpression assignment_expression, IntegerConstantExpression integer_constant_expression)
+fn void Parser.bind_initializer_parser(&self, IExpressionGrammar grammar)
 {
-	self.initializer_parser = { .parser = self, .context = context,
-	.assignment_expression = assignment_expression,
-	.integer_constant_expression = integer_constant_expression };
+	self.initializer_parser = { .parser = self, .grammar = grammar };
 	self.has_initializer_parser = true;
 }
 
@@ -248,6 +293,9 @@ fn parser_result::Result? Parser.parse_initializer(&self, type_store::QualType t
 		return PARSING_FAILED~;
 	}
 	tokens::TokenIndex initializer_tok = self.tok_i;
+	// Snapshot before the VLA check so an earlier error in this initializer,
+	// including VLA_INIT, suppresses the static value check below.
+	uint errors_before = self.diagnostics.errors;
 	if (try array = target.get(self.comp, type_store::TypeTag.ARRAY))
 	{
 		if (array.array.len.kind == type_store::ArrayLenKind.VARIABLE ||
@@ -256,11 +304,13 @@ fn parser_result::Result? Parser.parse_initializer(&self, type_store::QualType t
 			self.err(parser_diagnostics::ParserDiag.VLA_INIT, initializer_tok)!;
 		}
 	}
-	parser_result::Result? maybe_result = self.initializer_parser.parse(target, eval);
-	if (catch __fault = maybe_result) return __fault~;
-	parser_result::Result result = maybe_result;
+	parser_result::Result result = self.initializer_parser.parse(target, eval)!;
 	InitContext context = self.init_context;
-	if (!target.is_invalid() && context != InitContext.RUNTIME &&
+	// A static initializer that already reported an error is not re-checked for
+	// compile-time constness, so the static diagnostic does not repeat an earlier
+	// one (option B recovery).
+	bool static_after_error = context == InitContext.STATIC && self.diagnostics.errors > errors_before;
+	if (!target.is_invalid() && context != InitContext.RUNTIME && !static_after_error &&
 	!(result.require_initializer_value(self, context, initializer_tok)!))
 	{
 		// Match Parser.zig: one failed value requirement is enough to report the
@@ -371,45 +421,41 @@ fn void Parser.bind_finalized_tokens(&self)
 	if (self.tok_i > self.tok_end) self.tok_i = self.tok_end;
 }
 
-<* Return a token index at a bounded lookahead distance, or absence at/beyond EOF. *>
-fn TokenIndexOption Parser.peek_index(self, usz lookahead = 0)
+<* Return a token index at a bounded lookahead distance, or NO_TOKEN at/beyond EOF. Index zero is valid. *>
+fn tokens::TokenIndex? Parser.peek_index(self, usz lookahead = 0)
 {
-	if (self.tok_i >= self.tok_end) return {};
+	if (self.tok_i >= self.tok_end) return NO_TOKEN~;
 	usz remaining = (usz)(self.tok_end - self.tok_i);
-	if (lookahead >= remaining) return {};
-	return { .has_value = true, .value = (tokens::TokenIndex)((usz)self.tok_i + lookahead) };
+	if (lookahead >= remaining) return NO_TOKEN~;
+	return (tokens::TokenIndex)((usz)self.tok_i + lookahead);
 }
 
-<* Return an inspected token, or absence at/beyond the bound. Index zero is valid. *>
-fn TreeTokenOption Parser.peek(self, usz lookahead = 0)
+<* Return an inspected token, or NO_TOKEN at/beyond the bound. *>
+fn tokens::TreeToken? Parser.peek(self, usz lookahead = 0)
 {
-	TokenIndexOption maybe_i = self.peek_index(lookahead);
-	if (!maybe_i.has_value) return {};
-	return { .has_value = true, .value = self.tree.tokens[(usz)maybe_i.value] };
+	return self.tree.tokens[(usz)self.peek_index(lookahead)!];
 }
 
 <* Text of an in-range token, using Tree.tok_slice for source-backed lexemes. *>
-fn TokenTextOption Parser.peek_text(self, usz lookahead = 0)
+fn String? Parser.peek_text(self, usz lookahead = 0)
 {
-	TokenIndexOption maybe_i = self.peek_index(lookahead);
-	if (!maybe_i.has_value) return {};
-	return { .has_value = true, .value = self.tree.tok_slice(maybe_i.value) };
+	return self.tree.tok_slice(self.peek_index(lookahead)!);
 }
 
 <* True when the next in-range token has the requested id. *>
 fn bool Parser.is_at(self, tokenizer::TokenId id, usz lookahead = 0)
 {
-	TreeTokenOption tok = self.peek(lookahead);
-	return tok.has_value && tok.value.id == id;
+	if (try tok = self.peek(lookahead)) return tok.id == id;
+	return false;
 }
 
-<* Consume and return the next token index when it matches; has_value=false means absence/mismatch. *>
-fn TokenIndexOption Parser.eat(&self, tokenizer::TokenId id)
+<* Consume and return the next token index when it matches; NO_TOKEN on absence/mismatch. *>
+fn tokens::TokenIndex? Parser.eat(&self, tokenizer::TokenId id)
 {
-	if (!self.is_at(id)) return {};
+	if (!self.is_at(id)) return NO_TOKEN~;
 	tokens::TokenIndex result = self.tok_i;
 	self.advance();
-	return { .has_value = true, .value = result };
+	return result;
 }
 
 <* Report the standard expected-token diagnostic at the current token and return PARSING_FAILED. *>
@@ -643,9 +689,9 @@ fn bool? Parser.replay_pragma(&self)
 			String name = self.tree.tok_slice(name_tok);
 			if (try handler = self.comp.pragmas.get(name))
 			{
-				if (handler.parser)
+				if (&handler.parser_handler)
 				{
-					switch (handler.parser(handler.ctx, self, name_tok))
+					switch (handler.parser_handler(self, name_tok))
 					{
 						case pragma::PragmaResult.FATAL: return PARSING_FAILED~;
 						case pragma::PragmaResult.STOP_PREPROCESSING: return PARSING_FAILED~;
@@ -668,29 +714,6 @@ fn bool Parser.at_eof(self)
 	return self.tree.tokens[(usz)self.tok_i].id == EOF;
 }
 
-<* Tokens that can begin a declaration. Leave these at depth zero so the
- following translation-unit item gets a fresh parse attempt. *>
-fn bool recovery_declaration_start(tokenizer::TokenId id)
-{
-	switch (id)
-	{
-		case KEYWORD_ATTRIBUTE1: case KEYWORD_ATTRIBUTE2: case KEYWORD_DECLSPEC:
-		case KEYWORD_TYPEDEF: case KEYWORD_EXTERN: case KEYWORD_STATIC: case KEYWORD_AUTO:
-		case KEYWORD_REGISTER: case KEYWORD_THREAD_LOCAL: case KEYWORD_C23_THREAD_LOCAL:
-		case KEYWORD_THREAD: case KEYWORD_INLINE: case KEYWORD_INLINE1: case KEYWORD_INLINE2:
-		case KEYWORD_NORETURN: case KEYWORD_VOID: case KEYWORD_BOOL: case KEYWORD_C23_BOOL:
-		case KEYWORD_CHAR: case KEYWORD_SHORT: case KEYWORD_INT: case KEYWORD_LONG:
-		case KEYWORD_SIGNED: case KEYWORD_SIGNED1: case KEYWORD_SIGNED2: case KEYWORD_UNSIGNED:
-		case KEYWORD_FLOAT: case KEYWORD_DOUBLE: case KEYWORD_COMPLEX: case KEYWORD_ATOMIC:
-		case KEYWORD_ENUM: case KEYWORD_STRUCT: case KEYWORD_UNION: case KEYWORD_ALIGNAS:
-		case KEYWORD_C23_ALIGNAS: case IDENTIFIER: case EXTENDED_IDENTIFIER: case KEYWORD_TYPEOF:
-		case KEYWORD_TYPEOF1: case KEYWORD_TYPEOF2: case KEYWORD_TYPEOF_UNQUAL:
-		case KEYWORD_EXTENSION: case KEYWORD_BIT_INT:
-			return true;
-		default: return false;
-	}
-}
-
 <* Skip a malformed top-level construct through its semicolon or balanced
  close. A following declaration start and `[[` attribute introducer remain
  untouched for the next parse attempt. *>
@@ -706,7 +729,7 @@ fn void Parser.recover(&self)
 		if (at_depth_zero)
 		{
 			if (id == tokenizer::TokenId.L_BRACKET && self.is_at(tokenizer::TokenId.L_BRACKET, 1)) return;
-			if (recovery_declaration_start(id)) return;
+			if (id.starts_declaration()) return;
 			if (id == tokenizer::TokenId.SEMICOLON || id == tokenizer::TokenId.R_BRACE)
 			{
 				self.advance();
@@ -842,6 +865,11 @@ fn void? Parser.grammar_unavailable(&self)
 fn Tree? Parser.parse(&self)
 {
 	assert(self.initialized);
+	// Like Zig Parser.parse's deferred parser-state cleanup, release per-parse
+	// unused-local tracking on every success and error return. The returned
+	// Tree has independent ownership and remains with the caller.
+	defer self.maybe_unused_decl.free();
+	defer self.maybe_unused_order.free();
 	self.comp.pragmas.before_parse(self.comp);
 	if (self.handler && &self.handler.handle_implicit_typedefs)
 	{
@@ -1029,9 +1057,12 @@ fn void? Parser.diagnose_unused_locals(&self)
 <* Release a context that was initialized but not successfully parsed. *>
 fn void Parser.free(&self)
 {
-	if (self.initialized) self.tree.free();
+	if (self.initialized)
+	{
+		self.tree.free();
+		self.maybe_unused_decl.free();
+		self.maybe_unused_order.free();
+	}
 	self.release_symbols();
-	self.maybe_unused_decl.free();
-	self.maybe_unused_order.free();
 	*self = {};
 }

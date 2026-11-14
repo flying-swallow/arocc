@@ -3,7 +3,7 @@
 // instruction indexes, arguments precede the entry label in the body, and
 // finish_fn transfers the current arena to the declaration.
 module ir_tests;
-import std, aro::backend::ir, aro::backend::object, aro::target, aro::value_interner;
+import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::target, aro::value_interner;
 import aro::diagnostics, std::core::dstring;
 
 macro check(left, right)
@@ -227,6 +227,137 @@ fn target::Target renderer_target()
 	return parsed;
 }
 
+fn void builder_merges_function_and_global_declarations() @test
+{
+	Fixture f;
+	f.init();
+	Builder* b = &f.builder;
+
+	// Function declarations default to external linkage and yield to definitions.
+	char[8] function_name = { 'm', 'e', 'r', 'g', 'e', '_', 'f', 'n' };
+	b.finish_fn((String)function_name[..]);
+	function_name[0] = 'X';
+	check(b.decls.len(), 1);
+	check(b.decls[0].kind, DeclKind.FUNCTION);
+	check(b.decls[0].linkage, ir::Linkage.EXTERNAL);
+	check(b.decls[0].is_definition(), true);
+	test::eq(b.decls[0].name, "merge_fn");
+	b.start_fn();
+	Ref fn_arg = b.add_arg(value_interner::REF_I32);
+	b.add_return(fn_arg);
+	b.finish_fn("merge_fn", ir::Linkage.INTERNAL);
+	check(b.decls.len(), 1);
+	check(b.decls[0].is_definition(), true);
+	check(b.decls[0].linkage, ir::Linkage.INTERNAL);
+
+	// A later function definition replaces the previous body while retaining
+	// internal linkage; a subsequent declaration does not discard that body.
+	b.start_fn();
+	b.add_return(ir::NONE);
+	b.finish_fn("merge_fn", ir::Linkage.EXTERNAL);
+	check(b.decls.len(), 1);
+	check(b.decls[0].body.len, 2);
+	check(b.decls[0].linkage, ir::Linkage.INTERNAL);
+	b.finish_fn("merge_fn");
+	check(b.decls.len(), 1);
+	check(b.decls[0].is_definition(), true);
+	check(b.decls[0].linkage, ir::Linkage.INTERNAL);
+
+	char[6] global_name = { 'g', 'l', 'o', 'b', 'a', 'l' };
+	char[4] bytes = { 1, 2, 3, 4 };
+	char[6] reloc_name = { 't', 'a', 'r', 'g', 'e', 't' };
+	DataReloc[1] relocs = {
+		{ .offset = 1, .symbol = (String)reloc_name[..], .addend = -4 },
+	};
+	GlobalData declaration = { .size = 4, .align = 4, .section = DataSection.EXTERN };
+	b.add_global((String)global_name[..], ir::Linkage.EXTERNAL, declaration);
+	check(b.decls.len(), 2);
+	check(b.decls[1].is_definition(), false);
+	check(b.decls[1].global.section, DataSection.EXTERN);
+	GlobalData definition = {
+		.size = 4,
+		.align = 4,
+		.bytes = bytes[..],
+		.relocs = relocs[..],
+		.section = DataSection.DATA,
+		.own_section = true,
+	};
+	b.add_global((String)global_name[..], ir::Linkage.EXTERNAL, definition);
+	global_name[0] = 'X';
+	bytes[0] = 99;
+	reloc_name[0] = 'X';
+	b.add_global("global", ir::Linkage.EXTERNAL, declaration);
+	check(b.decls.len(), 2);
+	Decl* global = &b.decls[1];
+	check(global.kind, DeclKind.GLOBAL);
+	check(global.linkage, ir::Linkage.EXTERNAL);
+	check(global.is_definition(), true);
+	test::eq(global.name, "global");
+	check(global.global.section, DataSection.DATA);
+	check(global.global.tentative, false);
+	check(global.global.own_section, true);
+	check(global.global.bytes.len, 4);
+	check(global.global.bytes[0], 1);
+	check(global.global.relocs.len, 1);
+	check(global.global.relocs[0].offset, 1);
+	test::eq(global.global.relocs[0].symbol, "target");
+	check(global.global.relocs[0].addend, -4);
+
+	// Tentative definitions merge into one entry, an internal linkage wins,
+	// and a strong definition replaces the tentative data.
+	char[9] tentative_name = { 't', 'e', 'n', 't', 'a', 't', 'i', 'v', 'e' };
+	GlobalData tentative_first = {
+		.size = 4,
+		.align = 4,
+		.section = DataSection.COMMON,
+		.tentative = true,
+	};
+	GlobalData tentative_second = {
+		.size = 8,
+		.align = 8,
+		.section = DataSection.COMMON,
+		.tentative = true,
+	};
+	b.add_global((String)tentative_name[..], ir::Linkage.EXTERNAL, tentative_first);
+	b.add_global((String)tentative_name[..], ir::Linkage.INTERNAL, tentative_second);
+	check(b.decls.len(), 3);
+	Decl* tentative = &b.decls[2];
+	check(tentative.global.size, 4);
+	check(tentative.global.tentative, true);
+	check(tentative.is_definition(), true);
+	check(tentative.linkage, ir::Linkage.INTERNAL);
+
+	char[4] tentative_bytes = { 5, 6, 7, 8 };
+	GlobalData strong_definition = {
+		.size = 4,
+		.align = 4,
+		.bytes = tentative_bytes[..],
+		.section = DataSection.DATA,
+	};
+	b.add_global((String)tentative_name[..], ir::Linkage.EXTERNAL, strong_definition);
+	b.add_global((String)tentative_name[..], ir::Linkage.EXTERNAL, declaration);
+	check(b.decls.len(), 3);
+	check(tentative.global.section, DataSection.DATA);
+	check(tentative.global.tentative, false);
+	check(tentative.global.bytes[0], 5);
+	check(tentative.linkage, ir::Linkage.INTERNAL);
+
+	// Adding a global leaves a function currently being built, including its
+	// arena-owned symbol name, untouched.
+	b.start_fn();
+	Ref pending_symbol = b.add_symbol("pending_symbol", value_interner::REF_FUNC);
+	uint instructions_len = (uint)b.instructions.len();
+	uint body_len = (uint)b.body.len();
+	GlobalData state_probe = { .size = 1, .align = 1, .section = DataSection.BSS };
+	b.add_global("state_probe", ir::Linkage.INTERNAL, state_probe);
+	check(b.instructions.len(), instructions_len);
+	check(b.body.len(), body_len);
+	test::eq(b.instructions[(sz)pending_symbol].data.label, "pending_symbol");
+	b.finish_fn("pending_function");
+
+	f.free();
+}
+
 struct ObjectBuffer (OutStream)
 {
 	ByteWriter bytes;
@@ -316,4 +447,94 @@ fn void renderer_fail_replaces_duplicate_name_in_place() @test
 	renderer.errors.free();
 	assert(ta.allocation_count() == 0, "renderer failure replacement leaked allocator-owned messages");
 	ta.free();
+}
+
+fn void builder_materializes_fallthrough_and_skips_terminators() @test
+{
+	Fixture f;
+	f.init();
+	Builder* b = &f.builder;
+	Ref open_label = b.make_label("open");
+	Ref jump_probe = b.make_label("jump_probe");
+	Ref branch_probe = b.make_label("branch_probe");
+	Ref switch_probe = b.make_label("switch_probe");
+	Ref return_probe = b.make_label("return_probe");
+	Ref final_label = b.make_label("final");
+
+	b.start_fn();
+	Ref cond = b.add_arg(value_interner::REF_I1);
+	Ref value = b.add_arg(value_interner::REF_I32);
+	Ref target = b.add_arg(value_interner::REF_I32);
+	Ref entry_label = b.current_label;
+	uint entry_body_len = (uint)b.body.len();
+	check(entry_body_len, 4);
+	check(b.body[(sz)(entry_body_len - 1)], entry_label);
+	b.start_block(open_label);
+	check(b.body.len(), entry_body_len + 2);
+	Ref entry_fallthrough = b.body[(sz)entry_body_len];
+	check(b.instructions[(sz)entry_fallthrough].tag, ir::InstTag.JMP);
+	check(b.instructions[(sz)entry_fallthrough].data.ref, open_label);
+	check(b.body[(sz)entry_body_len + 1], open_label);
+
+	b.add_inst(ir::InstTag.NEGATE, { .ref = value }, value_interner::REF_I32);
+	uint open_body_len = (uint)b.body.len();
+	b.start_block(jump_probe);
+	check(b.body.len(), open_body_len + 2);
+	Ref open_fallthrough = b.body[(sz)open_body_len];
+	check(b.instructions[(sz)open_fallthrough].tag, ir::InstTag.JMP);
+	check(b.instructions[(sz)open_fallthrough].data.ref, jump_probe);
+	check(b.body[(sz)open_body_len + 1], jump_probe);
+
+	// Each add_* call below follows an existing terminator and must be skipped.
+	b.add_return(value);
+	check(b.instructions[(sz)b.body[(sz)b.body.len() - 1]].tag, ir::InstTag.RET);
+	uint after_return = (uint)b.body.len();
+	b.add_jump(branch_probe);
+	check(b.body.len(), after_return);
+	uint before_branch_probe = (uint)b.body.len();
+	b.start_block(branch_probe);
+	check(b.body.len(), before_branch_probe + 1);
+
+	b.add_jump(switch_probe);
+	check(b.instructions[(sz)b.body[(sz)b.body.len() - 1]].tag, ir::InstTag.JMP);
+	uint after_jump = (uint)b.body.len();
+	b.add_branch(cond, switch_probe, switch_probe);
+	check(b.body.len(), after_jump);
+	uint before_switch_probe = (uint)b.body.len();
+	b.start_block(switch_probe);
+	check(b.body.len(), before_switch_probe + 1);
+
+	b.add_branch(cond, return_probe, return_probe);
+	check(b.instructions[(sz)b.body[(sz)b.body.len() - 1]].tag, ir::InstTag.BRANCH);
+	value_interner::InternerRef[1] switch_values = { value_interner::REF_ONE };
+	Ref[1] return_labels = { return_probe };
+	uint after_branch = (uint)b.body.len();
+	b.add_switch(target, switch_values[..], return_labels[..], return_probe);
+	check(b.body.len(), after_branch);
+	uint before_return_probe = (uint)b.body.len();
+	b.start_block(return_probe);
+	check(b.body.len(), before_return_probe + 1);
+
+	Ref[1] final_labels = { final_label };
+	b.add_switch(target, switch_values[..], final_labels[..], final_label);
+	check(b.instructions[(sz)b.body[(sz)b.body.len() - 1]].tag, ir::InstTag.SWITCH);
+	uint after_switch = (uint)b.body.len();
+	b.add_return(value);
+	check(b.body.len(), after_switch);
+	uint before_final = (uint)b.body.len();
+	b.start_block(final_label);
+	check(b.body.len(), before_final + 1);
+	b.add_return(value);
+
+	// The entry block contains only its label after the ARG prefix. The verifier
+	// checks every block has one final terminator and no instruction follows it.
+	b.finish_fn("builder_blocks");
+	f.graph = b.finish();
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "builder block contract failed verification: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	check(errors.len(), 0);
+	errors.free();
+	f.free();
 }

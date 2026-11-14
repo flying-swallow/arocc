@@ -40,8 +40,11 @@ c3_test(name = "def_parse_tests", srcs = ["def_parse_tests.c3"], data = ["//:bui
 c3_test(name = "value_interner_tests", srcs = ["value_interner_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "ir_tests", srcs = ["ir_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "codegen_tests", srcs = ["codegen_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "ir_opt_tests", srcs = ["ir_opt_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "elf_tests", srcs = ["elf_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "elf_link_tests", srcs = ["elf_link_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "assembly_tests", srcs = ["assembly_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "x86_64_tests", srcs = ["x86_64_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "integer_value_tests", srcs = ["integer_value_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "builtin_type_description_tests", srcs = ["builtin_type_description_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "bigint_tests", srcs = ["bigint_tests.c3"], deps = ["//:aro_c3_lib"])
@@ -137,8 +140,11 @@ test_suite(
         ":value_interner_tests",
         ":ir_tests",
         ":codegen_tests",
+        ":ir_opt_tests",
         ":elf_tests",
+        ":elf_link_tests",
         ":assembly_tests",
+        ":x86_64_tests",
         ":integer_value_tests",
         ":builtin_type_description_tests",
         ":bigint_tests",

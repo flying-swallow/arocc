@@ -14,19 +14,19 @@ import std::core::dstring;
 excuse PARSING_FAILED;
 excuse CANNOT_CONCAT;
 
-alias NestedExpression = fn parser_result::Result?(void* context, parser::Parser* p,
-	tokens::Precedence min_prec, bool eval);
-alias CompoundLiteralCallback = fn parser_result::Result?(void* context, parser::Parser* p,
-	tokens::TokenIndex opening_tok, type_store::QualType qt, bool eval);
-
 struct PrimaryParser
 {
 	parser::Parser* parser;
-	void* context;
-	NestedExpression expression;
-	void* compound_literal_context;
-	CompoundLiteralCallback compound_literal;
-	bool has_compound_literal;
+	<* `parse_nested` (required for parenthesized and cast operands) and the
+	   optional `parse_compound_literal`. *>
+	parser::IExpressionParts parts;
+}
+
+fn parser_result::Result? PrimaryParser.nested(&self, tokens::Precedence min_prec, bool eval)
+{
+	parser::IExpressionParts g = self.parts;
+	if (!g || !&g.parse_nested) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return g.parse_nested(self.parser, min_prec, eval);
 }
 
 struct GenericTypeEntry
@@ -48,21 +48,6 @@ struct GenericDefaultEntry
 fn bool is_string_token(tokenizer::TokenId id)
 {
 	return id.is_string_literal() || id == tokenizer::TokenId.UNTERMINATED_STRING_LITERAL;
-}
-
-fn bool is_char_token(tokenizer::TokenId id)
-{
-	switch (id)
-	{
-		case CHAR_LITERAL:
-		case CHAR_LITERAL_UTF_8:
-		case CHAR_LITERAL_UTF_16:
-		case CHAR_LITERAL_UTF_32:
-		case CHAR_LITERAL_WIDE:
-		case EMPTY_CHAR_LITERAL:
-		case UNTERMINATED_CHAR_LITERAL: return true;
-		default: return false;
-	}
 }
 
 fn tree::CharLiteralKind char_kind(text_literal::TextLiteralKind kind)
@@ -347,10 +332,8 @@ fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenInd
 	p.advance();
 	if (symbol.kind == symbol_stack::SymbolKind.TYPEDEF)
 	{
-		DString message;
-		message.init(tmem);
-		message.appendf("unexpected type name '%s': expected expression", name);
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.UNEXPECTED_TYPE_NAME, message.str_view(), tok)!;
+		String message = string::tformat("unexpected type name '%s': expected expression", name);
+		p.emit_parser_diag(parser_diagnostics::ParserDiag.UNEXPECTED_TYPE_NAME, message, tok)!;
 		return PARSING_FAILED~;
 	}
 	p.mark_used(symbol.node);
@@ -389,12 +372,17 @@ fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::Token
 		if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
 		if (p.is_at(tokenizer::TokenId.L_BRACE))
 		{
-			if (self.has_compound_literal) { return self.compound_literal(self.compound_literal_context, p, l_paren, probe.qt, eval); }
+			parser::IExpressionParts g = self.parts;
+			if (g && &g.parse_compound_literal)
+			{
+				parser_result::Result? literal = g.parse_compound_literal(p, l_paren, probe.qt, eval);
+				if (catch f = literal) { if (f != parser::HOOK_ABSENT) return f~; } else { return literal; }
+			}
 			return unavailable(p, "compound literal expressions are unavailable in this parser composition", l_paren);
 		}
 		// A cast-expression is a unary expression or another cast-expression.
 		tokens::Precedence unary_only = (tokens::Precedence)((ichar)tokens::PREC_MULTIPLICATIVE + 1);
-		parser_result::Result? maybe_operand = self.expression(self.context, p, unary_only, eval);
+		parser_result::Result? maybe_operand = self.nested(unary_only, eval);
 		if (catch f = maybe_operand)
 		{
 			if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
@@ -402,8 +390,7 @@ fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::Token
 		}
 		parser_result::Result operand = maybe_operand;
 		type_store::QualType source_qt = operand.qt;
-		bool? maybe_cast = operand.explicit_cast(p, probe.qt, l_paren);
-		if (catch f = maybe_cast) return f~;
+		bool maybe_cast = operand.explicit_cast(p, probe.qt, l_paren)!;
 		if (!maybe_cast)
 		{
 			parser_diagnostics::ParserDiag diag;
@@ -432,7 +419,7 @@ fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::Token
 		return operand;
 	}
 	if (p.is_at(tokenizer::TokenId.L_BRACE)) { return unavailable(p, "statement expressions are unavailable in this parser composition", l_paren); }
-	parser_result::Result? maybe_inside = self.expression(self.context, p, tokens::PREC_ANY, eval);
+	parser_result::Result? maybe_inside = self.nested(tokens::PREC_ANY, eval);
 	if (catch f = maybe_inside)
 	{
 		if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
@@ -450,7 +437,7 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 {
 	parser::Parser* p = self.parser;
 	if (catch f = p.expect(tokenizer::TokenId.L_PAREN)) return f~;
-	parser_result::Result? maybe_control = self.expression(self.context, p, tokens::PREC_CONDITIONAL, false);
+	parser_result::Result? maybe_control = self.nested(tokens::PREC_CONDITIONAL, false);
 	if (catch f = maybe_control)
 	{
 		if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
@@ -536,7 +523,7 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 		tokens::TokenIndex expression_start = p.tok_i;
 		bool is_match = !is_default && !has_match && association_qt.eql(control.qt, p.comp);
 		bool evaluate_arm = is_match && eval;
-		parser_result::Result? maybe_arm = self.expression(self.context, p, tokens::PREC_ASSIGN, evaluate_arm);
+		parser_result::Result? maybe_arm = self.nested(tokens::PREC_ASSIGN, evaluate_arm);
 		if (catch f = maybe_arm)
 		{
 			if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
@@ -584,8 +571,7 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 		{
 			tokens::TokenIndex after_expression = p.tok_i;
 			p.tok_i = default_entry.expression_start;
-			parser_result::Result? maybe_selected = self.expression(self.context, p, tokens::PREC_ASSIGN, true);
-			if (catch f = maybe_selected) return f~;
+			parser_result::Result maybe_selected = self.nested(tokens::PREC_ASSIGN, true)!;
 			selected = maybe_selected;
 			p.tok_i = after_expression;
 			tree::Node default_node = default_entry.node.get(&p.tree);
@@ -631,7 +617,7 @@ fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
 	tokens::TokenIndex tok = p.tok_i;
 	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
 	if (id == tokenizer::TokenId.PP_NUM || id == tokenizer::TokenId.EMBED_BYTE) { return self.parse_number(tok); }
-	if (is_char_token(id)) return self.parse_char(tok);
+	if (id.is_char_literal()) return self.parse_char(tok);
 	if (is_string_token(id)) return self.parse_string(tok);
 	if (id == tokenizer::TokenId.KEYWORD_TRUE || id == tokenizer::TokenId.KEYWORD_FALSE)
 	{
@@ -651,7 +637,7 @@ fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
 		p.tree.set_value(node, value::NULL);
 		return { .node = node, .qt = type_store::NULLPTR_T, .val = value::NULL };
 	}
-	if (id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER)
+	if (id.is_identifier())
 	{
 		return self.parse_identifier(tok, eval);
 	}

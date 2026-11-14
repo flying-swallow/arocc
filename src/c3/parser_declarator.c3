@@ -8,27 +8,26 @@ import std::collections::list;
 
 excuse PARSING_FAILED;
 
-<* Callback used by the type-name bridge until declaration specifiers are
-   exposed as reusable parser methods. *>
-alias TypeName = fn type_store::QualType?(void* context, parser::Parser* p);
-
-<*
- Parse exactly one parameter declaration, including its declaration
- specifiers and optional named/abstract declarator. The owner callback creates
- and retains the parameter AST node and any symbol binding, then returns those
- handles in FuncParam. It runs in the temporary prototype scope established by
- DeclaratorParser; this grammar does not duplicate declaration-specifier
- parsing.
-*>
-alias ParameterDeclaration = fn type_store::FuncParam?(void* context, parser::Parser* p);
+<* Productions the declarator grammar borrows from the declaration grammar. *>
+interface IDeclaratorGrammar
+{
+	<* A typed type-name (the bridge until declaration specifiers are reusable parser methods). *>
+	fn type_store::QualType? declarator_type_name(parser::Parser* p) @optional;
+	<*
+	 Parse exactly one parameter declaration, including its declaration
+	 specifiers and optional named/abstract declarator. The owner creates and
+	 retains the parameter AST node and any symbol binding, then returns those
+	 handles in FuncParam. It runs in the temporary prototype scope established
+	 by DeclaratorParser; this grammar does not duplicate declaration-specifier
+	 parsing. Missing: prototypes with parameters are unavailable.
+	*>
+	fn type_store::FuncParam? declarator_parameter(parser::Parser* p) @optional;
+}
 
 struct DeclaratorParser
 {
 	parser::Parser* parser;
-	void* context;
-	TypeName type_name;
-	ParameterDeclaration parameter_declaration;
-	bool has_parameter_declaration;
+	IDeclaratorGrammar grammar;
 }
 
 <* A parsed declarator exposes token presence separately because token index
@@ -58,19 +57,14 @@ fn bool DeclaratorParser.at(self, tokenizer::TokenId id)
 	return self.parser.is_at(id);
 }
 
-fn bool is_identifier(tokenizer::TokenId id)
-{
-	return id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER;
-}
-
 fn bool is_group_start(DeclaratorParser* self, bool allow_abstract)
 {
 	if (!self.at(tokenizer::TokenId.L_PAREN)) return false;
-	parser::TreeTokenOption maybe_next = self.parser.peek(1);
-	if (!maybe_next.has_value) return false;
-	tokenizer::TokenId next = maybe_next.value.id;
+	tokens::TreeToken? next_tok = self.parser.peek(1);
+	if (catch next_tok) return false;
+	tokenizer::TokenId next = next_tok.id;
 	if (next == tokenizer::TokenId.ASTERISK || next == tokenizer::TokenId.L_PAREN) return true;
-	return !allow_abstract && is_identifier(next);
+	return !allow_abstract && next.is_identifier();
 }
 
 <* Consume the qualifiers that follow one pointer star. *>
@@ -185,9 +179,7 @@ fn type_store::QualType? DeclaratorParser.array_suffix(&self, type_store::QualTy
 	}
 
 	tokens::TokenIndex bound_tok = p.tok_i;
-	parser_result::Result? maybe_bound = p.assign_expr();
-	if (catch f = maybe_bound) return f~;
-	parser_result::Result bound = maybe_bound;
+	parser_result::Result bound = p.assign_expr_with_folding(true, parser::ConstDeclFoldingMode.GNU_VLA_FOLDING_EXTENSION)!;
 	if (!bound.qt.is_invalid() && !bound.qt.is_real_int(p.comp))
 	{
 		p.err(parser_diagnostics::ParserDiag.ARRAY_SIZE_NON_INT, bound_tok, p.fmt_qt(bound.qt))!;
@@ -218,7 +210,7 @@ fn bool DeclaratorParser.at_non_typedef_identifier(&self)
 {
 	parser::Parser* p = self.parser;
 	if (p.at_eof()) return false;
-	if (!is_identifier(p.tree.tokens[(usz)p.tok_i].id)) return false;
+	if (!p.tree.tokens[(usz)p.tok_i].id.is_identifier()) return false;
 	string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(p.tok_i));
 	symbol_stack::Symbol sym;
 	return !(p.find_typedef(name, p.tok_i, true, &sym) ?? false);
@@ -277,7 +269,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		return p.comp.type_store.put(type_store::type_func(ret, type_store::FuncKind.VARIADIC, {}));
 	}
-	if (!self.has_parameter_declaration)
+	if (!self.grammar || !&self.grammar.declarator_parameter)
 	{
 		p.grammar_unavailable()!;
 		return PARSING_FAILED~;
@@ -305,9 +297,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 				shape.has_old_style_ident = true;
 				shape.old_style_ident_tok = p.tok_i;
 			}
-			type_store::FuncParam? maybe_ident = self.parse_identifier_list_param();
-			if (catch f = maybe_ident) return f~;
-			type_store::FuncParam ident = maybe_ident;
+			type_store::FuncParam ident = self.parse_identifier_list_param()!;
 			params.push(ident);
 		}
 		else
@@ -329,9 +319,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 				shape.old_style_ident_tok = p.tok_i;
 			}
 			typed_param = true;
-			type_store::FuncParam? maybe_param = self.parameter_declaration(self.context, p);
-			if (catch f = maybe_param) return f~;
-			type_store::FuncParam param = maybe_param;
+			type_store::FuncParam param = self.grammar.declarator_parameter(p)!;
 			if (p.tok_i == param_start) return PARSING_FAILED~;
 			if (param.qt.is(p.comp, type_store::TypeTag.VOID))
 			{
@@ -387,6 +375,20 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 	return p.comp.type_store.put(type_store::type_func(ret, kind, params.array_view()));
 }
 
+fn bool DeclaratorParser.has_combine_placeholder(&self, type_store::QualType qt)
+{
+	// QualType.is() unwraps typedef/typeof wrappers via base(). Check each layer
+	// before get_type(), which cannot inspect parser placeholders.
+	if (qt.is_invalid() || qt.is_auto() || qt.index == type_store::IDX_DECLARATOR_COMBINE) return true;
+	type_store::Type ty = qt.get_type(self.parser.comp);
+	switch (ty.tag)
+	{
+		case TYPEOF: return self.has_combine_placeholder(ty.type_of.base);
+		case TYPEDEF: return self.has_combine_placeholder(ty.type_def.base);
+		default: return false;
+	}
+}
+
 <* Suffixes are parsed in source order and composed from the inside out: in
    `f[3](int)`, the function suffix is the direct child of the array suffix. *>
 fn type_store::QualType? DeclaratorParser.suffixes(&self, type_store::QualType base, DeclaratorShape* shape)
@@ -394,11 +396,9 @@ fn type_store::QualType? DeclaratorParser.suffixes(&self, type_store::QualType b
 	parser::Parser* p = self.parser;
 	if (self.at(tokenizer::TokenId.L_BRACKET))
 	{
-		type_store::QualType? maybe_suffix = self.array_suffix(base);
-		if (catch f = maybe_suffix) return f~;
+		type_store::QualType maybe_suffix = self.array_suffix(base)!;
 		type_store::QualType suffix = maybe_suffix;
-		type_store::QualType? maybe_inner = self.suffixes(base, shape);
-		if (catch f = maybe_inner) return f~;
+		type_store::QualType maybe_inner = self.suffixes(base, shape)!;
 		type_store::QualType inner = maybe_inner;
 		// Reuse the parsed array descriptor while replacing its element with
 		// the remaining suffix chain.
@@ -408,12 +408,22 @@ fn type_store::QualType? DeclaratorParser.suffixes(&self, type_store::QualType b
 	}
 	if (self.at(tokenizer::TokenId.L_PAREN))
 	{
-		type_store::QualType? maybe_suffix = self.function_suffix(base, shape);
-		if (catch f = maybe_suffix) return f~;
-		type_store::QualType suffix = maybe_suffix;
-		type_store::QualType? maybe_inner = self.suffixes(base, shape);
-		if (catch f = maybe_inner) return f~;
-		type_store::QualType inner = maybe_inner;
+		tokens::TokenIndex opener = p.tok_i;
+		type_store::QualType suffix = self.function_suffix(base, shape)!;
+		type_store::QualType inner = self.suffixes(base, shape)!;
+		// A partially composed type may hide the combine placeholder below its
+		// outer type, including through typedef/typeof wrappers.
+		if (!self.has_combine_placeholder(inner))
+		{
+			if (inner.is(p.comp, type_store::TypeTag.FUNC))
+			{
+				p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_FUNC, opener)!;
+			}
+			else if (inner.is(p.comp, type_store::TypeTag.ARRAY))
+			{
+				p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_ARRAY, opener)!;
+			}
+		}
 		type_store::Type func = suffix.get(p.comp, type_store::TypeTag.FUNC)!;
 		func.func.return_type = inner;
 		return p.comp.type_store.put(func).with_qualifiers(suffix);
@@ -437,7 +447,7 @@ fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType bas
 
 	tokens::TokenIndex after_pointers_tok = p.tok_i;
 	DeclaratorShape shape = { .qt = prefix, .after_pointers_tok = after_pointers_tok };
-	if (!allow_abstract && !p.at_eof() && is_identifier(p.tree.tokens[(usz)p.tok_i].id))
+	if (!allow_abstract && !p.at_eof() && p.tree.tokens[(usz)p.tok_i].id.is_identifier())
 	{
 		shape.has_name = true;
 		shape.name_tok = p.tok_i;
@@ -448,23 +458,19 @@ fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType bas
 		tokens::TokenIndex opener = p.tok_i;
 		p.advance();
 		type_store::QualType marker = type_store::DECLARATOR_COMBINE;
-		DeclaratorShape? maybe_inner = self.parse_shape(marker, allow_abstract);
-		if (catch f = maybe_inner) return f~;
-		DeclaratorShape inner = maybe_inner;
+		DeclaratorShape inner = self.parse_shape(marker, allow_abstract)!;
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		// The group precedes the outer suffixes, so its old-style record wins.
 		shape.has_old_style_ident = inner.has_old_style_ident;
 		shape.old_style_ident_tok = inner.old_style_ident_tok;
-		type_store::QualType? maybe_outer = self.suffixes(prefix, &shape);
-		if (catch f = maybe_outer) return f~;
+		type_store::QualType maybe_outer = self.suffixes(prefix, &shape)!;
 		shape.qt = self.splice(inner.qt, maybe_outer);
 		shape.has_name = inner.has_name;
 		shape.name_tok = inner.name_tok;
 		return shape;
 	}
 
-	type_store::QualType? maybe_suffixes = self.suffixes(prefix, &shape);
-	if (catch f = maybe_suffixes) return f~;
+	type_store::QualType maybe_suffixes = self.suffixes(prefix, &shape)!;
 	shape.qt = maybe_suffixes;
 	return shape;
 }
@@ -474,9 +480,7 @@ fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType bas
 fn ParsedDeclarator? DeclaratorParser.parse_declarator(&self, type_store::QualType base, bool allow_abstract = false)
 {
 	type_store::QualType marker = type_store::DECLARATOR_COMBINE;
-	DeclaratorShape? maybe_shape = self.parse_shape(marker, allow_abstract);
-	if (catch f = maybe_shape) return f~;
-	DeclaratorShape shape = maybe_shape;
+	DeclaratorShape shape = self.parse_shape(marker, allow_abstract)!;
 	if (!allow_abstract && !shape.has_name)
 	{
 		self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_IDENT_OR_L_PAREN, shape.after_pointers_tok)!;
@@ -495,9 +499,7 @@ fn ParsedDeclarator? DeclaratorParser.parse_declarator(&self, type_store::QualTy
    parser clients; it now accepts the full reusable declarator grammar. *>
 fn type_store::QualType? DeclaratorParser.abstract_declarator(&self, type_store::QualType base)
 {
-	ParsedDeclarator? maybe_parsed = self.parse_declarator(base, true);
-	if (catch f = maybe_parsed) return f~;
-	ParsedDeclarator parsed = maybe_parsed;
+	ParsedDeclarator parsed = self.parse_declarator(base, true)!;
 	return parsed.qt;
 }
 
@@ -505,5 +507,6 @@ fn type_store::QualType? DeclaratorParser.abstract_declarator(&self, type_store:
    IParserHandler. This leaves declaration specifiers with their owner. *>
 fn type_store::QualType? DeclaratorParser.parse_type_name(&self)
 {
-	return self.type_name(self.context, self.parser);
+	if (!self.grammar || !&self.grammar.declarator_type_name) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return self.grammar.declarator_type_name(self.parser);
 }

@@ -31,8 +31,8 @@
 //
 // Differences from the real driver, by construction:
 //   - Builtin macros and #pragma once are provided by the C3 port. This probe
-//     registers handlers for GCC, once, and message pragmas; other unknown
-//     pragmas remain in the output stream.
+//     registers handlers for GCC, once, message, and pack pragmas; other
+//     unknown pragmas remain in the output stream.
 //   - #include / #embed and __has_include use Compilation's ordered filesystem
 //     search. Include directories and inputs are relative to the case cwd set
 //     by the migration runner. -M records main, included, and embedded paths.
@@ -51,7 +51,7 @@
 module frontend_probe;
 import aro::compilation, aro::driver, aro::driver_options, aro::include_search, aro::diagnostics, aro::preprocessor, aro::source, aro::tokens, aro::tokenizer, aro::lang_opts, aro::target, aro::predefined_macros, aro::parser, aro::parser_frontend, aro::tree, aro::type_store;
 import std::io, std::io::os, std::os::env, std::collections::list;
-import aro::dep_file, aro::pragma, aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message;
+import aro::dep_file, aro::pragma, aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message, aro::pragmas::pack;
 
 excuse PROBE_FAILED;
 
@@ -532,6 +532,7 @@ fn int main(String[] args)
 	comp.pragmas.add("GCC", gcc::make_handler(mem));
 	comp.pragmas.add("once", once::handler(mem));
 	comp.pragmas.add("message", message::handler());
+	comp.pragmas.add("pack", pack::make_handler(mem));
 	if (try epoch = env::get_var(mem, "SOURCE_DATE_EPOCH"))
 	{
 		comp.environment.has_source_date_epoch = true;

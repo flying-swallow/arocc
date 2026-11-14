@@ -26,6 +26,30 @@ struct CallbackContext
 	uint constant_calls;
 }
 
+alias TestAssignment = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
+alias TestIntegerConstant = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode mode, bool eval);
+
+<* IExpressionGrammar over the tests' callback functions; a null callback is HOOK_ABSENT. *>
+struct CallbackExpressions (parser::IExpressionGrammar)
+{
+	void* context;
+	TestAssignment assign;
+	TestIntegerConstant int_const;
+}
+
+fn parser_result::Result? CallbackExpressions.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
+{
+	if (!self.assign) return parser::HOOK_ABSENT~;
+	return self.assign(self.context, p, eval);
+}
+
+fn parser_result::Result? CallbackExpressions.integer_constant_expression(&self, parser::Parser* p,
+	parser::ConstDeclFoldingMode mode, bool eval) @dynamic
+{
+	if (!self.int_const) return parser::HOOK_ABSENT~;
+	return self.int_const(self.context, p, mode, eval);
+}
+
 struct OffsetTypeContext (parser::IParserHandler) { type_store::QualType qt; }
 
 fn type_store::QualType? OffsetTypeContext.handle_typed_type_name(&self, parser::Parser* p) @dynamic
@@ -165,12 +189,11 @@ fn void choose_expression_suppresses_unselected_evaluation() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_choose_operand,
-			.integer_constant_expression = &parse_choose_constant };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_choose_operand, .int_const = &parse_choose_constant };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.choose_expr()!!;
 		assert(p.at_eof());
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.BUILTIN_CHOOSE_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_CHOOSE_EXPR);
 		assert(result.val.to_i64(&comp)!! == 2);
 		assert(context.constant_calls == 1 && context.expression_calls == 3);
 		assert(context.expression_eval[0] && context.expression_eval[1] && !context.expression_eval[2]);
@@ -207,7 +230,7 @@ fn void types_compatible_expression_returns_constant_boolean() @test
 		parser_builtin::BuiltinParser builtin = { .parser = &p };
 		parser_result::Result result = builtin.types_compatible(0)!!;
 		assert(p.at_eof());
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.BUILTIN_TYPES_COMPATIBLE_P);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_TYPES_COMPATIBLE_P);
 		assert(result.qt.eql(type_store::INT, &comp));
 		assert(result.val.to_i64(&comp)!! == 1);
 		p.tree.free();
@@ -261,6 +284,59 @@ fn void builtin_eval_infinity_and_isinf_finite_cases() @test
 		assert(missing.is_none());
 		builtins::Expanded unsupported = { .tag = common::TAG___BUILTIN_ISINF };
 		assert(builtin_eval::eval(unsupported, &p, args).is_none());
+		tree.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void builtin_eval_bswap16_32_64_and_missing_value() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		parser::Parser p = { .comp = &comp };
+		Tree* tree = &p.tree;
+		tree.init(&comp, {});
+
+		NodeIndex arg16 = tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
+			.literal = { .qt = type_store::INT } });
+		tree.set_value(arg16, value::int_u64(0x1234, &comp));
+		NodeIndex[] args16 = { arg16 };
+		builtins::Expanded bswap16_builtin = { .tag = common::TAG___BUILTIN_BSWAP16,
+			.attributes = { .const_evaluable = true } };
+		value::Value result16 = builtin_eval::eval(bswap16_builtin, &p, args16);
+		assert(!result16.is_none() && result16.to_u64(&comp)!! == 0x3412);
+
+		NodeIndex arg32 = tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
+			.literal = { .qt = type_store::INT } });
+		tree.set_value(arg32, value::int_u64(1, &comp));
+		NodeIndex[] args32 = { arg32 };
+		builtins::Expanded bswap32_builtin = { .tag = common::TAG___BUILTIN_BSWAP32,
+			.attributes = { .const_evaluable = true } };
+		value::Value result32 = builtin_eval::eval(bswap32_builtin, &p, args32);
+		assert(!result32.is_none() && result32.to_u64(&comp)!! == 0x01000000);
+
+		NodeIndex arg64 = tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
+			.literal = { .qt = type_store::INT } });
+		tree.set_value(arg64, value::int_u64(0x0102030405060708, &comp));
+		NodeIndex[] args64 = { arg64 };
+		builtins::Expanded bswap64_builtin = { .tag = common::TAG___BUILTIN_BSWAP64,
+			.attributes = { .const_evaluable = true } };
+		value::Value result64 = builtin_eval::eval(bswap64_builtin, &p, args64);
+		assert(!result64.is_none() && result64.to_u64(&comp)!! == 0x0807060504030201);
+
+		NodeIndex unknown_arg = tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
+			.literal = { .qt = type_store::INT } });
+		NodeIndex[] unknown_args = { unknown_arg };
+		assert(builtin_eval::eval(bswap16_builtin, &p, unknown_args).is_none());
+
 		tree.free();
 		comp.free();
 		d.free();
@@ -544,10 +620,10 @@ fn void shufflevector_diagnoses_index_below_negative_one_and_keeps_ast() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_vector_operand, .integer_constant_expression = &parse_choose_constant };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_vector_operand, .int_const = &parse_choose_constant };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.shufflevector(0)!!;
-		assert(p.at_eof() && result.node.tag(&p.tree).kind == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
+		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "index for __builtin_shufflevector must be positive or -1");
 		check(d.messages[0].location.col, 8);
@@ -566,10 +642,10 @@ fn void shufflevector_builds_result_type_and_index_nodes() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_vector_operand, .integer_constant_expression = &parse_choose_constant };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_vector_operand, .int_const = &parse_choose_constant };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.shufflevector(0)!!;
-		assert(p.at_eof() && result.node.tag(&p.tree).kind == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
+		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
 		tree::Node node = p.tree.decode_expr_stmt(result.node);
 		assert(node.shufflevector.indexes.len == 2);
 		assert(node.shufflevector.qt.get(&comp, type_store::TypeTag.VECTOR)!!.vector.len == 2);
@@ -592,10 +668,10 @@ fn void convertvector_builds_destination_typed_node() @test
 		parser::Parser p; p.init(&pp, &vector_types);
 		p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_vector_operand };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_vector_operand };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.convertvector(0)!!;
-		assert(p.at_eof() && result.node.tag(&p.tree).kind == tree::NodeKind.BUILTIN_CONVERTVECTOR);
+		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_CONVERTVECTOR);
 		tree::Node node = p.tree.decode_expr_stmt(result.node);
 		assert(node.convertvector.dest_qt.eql(result.qt, &comp));
 		assert(result.qt.get(&comp, type_store::TypeTag.VECTOR)!!.vector.len == 4);
@@ -616,8 +692,8 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 		parser::Parser p; p.init(&pp, &int_types);
 		p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_choose_operand };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_choose_operand };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		assert(@catch(builtin.va_arg(0)) == parser_builtin::PARSING_FAILED);
 		assert(d.messages.len() == 1);
 		// Parser/Diagnostic.zig::incompatible_va_arg uses {qt}; Parser.zig::formatQualType quotes it.
@@ -669,8 +745,8 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.integer_constant_expression = &parse_offset_integer_constant };
+		CallbackExpressions exprs = { .context = &context, .int_const = &parse_offset_integer_constant };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.offsetof(0, true)!!;
 		assert(p.at_eof() && result.val.to_i64(&comp)!! == 64);
 		tree::Node call = result.node.get(&p.tree);
@@ -718,8 +794,8 @@ fn void offsetof_resolves_promoted_anonymous_record_fields() @test
 		OffsetTypeContext types = { .qt = root };
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
-		parser_builtin::BuiltinParser builtin = { .parser = &p,
-			.integer_constant_expression = &parse_offset_integer_constant };
+		CallbackExpressions exprs = { .int_const = &parse_offset_integer_constant };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.offsetof(0, true)!!;
 		assert(result.val.to_i64(&comp)!! == 24);
 		tree::Node access = result.node.get(&p.tree).builtin_call.args[0].get(&p.tree);
@@ -757,8 +833,8 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.integer_constant_expression = &parse_offset_integer_constant };
+		CallbackExpressions exprs = { .context = &context, .int_const = &parse_offset_integer_constant };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result byte_offset = builtin.offsetof(0)!!;
 		assert(byte_offset.val.to_i64(&comp)!! == 9);
 		tree::Node call = byte_offset.node.get(&p.tree);
@@ -806,8 +882,8 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_nonconstant_offset_expression };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_nonconstant_offset_expression };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		assert(@catch(builtin.offsetof(0)) == parser_builtin::PARSING_FAILED);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "expected identifier");
@@ -819,7 +895,7 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 		assert(runtime_access.array_access.qt.eql(type_store::INT, &comp));
 		assert(d.messages.len() == 1);
 		assert(p.is_at(tokenizer::TokenId.L_PAREN));
-		builtin.assignment_expression = &parse_offset_assignment_expression;
+		exprs.assign = &parse_offset_assignment_expression;
 		parser_result::Result recovered = builtin.offsetof(0)!!;
 		assert(recovered.val.to_i64(&comp)!! == 4);
 		assert(p.at_eof());
@@ -840,11 +916,11 @@ fn void bit_cast_accepts_equal_sized_callback_operand_and_type() @test
 		parser::Parser p; p.init(&pp, &int_types);
 		p.bind_finalized_tokens();
 		CallbackContext context = {};
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .context = &context,
-			.assignment_expression = &parse_choose_operand };
+		CallbackExpressions exprs = { .context = &context, .assign = &parse_choose_operand };
+		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
 		parser_result::Result result = builtin.bit_cast(0)!!;
 		assert(p.at_eof());
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.CAST);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.CAST);
 		assert(result.qt.eql(type_store::INT, &comp));
 		assert(context.expression_calls == 1 && context.expression_eval[0]);
 		p.free(); pp.free(); comp.free(); d.free();
@@ -884,7 +960,7 @@ fn void va_arg_pack_obeys_call_and_function_contexts() @test
 		// implementation; the call-state diagnostic outranks type acceptance.
 		p.tok_i = 1;
 		parser_result::Result outside = builtin.va_arg_pack(0)!!;
-		assert(outside.node.tag(&p.tree).kind == tree::NodeKind.BUILTIN_VA_ARG_PACK);
+		assert(outside.node.kind(&p.tree) == tree::NodeKind.BUILTIN_VA_ARG_PACK);
 		assert(outside.qt.is_invalid());
 		assert(d.messages.len() == 1 && d.messages[0].text == "'__va_arg_pack' used outside a call");
 

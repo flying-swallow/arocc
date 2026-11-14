@@ -32,11 +32,7 @@ struct ProcessOutcome
 
 fn void? add_exec_fatal(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	DString text;
-	text.init(a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	return d.add({ .kind = FATAL_ERROR, .text = text.str_view() });
+	@pool() { return d.add({ .kind = FATAL_ERROR, .text = string::tformat(fmt, ...args) }); };
 }
 
 <*

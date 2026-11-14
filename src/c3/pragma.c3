@@ -1,6 +1,6 @@
 // Compilation-owned pragma callback contracts, ported from src/aro/Pragma.zig.
 module aro::pragma;
-import aro::compilation, aro::preprocessor, aro::source, aro::tokens;
+import aro::compilation, aro::preprocessor, aro::source, aro::tokens, aro::parser;
 import std::collections::list;
 import aro::string_interner;
 
@@ -11,32 +11,36 @@ excuse NOT_FOUND;
 enum PragmaResult : char { HANDLED, UNKNOWN, STOP_PREPROCESSING, FATAL }
 enum IncludePragmaResult : char { CONTINUE, SKIP_INCLUDE, FATAL }
 
-alias PragmaPreprocessFn = fn PragmaResult(void* ctx, Preprocessor* pp, TokenIndex start_idx);
-alias PragmaParserFn = fn PragmaResult(void* ctx, void* parser, TokenIndex start_idx);
-alias PragmaBeforeIncludeFn = fn IncludePragmaResult(void* ctx, Preprocessor* pp, Source source);
-alias PragmaLifecycleFn = fn void(void* ctx, Compilation* comp);
-alias PragmaPreserveFn = fn bool(void* ctx, Preprocessor* pp, TokenIndex start_idx);
-alias PragmaExpandFn = fn bool(void* ctx, TokenIndex index);
-
-// Callback implementations own ctx. Compilation invokes destroy exactly once.
-struct Handler {
-	void* ctx;
-	PragmaPreprocessFn preprocess;
-	PragmaParserFn parser;
-	PragmaBeforeIncludeFn before_include;
-	PragmaLifecycleFn before_preprocess;
-	PragmaLifecycleFn before_parse;
-	PragmaLifecycleFn after_parse;
-	PragmaLifecycleFn destroy;
-	PragmaPreserveFn preserve_tokens;
-	PragmaExpandFn should_expand;
+<*
+ Zig `Pragma`: a named pragma handler registered on the Compilation. Every
+ method is optional; a missing method behaves as described on it. The
+ implementing value is borrowed by the Registry, which calls `deinit` exactly
+ once when it is freed, so the implementation owns (and may free) itself there.
+*>
+interface IPragma
+{
+	<* `#pragma name ...` during preprocessing. Missing: UNKNOWN (unknown-pragma warning). *>
+	fn PragmaResult preprocessor_handler(Preprocessor* pp, TokenIndex start_idx) @optional;
+	<* A preserved pragma replayed by the parser. Missing: ignored. *>
+	fn PragmaResult parser_handler(Parser* p, TokenIndex start_idx) @optional;
+	<* Before an #include enters `source`. Missing: CONTINUE. *>
+	fn IncludePragmaResult before_include(Preprocessor* pp, Source source) @optional;
+	fn void before_preprocess(Compilation* comp) @optional;
+	fn void before_parse(Compilation* comp) @optional;
+	fn void after_parse(Compilation* comp) @optional;
+	<* Release the handler; called once by Registry.free. *>
+	fn void deinit(Compilation* comp) @optional;
+	<* Keep this pragma's tokens in -E output. Missing: true. *>
+	fn bool preserve_tokens(Preprocessor* pp, TokenIndex start_idx) @optional;
+	<* Macro-expand the pragma token at `index` (counted from the name). Missing: true. *>
+	fn bool should_expand_token_at_index(TokenIndex index) @optional;
 }
 
 struct Registry {
 	Allocator gpa;
 	<* Names are borrowed by StringTable; registration callers must keep them alive. *>
 	StringTable names;
-	List{Handler} handlers;
+	List{IPragma} handlers;
 }
 
 fn void Registry.init(&self, Allocator gpa)
@@ -48,10 +52,10 @@ fn void Registry.init(&self, Allocator gpa)
 
 <*
  Register a named handler. Returns false if the name is already registered.
- The name's bytes remain borrowed until `free`; callback state is owned by
- the registry and its destroy callback runs once during `free`.
+ The name's bytes and the handler remain borrowed until `free`, which calls
+ the handler's `deinit` once.
 *>
-fn bool Registry.add(&self, String name, Handler handler)
+fn bool Registry.add(&self, String name, IPragma handler)
 {
 	bool found_existing = false;
 	self.names.get_or_put(name, &found_existing);
@@ -61,7 +65,7 @@ fn bool Registry.add(&self, String name, Handler handler)
 }
 
 <* Return a handler by its registered name, or NOT_FOUND when absent. *>
-fn Handler? Registry.get(&self, String name)
+fn IPragma? Registry.get(&self, String name)
 {
 	if (try index = self.names.find(name)) return self.handlers[index];
 	return NOT_FOUND~;
@@ -69,22 +73,22 @@ fn Handler? Registry.get(&self, String name)
 
 fn void Registry.before_preprocess(&self, Compilation* comp)
 {
-	foreach (h : self.handlers) if (h.before_preprocess) h.before_preprocess(h.ctx, comp);
+	foreach (h : self.handlers) if (&h.before_preprocess) h.before_preprocess(comp);
 }
 
 fn void Registry.before_parse(&self, Compilation* comp)
 {
-	foreach (h : self.handlers) if (h.before_parse) h.before_parse(h.ctx, comp);
+	foreach (h : self.handlers) if (&h.before_parse) h.before_parse(comp);
 }
 
 fn void Registry.after_parse(&self, Compilation* comp)
 {
-	foreach (h : self.handlers) if (h.after_parse) h.after_parse(h.ctx, comp);
+	foreach (h : self.handlers) if (&h.after_parse) h.after_parse(comp);
 }
 
 fn void Registry.free(&self, Compilation* comp)
 {
-	foreach (h : self.handlers) if (h.destroy) h.destroy(h.ctx, comp);
+	foreach (h : self.handlers) if (&h.deinit) h.deinit(comp);
 	self.names.free();
 	self.handlers.free();
 	*self = {};
@@ -94,8 +98,8 @@ fn PragmaResult Registry.preprocess(&self, Preprocessor* pp, TokenIndex start_id
 {
 	foreach (h : self.handlers)
 	{
-		if (!h.preprocess) continue;
-		PragmaResult r = h.preprocess(h.ctx, pp, start_idx);
+		if (!&h.preprocessor_handler) continue;
+		PragmaResult r = h.preprocessor_handler(pp, start_idx);
 		if (r != UNKNOWN) return r;
 	}
 	return UNKNOWN;
@@ -110,8 +114,8 @@ fn IncludePragmaResult Registry.before_include_named(&self, Preprocessor* pp, So
 {
 	foreach (i, h : self.handlers)
 	{
-		if (!h.before_include) continue;
-		IncludePragmaResult r = h.before_include(h.ctx, pp, src);
+		if (!&h.before_include) continue;
+		IncludePragmaResult r = h.before_include(pp, src);
 		if (r != CONTINUE)
 		{
 			if (r == SKIP_INCLUDE && skipper_name != null) *skipper_name = self.names.key((uint)i);
@@ -130,7 +134,7 @@ fn bool Registry.preserve_tokens(&self, String name, Preprocessor* pp, TokenInde
 {
 	if (try h = self.get(name))
 	{
-		if (h.preserve_tokens) return h.preserve_tokens(h.ctx, pp, start_idx);
+		if (&h.preserve_tokens) return h.preserve_tokens(pp, start_idx);
 	}
 	return true;
 }
@@ -139,7 +143,7 @@ fn bool Registry.should_expand(&self, String name, TokenIndex index)
 {
 	if (try h = self.get(name))
 	{
-		if (h.should_expand) return h.should_expand(h.ctx, index);
+		if (&h.should_expand_token_at_index) return h.should_expand_token_at_index(index);
 	}
 	return true;
 }

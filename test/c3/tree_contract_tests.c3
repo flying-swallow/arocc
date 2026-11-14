@@ -44,9 +44,9 @@ fn void packed_elems() @test
 
 fn void tag_counts() @test
 {
-	// Tree.zig: 118 Node variants, 146 Repr tags, 31 Cast kinds.
+	// Tree.zig: 118 Node variants, 31 Cast kinds. (Zig's 146 Repr tags are
+	// NodeKind + NodeForm bits here.)
 	check(NodeKind::len, 118);
-	check(NodeTag::len, 146);
 	check(CastKind::len, 31);
 	// Attribute.zig: 104 Args tags; Map.zig: 35 Repr tags.
 	check(AttributeTag::len, 104);
@@ -60,23 +60,6 @@ fn void tag_counts() @test
 
 fn void tag_mapping() @test
 {
-	assert(NodeTag.FN_PROTO.kind == NodeKind.FUNCTION);
-	assert(NodeTag.FN_DEF.kind == NodeKind.FUNCTION);
-	assert(NodeTag.VARIABLE_DEF.kind == NodeKind.VARIABLE);
-	assert(NodeTag.STRUCT_DECL_TWO.kind == NodeKind.STRUCT_DECL);
-	assert(NodeTag.IF_FULL.kind == NodeKind.IF_STMT);
-	assert(NodeTag.FOR_EVER.kind == NodeKind.FOR_STMT);
-	assert(NodeTag.IMPLICIT_RETURN.kind == NodeKind.RETURN_STMT);
-	assert(NodeTag.ASM_STMT_SIMPLE.kind == NodeKind.ASM_STMT);
-	assert(NodeTag.EXPLICIT_CAST.kind == NodeKind.CAST);
-	assert(NodeTag.CALL_EXPR_ONE.kind == NodeKind.CALL_EXPR);
-	assert(NodeTag.GENERIC_EXPR_ZERO.kind == NodeKind.GENERIC_EXPR);
-	assert(NodeTag.IDENTIFIER_ARG.kind == NodeKind.IDENTIFIER_ARG);
-	// Every Repr tag's name starts with (or is) a prefix related to its kind,
-	// and every kind is reachable from at least one storage tag.
-	bool[NodeKind::len] seen;
-	foreach (t : NodeTag::values) seen[t.kind.ordinal] = true;
-	foreach (k, s : seen) assert(s, "NodeKind %s has no NodeTag", NodeKind::values[k].name);
 	assert(NodeKind.TYPEDEF.name == "typedef");
 	assert(NodeKind.CAST.family == EXPR);
 	assert(NodeKind.DECL_STMT.family == STMT);
@@ -92,6 +75,13 @@ fn void tag_mapping() @test
 
 fn void bit_layouts() @test
 {
+	// NodeData views overlay the same three words (Zig Repr.data: [3]u32).
+	check(NodeData::size, 12);
+	check(NodeRepr::size, 20);
+	NodeData data;
+	data.binary = { .lhs = (NodeIndex)7, .rhs = (NodeIndex)9 };
+	check(data.words[1], 7);
+	check(data.for_stmt.body, 9);
 	DeclAttr a = { .is_static = true, .register = true };
 	check((uint)a, 0b100010);
 	GnuAsmQualifiers q = { .is_inline = true, .is_goto = true };

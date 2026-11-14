@@ -183,45 +183,64 @@ enum TypeTag : char
 	TYPEDEF,
 }
 
-<* Type.Int *>
-enum TypeInt : char
+<*
+ Type.Int, with its fixed properties:
+ - `index`: the builtin QualType index (`int_index`);
+ - `name`: the C spelling (`int_name`);
+ - `builder`: the type builder specifier (`builder_from_int_type`);
+ - `ctype` / `fixed_bits`: the width, either the target's size of `ctype`
+   (when `fixed_bits == 0`) or a fixed number of bits (`TypeInt.bits`);
+ - `sign`: signedness, except CHAR, whose signedness is the target's;
+ - `rank_class`: the C conversion rank before the size term (`int_rank`);
+ - `unsigned_of`: the unsigned type of the same rank (`make_int_unsigned`).
+*>
+enum TypeInt : char (uint index, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, Signedness sign, char rank_class, TypeInt unsigned_of)
 {
-	CHAR,
-	SCHAR,
-	UCHAR,
-	SHORT,
-	USHORT,
-	INT,
-	UINT,
-	LONG,
-	ULONG,
-	LONG_LONG,
-	ULONG_LONG,
-	INT128,
-	UINT128,
-	INT24,
-	UINT24,
+	CHAR { IDX_INT_CHAR, "char", CHAR, CHAR, 0, SIGNED, 2, UCHAR },
+	SCHAR { IDX_INT_SCHAR, "signed char", SCHAR, CHAR, 0, SIGNED, 2, UCHAR },
+	UCHAR { IDX_INT_UCHAR, "unsigned char", UCHAR, CHAR, 0, UNSIGNED, 2, UCHAR },
+	SHORT { IDX_INT_SHORT, "short", SHORT, SHORT, 0, SIGNED, 3, USHORT },
+	USHORT { IDX_INT_USHORT, "unsigned short", USHORT, USHORT, 0, UNSIGNED, 3, USHORT },
+	INT { IDX_INT_INT, "int", INT, INT, 0, SIGNED, 4, UINT },
+	UINT { IDX_INT_UINT, "unsigned int", UINT, UINT, 0, UNSIGNED, 4, UINT },
+	LONG { IDX_INT_LONG, "long", LONG, LONG, 0, SIGNED, 6, ULONG },
+	ULONG { IDX_INT_ULONG, "unsigned long", ULONG, ULONG, 0, UNSIGNED, 6, ULONG },
+	LONG_LONG { IDX_INT_LONG_LONG, "long long", LONG_LONG, LONGLONG, 0, SIGNED, 7, ULONG_LONG },
+	ULONG_LONG { IDX_INT_ULONG_LONG, "unsigned long long", ULONG_LONG, ULONGLONG, 0, UNSIGNED, 7, ULONG_LONG },
+	INT128 { IDX_INT_INT128, "__int128", INT128, CHAR, 128, SIGNED, 8, UINT128 },
+	UINT128 { IDX_INT_UINT128, "unsigned __int128", UINT128, CHAR, 128, UNSIGNED, 8, UINT128 },
+	INT24 { IDX_INT_INT24, "__int24", INT24, CHAR, 24, SIGNED, 5, UINT24 },
+	UINT24 { IDX_INT_UINT24, "unsigned __int24", UINT24, CHAR, 24, UNSIGNED, 5, UINT24 },
 }
 
-<* Type.Float *>
-enum TypeFloat : char
+<*
+ Type.Float, with its fixed properties:
+ - `index`: the builtin QualType index (`float_index`);
+ - `name`: the C spelling (`float_name`);
+ - `builder`: the type builder specifier (`builder_from_float_type`);
+ - `ctype` / `fixed_bits`: the width, either the target's size of `ctype`
+   (when `fixed_bits == 0`) or a fixed number of bits (`TypeFloat.bits`);
+ - `rank`: the floating conversion rank (`float_rank`).
+ FLOAT128X is not supported: `bits` and `float_rank` reject it.
+*>
+enum TypeFloat : char (uint index, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, uint rank)
 {
-	BF16,
-	FP16,
-	FLOAT16,
-	FLOAT,
-	DOUBLE,
-	LONG_DOUBLE,
-	FLOAT128,
-	FLOAT32,
-	FLOAT64,
-	FLOAT32X,
-	FLOAT64X,
-	FLOAT128X,
-	DFLOAT32,
-	DFLOAT64,
-	DFLOAT128,
-	DFLOAT64X,
+	BF16 { IDX_FLOAT_BF16, "__bf16", BF16, FLOAT, 16, 0 },
+	FP16 { IDX_FLOAT_FP16, "__fp16", FP16, FLOAT, 16, 2 },
+	FLOAT16 { IDX_FLOAT_FLOAT16, "_Float16", FLOAT16, FLOAT, 16, 1 },
+	FLOAT { IDX_FLOAT_FLOAT, "float", FLOAT, FLOAT, 0, 3 },
+	DOUBLE { IDX_FLOAT_DOUBLE, "double", DOUBLE, DOUBLE, 0, 6 },
+	LONG_DOUBLE { IDX_FLOAT_LONG_DOUBLE, "long double", LONG_DOUBLE, LONGDOUBLE, 0, 9 },
+	FLOAT128 { IDX_FLOAT_FLOAT128, "__float128", FLOAT128, FLOAT, 128, 10 },
+	FLOAT32 { IDX_FLOAT_FLOAT32, "_Float32", FLOAT32, FLOAT, 32, 4 },
+	FLOAT64 { IDX_FLOAT_FLOAT64, "_Float64", FLOAT64, FLOAT, 64, 7 },
+	FLOAT32X { IDX_FLOAT_FLOAT32X, "_Float32x", FLOAT32X, FLOAT, 32 * 2, 5 },
+	FLOAT64X { IDX_FLOAT_FLOAT64X, "_Float64x", FLOAT64X, FLOAT, 64 * 2, 8 },
+	FLOAT128X { IDX_FLOAT_FLOAT128X, "_Float128x", FLOAT128X, FLOAT, 0, 0 },
+	DFLOAT32 { IDX_FLOAT_DFLOAT32, "_Decimal32", DFLOAT32, FLOAT, 32, DECIMAL_FLOAT_RANK + 0 },
+	DFLOAT64 { IDX_FLOAT_DFLOAT64, "_Decimal64", DFLOAT64, FLOAT, 64, DECIMAL_FLOAT_RANK + 1 },
+	DFLOAT128 { IDX_FLOAT_DFLOAT128, "_Decimal128", DFLOAT128, FLOAT, 128, DECIMAL_FLOAT_RANK + 3 },
+	DFLOAT64X { IDX_FLOAT_DFLOAT64X, "_Decimal64x", DFLOAT64X, FLOAT, 64 * 2, DECIMAL_FLOAT_RANK + 2 },
 }
 
 <* Type.StorageFloat: non-arithmetic floats. *>
@@ -720,50 +739,9 @@ macro copy_slice(Allocator gpa, slice) @local
 
 fn QualType TypeStore.put(&self, Type ty) => { .index = self.put_extra(ty) };
 
-fn uint int_index(TypeInt k)
-{
-	switch (k)
-	{
-		case CHAR: return IDX_INT_CHAR;
-		case SCHAR: return IDX_INT_SCHAR;
-		case UCHAR: return IDX_INT_UCHAR;
-		case SHORT: return IDX_INT_SHORT;
-		case USHORT: return IDX_INT_USHORT;
-		case INT: return IDX_INT_INT;
-		case UINT: return IDX_INT_UINT;
-		case LONG: return IDX_INT_LONG;
-		case ULONG: return IDX_INT_ULONG;
-		case LONG_LONG: return IDX_INT_LONG_LONG;
-		case ULONG_LONG: return IDX_INT_ULONG_LONG;
-		case INT128: return IDX_INT_INT128;
-		case UINT128: return IDX_INT_UINT128;
-		case INT24: return IDX_INT_INT24;
-		case UINT24: return IDX_INT_UINT24;
-	}
-}
+fn uint int_index(TypeInt k) => k.index;
 
-fn uint float_index(TypeFloat k)
-{
-	switch (k)
-	{
-		case BF16: return IDX_FLOAT_BF16;
-		case FP16: return IDX_FLOAT_FP16;
-		case FLOAT16: return IDX_FLOAT_FLOAT16;
-		case FLOAT: return IDX_FLOAT_FLOAT;
-		case DOUBLE: return IDX_FLOAT_DOUBLE;
-		case LONG_DOUBLE: return IDX_FLOAT_LONG_DOUBLE;
-		case FLOAT128: return IDX_FLOAT_FLOAT128;
-		case FLOAT32: return IDX_FLOAT_FLOAT32;
-		case FLOAT64: return IDX_FLOAT_FLOAT64;
-		case FLOAT32X: return IDX_FLOAT_FLOAT32X;
-		case FLOAT64X: return IDX_FLOAT_FLOAT64X;
-		case FLOAT128X: return IDX_FLOAT_FLOAT128X;
-		case DFLOAT32: return IDX_FLOAT_DFLOAT32;
-		case DFLOAT64: return IDX_FLOAT_DFLOAT64;
-		case DFLOAT128: return IDX_FLOAT_DFLOAT128;
-		case DFLOAT64X: return IDX_FLOAT_DFLOAT64X;
-	}
-}
+fn uint float_index(TypeFloat k) => k.index;
 
 <* Builtin types map to fixed indices; everything else gets a new slot. *>
 fn uint TypeStore.put_extra(&self, Type ty)

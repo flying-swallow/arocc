@@ -21,27 +21,30 @@ fn bool switch_case_ranges_overlap(SwitchCaseEntry previous, value::Value start,
 		!value::compare(previous.end, bigint::CompareOperator.LT, start, p.comp);
 }
 
-alias StatementExpression = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias StatementIntegerConstantExpression = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode mode, bool eval);
-<* The declaration grammar owns recognition and construction. Return a complete
-   DECL_STMT node when recognized, null when this token sequence is not a local
-   declaration, and PARSING_FAILED for a recognized malformed declaration.
-   A null result must leave parser state unchanged. *>
-alias LocalDeclarationStatement = fn type_store::NodeIndex?(void* context, parser::Parser* p);
+<* Local declarations inside statements, supplied by the declaration grammar. *>
+interface ILocalDeclarationGrammar
+{
+	<* The declaration grammar owns recognition and construction. Return a complete
+	   DECL_STMT node when recognized, tree::NULL_NODE when this token sequence is
+	   not a local declaration (leaving parser state unchanged), and PARSING_FAILED
+	   for a recognized malformed declaration. parser::HOOK_ABSENT means the
+	   implementer provides no local declarations. *>
+	fn type_store::NodeIndex? parse_local_declaration(parser::Parser* p);
+}
 
 <* Expression parsing is delegated to the active expression grammar. *>
 struct StatementParser (parser::IAddressOfLabel)
 {
 	parser::Parser* parser;
-	void* context;
-	StatementExpression expression;
-	StatementIntegerConstantExpression integer_constant_expression;
-	bool has_integer_constant_expression;
-	void* local_declaration_context;
-	LocalDeclarationStatement local_declaration_statement;
-	bool has_local_declaration_statement;
-	parser_asm::AsmParser asm_parser;
-	bool has_asm_parser;
+	<* Expression productions: `expression` (required for statements) and an
+	   optional `integer_constant_expression`. *>
+	parser::IExpressionGrammar expressions;
+	<* Local declarations; null when statements contain only expressions. *>
+	ILocalDeclarationGrammar local_declarations;
+	parser_attribute::AttributeBuffer* prefix_declaration_attributes;
+	bool prefix_declaration_attributes_consumed;
+	<* GNU asm statement grammar; null when asm statements are not parsed. *>
+	parser::IAsmParser asm_parser;
 	uint loop_depth;
 	uint switch_depth;
 	bool switch_has_default;
@@ -62,6 +65,23 @@ struct StatementParser (parser::IAddressOfLabel)
 	bool has_function_context;
 }
 
+<* Zig `expr` through `expressions`. *>
+fn parser_result::Result? StatementParser.expr(&self, bool eval)
+{
+	parser::IExpressionGrammar g = self.expressions;
+	if (!g || !&g.expression) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	return g.expression(self.parser, eval);
+}
+
+<* A local declaration at the cursor, or tree::NULL_NODE when there is none or no declaration grammar. *>
+fn type_store::NodeIndex? StatementParser.local_declaration(&self)
+{
+	if (!self.local_declarations) return tree::NULL_NODE~;
+	type_store::NodeIndex? parsed = self.local_declarations.parse_local_declaration(self.parser);
+	if (catch f = parsed) return (f == parser::HOOK_ABSENT ? tree::NULL_NODE : f)~;
+	return parsed;
+}
+
 fn parser_result::Result? StatementParser.integer_const_expr(&self)
 {
 	parser::Parser* p = self.parser;
@@ -69,14 +89,16 @@ fn parser_result::Result? StatementParser.integer_const_expr(&self)
 	parser::ConstDeclFoldingMode previous_mode = p.const_decl_folding;
 	p.const_decl_folding = parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION;
 	defer p.const_decl_folding = previous_mode;
-	parser_result::Result? maybe_result;
-	if (self.has_integer_constant_expression)
+	// Prefer the integer-constant production; fall back to a full expression.
+	parser_result::Result? maybe_result = parser::HOOK_ABSENT~;
+	parser::IExpressionGrammar g = self.expressions;
+	if (g && &g.integer_constant_expression)
 	{
-		maybe_result = self.integer_constant_expression(self.context, p, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, true);
+		maybe_result = g.integer_constant_expression(p, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, true);
 	}
-	else
+	if (catch absent = maybe_result)
 	{
-		maybe_result = self.expression(self.context, p, true);
+		if (absent == parser::HOOK_ABSENT) maybe_result = self.expr(true);
 	}
 	fault parse_fault = @catch(maybe_result);
 	if (parse_fault) return (parse_fault == parser_expression::NO_EXPRESSION ? PARSING_FAILED : parse_fault)~;
@@ -146,12 +168,11 @@ struct StatementBodyBinding
 	type_store::NodeOptIndex body;
 }
 
-fn void? parse_body_callback(void* context, parser::Parser* p)
+<* Parse a function body into `binding.body` (NODE_NULL on failure). *>
+fn void? StatementBodyBinding.parse(&binding, parser::Parser* p)
 {
-	StatementBodyBinding* binding = (StatementBodyBinding*)context;
 	binding.body = type_store::NODE_NULL;
 	binding.statements.parser = p;
-	if (binding.statements.has_asm_parser) binding.statements.asm_parser.parser = p;
 	type_store::NodeIndex? parsed = binding.statements.parse_body(true);
 	if (catch __fault = parsed)
 	{
@@ -179,7 +200,9 @@ fn void? append_statement_attributes(parser::Parser* p,
 	parser_attribute::AttributeBuffer* buffer, attribute_wip::Wip* wip)
 {
 	tokens::TokenIndex saved_tok_i = p.tok_i;
+	tokens::TokenIndex saved_tok_end = p.tok_end;
 	defer p.tok_i = saved_tok_i;
+	defer p.tok_end = saved_tok_end;
 	foreach (parsed : buffer.attributes)
 	{
 		if (!parsed.has_name) continue;
@@ -189,16 +212,47 @@ fn void? append_statement_attributes(parser::Parser* p,
 		for (uint i = 0; i < parsed.args_len; i++)
 		{
 			parser_attribute::AttributeArgTokens range = buffer.arguments[(sz)(parsed.args_offset + i)];
+			// Zig `Parser.attribute`: a lone identifier as the first argument of an
+			// attribute that takes one (format/mode/access/spectre) is an
+			// IDENTIFIER_ARG node, not an expression.
+			if (i == 0 && parsed.name.has_identifier_arg() && range.end == range.start + 1)
+			{
+				tokenizer::TokenId id = p.tree.tokens[(usz)range.start].id;
+				if (id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER)
+				{
+					type_store::NodeIndex ident = p.tree.add_node({ .kind = tree::NodeKind.IDENTIFIER_ARG,
+						.identifier_arg = { .identifier_tok = range.start } });
+					args.push({ .node = ident, .qt = type_store::INVALID, .val = value::NONE });
+					continue;
+				}
+			}
 			p.tok_i = range.start;
+			p.tok_end = range.end;
 			parser_result::Result? maybe_arg = p.expr(true);
-			if (catch f = maybe_arg) return f~;
+			fault arg_fault = @catch(maybe_arg);
+			p.tok_end = saved_tok_end;
+			if (arg_fault) return arg_fault~;
 			if (p.tok_i != range.end)
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_TOKEN,
-					"expected attribute argument expression", p.tok_i)!;
+				if (p.at_eof())
+				{
+					p.err(parser_diagnostics::ParserDiag.EXPECTED_EOF, p.diag_index(),
+						"attribute argument expression")!;
+				}
+				else if (p.tree.tokens[(usz)p.tok_i].id == tokenizer::TokenId.INVALID)
+				{
+					p.err(parser_diagnostics::ParserDiag.EXPECTED_INVALID, p.tok_i,
+						"attribute argument expression")!;
+				}
+				else
+				{
+					p.err(parser_diagnostics::ParserDiag.EXPECTED_TOKEN, p.tok_i,
+						"attribute argument expression", p.tree.tokens[(usz)p.tok_i].id.symbol())!;
+				}
 				return PARSING_FAILED~;
 			}
-			args.push(maybe_arg);
+			parser_result::Result arg = maybe_arg!!;
+			args.push(arg);
 		}
 		wip.add(parsed.name, parsed.syntax, parsed.tok, args.array_view());
 	}
@@ -231,15 +285,27 @@ fn type_store::NodeIndex? StatementParser.parse_statement(&self, bool check_unus
 	buffer.init(p.comp.gpa);
 	defer buffer.free();
 	if (catch p.parse_attribute_specifiers(&buffer)) return PARSING_FAILED~;
-	type_store::NodeIndex? maybe_stmt = self.parse_attributed_statement(check_unused);
-	if (catch __fault = maybe_stmt) return __fault~;
-	type_store::NodeIndex stmt = maybe_stmt;
+	parser_attribute::AttributeBuffer* old_prefix_attributes = self.prefix_declaration_attributes;
+	bool old_prefix_attributes_consumed = self.prefix_declaration_attributes_consumed;
+	self.prefix_declaration_attributes = &buffer;
+	self.prefix_declaration_attributes_consumed = false;
+	defer
+	{
+		self.prefix_declaration_attributes = old_prefix_attributes;
+		self.prefix_declaration_attributes_consumed = old_prefix_attributes_consumed;
+	}
+	type_store::NodeIndex stmt = self.parse_attributed_statement(check_unused)!;
 	tree::Node stmt_node = stmt.get(&p.tree);
 	if (stmt_node.kind == tree::NodeKind.DECL_STMT)
 	{
 		// Leading attributes on a declaration statement belong to each
-		// declarator, not to the DECL_STMT wrapper.
-		self.apply_prefix_declaration_attrs(&buffer, &wip, stmt)!;
+		// declarator, not to the DECL_STMT wrapper. The declaration grammar
+		// consumes them before it builds the declarators; custom declaration
+		// callbacks retain the older post-parse bridge.
+		if (!self.prefix_declaration_attributes_consumed)
+		{
+			self.apply_prefix_declaration_attrs(&buffer, &wip, stmt)!;
+		}
 	}
 	else
 	{
@@ -289,7 +355,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			if (catch parsed) return PARSING_FAILED~;
 			if (!parsed) break;
 		}
-		append_statement_attributes(&label_buffer, &label_wip);
+		append_statement_attributes(p, &label_buffer, &label_wip)!;
 		label_wip.apply_stmt_attrs(p, labeled, self.switch_depth > 0)!;
 		p.add_maybe_unused(labeled)!;
 		if (self.in_function)
@@ -299,14 +365,10 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			foreach (label : self.labels) if (same_token_text(p, label, label_tok)) { previous = label; break; }
 			if (@ok(previous))
 			{
-				DString duplicate;
-				duplicate.init(tmem);
-				duplicate.appendf("duplicate label '%s'", p.tree.tok_slice(label_tok));
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.DUPLICATE_LABEL, duplicate.str_view(), label_tok)!;
-				DString previous_msg;
-				previous_msg.init(tmem);
-				previous_msg.appendf("previous definition of label '%s' was here", p.tree.tok_slice(label_tok));
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.PREVIOUS_LABEL, previous_msg.str_view(), previous!)!;
+				String duplicate = string::tformat("duplicate label '%s'", p.tree.tok_slice(label_tok));
+				p.emit_parser_diag(parser_diagnostics::ParserDiag.DUPLICATE_LABEL, duplicate, label_tok)!;
+				String previous_msg = string::tformat("previous definition of label '%s' was here", p.tree.tok_slice(label_tok));
+				p.emit_parser_diag(parser_diagnostics::ParserDiag.PREVIOUS_LABEL, previous_msg, previous!)!;
 			}
 			else
 			{
@@ -320,12 +382,12 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			.labeled_stmt = { .label_tok = label_tok, .body = maybe_body } }, (sz)labeled);
 		return labeled;
 	}
-	if (self.has_asm_parser)
+	if (self.asm_parser)
 	{
-		self.asm_parser.parser = p;
-		type_store::NodeIndex? maybe_asm = self.asm_parser.parse_statement();
-		if (catch __fault = maybe_asm) return __fault~;
-		return maybe_asm;
+		type_store::NodeIndex? maybe_asm = self.asm_parser.parse_asm_statement(p);
+		if (try maybe_asm) return maybe_asm;
+		// NOT_ASM: not an asm statement, continue with the other statement forms.
+		if (catch __fault = maybe_asm) { if (__fault != parser::NOT_ASM) return __fault~; }
 	}
 	if (self.at(tokenizer::TokenId.L_BRACE))
 	{
@@ -343,23 +405,21 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		p.advance();
 		tokens::TokenIndex opener = p.tok_i;
 		if (catch self.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-		parser_result::Result? maybe_cond = self.expression(self.context, p, true);
+		parser_result::Result? maybe_cond = self.expr(true);
 		if (catch __fault = maybe_cond) return __fault~;
 		parser_result::Result cond = maybe_cond;
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		cond.lval_conversion(p);
 		if (catch cond.usual_unary_conversion(p, opener + 1)) return PARSING_FAILED~;
 		cond.save_value(p);
-		type_store::NodeIndex? maybe_then = self.parse_statement(true);
-		if (catch __fault = maybe_then) return __fault~;
+		type_store::NodeIndex maybe_then = self.parse_statement(true)!;
 		type_store::NodeIndex then_body;
 		then_body = maybe_then;
 		type_store::NodeOptIndex else_body = type_store::NODE_NULL;
 		if (self.at(tokenizer::TokenId.KEYWORD_ELSE))
 		{
 			p.advance();
-			type_store::NodeIndex? maybe_else = self.parse_statement(true);
-			if (catch __fault = maybe_else) return __fault~;
+			type_store::NodeIndex maybe_else = self.parse_statement(true)!;
 			else_body = maybe_else.pack();
 		}
 		return p.tree.add_node({ .kind = tree::NodeKind.IF_STMT, .if_stmt = {
@@ -373,7 +433,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		p.advance();
 		tokens::TokenIndex opener = p.tok_i;
 		if (catch self.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-		parser_result::Result? maybe_cond = self.expression(self.context, p, true);
+		parser_result::Result? maybe_cond = self.expr(true);
 		if (catch __fault = maybe_cond) return __fault~;
 		parser_result::Result cond = maybe_cond;
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
@@ -410,6 +470,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		bool is_default = self.at(tokenizer::TokenId.KEYWORD_DEFAULT);
 		tokens::TokenIndex kw = p.tok_i;
 		p.advance();
+		tokens::TokenIndex case_expr_tok = p.tok_i;
 		type_store::NodeIndex value_node;
 		type_store::NodeOptIndex end_node = type_store::NODE_NULL;
 		value::Value case_value = value::NONE;
@@ -420,8 +481,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		tokens::TokenIndex ellipsis = 0;
 		if (!is_default)
 		{
-			parser_result::Result? maybe_value = self.integer_const_expr();
-			if (catch __fault = maybe_value) return __fault~;
+			parser_result::Result maybe_value = self.integer_const_expr()!;
 			maybe_case_value = maybe_value;
 			if (self.at(tokenizer::TokenId.ELLIPSIS))
 			{
@@ -436,8 +496,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 				{
 					p.err(parser_diagnostics::ParserDiag.C2Y_SWITCH_RANGE, ellipsis)!;
 				}
-				parser_result::Result? maybe_end = self.integer_const_expr();
-				if (catch __fault = maybe_end) return __fault~;
+				parser_result::Result maybe_end = self.integer_const_expr()!;
 				maybe_case_end = maybe_end;
 			}
 		}
@@ -504,7 +563,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 					p.err(parser_diagnostics::ParserDiag.DUPLICATE_SWITCH_CASE, kw + 1, p.fmt_value(case_value, case_qt))!;
 					p.emit_parser_diag(parser_diagnostics::ParserDiag.PREVIOUS_CASE, "previous case defined here", previous!.tok)!;
 				}
-				else { self.switch_case_values.push({ .start = case_value, .end = case_end_value, .tok = kw }); }
+				else { self.switch_case_values.push({ .start = case_value, .end = case_end_value, .tok = case_expr_tok }); }
 			}
 		}
 		type_store::NodeIndex? maybe_body = self.parse_statement(true);
@@ -531,7 +590,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		p.advance();
 		tokens::TokenIndex opener = p.tok_i;
 		if (catch self.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-		parser_result::Result? maybe_cond = self.expression(self.context, p, true);
+		parser_result::Result? maybe_cond = self.expr(true);
 		if (catch __fault = maybe_cond) return __fault~;
 		parser_result::Result cond = maybe_cond;
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
@@ -558,7 +617,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		if (catch self.expect(tokenizer::TokenId.KEYWORD_WHILE)) return PARSING_FAILED~;
 		tokens::TokenIndex opener = p.tok_i;
 		if (catch self.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-		parser_result::Result? maybe_cond = self.expression(self.context, p, true);
+		parser_result::Result? maybe_cond = self.expr(true);
 		if (catch __fault = maybe_cond) return __fault~;
 		parser_result::Result cond = maybe_cond;
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
@@ -582,9 +641,21 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		// optional expression followed by ';'.
 		type_store::NodeOptIndex init = type_store::NODE_NULL;
 		bool init_is_decl = false;
-		if (self.has_local_declaration_statement)
+		if (self.local_declarations)
 		{
-			type_store::NodeIndex? maybe_decl = self.local_declaration_statement(self.local_declaration_context, p);
+			type_store::NodeIndex? maybe_decl;
+			{
+				parser_attribute::AttributeBuffer* saved_prefix_attributes = self.prefix_declaration_attributes;
+				bool saved_prefix_consumed = self.prefix_declaration_attributes_consumed;
+				self.prefix_declaration_attributes = null;
+				self.prefix_declaration_attributes_consumed = false;
+				defer
+				{
+					self.prefix_declaration_attributes = saved_prefix_attributes;
+					self.prefix_declaration_attributes_consumed = saved_prefix_consumed;
+				}
+				maybe_decl = self.local_declaration();
+			}
 			if (catch __fault = maybe_decl)
 			{
 				if (__fault != tree::NULL_NODE) return __fault~;
@@ -598,7 +669,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		if (!init_is_decl)
 		{
 			uint init_prev_errors = p.diagnostics.errors;
-			parser_result::Result? maybe_init = self.expression(self.context, p, true);
+			parser_result::Result? maybe_init = self.expr(true);
 			if (catch __fault = maybe_init) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
 			if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 			if (@ok(maybe_init))
@@ -610,7 +681,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 				init = init_expr.node.pack();
 			}
 		}
-		parser_result::Result? maybe_cond = self.expression(self.context, p, true);
+		parser_result::Result? maybe_cond = self.expr(true);
 		if (catch __fault = maybe_cond) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		type_store::NodeOptIndex cond_node = type_store::NODE_NULL;
@@ -623,7 +694,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			cond_node = cond.node.pack();
 		}
 		uint incr_prev_errors = p.diagnostics.errors;
-		parser_result::Result? maybe_incr = self.expression(self.context, p, true);
+		parser_result::Result? maybe_incr = self.expr(true);
 		if (catch __fault = maybe_incr) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		type_store::NodeOptIndex incr = type_store::NODE_NULL;
@@ -635,8 +706,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			incr_expr.save_value(p);
 			incr = incr_expr.node.pack();
 		}
-		type_store::NodeIndex? maybe_body = self.parse_statement(check_unused);
-		if (catch __fault = maybe_body) return __fault~;
+		type_store::NodeIndex maybe_body = self.parse_statement(check_unused)!;
 		return p.tree.add_node({ .kind = tree::NodeKind.FOR_STMT, .for_stmt = { .for_tok = kw, .init = init, .cond = cond_node, .incr = incr, .body = maybe_body } });
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_BREAK) || self.at(tokenizer::TokenId.KEYWORD_CONTINUE))
@@ -663,7 +733,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		if (self.at(tokenizer::TokenId.ASTERISK))
 		{
 			p.advance();
-			parser_result::Result? maybe_expr = self.expression(self.context, p, true);
+			parser_result::Result? maybe_expr = self.expr(true);
 			if (catch __fault = maybe_expr) return __fault~;
 			parser_result::Result expr = maybe_expr;
 			expr.lval_conversion(p);
@@ -684,7 +754,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		tokens::TokenIndex kw = p.tok_i;
 		p.advance();
 		tokens::TokenIndex expr_tok = p.tok_i;
-		parser_result::Result? maybe_expr = self.expression(self.context, p, true);
+		parser_result::Result? maybe_expr = self.expr(true);
 		if (catch __fault = maybe_expr) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		type_store::QualType ret_qt = self.has_function_context ? self.function_return_qt : type_store::INVALID;
@@ -709,7 +779,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 				else
 				{
 					type_store::QualType original_qt = expr.qt;
-					if (expr.coerce_scalar(p, ret_qt, expr_tok)!) { expr.save_value(p); }
+					if (expr.coerce_scalar(p, ret_qt, expr_tok, parser_result::CoercionContext.RETURN)!) { expr.save_value(p); }
 					else
 					{
 						p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_RETURN, expr_tok, p.fmt_qt(original_qt), p.fmt_qt(ret_qt))!;
@@ -728,9 +798,9 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			.return_tok = kw, .return_qt = ret_qt, .operand = tree::ReturnOperandKind.NONE,
 		} });
 	}
-	if (self.has_local_declaration_statement)
+	if (self.local_declarations)
 	{
-		type_store::NodeIndex? maybe_decl = self.local_declaration_statement(self.local_declaration_context, p);
+		type_store::NodeIndex? maybe_decl = self.local_declaration();
 		if (catch __fault = maybe_decl)
 		{
 			// NULL_NODE: no declaration specifier here, so parse an expression statement.
@@ -742,7 +812,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		}
 	}
 	uint expr_prev_errors = p.diagnostics.errors;
-	parser_result::Result? maybe_expr = self.expression(self.context, p, true);
+	parser_result::Result? maybe_expr = self.expr(true);
 	if (catch __fault = maybe_expr) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
 	if (@ok(maybe_expr))
 	{
@@ -794,51 +864,6 @@ fn NoreturnKind StatementParser.node_is_noreturn(&self, type_store::NodeIndex in
 	}
 }
 
-fn bool compound_item_recovery_start(tokenizer::TokenId id)
-{
-	switch (id)
-	{
-		case tokenizer::TokenId.KEYWORD_ATTRIBUTE1: case tokenizer::TokenId.KEYWORD_ATTRIBUTE2:
-		case tokenizer::TokenId.KEYWORD_DECLSPEC: case tokenizer::TokenId.KEYWORD_FOR:
-		case tokenizer::TokenId.KEYWORD_WHILE: case tokenizer::TokenId.KEYWORD_DO:
-		case tokenizer::TokenId.KEYWORD_IF: case tokenizer::TokenId.KEYWORD_GOTO:
-		case tokenizer::TokenId.KEYWORD_SWITCH: case tokenizer::TokenId.KEYWORD_CASE:
-		case tokenizer::TokenId.KEYWORD_DEFAULT: case tokenizer::TokenId.KEYWORD_CONTINUE:
-		case tokenizer::TokenId.KEYWORD_BREAK: case tokenizer::TokenId.KEYWORD_RETURN:
-		case tokenizer::TokenId.KEYWORD_TYPEDEF: case tokenizer::TokenId.KEYWORD_EXTERN:
-		case tokenizer::TokenId.KEYWORD_STATIC: case tokenizer::TokenId.KEYWORD_AUTO:
-		case tokenizer::TokenId.KEYWORD_AUTO_TYPE: case tokenizer::TokenId.KEYWORD_REGISTER:
-		case tokenizer::TokenId.KEYWORD_THREAD_LOCAL: case tokenizer::TokenId.KEYWORD_C23_THREAD_LOCAL:
-		case tokenizer::TokenId.KEYWORD_THREAD: case tokenizer::TokenId.KEYWORD_INLINE:
-		case tokenizer::TokenId.KEYWORD_INLINE1: case tokenizer::TokenId.KEYWORD_INLINE2:
-		case tokenizer::TokenId.KEYWORD_NORETURN: case tokenizer::TokenId.KEYWORD_VOID:
-		case tokenizer::TokenId.KEYWORD_BOOL: case tokenizer::TokenId.KEYWORD_C23_BOOL:
-		case tokenizer::TokenId.KEYWORD_CHAR: case tokenizer::TokenId.KEYWORD_SHORT:
-		case tokenizer::TokenId.KEYWORD_INT: case tokenizer::TokenId.KEYWORD_INT24:
-		case tokenizer::TokenId.KEYWORD_INT128: case tokenizer::TokenId.KEYWORD_INT64:
-		case tokenizer::TokenId.KEYWORD_INT64_2: case tokenizer::TokenId.KEYWORD_LONG:
-		case tokenizer::TokenId.KEYWORD_SIGNED: case tokenizer::TokenId.KEYWORD_SIGNED1:
-		case tokenizer::TokenId.KEYWORD_SIGNED2: case tokenizer::TokenId.KEYWORD_UNSIGNED:
-		case tokenizer::TokenId.KEYWORD_FLOAT: case tokenizer::TokenId.KEYWORD_DOUBLE:
-		case tokenizer::TokenId.KEYWORD_FLOAT128_1: case tokenizer::TokenId.KEYWORD_COMPLEX:
-		case tokenizer::TokenId.KEYWORD_IMAGINARY: case tokenizer::TokenId.KEYWORD_ATOMIC:
-		case tokenizer::TokenId.KEYWORD_ENUM: case tokenizer::TokenId.KEYWORD_STRUCT:
-		case tokenizer::TokenId.KEYWORD_UNION: case tokenizer::TokenId.KEYWORD_CONST:
-		case tokenizer::TokenId.KEYWORD_CONST1: case tokenizer::TokenId.KEYWORD_CONST2:
-		case tokenizer::TokenId.KEYWORD_VOLATILE: case tokenizer::TokenId.KEYWORD_VOLATILE1:
-		case tokenizer::TokenId.KEYWORD_VOLATILE2: case tokenizer::TokenId.KEYWORD_RESTRICT:
-		case tokenizer::TokenId.KEYWORD_RESTRICT1: case tokenizer::TokenId.KEYWORD_RESTRICT2:
-		case tokenizer::TokenId.KEYWORD_ALIGNAS: case tokenizer::TokenId.KEYWORD_C23_ALIGNAS:
-		case tokenizer::TokenId.KEYWORD_TYPEOF: case tokenizer::TokenId.KEYWORD_TYPEOF1:
-		case tokenizer::TokenId.KEYWORD_TYPEOF2: case tokenizer::TokenId.KEYWORD_TYPEOF_UNQUAL:
-		case tokenizer::TokenId.KEYWORD_EXTENSION: case tokenizer::TokenId.KEYWORD_STATIC_ASSERT:
-		case tokenizer::TokenId.KEYWORD_C23_STATIC_ASSERT: case tokenizer::TokenId.KEYWORD_CONSTEXPR:
-		case tokenizer::TokenId.KEYWORD_ASM: case tokenizer::TokenId.KEYWORD_ASM1:
-		case tokenizer::TokenId.KEYWORD_ASM2: return true;
-		default: return false;
-	}
-}
-
 <* Only parser grammar failures can be recovered at a
  compound-item boundary. Fatal diagnostics, allocation failures and absent hooks
  propagate. *>
@@ -883,7 +908,7 @@ fn bool StatementParser.recover_compound_item(&self, tokens::TokenIndex item_sta
 	{
 		tokenizer::TokenId id = p.tree.tokens[(usz)p.tok_i].id;
 		bool at_item_boundary = parens == 0 && braces == 0 && brackets == 0;
-		if (at_item_boundary && p.tok_i != item_start && compound_item_recovery_start(id)) return false;
+		if (at_item_boundary && p.tok_i != item_start && id.starts_compound_item()) return false;
 		if (id == tokenizer::TokenId.R_BRACE && parens == 0 && braces == 0 && brackets == 0)
 		{
 			p.advance();
@@ -947,10 +972,8 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 		{
 			if (!self.mark_label_used(p, goto_tok))
 			{
-				DString msg;
-				msg.init(tmem);
-				msg.appendf("use of undeclared label '%s'", p.tree.tok_slice(goto_tok));
-				(void)p.emit_parser_diag(parser_diagnostics::ParserDiag.UNDECLARED_LABEL, msg.str_view(), goto_tok);
+				String msg = string::tformat("use of undeclared label '%s'", p.tree.tok_slice(goto_tok));
+				(void)p.emit_parser_diag(parser_diagnostics::ParserDiag.UNDECLARED_LABEL, msg, goto_tok);
 			}
 		}
 		if (body_parsed && self.has_computed_goto && !self.function_has_address_of_label)

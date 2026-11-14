@@ -115,8 +115,8 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 	{
 		ulong bit_size = qt.bit_sizeof(comp);
 		type_store::ScalarKind scalar_kind = qt.scalar_kind(comp);
-		if (!scalar_kind.is_real()) return todo_node(tree, "Codegen _Complex values", node);
-		if (scalar_kind.is_int())
+		if (!scalar_kind.is_real) return todo_node(tree, "Codegen _Complex values", node);
+		if (scalar_kind.is_int)
 		{
 			// _Bool has bit_sizeof 1, which maps to no StorageUnit; it is emitted as one byte.
 			ulong storage_bits = bit_size;
@@ -140,7 +140,7 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 			}
 			return todo_node(tree, "Codegen _BitInt values", node);
 		}
-		if (scalar_kind.is_float())
+		if (scalar_kind.is_float)
 		{
 			value_interner::KeyFloatTag tag;
 			switch (bit_size)
@@ -157,7 +157,7 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 			serialize_float(data, value.to_float(tag, comp));
 			return;
 		}
-		if (scalar_kind.is_pointer()) return todo_node(tree, "Codegen pointer", node);
+		if (scalar_kind.is_pointer) return todo_node(tree, "Codegen pointer", node);
 		if (qt.is(comp, type_store::TypeTag.ARRAY))
 		{
 			value_interner::InternerKey key = comp.interner.get(value.ref());
@@ -277,13 +277,22 @@ fn void? gen_asm(tree::Tree* tree, DString* data, DString* text)
 			case tree::NodeKind.STRUCT_DECL:
 			case tree::NodeKind.UNION_DECL:
 			case tree::NodeKind.ENUM_DECL:
+			case tree::NodeKind.STRUCT_FORWARD_DECL:
+			case tree::NodeKind.UNION_FORWARD_DECL:
+			case tree::NodeKind.ENUM_FORWARD_DECL:
+			case tree::NodeKind.EMPTY_DECL:
 				break;
 			case tree::NodeKind.FUNCTION:
 				if (!node.function.body.is_null()) gen_function(tree, node.function)!;
 			case tree::NodeKind.VARIABLE:
+				// `extern T x;` only declares x; emitting storage would define it.
+				if (node.variable.storage_class == tree::VariableStorageClass.EXTERN && node.variable.initializer.is_null()) break;
 				gen_variable(tree, node.variable, data)!;
+			case tree::NodeKind.GLOBAL_ASM:
+				return todo_at(tree, "Codegen global asm", node.global_asm.asm_tok);
 			default:
-				unreachable("unexpected top-level declaration in assembly emitter");
+				// Zig has `unreachable` here; report instead of crashing on new top-level kinds.
+				return todo_at(tree, "Codegen top-level declaration", decl.tok(tree));
 		}
 	}
 	text.append_string("  .section  .note.GNU-stack,\"\",@progbits\n");

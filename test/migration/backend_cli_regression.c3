@@ -261,7 +261,7 @@ fn void backend_argv_spaces_multiple_inputs_and_temp_cleanup() @test
 	d.free();
 }
 
-fn void optimized_prototypes_write_objects_without_lowering_or_subprocesses() @test
+fn void optimized_integrated_as_writes_objects_without_subprocesses() @test
 {
 	String dir = backend_scratch("optimized prototypes");
 	String path_value = backend_tool_path(dir);
@@ -270,14 +270,14 @@ fn void optimized_prototypes_write_objects_without_lowering_or_subprocesses() @t
 	BackendChild prototype_child;
 	diagnostics::Diagnostics prototype_d;
 	prototype_d.init_list(mem);
-	int prototype_status = run_backend_driver({ "aro", "-O1", "--target=x86_64-linux-gnu", "-c", "-nostdinc", "-nobuiltininc", "-o", prototype_output, prototype }, &prototype_d, &prototype_child, path_value);
+	int prototype_status = run_backend_driver({ "aro", "-O1", "-fintegrated-as", "--target=x86_64-linux-gnu", "-c", "-nostdinc", "-nobuiltininc", "-o", prototype_output, prototype }, &prototype_d, &prototype_child, path_value);
 	assert(prototype_status == 0 && prototype_d.errors == 0,
-		"prototype-only -O1 compile failed; diagnostics: %s", backend_diag_text(&prototype_d));
+		"prototype-only -O1 -fintegrated-as compile failed; diagnostics: %s", backend_diag_text(&prototype_d));
 	assert(file::exists(prototype_output), "prototype-only -O1 compile did not write an object");
 	String prototype_bytes = (String)file::load(mem, prototype_output)!!;
 	assert(prototype_bytes.starts_with("\x7fELF"), "prototype-only -O1 output is not an ELF object");
 	alloc::free(mem, prototype_bytes.ptr);
-	assert(prototype_child.calls == 0, "prototype-only -O1 compile spawned a subprocess");
+	assert(prototype_child.calls == 0, "prototype-only -O1 -fintegrated-as compile spawned a subprocess");
 	prototype_d.free();
 
 	String definition = backend_put(dir, "definition.c", "int f(void) { return 0; }\n");
@@ -285,12 +285,14 @@ fn void optimized_prototypes_write_objects_without_lowering_or_subprocesses() @t
 	BackendChild definition_child;
 	diagnostics::Diagnostics definition_d;
 	definition_d.init_list(mem);
-	int definition_status = run_backend_driver({ "aro", "-O1", "--target=x86_64-linux-gnu", "-c", "-nostdinc", "-nobuiltininc", "-o", definition_output, definition }, &definition_d, &definition_child, path_value);
-	String lowering_message = "unable to render Ir to machine code: TODO implement lowering functions";
-	assert(definition_status == 1 && backend_diag_count(&definition_d, diagnostics::MessageKind.FATAL_ERROR, lowering_message) == 1,
-		"function definition did not report exactly one per-declaration lowering FATAL: %s", backend_diag_text(&definition_d));
-	assert(!file::exists(definition_output), "failed function lowering created an object file");
-	assert(definition_child.calls == 0, "failed function lowering spawned a subprocess");
+	int definition_status = run_backend_driver({ "aro", "-O1", "-fintegrated-as", "--target=x86_64-linux-gnu", "-c", "-nostdinc", "-nobuiltininc", "-o", definition_output, definition }, &definition_d, &definition_child, path_value);
+	assert(definition_status == 0 && definition_d.errors == 0,
+		"function definition -O1 -fintegrated-as compile failed; diagnostics: %s", backend_diag_text(&definition_d));
+	assert(file::exists(definition_output), "function definition -O1 -fintegrated-as compile did not write an object");
+	String definition_bytes = (String)file::load(mem, definition_output)!!;
+	assert(definition_bytes.starts_with("\x7fELF"), "function definition -O1 -fintegrated-as output is not an ELF object");
+	alloc::free(mem, definition_bytes.ptr);
+	assert(definition_child.calls == 0, "function definition -O1 -fintegrated-as compile spawned a subprocess");
 	definition_d.free();
 }
 
@@ -303,11 +305,11 @@ fn void optimized_link_mode_uses_and_cleans_temporary_object() @test
 	BackendChild child;
 	diagnostics::Diagnostics d;
 	d.init_list(mem);
-	int status = run_backend_driver({ "aro", "-O1", "--target=x86_64-linux-gnu", "-nostdinc", "-nobuiltininc", "-nostdlib", "-o", output, prototype }, &d, &child, path_value);
+	int status = run_backend_driver({ "aro", "-O1", "-fintegrated-as", "--target=x86_64-linux-gnu", "-nostdinc", "-nobuiltininc", "-nostdlib", "-o", output, prototype }, &d, &child, path_value);
 	assert(status == 0 && d.errors == 0,
-		"prototype-only -O1 link failed; diagnostics: %s", backend_diag_text(&d));
+		"prototype-only -O1 -fintegrated-as link failed; diagnostics: %s", backend_diag_text(&d));
 	assert(child.calls == 1 && backend_linker_calls(&child) == 1,
-		"prototype-only -O1 link should invoke only the linker; calls=%d diagnostics: %s", child.calls, backend_diag_text(&d));
+		"prototype-only -O1 -fintegrated-as link should invoke only the linker; calls=%d diagnostics: %s", child.calls, backend_diag_text(&d));
 	String[] linker_argv = backend_argv(&child, 0);
 	assert(argv_value_after(linker_argv, "-o") == output, "-O1 linker argv omitted the requested output path");
 	String temp_object = child.observed_link_object;
@@ -315,8 +317,77 @@ fn void optimized_link_mode_uses_and_cleans_temporary_object() @test
 		"linker did not receive an existing temporary object path");
 	assert(argv_has(linker_argv, temp_object) && temp_object != prototype && temp_object != output,
 		"linker argv omitted its temporary object input");
-	assert(!file::exists(temp_object), "temporary -O1 object survived successful linking");
+	assert(!file::exists(temp_object), "temporary -O1 -fintegrated-as object survived successful linking");
 	assert(file::exists(output), "fake linker did not materialize the linked output");
+	d.free();
+}
+
+fn void integrated_as_assemble_mode_writes_text_without_subprocesses() @test
+{
+	String dir = backend_scratch("integrated as assemble mode");
+	String source = backend_put(dir, "function.c", "int f(void) { return 7; }\n");
+	String output = backend_join(dir, "function.s");
+	BackendChild child;
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	int status = run_backend_driver({ "aro", "-O1", "-fintegrated-as", "--target=x86_64-linux-gnu", "-S", "-nostdinc", "-nobuiltininc", "-o", output, source }, &d, &child, backend_tool_path(dir));
+	assert(status == 0 && d.errors == 0,
+		"-O1 -fintegrated-as -S failed; diagnostics: %s", backend_diag_text(&d));
+	assert(child.calls == 0, "-O1 -fintegrated-as -S spawned a subprocess");
+	assert(file::exists(output), "-O1 -fintegrated-as -S did not write its output");
+	String output_bytes = (String)file::load(mem, output)!!;
+	assert(!output_bytes.starts_with("\x7fELF"), "-O1 -fintegrated-as -S wrote an ELF object instead of assembly text");
+	assert(output_bytes.contains(".intel_syntax") && output_bytes.contains("f:"),
+		"-O1 -fintegrated-as -S output did not contain assembly text: %s", output_bytes);
+	alloc::free(mem, output_bytes.ptr);
+	d.free();
+}
+
+fn void optimized_nostdlib_static_auto_integrates_without_temporary_assembly() @test
+{
+	String dir = backend_scratch("static integrated link");
+	String source = backend_put(dir, "global.c", "int value = 42;\n");
+	String output = backend_join(dir, "linked output");
+	BackendChild child;
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	int status = run_backend_driver({ "aro", "-O1", "--target=x86_64-linux-gnu", "-nostdinc", "-nobuiltininc", "-nostdlib", "-static", "-o", output, source }, &d, &child, backend_tool_path(dir));
+	assert(status == 0 && d.errors == 0,
+		"-O1 -nostdlib -static auto integrated link failed; diagnostics: %s", backend_diag_text(&d));
+	assert(child.calls == 1 && backend_linker_calls(&child) == 1,
+		"-O1 -nostdlib -static should invoke only the linker; calls=%d diagnostics: %s", child.calls, backend_diag_text(&d));
+	String[] linker_argv = backend_argv(&child, 0);
+	assert(argv_value_after(linker_argv, "-o") == output, "static integrated linker argv omitted the requested output path");
+	String temp_object = child.observed_link_object;
+	assert(child.observed_link_object_exists && temp_object != "" && argv_has(linker_argv, temp_object),
+		"static integrated linker did not receive an existing temporary object");
+	foreach (arg : linker_argv) assert(!arg.ends_with(".s"), "static integrated linker received a temporary assembly path: %s", arg);
+	assert(!file::exists(temp_object), "temporary static integrated object survived successful linking");
+	assert(file::exists(output), "static integrated fake linker did not materialize its output");
+	d.free();
+}
+
+fn void optimized_nostdlib_without_static_keeps_assembler_and_linker() @test
+{
+	String dir = backend_scratch("dynamic external assembler link");
+	String source = backend_put(dir, "global.c", "int value = 42;\n");
+	String output = backend_join(dir, "linked output");
+	BackendChild child = { .write_assembler_output = true };
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	int status = run_backend_driver({ "aro", "-O1", "--target=x86_64-linux-gnu", "-nostdinc", "-nobuiltininc", "-nostdlib", "-o", output, source }, &d, &child, backend_tool_path(dir));
+	assert(status == 0 && d.errors == 0,
+		"-O1 -nostdlib without -static link failed; diagnostics: %s", backend_diag_text(&d));
+	assert(child.calls == 2 && backend_linker_calls(&child) == 1,
+		"-O1 -nostdlib without -static should invoke assembler then linker; calls=%d diagnostics: %s", child.calls, backend_diag_text(&d));
+	String[] assembler_argv = backend_argv(&child, 0);
+	String[] linker_argv = backend_argv(&child, 1);
+	assert(assembler_argv.len == 4 && assembler_argv[0].ends_with("/as") && assembler_argv[1].ends_with(".s") && assembler_argv[2] == "-o" && assembler_argv[3].ends_with(".o"),
+		"non-static optimized path did not invoke the system assembler with a temporary .s and object output");
+	assert(argv_value_after(linker_argv, "-o") == output, "non-static optimized linker argv omitted the requested output path");
+	assert(!file::exists(assembler_argv[1]) && !file::exists(assembler_argv[3]),
+		"non-static optimized path did not clean its temporary assembly/object files");
+	assert(file::exists(output), "non-static fake linker did not materialize its output");
 	d.free();
 }
 
@@ -393,7 +464,7 @@ fn void missing_linker_host_spawn_reports_exact_fatal_text() @test
 
 	diagnostics::Diagnostics d;
 	d.init_list(mem);
-	int status = run_backend_driver_host({ "aro", "-O1", "--target=x86_64-linux-gnu",
+	int status = run_backend_driver_host({ "aro", "-O1", "-fintegrated-as", "--target=x86_64-linux-gnu",
 		string::tformat("--sysroot=%s", sysroot), "-nostdinc", "-nobuiltininc", "-nostdlib", "-r",
 		"-o", output, prototype, input }, &d, empty_path);
 	String expected = "unable to spawn linker: file not found";
@@ -417,7 +488,7 @@ fn void expect_windows_linker_spawn_fatal(String dir, String linker, String expe
 
 	diagnostics::Diagnostics d;
 	d.init_list(mem);
-	int status = run_backend_driver_host({ "aro", "-O1", "--target=x86_64-linux-gnu",
+	int status = run_backend_driver_host({ "aro", "-O1", "-fintegrated-as", "--target=x86_64-linux-gnu",
 		string::tformat("--ld-path=%s", linker), string::tformat("--sysroot=%s", sysroot),
 		"-nostdinc", "-nobuiltininc", "-nostdlib", "-r", "-o", output, prototype, input }, &d, empty_path);
 	assert(status == 1, "host linker spawn should exit with status 1, got %d; diagnostics: %s", status, backend_diag_text(&d));

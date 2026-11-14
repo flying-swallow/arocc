@@ -279,50 +279,9 @@ fn BuilderSpecifier builder_from_type(Compilation* comp, QualType qt)
 	}
 }
 
-fn BuilderSpecifier builder_from_int_type(TypeInt ty)
-{
-	switch (ty)
-	{
-		case CHAR: return { .tag = CHAR };
-		case SCHAR: return { .tag = SCHAR };
-		case UCHAR: return { .tag = UCHAR };
-		case SHORT: return { .tag = SHORT };
-		case USHORT: return { .tag = USHORT };
-		case INT: return { .tag = INT };
-		case UINT: return { .tag = UINT };
-		case LONG: return { .tag = LONG };
-		case ULONG: return { .tag = ULONG };
-		case LONG_LONG: return { .tag = LONG_LONG };
-		case ULONG_LONG: return { .tag = ULONG_LONG };
-		case INT128: return { .tag = INT128 };
-		case UINT128: return { .tag = UINT128 };
-		case INT24: return { .tag = INT24 };
-		case UINT24: return { .tag = UINT24 };
-	}
-}
+fn BuilderSpecifier builder_from_int_type(TypeInt ty) => { .tag = ty.builder };
 
-fn BuilderSpecifier builder_from_float_type(TypeFloat ty)
-{
-	switch (ty)
-	{
-		case BF16: return { .tag = BF16 };
-		case FP16: return { .tag = FP16 };
-		case FLOAT16: return { .tag = FLOAT16 };
-		case FLOAT: return { .tag = FLOAT };
-		case DOUBLE: return { .tag = DOUBLE };
-		case LONG_DOUBLE: return { .tag = LONG_DOUBLE };
-		case FLOAT128: return { .tag = FLOAT128 };
-		case FLOAT32: return { .tag = FLOAT32 };
-		case FLOAT64: return { .tag = FLOAT64 };
-		case FLOAT32X: return { .tag = FLOAT32X };
-		case FLOAT64X: return { .tag = FLOAT64X };
-		case FLOAT128X: return { .tag = FLOAT128X };
-		case DFLOAT32: return { .tag = DFLOAT32 };
-		case DFLOAT64: return { .tag = DFLOAT64 };
-		case DFLOAT128: return { .tag = DFLOAT128 };
-		case DFLOAT64X: return { .tag = DFLOAT64X };
-	}
-}
+fn BuilderSpecifier builder_from_float_type(TypeFloat ty) => { .tag = ty.builder };
 
 <* Convert the supported scalar specifier to its `_Complex` spelling. *>
 fn BuilderSpecifier builder_as_complex(BuilderSpecifier base)
@@ -521,10 +480,8 @@ fn void? Builder.cannot_combine(&self, tokens::TokenIndex tok)
 fn void? Builder.duplicate_spec(&self, tokens::TokenIndex tok, String spelling)
 {
 	if (self.parser.comp.langopts.emulate == GCC) return self.cannot_combine(tok);
-	DString text;
-	text.init(tmem);
-	text.appendf("duplicate '%s' declaration specifier", spelling);
-	return self.emit(parser_diagnostics::ParserDiag.DUPLICATE_DECL_SPEC, text.str_view(), self.parser.tok_i);
+	String text = string::tformat("duplicate '%s' declaration specifier", spelling);
+	return self.emit(parser_diagnostics::ParserDiag.DUPLICATE_DECL_SPEC, text, self.parser.tok_i);
 }
 
 <* Combine one declaration specifier using TypeStore.Builder's source-derived

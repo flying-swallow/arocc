@@ -10,15 +10,13 @@ fn symbol_stack::SymbolContext Parser.symbol_context(&self)
 {
 	return {
 		.comp = self.comp,
-		.ctx = (void*)self,
-		.err = &parser_symbol_error,
-		.set_tentative_decl_definition = &parser_symbol_set_tentative_definition,
+		.handler = self,
 	};
 }
 
-fn void? parser_symbol_error(void* context, tokens::TokenIndex tok, symbol_stack::SymbolDiag diag, type_store::QualType qt_a, type_store::QualType qt_b)
+fn void? Parser.symbol_diag(&self, tokens::TokenIndex tok, symbol_stack::SymbolDiag diag, type_store::QualType qt_a, type_store::QualType qt_b) @dynamic
 {
-	Parser* p = (Parser*)context;
+	Parser* p = self;
 	String name = p.tree.tok_slice(tok);
 	parser_diagnostics::ParserDiag parser_diag;
 	DString message;
@@ -60,9 +58,9 @@ fn void? parser_symbol_error(void* context, tokens::TokenIndex tok, symbol_stack
 	return p.emit_parser_diag(parser_diag, message.str_view(), tok);
 }
 
-fn void parser_symbol_set_tentative_definition(void* context, type_store::NodeIndex declaration, type_store::NodeIndex definition)
+fn void Parser.symbol_tentative_definition(&self, type_store::NodeIndex declaration, type_store::NodeIndex definition) @dynamic
 {
-	Parser* p = (Parser*)context;
+	Parser* p = self;
 	assert(p.handler && &p.handler.handle_tentative_decl_definition, "declaration completion handler is not bound");
 	p.handler.handle_tentative_decl_definition(p, declaration, definition);
 }

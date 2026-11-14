@@ -199,50 +199,9 @@ fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* 
 	return true;
 }
 
-fn String int_name(TypeInt k)
-{
-	switch (k)
-	{
-		case CHAR: return "char";
-		case SCHAR: return "signed char";
-		case UCHAR: return "unsigned char";
-		case SHORT: return "short";
-		case USHORT: return "unsigned short";
-		case INT: return "int";
-		case UINT: return "unsigned int";
-		case LONG: return "long";
-		case ULONG: return "unsigned long";
-		case LONG_LONG: return "long long";
-		case ULONG_LONG: return "unsigned long long";
-		case INT128: return "__int128";
-		case UINT128: return "unsigned __int128";
-		case INT24: return "__int24";
-		case UINT24: return "unsigned __int24";
-	}
-}
+fn String int_name(TypeInt k) => k.name;
 
-fn String float_name(TypeFloat k)
-{
-	switch (k)
-	{
-		case BF16: return "__bf16";
-		case FP16: return "__fp16";
-		case FLOAT16: return "_Float16";
-		case FLOAT: return "float";
-		case DOUBLE: return "double";
-		case LONG_DOUBLE: return "long double";
-		case FLOAT128: return "__float128";
-		case FLOAT32: return "_Float32";
-		case FLOAT64: return "_Float64";
-		case FLOAT32X: return "_Float32x";
-		case FLOAT64X: return "_Float64x";
-		case FLOAT128X: return "_Float128x";
-		case DFLOAT32: return "_Decimal32";
-		case DFLOAT64: return "_Decimal64";
-		case DFLOAT128: return "_Decimal128";
-		case DFLOAT64X: return "_Decimal64x";
-	}
-}
+fn String float_name(TypeFloat k) => k.name;
 
 fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString* w)
 {

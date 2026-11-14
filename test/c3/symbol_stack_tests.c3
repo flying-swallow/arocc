@@ -10,7 +10,7 @@ macro check(left, right)
 	test::eq((long)left, (long)right);
 }
 
-struct SymbolRecorder
+struct SymbolRecorder (ISymbolHandler)
 {
 	SymbolDiag[16] diags;
 	tokens::TokenIndex[16] toks;
@@ -23,9 +23,9 @@ struct SymbolRecorder
 	bool fail_diagnostics;
 }
 
-fn void? record_symbol_error(void* ctx, tokens::TokenIndex tok, SymbolDiag diag, QualType qt_a, QualType qt_b)
+fn void? SymbolRecorder.symbol_diag(&self, tokens::TokenIndex tok, SymbolDiag diag, QualType qt_a, QualType qt_b) @dynamic
 {
-	SymbolRecorder* r = (SymbolRecorder*)ctx;
+	SymbolRecorder* r = self;
 	usz i = r.diag_len;
 	r.diags[i] = diag;
 	r.toks[i] = tok;
@@ -35,9 +35,9 @@ fn void? record_symbol_error(void* ctx, tokens::TokenIndex tok, SymbolDiag diag,
 	if (r.fail_diagnostics) return compilation::FATAL_ERROR~;
 }
 
-fn void record_tentative_link(void* ctx, NodeIndex decl, NodeIndex definition)
+fn void SymbolRecorder.symbol_tentative_definition(&self, NodeIndex decl, NodeIndex definition) @dynamic
 {
-	SymbolRecorder* r = (SymbolRecorder*)ctx;
+	SymbolRecorder* r = self;
 	usz i = r.tentative_len;
 	r.tentative_decl[i] = decl;
 	r.tentative_def[i] = definition;
@@ -46,7 +46,7 @@ fn void record_tentative_link(void* ctx, NodeIndex decl, NodeIndex definition)
 
 fn SymbolContext symbol_context(Compilation* comp, SymbolRecorder* r)
 {
-	return { .comp = comp, .ctx = r, .err = &record_symbol_error, .set_tentative_decl_definition = &record_tentative_link };
+	return { .comp = comp, .handler = r };
 }
 
 fn Symbol symbol(StringId name, SymbolKind kind, QualType qt = type_store::INT, uint tok = 0, uint node = 0)

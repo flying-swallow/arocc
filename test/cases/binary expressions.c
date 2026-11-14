@@ -111,6 +111,18 @@ void qualified_binary_operands(void) {
     c |= b;
 }
 
+void invalid_float_pointer_arithmetic(void) {
+    int *ptr;
+    int x;
+    float f;
+    x *= ptr;
+    f /= ptr;
+    1.0 * ptr;
+    ptr / 1.0;
+    ptr += x;
+    ptr -= x;
+}
+
 /** manifest:
 syntax
 args = -Wno-unused
@@ -151,4 +163,8 @@ binary expressions.c:108:7: error: invalid operands to binary expression ('const
 binary expressions.c:109:7: error: invalid operands to binary expression ('const volatile _Atomic(long)' and 'const volatile float')
 binary expressions.c:110:13: error: invalid operands to binary expression ('long' and 'const volatile float')
 binary expressions.c:111:7: error: invalid operands to binary expression ('volatile _Atomic(long)' and 'const volatile float')
+binary expressions.c:118:7: error: invalid operands to binary expression ('int' and 'int *')
+binary expressions.c:119:7: error: invalid operands to binary expression ('float' and 'int *')
+binary expressions.c:120:9: error: invalid operands to binary expression ('double' and 'int *')
+binary expressions.c:121:9: error: invalid operands to binary expression ('int *' and 'double')
 */

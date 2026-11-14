@@ -2,7 +2,7 @@
 // DeclarationParser plus the builtin, compound-literal and statement-expression
 // extension hooks. Shared by the CLI driver and the migration frontend probe.
 module aro::parser_frontend;
-import aro::parser, aro::parser_result, aro::parser_declaration, aro::parser_builtin, aro::parser_postfix;
+import aro::parser, aro::parser_result, aro::parser_declaration, aro::parser_builtin, aro::parser_postfix, aro::parser_asm;
 import aro::builtin_call, aro::tokens, aro::type_store;
 
 <*
@@ -10,36 +10,32 @@ import aro::builtin_call, aro::tokens, aro::type_store;
  same stack frame) and must outlive it. Call `bind` after `Parser.init`
  and before `Parser.parse`.
 *>
-struct FrontendHandler (parser::IParserHandler)
+struct FrontendHandler (parser::IParserHandler, parser::IExpressionGrammar)
 {
 	parser_declaration::DeclarationParser declarations;
 	parser_builtin::BuiltinParser builtin;
 	parser_postfix::PostfixParser postfix;
+	parser_asm::AsmParser asm_parser;
 }
+
+<* AsmParser operand callback: `context` is the FrontendHandler. *>
+fn parser_result::Result? asm_operand_expression(void* context, parser::Parser* p, bool eval)
+	=> p.expr(eval);
 
 <* Install this handler on an initialized `p` and bind the initializer seam. *>
 fn void FrontendHandler.bind(&self, parser::Parser* p)
 {
 	*self = {};
-	self.builtin = {
-		.parser = p,
-		.context = (void*)self,
-		.assignment_expression = &assignment_expression,
-		.integer_constant_expression = &integer_constant_expression,
-	};
-	self.postfix = { .parser = p, .context = (void*)self };
+	self.builtin = { .parser = p, .expressions = self };
+	self.postfix = { .parser = p };
+	self.asm_parser = { .parser = p, .context = self, .expression = &asm_operand_expression };
 	self.declarations = {
-		.statements = {
-			.context = (void*)self,
-			.expression = &statement_expression,
-			.integer_constant_expression = &integer_constant_expression,
-			.has_integer_constant_expression = true,
-		},
+		.statements = { .expressions = self, .asm_parser = &self.asm_parser },
 		.implicit_typedefs = &parser_declaration::implicit_typedef_prelude,
 		.has_implicit_typedefs = true,
 	};
 	p.handler = self;
-	p.bind_initializer_parser((void*)self, &assignment_expression, &initializer_integer_constant_expression);
+	p.bind_initializer_parser(self);
 }
 
 // Grammar hooks forward to the declaration grammar.
@@ -65,8 +61,7 @@ fn bool? FrontendHandler.is_recoverable_parse_fault(&self, parser::Parser* p, fa
 // Expression extension hooks.
 fn parser_result::Result? FrontendHandler.handle_builtin_primary_expression(&self, parser::Parser* p, bool eval) @dynamic
 {
-	self.builtin.parser = p;
-	return parser_builtin::builtin_primary_expression((void*)&self.builtin, p, eval);
+	return self.builtin.parse_builtin_primary(p, eval);
 }
 
 fn parser_result::Result? FrontendHandler.handle_builtin_call(&self, parser::Parser* p, type_store::NodeIndex callee,
@@ -88,17 +83,11 @@ fn type_store::NodeIndex? FrontendHandler.handle_statement_expression_body(&self
 	return self.declarations.statements.parse_body(false);
 }
 
-// Sub-parser adapters: route back into Parser's composed expression entry points.
-fn parser_result::Result? assignment_expression(void* context, parser::Parser* p, bool eval) @local
-	=> p.assign_expr(eval);
-
-fn parser_result::Result? integer_constant_expression(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode mode, bool eval) @local
-	=> p.integer_const_expr(eval, mode);
-
-fn parser_result::Result? initializer_integer_constant_expression(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode mode) @local
-	=> p.integer_const_expr(true, mode);
-
-fn parser_result::Result? statement_expression(void* context, parser::Parser* p, bool eval) @local
+// IExpressionGrammar: Parser's composed expression entry points.
+fn parser_result::Result? FrontendHandler.expression(&self, parser::Parser* p, bool eval) @dynamic
 	=> p.expr(eval);
+fn parser_result::Result? FrontendHandler.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> p.assign_expr(eval);
+fn parser_result::Result? FrontendHandler.integer_constant_expression(&self, parser::Parser* p,
+	parser::ConstDeclFoldingMode mode, bool eval) @dynamic
+	=> p.integer_const_expr(eval, mode);

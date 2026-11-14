@@ -34,26 +34,6 @@ enum StringifyWs : char @private
 	NOT_NEEDED,
 }
 
-<* Zig stringify's `is_str`: tokens whose '\' are escaped (note: not CHAR_LITERAL_UTF_8, as in Zig). *>
-fn bool stringify_escapes_backslash(TokenId id) @private
-{
-	switch (id)
-	{
-		case STRING_LITERAL:
-		case STRING_LITERAL_UTF_16:
-		case STRING_LITERAL_UTF_8:
-		case STRING_LITERAL_UTF_32:
-		case STRING_LITERAL_WIDE:
-		case CHAR_LITERAL:
-		case CHAR_LITERAL_UTF_16:
-		case CHAR_LITERAL_UTF_32:
-		case CHAR_LITERAL_WIDE:
-			return true;
-		default:
-			return false;
-	}
-}
-
 <*
  Zig `stringify`: append the `#` spelling of `toks` to char_buf: '"', then
  each token's expanded_slice with '"' -> \" everywhere and '\' -> \\ inside
@@ -82,7 +62,7 @@ fn void? Preprocessor.stringify(&self, TokenWithExpansionLocs[] toks)
 		ws_state = NOT_NEEDED;
 
 		// backslashes not inside strings are not escaped
-		bool is_str = stringify_escapes_backslash(tok.id);
+		bool is_str = tok.id.stringify_escapes();
 		foreach (c : self.expanded_slice(tok))
 		{
 			if (c == '"')

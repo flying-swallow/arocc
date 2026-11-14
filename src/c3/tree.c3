@@ -23,8 +23,8 @@
 //    `.binary`, all Unary variants `.unary`, ...). The kind -> member mapping
 //    is in the docs table and in each payload struct's doc comment.
 //  - Zig `Node.Repr` (MultiArrayList) is `NodeRepr` stored array-of-structs in
-//    `Tree.nodes`. `NodeTag` is Zig `Repr.Tag`; `NodeTag.kind` is the
-//    `NodeKind` that tag decodes to.
+//    `Tree.nodes`. Instead of Zig's `Repr.Tag` (kind x storage variant) it
+//    stores the `NodeKind` plus `NodeForm` bits selecting the variant.
 //  - Slices in a decoded `Node` (fields, body, args, ...) point into
 //    `Tree.extra` or into the node's own `NodeRepr.data` (the "_two"/"_three"
 //    packed forms, Zig `unPackElems`). Exactly as in Zig they stay valid only
@@ -34,7 +34,7 @@
 //    released by `Tree.free` (Zig `deinit`).
 //  - Running out of memory panics, so Zig's `!T` (OOM only) is plain `T`.
 //  - Zig leaves unused `Repr.data` words `undefined`; C3 zero-initializes
-//    them. `qt_or_null` reads data[0] for every non-listed tag (including
+//    them. `qt_or_null` reads data[0] for every non-listed kind (including
 //    IDENTIFIER_ARG and CODEGEN_DIAGNOSTIC), as Zig does.
 //
 // Storage and node dispatch live here; declaration and expression codecs,
@@ -115,16 +115,16 @@ struct ExtraSpan
 <* Which stage-1 file encodes/decodes a node kind (see docs/c3-tree-tags.md). *>
 enum NodeFamily : char
 {
-	DECL, // tree_decl.c3
-	STMT, // tree_expr.c3
-	EXPR, // tree_expr.c3
+	DECL,  // tree_decl.c3
+	STMT,  // tree_expr.c3
+	EXPR,  // tree_expr.c3
 }
 
 <*
  Zig `std.meta.Tag(Tree.Node)`, in Zig declaration order. `name` is the Zig
  tag name (`{t}` in `dumpNode`), `family` the owning encoder/decoder.
 *>
-enum NodeKind : char (String name, NodeFamily family)
+enum NodeKind : char(String name, NodeFamily family)
 {
 	EMPTY_DECL { "empty_decl", DECL },
 	STATIC_ASSERT { "static_assert", DECL },
@@ -246,159 +246,28 @@ enum NodeKind : char (String name, NodeFamily family)
 	IDENTIFIER_ARG { "identifier_arg", DECL },
 }
 
-<* Zig `Node.Repr.Tag` (enum(u8)), in Zig order. `kind` is the `NodeKind` it decodes to. *>
-enum NodeTag : char (NodeKind kind)
+<*
+ Storage-variant bits of a `NodeRepr`; which bits apply depends on `kind`.
+ Replaces Zig `Node.Repr.Tag`'s per-kind variants (FN_PROTO/FN_DEF,
+ FOR_INIT_COND, *_TWO/_THREE, IMPLICIT_CAST, ASM_STMT_INLINE, ...); see
+ docs/c3-tree-tags.md section 2.
+*>
+bitstruct NodeForm : ushort
 {
-	EMPTY_DECL { NodeKind.EMPTY_DECL },
-	STATIC_ASSERT { NodeKind.STATIC_ASSERT },
-	FN_PROTO { NodeKind.FUNCTION },
-	FN_DEF { NodeKind.FUNCTION },
-	PARAM { NodeKind.PARAM },
-	VARIABLE { NodeKind.VARIABLE },
-	VARIABLE_DEF { NodeKind.VARIABLE },
-	TYPEDEF { NodeKind.TYPEDEF },
-	GLOBAL_ASM { NodeKind.GLOBAL_ASM },
-	STRUCT_DECL { NodeKind.STRUCT_DECL },
-	UNION_DECL { NodeKind.UNION_DECL },
-	ENUM_DECL { NodeKind.ENUM_DECL },
-	STRUCT_DECL_TWO { NodeKind.STRUCT_DECL },
-	UNION_DECL_TWO { NodeKind.UNION_DECL },
-	ENUM_DECL_TWO { NodeKind.ENUM_DECL },
-	STRUCT_FORWARD_DECL { NodeKind.STRUCT_FORWARD_DECL },
-	UNION_FORWARD_DECL { NodeKind.UNION_FORWARD_DECL },
-	ENUM_FORWARD_DECL { NodeKind.ENUM_FORWARD_DECL },
-	ENUM_FIELD { NodeKind.ENUM_FIELD },
-	RECORD_FIELD { NodeKind.RECORD_FIELD },
-	LABELED_STMT { NodeKind.LABELED_STMT },
-	COMPOUND_STMT { NodeKind.COMPOUND_STMT },
-	COMPOUND_STMT_THREE { NodeKind.COMPOUND_STMT },
-	IF_STMT { NodeKind.IF_STMT },
-	IF_INIT { NodeKind.IF_STMT },
-	IF_FULL { NodeKind.IF_STMT },
-	SWITCH_STMT { NodeKind.SWITCH_STMT },
-	CASE_STMT { NodeKind.CASE_STMT },
-	DEFAULT_STMT { NodeKind.DEFAULT_STMT },
-	WHILE_STMT { NodeKind.WHILE_STMT },
-	DO_WHILE_STMT { NodeKind.DO_WHILE_STMT },
-	FOR_FULL { NodeKind.FOR_STMT },
-	FOR_INIT_COND { NodeKind.FOR_STMT },
-	FOR_INIT_INCR { NodeKind.FOR_STMT },
-	FOR_COND_INCR { NodeKind.FOR_STMT },
-	FOR_INIT { NodeKind.FOR_STMT },
-	FOR_COND { NodeKind.FOR_STMT },
-	FOR_INCR { NodeKind.FOR_STMT },
-	FOR_EVER { NodeKind.FOR_STMT },
-	GOTO_STMT { NodeKind.GOTO_STMT },
-	COMPUTED_GOTO_STMT { NodeKind.COMPUTED_GOTO_STMT },
-	CONTINUE_STMT { NodeKind.CONTINUE_STMT },
-	BREAK_STMT { NodeKind.BREAK_STMT },
-	NULL_STMT { NodeKind.NULL_STMT },
-	RETURN_STMT { NodeKind.RETURN_STMT },
-	RETURN_NONE_STMT { NodeKind.RETURN_STMT },
-	IMPLICIT_RETURN { NodeKind.RETURN_STMT },
-	ASM_STMT { NodeKind.ASM_STMT },
-	ASM_STMT_INLINE { NodeKind.ASM_STMT },
-	ASM_STMT_VOLATILE { NodeKind.ASM_STMT },
-	ASM_STMT_INLINE_VOLATILE { NodeKind.ASM_STMT },
-	ASM_STMT_SIMPLE { NodeKind.ASM_STMT },
-	DECL_STMT_THREE { NodeKind.DECL_STMT },
-	DECL_STMT { NodeKind.DECL_STMT },
-	COMMA_EXPR { NodeKind.COMMA_EXPR },
-	ASSIGN_EXPR { NodeKind.ASSIGN_EXPR },
-	MUL_ASSIGN_EXPR { NodeKind.MUL_ASSIGN_EXPR },
-	DIV_ASSIGN_EXPR { NodeKind.DIV_ASSIGN_EXPR },
-	MOD_ASSIGN_EXPR { NodeKind.MOD_ASSIGN_EXPR },
-	ADD_ASSIGN_EXPR { NodeKind.ADD_ASSIGN_EXPR },
-	SUB_ASSIGN_EXPR { NodeKind.SUB_ASSIGN_EXPR },
-	SHL_ASSIGN_EXPR { NodeKind.SHL_ASSIGN_EXPR },
-	SHR_ASSIGN_EXPR { NodeKind.SHR_ASSIGN_EXPR },
-	BIT_AND_ASSIGN_EXPR { NodeKind.BIT_AND_ASSIGN_EXPR },
-	BIT_XOR_ASSIGN_EXPR { NodeKind.BIT_XOR_ASSIGN_EXPR },
-	BIT_OR_ASSIGN_EXPR { NodeKind.BIT_OR_ASSIGN_EXPR },
-	COMPOUND_ASSIGN_DUMMY_EXPR { NodeKind.COMPOUND_ASSIGN_DUMMY_EXPR },
-	BOOL_OR_EXPR { NodeKind.BOOL_OR_EXPR },
-	BOOL_AND_EXPR { NodeKind.BOOL_AND_EXPR },
-	BIT_OR_EXPR { NodeKind.BIT_OR_EXPR },
-	BIT_XOR_EXPR { NodeKind.BIT_XOR_EXPR },
-	BIT_AND_EXPR { NodeKind.BIT_AND_EXPR },
-	EQUAL_EXPR { NodeKind.EQUAL_EXPR },
-	NOT_EQUAL_EXPR { NodeKind.NOT_EQUAL_EXPR },
-	LESS_THAN_EXPR { NodeKind.LESS_THAN_EXPR },
-	LESS_THAN_EQUAL_EXPR { NodeKind.LESS_THAN_EQUAL_EXPR },
-	GREATER_THAN_EXPR { NodeKind.GREATER_THAN_EXPR },
-	GREATER_THAN_EQUAL_EXPR { NodeKind.GREATER_THAN_EQUAL_EXPR },
-	SHL_EXPR { NodeKind.SHL_EXPR },
-	SHR_EXPR { NodeKind.SHR_EXPR },
-	ADD_EXPR { NodeKind.ADD_EXPR },
-	SUB_EXPR { NodeKind.SUB_EXPR },
-	MUL_EXPR { NodeKind.MUL_EXPR },
-	DIV_EXPR { NodeKind.DIV_EXPR },
-	MOD_EXPR { NodeKind.MOD_EXPR },
-	EXPLICIT_CAST { NodeKind.CAST },
-	IMPLICIT_CAST { NodeKind.CAST },
-	ADDR_OF_EXPR { NodeKind.ADDR_OF_EXPR },
-	DEREF_EXPR { NodeKind.DEREF_EXPR },
-	PLUS_EXPR { NodeKind.PLUS_EXPR },
-	NEGATE_EXPR { NodeKind.NEGATE_EXPR },
-	BIT_NOT_EXPR { NodeKind.BIT_NOT_EXPR },
-	BOOL_NOT_EXPR { NodeKind.BOOL_NOT_EXPR },
-	PRE_INC_EXPR { NodeKind.PRE_INC_EXPR },
-	PRE_DEC_EXPR { NodeKind.PRE_DEC_EXPR },
-	IMAG_EXPR { NodeKind.IMAG_EXPR },
-	REAL_EXPR { NodeKind.REAL_EXPR },
-	POST_INC_EXPR { NodeKind.POST_INC_EXPR },
-	POST_DEC_EXPR { NodeKind.POST_DEC_EXPR },
-	PAREN_EXPR { NodeKind.PAREN_EXPR },
-	STMT_EXPR { NodeKind.STMT_EXPR },
-	ADDR_OF_LABEL { NodeKind.ADDR_OF_LABEL },
-	ARRAY_ACCESS_EXPR { NodeKind.ARRAY_ACCESS_EXPR },
-	CALL_EXPR_ONE { NodeKind.CALL_EXPR },
-	CALL_EXPR { NodeKind.CALL_EXPR },
-	BUILTIN_CALL_EXPR { NodeKind.BUILTIN_CALL_EXPR },
-	BUILTIN_CALL_EXPR_TWO { NodeKind.BUILTIN_CALL_EXPR },
-	MEMBER_ACCESS_EXPR { NodeKind.MEMBER_ACCESS_EXPR },
-	MEMBER_ACCESS_PTR_EXPR { NodeKind.MEMBER_ACCESS_PTR_EXPR },
-	DECL_REF_EXPR { NodeKind.DECL_REF_EXPR },
-	ENUMERATION_REF { NodeKind.ENUMERATION_REF },
-	BUILTIN_REF { NodeKind.BUILTIN_REF },
-	BOOL_LITERAL { NodeKind.BOOL_LITERAL },
-	NULLPTR_LITERAL { NodeKind.NULLPTR_LITERAL },
-	INT_LITERAL { NodeKind.INT_LITERAL },
-	CHAR_LITERAL { NodeKind.CHAR_LITERAL },
-	FLOAT_LITERAL { NodeKind.FLOAT_LITERAL },
-	STRING_LITERAL_EXPR { NodeKind.STRING_LITERAL_EXPR },
-	IMAGINARY_LITERAL { NodeKind.IMAGINARY_LITERAL },
-	SIZEOF_EXPR { NodeKind.SIZEOF_EXPR },
-	ALIGNOF_EXPR { NodeKind.ALIGNOF_EXPR },
-	COUNTOF_EXPR { NodeKind.COUNTOF_EXPR },
-	GENERIC_EXPR { NodeKind.GENERIC_EXPR },
-	GENERIC_EXPR_ZERO { NodeKind.GENERIC_EXPR },
-	GENERIC_ASSOCIATION_EXPR { NodeKind.GENERIC_ASSOCIATION_EXPR },
-	GENERIC_DEFAULT_EXPR { NodeKind.GENERIC_DEFAULT_EXPR },
-	BINARY_COND_EXPR { NodeKind.BINARY_COND_EXPR },
-	COND_DUMMY_EXPR { NodeKind.COND_DUMMY_EXPR },
-	COND_EXPR { NodeKind.COND_EXPR },
-	BUILTIN_CHOOSE_EXPR { NodeKind.BUILTIN_CHOOSE_EXPR },
-	BUILTIN_TYPES_COMPATIBLE_P { NodeKind.BUILTIN_TYPES_COMPATIBLE_P },
-	BUILTIN_CONVERTVECTOR { NodeKind.BUILTIN_CONVERTVECTOR },
-	BUILTIN_SHUFFLEVECTOR { NodeKind.BUILTIN_SHUFFLEVECTOR },
-	BUILTIN_VA_ARG_PACK { NodeKind.BUILTIN_VA_ARG_PACK },
-	BUILTIN_VA_ARG_PACK_LEN { NodeKind.BUILTIN_VA_ARG_PACK_LEN },
-	ARRAY_INIT_EXPR { NodeKind.ARRAY_INIT_EXPR },
-	ARRAY_INIT_EXPR_TWO { NodeKind.ARRAY_INIT_EXPR },
-	STRUCT_INIT_EXPR { NodeKind.STRUCT_INIT_EXPR },
-	STRUCT_INIT_EXPR_TWO { NodeKind.STRUCT_INIT_EXPR },
-	UNION_INIT_EXPR { NodeKind.UNION_INIT_EXPR },
-	ARRAY_FILLER_EXPR { NodeKind.ARRAY_FILLER_EXPR },
-	DEFAULT_INIT_EXPR { NodeKind.DEFAULT_INIT_EXPR },
-	COMPOUND_LITERAL_EXPR { NodeKind.COMPOUND_LITERAL_EXPR },
-	CODEGEN_DIAGNOSTIC { NodeKind.CODEGEN_DIAGNOSTIC },
-	ALIGNAS_TYPE { NodeKind.ALIGNAS_TYPE },
-	IDENTIFIER_ARG { NodeKind.IDENTIFIER_ARG },
+	bool packed: 0;       // elements inline in data[] (Zig *_two/*_three/_one/_zero, asm_stmt_simple)
+	bool defined: 1;      // FUNCTION/VARIABLE: data[2] is body/initializer, else definition
+	bool implicit: 2;     // CAST: implicit cast; RETURN_STMT: implicit return
+	bool has_init: 3;     // IF_STMT, FOR_STMT
+	bool has_cond: 4;     // FOR_STMT
+	bool has_incr: 5;     // FOR_STMT
+	bool has_else: 6;     // IF_STMT with init (Zig if_full)
+	bool asm_inline: 7;   // ASM_STMT (non-simple)
+	bool asm_volatile: 8; // ASM_STMT (non-simple)
+	bool return_none: 9;  // RETURN_STMT without operand
 }
 
 <* Zig `Node.Cast.Kind`; `name` is the Zig tag name (printed by dump). *>
-enum CastKind : char (String name)
+enum CastKind : char(String name)
 {
 	NO_OP { "no_op" },
 	BITCAST { "bitcast" },
@@ -434,7 +303,7 @@ enum CastKind : char (String name)
 }
 
 <* Zig `Node.CharLiteral.kind` (also used by string_literal_expr). *>
-enum CharLiteralKind : char (String name)
+enum CharLiteralKind : char(String name)
 {
 	ASCII { "ascii" },
 	WIDE { "wide" },
@@ -479,20 +348,20 @@ enum ReturnOperandKind : char
 <* Zig `Tree.GNUAssemblyQualifiers` (packed struct(u32)). *>
 bitstruct GnuAsmQualifiers : uint
 {
-	bool is_volatile : 0;
-	bool is_inline : 1;
-	bool is_goto : 2;
+	bool is_volatile: 0;
+	bool is_inline: 1;
+	bool is_goto: 2;
 }
 
 <* Zig `Node.Repr.DeclAttr` (packed struct(u32)). *>
 bitstruct DeclAttr : uint
 {
-	bool is_extern : 0;
-	bool is_static : 1;
-	bool is_inline : 2;
-	bool thread_local : 3;
-	bool implicit : 4;
-	bool register : 5;
+	bool is_extern: 0;
+	bool is_static: 1;
+	bool is_inline: 2;
+	bool thread_local: 3;
+	bool implicit: 4;
+	bool register: 5;
 }
 
 <*
@@ -501,8 +370,8 @@ bitstruct DeclAttr : uint
 *>
 bitstruct DiagnosticPack : uint
 {
-	bool is_warning : 0;
-	bool attribute_warning : 1;
+	bool is_warning: 0;
+	bool attribute_warning: 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +392,7 @@ struct NodeStaticAssert
 	NodeOptIndex message;
 }
 
-<* FUNCTION (tags FN_PROTO when body is null, FN_DEF otherwise). *>
+<* FUNCTION (form.defined when body is set; Zig fn_proto / fn_def). *>
 struct NodeFunction
 {
 	tokens::TokenIndex name_tok;
@@ -543,7 +412,7 @@ struct NodeParam
 	ParamStorageClass storage_class;
 }
 
-<* VARIABLE (tags VARIABLE when initializer is null, VARIABLE_DEF otherwise). *>
+<* VARIABLE (form.defined when initializer is set; Zig variable / variable_def). *>
 struct NodeVariable
 {
 	tokens::TokenIndex name_tok;
@@ -769,7 +638,7 @@ struct NodeBinary
 	NodeIndex rhs;
 }
 
-<* CAST (tags EXPLICIT_CAST / IMPLICIT_CAST by `implicit`). *>
+<* CAST (form.implicit mirrors `implicit`; Zig explicit_cast / implicit_cast). *>
 struct NodeCast
 {
 	QualType qt;
@@ -1087,7 +956,10 @@ fn bool Node.is_implicit(&self)
 {
 	switch (self.kind)
 	{
-		case ARRAY_FILLER_EXPR: case DEFAULT_INIT_EXPR: case COND_DUMMY_EXPR: case COMPOUND_ASSIGN_DUMMY_EXPR: return true;
+		case ARRAY_FILLER_EXPR:
+		case DEFAULT_INIT_EXPR:
+		case COND_DUMMY_EXPR:
+		case COMPOUND_ASSIGN_DUMMY_EXPR: return true;
 		case RETURN_STMT: return self.return_stmt.operand == IMPLICIT;
 		case CAST: return self.cast.implicit;
 		case VARIABLE: return self.variable.implicit;
@@ -1101,14 +973,90 @@ fn bool Node.is_implicit(&self)
 // ---------------------------------------------------------------------------
 
 <*
- Zig `Node.Repr`: `tag`, three data words (if a node is typed its QualType
- bits are in data[0]) and the node's main token. Layout per tag:
- docs/c3-tree-tags.md section 2.
+ Zig `Node.Repr.data`: three 32-bit words, with one named view per payload
+ layout (docs/c3-tree-tags.md section 2). Every field is a 32-bit word, so
+ views never pad; a typed node's QualType is always the first word. Which
+ view applies is fixed by the node's kind and form bits.
+*>
+union NodeData
+{
+	uint[3] words;
+	<* Packed node lists (compound/decl_stmt; NODE_NULL ends the list). *>
+	NodeIndex[3] elems;
+	<* Typed node with no other data (forward decls, literals, alignas, ...). *>
+	struct typed { QualType qt; }
+	<* Typed packed list (form.packed container decls, builtin calls, init exprs). *>
+	struct typed_list { QualType qt; NodeIndex[2] elems; }
+	<* Typed list in `extra` (container decls, builtin calls, init exprs). *>
+	struct typed_span { QualType qt; uint start; uint len; }
+	<* Untyped list in `extra` (compound/decl_stmt). *>
+	struct span { uint start; uint len; }
+	<* FUNCTION / VARIABLE / PARAM: `link` is body/initializer (form.defined) or definition. *>
+	struct decl { QualType qt; DeclAttr attr; NodeOptIndex link; }
+	struct static_assert { NodeIndex cond; NodeOptIndex message; }
+	struct type_def { QualType qt; uint implicit; }
+	struct global_asm { NodeIndex asm_str; }
+	<* ENUM_FIELD init / RECORD_FIELD bit_width. *>
+	struct field { QualType qt; NodeOptIndex opt; }
+	struct diagnostic { DiagnosticPack pack; uint start; uint len; }
+	<* LABELED_STMT / DEFAULT_STMT. *>
+	struct body { NodeIndex body; }
+	<* IF_STMT without init. *>
+	struct if_stmt { NodeIndex cond; NodeIndex then_body; NodeOptIndex else_body; }
+	<* IF_STMT with init: `then_or_extra` is then_body, or (form.has_else) extra start of [then, else]. *>
+	struct if_init { NodeIndex cond; NodeOptIndex init; uint then_or_extra; }
+	struct switch_stmt { NodeIndex cond; NodeOptIndex init; NodeIndex body; }
+	struct case_stmt { NodeIndex start; NodeOptIndex end; NodeIndex body; }
+	<* WHILE_STMT / DO_WHILE_STMT. *>
+	struct loop { NodeIndex cond; NodeIndex body; }
+	<* FOR_STMT: present clauses in init, cond, incr order; with all three, [init, extra start of [cond, incr]]. *>
+	struct for_stmt { uint[2] clauses; NodeIndex body; }
+	<* COMPUTED_GOTO_STMT / GENERIC_DEFAULT_EXPR. *>
+	struct expr { NodeIndex expr; }
+	<* CONTINUE_STMT / BREAK_STMT. *>
+	struct jump { uint has_label; tokens::TokenIndex label; }
+	<* RETURN_STMT: `value` is the expr node, or implicit_value with form.implicit. *>
+	struct return_stmt { QualType qt; uint value; }
+	<* ASM_STMT: form.packed -> quals bits; else labels.len and extra start of the operand block. *>
+	struct asm_stmt { NodeIndex asm_str; uint quals_or_labels; uint extra; }
+	struct binary { QualType qt; NodeIndex lhs; NodeIndex rhs; }
+	struct unary { QualType qt; NodeIndex operand; }
+	struct cast { QualType qt; uint kind; NodeIndex operand; }
+	struct array_access { QualType qt; NodeIndex base; NodeIndex index; }
+	struct member_access { QualType qt; NodeIndex base; uint member_index; }
+	struct decl_ref { QualType qt; NodeIndex decl; }
+	<* CHAR_LITERAL / STRING_LITERAL_EXPR. *>
+	struct char_literal { QualType qt; uint kind; }
+	<* SIZEOF / ALIGNOF / COUNTOF_EXPR. *>
+	struct type_info { QualType qt; NodeOptIndex expr; QualType operand_qt; }
+	<* BINARY_COND / COND / BUILTIN_CHOOSE_EXPR: extra start of [then, else]. *>
+	struct conditional { QualType qt; NodeIndex cond; uint extra; }
+	<* CALL_EXPR (form.packed). *>
+	struct call_one { QualType qt; NodeIndex callee; NodeOptIndex arg; }
+	<* CALL_EXPR / GENERIC_EXPR in extra: [callee or controlling+chosen, rest...]. *>
+	struct extra_list { QualType qt; uint start; uint len; }
+	<* GENERIC_EXPR (form.packed). *>
+	struct generic_zero { QualType qt; NodeIndex controlling; NodeIndex chosen; }
+	struct generic_association { QualType qt; NodeIndex expr; }
+	struct types_compatible { QualType lhs; QualType rhs; }
+	struct convertvector { QualType dest_qt; NodeIndex operand; }
+	<* BUILTIN_SHUFFLEVECTOR: extra [lhs, rhs, indexes...]. *>
+	struct shufflevector { QualType qt; uint start; uint index_count; }
+	struct union_init { QualType qt; uint field_index; NodeOptIndex initializer; }
+	struct array_filler { QualType qt; uint count_lo; uint count_hi; }
+	struct compound_literal { QualType qt; DeclAttr attr; NodeIndex initializer; }
+}
+
+<*
+ Zig `Node.Repr`: kind + form bits (Zig `tag`), the three data words and the
+ node's main token. Layout per kind/form: `NodeData` and docs/c3-tree-tags.md
+ section 2.
 *>
 struct NodeRepr
 {
-	NodeTag tag;
-	uint[3] data;
+	NodeKind kind;
+	NodeForm form;
+	NodeData data;
 	tokens::TokenIndex tok;
 }
 
@@ -1119,7 +1067,7 @@ struct NodeRepr
 *>
 fn NodeIndex[] unpack_node_elems(NodeRepr* repr, usz start, usz length)
 {
-	uint[] data = ((uint*)&repr.data[start])[:length];
+	uint[] data = ((uint*)&repr.data.words[start])[:length];
 	return unpack_elems(data);
 }
 
@@ -1187,23 +1135,24 @@ fn void Tree.set_node(&self, Node node, sz index)
 	switch (node.kind.family)
 	{
 		case DECL: self.encode_decl(node, &repr);
-		case STMT: case EXPR: self.encode_expr_stmt(node, &repr);
+		case STMT:
+		case EXPR: self.encode_expr_stmt(node, &repr);
 	}
 	self.nodes[index] = repr;
 }
 
 <*
  Zig `Node.Index.get`: decode `nodes[index]` into a `Node`. Dispatches on
- `tag.kind.family`: DECL -> `decode_decl`, STMT/EXPR -> `decode_expr_stmt`.
+ `kind.family`: DECL -> `decode_decl`, STMT/EXPR -> `decode_expr_stmt`.
  Returned slices alias tree storage (see the module comment).
 *>
 fn Node NodeIndex.get(self, Tree* tree)
 {
-	NodeTag tag = tree.nodes[(usz)self].tag;
-	switch (tag.kind.family)
+	switch (tree.nodes[(usz)self].kind.family)
 	{
 		case DECL: return tree.decode_decl(self);
-		case STMT: case EXPR: return tree.decode_expr_stmt(self);
+		case STMT:
+		case EXPR: return tree.decode_expr_stmt(self);
 	}
 }
 
@@ -1226,38 +1175,52 @@ fn QualType NodeIndex.qt(self, Tree* tree)
 }
 
 <*
- Zig `Node.Index.qtOrNull`: NO_QT for EMPTY_DECL, STATIC_ASSERT,
- COMPOUND_STMT(_THREE), IF_STMT/IF_INIT/IF_FULL, SWITCH/CASE/DEFAULT/WHILE/
- DO_WHILE_STMT, all FOR_* tags, GOTO/COMPUTED_GOTO/CONTINUE/BREAK_STMT, all
- ASM_STMT* tags, DECL_STMT(_THREE), NULL_STMT, LABELED_STMT, GLOBAL_ASM,
- GENERIC_ASSOCIATION_EXPR, GENERIC_DEFAULT_EXPR, BUILTIN_VA_ARG_PACK;
- `type_store::INT` for BUILTIN_VA_ARG_PACK_LEN and BUILTIN_TYPES_COMPATIBLE_P;
- otherwise the QualType bits in data[0].
+ Zig `Node.Index.qtOrNull`: NO_QT for statements (except RETURN_STMT),
+ EMPTY_DECL, STATIC_ASSERT, GLOBAL_ASM, GENERIC_ASSOCIATION_EXPR,
+ GENERIC_DEFAULT_EXPR and BUILTIN_VA_ARG_PACK; `type_store::INT` for
+ BUILTIN_VA_ARG_PACK_LEN and BUILTIN_TYPES_COMPATIBLE_P; otherwise the
+ QualType bits in data[0].
 *>
 fn QualType? NodeIndex.qt_or_null(self, Tree* tree)
 {
-	NodeTag tag = self.tag(tree);
-	switch (tag)
+	switch (self.kind(tree))
 	{
-		case EMPTY_DECL: case STATIC_ASSERT: case COMPOUND_STMT: case COMPOUND_STMT_THREE:
-		case IF_STMT: case IF_INIT: case IF_FULL: case SWITCH_STMT: case CASE_STMT: case DEFAULT_STMT:
-		case WHILE_STMT: case DO_WHILE_STMT: case FOR_FULL: case FOR_INIT_COND: case FOR_INIT_INCR:
-		case FOR_COND_INCR: case FOR_INIT: case FOR_COND: case FOR_INCR: case FOR_EVER: case GOTO_STMT:
-		case COMPUTED_GOTO_STMT: case CONTINUE_STMT: case BREAK_STMT: case ASM_STMT:
-		case ASM_STMT_VOLATILE: case ASM_STMT_INLINE: case ASM_STMT_INLINE_VOLATILE:
-		case ASM_STMT_SIMPLE: case DECL_STMT_THREE: case DECL_STMT: case NULL_STMT: case LABELED_STMT:
-		case GLOBAL_ASM: case GENERIC_ASSOCIATION_EXPR: case GENERIC_DEFAULT_EXPR:
+		case EMPTY_DECL:
+		case STATIC_ASSERT:
+		case COMPOUND_STMT:
+		case IF_STMT:
+		case SWITCH_STMT:
+		case CASE_STMT:
+		case DEFAULT_STMT:
+		case WHILE_STMT:
+		case DO_WHILE_STMT:
+		case FOR_STMT:
+		case GOTO_STMT:
+		case COMPUTED_GOTO_STMT:
+		case CONTINUE_STMT:
+		case BREAK_STMT:
+		case ASM_STMT:
+		case DECL_STMT:
+		case NULL_STMT:
+		case LABELED_STMT:
+		case GLOBAL_ASM:
+		case GENERIC_ASSOCIATION_EXPR:
+		case GENERIC_DEFAULT_EXPR:
 		case BUILTIN_VA_ARG_PACK: return NO_QT~;
-		case BUILTIN_VA_ARG_PACK_LEN: case BUILTIN_TYPES_COMPATIBLE_P: return type_store::INT;
-		default: return (QualType)tree.nodes[(usz)self].data[0];
+		case BUILTIN_VA_ARG_PACK_LEN:
+		case BUILTIN_TYPES_COMPATIBLE_P: return type_store::INT;
+		default: return tree.nodes[(usz)self].data.typed.qt;
 	}
 }
 
-<* The storage tag of a node (Zig `tree.nodes.items(.tag)[index]`). *>
-fn NodeTag NodeIndex.tag(self, Tree* tree)
-{
-	return tree.nodes[(usz)self].tag;
-}
+<* The node's kind without decoding it (Zig `tree.nodes.items(.tag)[index]`, minus the variant). *>
+fn NodeKind NodeIndex.kind(self, Tree* tree) => tree.nodes[(usz)self].kind;
+
+<* The node's storage-variant bits. *>
+fn NodeForm NodeIndex.form(self, Tree* tree) => tree.nodes[(usz)self].form;
+
+<* `len` node indices stored in `extra` from `start` (aliases `extra`; valid until it grows). *>
+fn NodeIndex[] Tree.extra_nodes(&self, uint start, uint len) => ((NodeIndex*)self.extra.array_view().ptr)[(usz)start : (usz)len];
 
 <* Zig `addExtra`: append `data` to `extra`; returns its start index and length. *>
 fn ExtraSpan Tree.add_extra(&self, NodeIndex[] data)
@@ -1277,7 +1240,7 @@ fn String Tree.tok_slice(&self, tokens::TokenIndex tok_i)
 	scanner.init(src.buf, source::GENERATED_ID, self.comp.langopts, src.splice_locs);
 	scanner.index = tok.loc.byte_offset;
 	Token span = scanner.next();
-	return src.buf[(usz)span.start:(usz)(span.end - span.start)];
+	return src.buf[(usz)span.start :(usz)(span.end - span.start)];
 }
 
 <* Zig `tree.value_map.get(node)`: the constant value recorded for a node (fault NOT_FOUND). *>

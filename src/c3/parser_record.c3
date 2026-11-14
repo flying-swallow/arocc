@@ -3,6 +3,7 @@
 // nodes; the declaration grammar supplies record-member and enumerator parsing.
 module aro::parser;
 import aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::symbol_stack, aro::string_interner, aro::parser_diagnostics;
+import aro::pragmas::pack;
 
 excuse ENUM_UNDERLYING_NO_DECL_SPEC;
 
@@ -37,6 +38,7 @@ struct ContainerBodySeed
 	bool is_enum;
 	bool has_fixed;
 	type_store::QualType fixed_qt;
+	pack::PackValue pack_value;
 	TagAttributeCallback tag_attributes;
 	void* tag_attribute_context;
 }
@@ -51,8 +53,6 @@ alias ContainerBodyCallback = fn type_store::QualType?(void* context, Parser* p,
    The implementer rejects storage-class specifiers. Returns PARSING_FAILED on a
    hard parse error. *>
 alias FixedUnderlyingCallback = fn type_store::QualType?(void* context, Parser* p);
-
-fn bool is_identifier(tokenizer::TokenId id) => id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER;
 
 fn string_interner::StringId Parser.anonymous_container_name(&self, tokens::TokenIndex keyword_tok, bool is_union, bool is_enum)
 {
@@ -138,7 +138,7 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 
 	tokens::TokenIndex name_tok = 0;
 	string_interner::StringId name = string_interner::EMPTY;
-	if (!self.at_eof() && is_identifier(self.tree.tokens[(usz)self.tok_i].id))
+	if (!self.at_eof() && self.tree.tokens[(usz)self.tok_i].id.is_identifier())
 	{
 		name_tok = self.tok_i;
 		name = self.comp.intern_string(self.tree.tok_slice(name_tok));
@@ -303,7 +303,7 @@ fn type_store::QualType? Parser.record_spec(&self, bool is_enum = false, FixedUn
 			(!is_enum && (keyword == tokenizer::TokenId.KEYWORD_STRUCT || keyword == tokenizer::TokenId.KEYWORD_UNION)))
 		{
 			usz lookahead = 1;
-			if ((usz)start + lookahead < self.tree.tokens.len && is_identifier(self.tree.tokens[(usz)start + lookahead].id)) lookahead++;
+			if ((usz)start + lookahead < self.tree.tokens.len && self.tree.tokens[(usz)start + lookahead].id.is_identifier()) lookahead++;
 			if ((usz)start + lookahead < self.tree.tokens.len && self.tree.tokens[(usz)start + lookahead].id == tokenizer::TokenId.L_BRACE)
 			{
 				self.grammar_unavailable()!;
@@ -324,6 +324,12 @@ fn type_store::QualType? Parser.record_spec(&self, bool is_enum = false, FixedUn
 fn type_store::QualType? Parser.record_spec_with_body(&self, ContainerBodyCallback parse_body, void* context, bool is_enum = false, FixedUnderlyingCallback parse_fixed = null, void* fixed_context = null,
 	TagAttributeCallback tag_attributes = null, void* tag_attribute_context = null)
 {
+	pack::PackValue pack_value = {};
+	if (try pack_handler = self.comp.pragmas.get("pack"))
+	{
+		pack::PackState* pack_state = (pack::PackState*)pack_handler.ptr;
+		pack_value = pack_state.current_value();
+	}
 	TagHeader? parsed = self.record_header(is_enum, parse_fixed, fixed_context, tag_attributes, tag_attribute_context);
 	if (catch parsed) return PARSING_FAILED~;
 	TagHeader header = parsed;
@@ -334,6 +340,7 @@ fn type_store::QualType? Parser.record_spec_with_body(&self, ContainerBodyCallba
 		.name_tok = header.name_tok, .decl_node = header.decl_node,
 		.is_union = header.is_union, .is_enum = header.is_enum,
 		.has_fixed = header.has_fixed, .fixed_qt = header.fixed_qt,
+		.pack_value = pack_value,
 		.tag_attributes = tag_attributes, .tag_attribute_context = tag_attribute_context,
 	})!;
 	assert(completed.index == header.qt.index, "container body callback must preserve tag identity");

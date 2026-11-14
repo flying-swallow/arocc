@@ -20,7 +20,7 @@ fn void sparse_array_initializer_round_trip() @test
 			type_store::NodeIndex filler = tree.add_node({ .kind = tree::NodeKind.ARRAY_FILLER_EXPR, .array_filler = { .last_tok = 8, .qt = type_store::INT, .count = 0x1_0000_0003 } });
 			type_store::NodeIndex[] items = { first, filler, last };
 			type_store::NodeIndex init = tree.add_node({ .kind = tree::NodeKind.ARRAY_INIT_EXPR, .container_init = { .l_brace_tok = 3, .container_qt = type_store::INT, .items = items[..] } });
-			assert(init.tag(&tree) == tree::NodeTag.ARRAY_INIT_EXPR, "three initializer entries use the extended representation");
+			assert(init.kind(&tree) == tree::NodeKind.ARRAY_INIT_EXPR && !init.form(&tree).packed, "three initializer entries use the extended representation");
 			tree::Node got = init.get(&tree);
 			assert(got.container_init.items.len == 3);
 			assert(got.container_init.items[0] == first && got.container_init.items[1] == filler && got.container_init.items[2] == last);

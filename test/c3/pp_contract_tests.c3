@@ -7,7 +7,6 @@
 // Preprocessor/Diagnostic.zig; no Zig executable was run.
 module pp_contract_tests;
 import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::hideset;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)
@@ -224,10 +223,10 @@ fn void err_formats_and_locates() @test
 		Preprocessor pp;
 		pp.init(comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs name = { .id = IDENTIFIER, .loc = { .id = src.id, .byte_offset = 8, .line = 1 } };
-		pp.err(name, preprocessor::DIAG_MACRO_REDEFINED, { diagnostics::arg_str("FOO") })!!;
-		pp.err_loc(name.loc, preprocessor::DIAG_EXPECTED_ARGUMENTS, { diagnostics::arg_uint(2), diagnostics::arg_uint(0) })!!;
+		pp.err(name, preprocessor::PpDiag.MACRO_REDEFINED, "FOO")!!;
+		pp.err_loc(name.loc, preprocessor::PpDiag.EXPECTED_ARGUMENTS, 2, 0)!!;
 		// OFF by default: not reported.
-		pp.err(name, preprocessor::DIAG_KEYWORD_MACRO)!!;
+		pp.err(name, preprocessor::PpDiag.KEYWORD_MACRO)!!;
 		check(d.messages.len(), 2);
 		test::eq(d.messages[0].text, "'FOO' macro redefined");
 		check(d.messages[0].effective_kind.ordinal, MessageKind.WARNING.ordinal);
@@ -237,7 +236,7 @@ fn void err_formats_and_locates() @test
 		// Through an expansion location: reported at the outermost one plus a note.
 		TokenWithExpansionLocs use = { .id = IDENTIFIER, .loc = name.loc };
 		use.add_expansion_location(comp.gpa, { { .id = src.id, .byte_offset = 14, .line = 2 } });
-		pp.err(use, preprocessor::DIAG_POISONED_IDENTIFIER)!!;
+		pp.err(use, preprocessor::PpDiag.POISONED_IDENTIFIER)!!;
 		check(d.messages.len(), 4);
 		check(d.messages[2].location.line_no, 2);
 		test::eq(d.messages[3].text, "expanded from here");
@@ -327,19 +326,20 @@ fn void expand_buf_helpers() @test
 
 fn void diagnostic_records() @test
 {
-	test::eq(preprocessor::DIAG_ELIF_WITHOUT_IF.fmt, "#elif without #if");
-	check(preprocessor::DIAG_ELIF_WITHOUT_IF.kind.ordinal, MessageKind.ERROR.ordinal);
-	PpDiagnostic w = preprocessor::DIAG_WARNING_DIRECTIVE;
-	assert(w.show_in_system_headers && w.has_opt && w.opt == Option.WARNINGS);
-	PpDiagnostic ext = preprocessor::DIAG_EXPANSION_TO_DEFINED_FUNC;
+	test::eq(preprocessor::PpDiag.ELIF_WITHOUT_IF.fmt, "#elif without #if");
+	check(preprocessor::PpDiag.ELIF_WITHOUT_IF.kind.ordinal, MessageKind.ERROR.ordinal);
+	PpDiag w = preprocessor::PpDiag.WARNING_DIRECTIVE;
+	assert(w.meta.show_in_system_headers && w.meta.has_opt && w.meta.opt == Option.WARNINGS);
+	PpDiag ext = preprocessor::PpDiag.EXPANSION_TO_DEFINED_FUNC;
 	test::eq(ext.fmt, "macro expansion producing 'defined' has undefined behavior");
-	assert(ext.extension && ext.opt == Option.EXPANSION_TO_DEFINED);
-	assert(!preprocessor::DIAG_EXPANSION_TO_DEFINED_OBJ.extension);
-	test::eq(preprocessor::DIAG_INVALID_PP_STRINGIFY_ESCAPE.fmt, "invalid string literal, ignoring final '\\'");
-	test::eq(preprocessor::DIAG_COUNTER_OVERFLOW.fmt, "'__COUNTER__' value cannot exceed 2'147'483'647");
-	PpDiagnostic dt = preprocessor::DIAG_DATE_TIME;
-	assert(dt.show_in_system_headers && dt.kind == OFF);
+	assert(ext.meta.extension && ext.meta.opt == Option.EXPANSION_TO_DEFINED);
+	assert(!preprocessor::PpDiag.EXPANSION_TO_DEFINED_OBJ.meta.extension);
+	test::eq(preprocessor::PpDiag.INVALID_PP_STRINGIFY_ESCAPE.fmt, "invalid string literal, ignoring final '\\'");
+	test::eq(preprocessor::PpDiag.COUNTER_OVERFLOW.fmt, "'__COUNTER__' value cannot exceed 2'147'483'647");
+	PpDiag dt = preprocessor::PpDiag.DATE_TIME;
+	assert(dt.meta.show_in_system_headers && dt.kind == OFF);
 	test::eq(preprocessor::invalid_token_diagnostic(EMPTY_CHAR_LITERAL).fmt, "empty character constant");
-	DiagnosticTemplate plain = preprocessor::DIAG_NEWLINE_EOF;
-	assert(plain.has_opt && plain.opt == Option.NEWLINE_EOF && plain.kind == OFF && plain.extension);
+	PpDiag plain = preprocessor::PpDiag.NEWLINE_EOF;
+	assert(plain.meta.has_opt && plain.meta.opt == Option.NEWLINE_EOF && plain.kind == OFF && plain.meta.extension);
+	assert(!plain.meta.show_in_system_headers);
 }

@@ -154,7 +154,7 @@ fn void? Preprocessor.pretty_print_macro(&self, OutStream w, Location loc, Macro
 				prev_ws = false;
 				io::fprint(w, self.tok_slice(tok))!;
 		}
-		if (tok.id == IDENTIFIER || tok.id == EXTENDED_IDENTIFIER)
+		if (tok.id.is_identifier())
 		{
 			if (parts == NAME_ONLY) return;
 			saw_name = true;
@@ -253,7 +253,7 @@ fn void? Preprocessor.pretty_print_tokens(&self, OutStream w, DumpMode macro_dum
 					String name = self.tree_token_slice(toks[i + 1]);
 					if (try handler = self.comp.pragmas.get(name))
 					{
-						if (handler.preserve_tokens && !handler.preserve_tokens(handler.ctx, self, (TokenIndex)(i + 1)))
+						if (&handler.preserve_tokens && !handler.preserve_tokens(self, (TokenIndex)(i + 1)))
 						{
 							w.write_byte('\n')!;
 							last_nl = true;

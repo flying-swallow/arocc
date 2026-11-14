@@ -271,7 +271,7 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 		DString v; v.init(tmem);
 		NestedPrint nested;
 		if (value.print(index.qt(self), self.comp, &v, &nested)) {
-			if (((NodeIndex)nested.node).tag(self) == COMPOUND_LITERAL_EXPR) {
+			if (((NodeIndex)nested.node).kind(self) == COMPOUND_LITERAL_EXPR) {
 				v.append_string("(compound literal) ");
 				nested.offset.print(self.comp.type_store.ptrdiff, self.comp, &v);
 			} else {
@@ -329,7 +329,7 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 			if (!n.enum_field.init.is_null()) self.dump_child(term, level + 1, "init:", n.enum_field.init.unwrap())!;
 		case RECORD_FIELD:
 			tokenizer::TokenId id = self.tokens[n.record_field.name_or_first_tok].id;
-			if (id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER) dump_named_field(term, level + 1, "name: ", self.tok_slice(n.record_field.name_or_first_tok))!;
+			if (id.is_identifier()) dump_named_field(term, level + 1, "name: ", self.tok_slice(n.record_field.name_or_first_tok))!;
 			if (!n.record_field.bit_width.is_null()) self.dump_child(term, level + 1, "bits:", n.record_field.bit_width.unwrap())!;
 		case COMPOUND_STMT:
 			foreach (i, child : n.compound_stmt.body) { if (i != 0) term.writer.write_byte('\n')!; self.dump_node(child, level + 2, term)!; }

@@ -10,7 +10,7 @@ fn parser_result::Result? parse_initializer_test_integer(void* context, parser::
 	if (p.at_eof()) return parser::PARSING_FAILED~;
 	tokens::TokenIndex tok = p.tok_i;
 	String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-	long parsed_value = spelling == "999999" ? 999999 : spelling == "1" ? 1 : spelling == "2" ? 2 : spelling == "3" ? 3 : spelling == "4" ? 4 : 7;
+	long parsed_value = spelling == "0" ? 0 : spelling == "999999" ? 999999 : spelling == "1" ? 1 : spelling == "2" ? 2 : spelling == "3" ? 3 : spelling == "4" ? 4 : 7;
 	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
 		.literal = { .literal_tok = tok, .qt = type_store::INT } });
 	p.advance();
@@ -69,7 +69,7 @@ fn void initializer_grammar_keeps_high_designators_sparse() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(null, &parse_initializer_test_integer, &parse_initializer_test_ice);
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
 		parser_result::Result parsed = p.parse_initializer(incomplete)!!;
 		tree::Node init = parsed.node.get(&p.tree);
@@ -103,7 +103,7 @@ fn void initializer_grammar_parses_nested_designator_paths() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(null, &parse_initializer_test_integer, &parse_initializer_test_ice);
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
 		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
@@ -148,7 +148,7 @@ fn void initializer_grammar_elides_braces_across_nested_arrays() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(null, &parse_initializer_test_integer, &parse_initializer_test_ice);
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
 		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::QualType matrix = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.FIXED, 2));
 
@@ -194,7 +194,7 @@ fn void initializer_grammar_elided_scalar_override_diagnostic_order() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(null, &parse_initializer_test_integer, &parse_initializer_test_ice);
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[2] pair_fields = {
 			type_store::record_field(comp.intern_string("first"), type_store::INT),
@@ -245,7 +245,7 @@ fn void initializer_grammar_range_and_duplicate_override_semantics() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(null, &parse_initializer_test_integer, &parse_initializer_test_ice);
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
 		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
 		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR);
@@ -261,6 +261,56 @@ fn void initializer_grammar_range_and_duplicate_override_semantics() @test
 		assert(parsed.container_init.items[4].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
 		assert(parsed.container_init.items[4].get(&p.tree).array_filler.count == 1);
 		assert(d.messages.len() == 2, "overrides emit the new-initializer warning and previous-initializer note");
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void initializer_grammar_range_override_preserves_warning_locations() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-override-initializer.c", "{ [2] = 1, [1 ... 3] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
+
+		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 5);
+		tree::Node before_range = parsed.container_init.items[0].get(&p.tree);
+		assert(before_range.kind == tree::NodeKind.ARRAY_FILLER_EXPR && before_range.array_filler.count == 1);
+		for (usz i = 1; i <= 3; i++)
+		{
+			tree::Node selected = parsed.container_init.items[i].get(&p.tree);
+			assert(selected.kind == tree::NodeKind.INT_LITERAL);
+			assert(p.tree.tok_slice(selected.literal.literal_tok) == "7");
+		}
+		tree::Node after_range = parsed.container_init.items[4].get(&p.tree);
+		assert(after_range.kind == tree::NodeKind.ARRAY_FILLER_EXPR && after_range.array_filler.count == 1);
+
+		assert(d.messages.len() == 2);
+		assert(d.messages[0].kind == diagnostics::MessageKind.WARNING);
+		assert(d.messages[0].text == "initializer overrides previous initialization");
+		assert(d.messages[0].has_location && d.messages[0].location.line_no == 1 && d.messages[0].location.col == 24);
+		assert(d.messages[1].kind == diagnostics::MessageKind.NOTE);
+		assert(d.messages[1].text == "previous initialization");
+		assert(d.messages[1].has_location && d.messages[1].location.line_no == 1 && d.messages[1].location.col == 9);
 
 		p.free();
 		pp.free();
@@ -442,7 +492,7 @@ fn void brace_elision_fills_nested_array_fields_in_order() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(null, &parse_initializer_test_integer, &parse_initializer_test_ice);
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
 
 		type_store::QualType pair_array = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::RecordField[2] fields = {
@@ -496,7 +546,8 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		parser::Parser inferred_parser;
 		inferred_parser.init(&inferred_pp, {});
 		inferred_parser.bind_finalized_tokens();
-		inferred_parser.bind_initializer_parser(&literal, &parse_initializer_test_string, &parse_initializer_test_ice);
+		InitGrammar inferred_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
+		inferred_parser.bind_initializer_parser(&inferred_parser_grammar);
 		parser_result::Result inferred = inferred_parser.parse_initializer(incomplete)!!;
 		assert(inferred.qt.get(&comp, type_store::TypeTag.ARRAY)!!.array.len.len == 4,
 			"the inferred array bound includes its terminating null code unit");
@@ -515,7 +566,8 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		parser::Parser exact_parser;
 		exact_parser.init(&exact_pp, {});
 		exact_parser.bind_finalized_tokens();
-		exact_parser.bind_initializer_parser(&literal, &parse_initializer_test_string, &parse_initializer_test_ice);
+		InitGrammar exact_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
+		exact_parser.bind_initializer_parser(&exact_parser_grammar);
 		exact_parser.parse_initializer(exact)!!;
 		assert(d.messages.len() == 0, "the target may omit only the final null code unit");
 		exact_parser.free();
@@ -530,7 +582,8 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		parser::Parser short_parser;
 		short_parser.init(&short_pp, {});
 		short_parser.bind_finalized_tokens();
-		short_parser.bind_initializer_parser(&literal, &parse_initializer_test_string, &parse_initializer_test_ice);
+		InitGrammar short_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
+		short_parser.bind_initializer_parser(&short_parser_grammar);
 		short_parser.parse_initializer(too_short)!!;
 		assert(d.messages.len() == 1);
 		assert(d.messages[0].text == "initializer-string for char array is too long");
@@ -568,7 +621,8 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		parser::Parser compatible_parser;
 		compatible_parser.init(&compatible_pp, {});
 		compatible_parser.bind_finalized_tokens();
-		compatible_parser.bind_initializer_parser(&literal, &parse_initializer_test_string, &parse_initializer_test_ice);
+		InitGrammar compatible_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
+		compatible_parser.bind_initializer_parser(&compatible_parser_grammar);
 		parser_result::Result compatible = compatible_parser.parse_initializer(target)!!;
 		tree::Node compatible_node = compatible.node.get(&compatible_parser.tree);
 		assert(compatible_node.kind == tree::NodeKind.STRING_LITERAL_EXPR);
@@ -587,7 +641,8 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		parser::Parser incompatible_parser;
 		incompatible_parser.init(&incompatible_pp, {});
 		incompatible_parser.bind_finalized_tokens();
-		incompatible_parser.bind_initializer_parser(&literal, &parse_initializer_test_string, &parse_initializer_test_ice);
+		InitGrammar incompatible_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
+		incompatible_parser.bind_initializer_parser(&incompatible_parser_grammar);
 		incompatible_parser.parse_initializer(char_array)!!;
 		assert(d.messages.len() == 1);
 		assert(d.messages[0].text.starts_with("cannot initialize array of type"));
@@ -622,7 +677,8 @@ fn void brace_elision_accepts_string_array_subobject() @test
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
 			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
-		p.bind_initializer_parser(&literal, &parse_initializer_test_mixed, &parse_initializer_test_ice);
+		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
+		p.bind_initializer_parser(&p_grammar);
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 3));
 		type_store::RecordField[2] fields = {
 			type_store::record_field(comp.intern_string("text"), chars),
@@ -668,7 +724,8 @@ fn void brace_elision_does_not_replace_array_elements_with_later_string() @test
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
 			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
-		p.bind_initializer_parser(&literal, &parse_initializer_test_mixed, &parse_initializer_test_ice);
+		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
+		p.bind_initializer_parser(&p_grammar);
 		type_store::QualType target = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 
 		tree::Node parsed = p.parse_initializer(target)!!.node.get(&p.tree);
@@ -714,7 +771,8 @@ fn void brace_elision_does_not_replace_initialized_char_array_with_string() @tes
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 3));
 		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
 			.val = value::intern(&comp, { .tag = BYTES, .bytes = "bc\0" }) };
-		p.bind_initializer_parser(&literal, &parse_initializer_test_mixed, &parse_initializer_test_ice);
+		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
+		p.bind_initializer_parser(&p_grammar);
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 1));
 
 		tree::Node parsed = p.parse_initializer(chars)!!.node.get(&p.tree);
@@ -756,7 +814,8 @@ fn void brace_elision_replaces_equal_nested_array_subobject_in_order() @test
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		StringInitializerContext literal = { .qt = chars, .kind = tree::CharLiteralKind.ASCII,
 			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
-		p.bind_initializer_parser(&literal, &parse_initializer_test_mixed, &parse_initializer_test_ice);
+		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
+		p.bind_initializer_parser(&p_grammar);
 		type_store::RecordField[1] fields = { type_store::record_field(comp.intern_string("text"), chars) };
 		type_store::RecordLayout layout = { .size_bits = 128, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
 		type_store::QualType record = comp.type_store.put(type_store::type_record(comp.intern_string("Text"), fields[..], layout, false));
@@ -777,3 +836,559 @@ fn void brace_elision_replaces_equal_nested_array_subobject_in_order() @test
 	}
 	assert(ta.allocation_count() == 0);
 }
+
+<* Index of the first parsed token spelled `text`; pins diagnostic token locations. *>
+fn tokens::TokenIndex token_with_text(parser::Parser* p, String text)
+{
+	for (usz i = 0; i < p.tree.tokens.len; i++)
+	{
+		if (p.tree.tok_slice((tokens::TokenIndex)i) == text) return (tokens::TokenIndex)i;
+	}
+	return 0;
+}
+
+fn void range_designator_with_field_suffix_repeats_per_element() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-field-suffix-initializer.c", "{ [1 ... 3].value = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+
+		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
+		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
+		type_store::QualType leaf = comp.type_store.put(type_store::type_record(comp.intern_string("Leaf"), leaf_fields[..], layout, false));
+		type_store::QualType leaves = comp.type_store.put(type_store::type_array(leaf, type_store::ArrayLenKind.FIXED, 4));
+
+		tree::Node parsed = p.parse_initializer(leaves)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 4);
+		assert(parsed.container_init.items[0].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+		assert(parsed.container_init.items[0].get(&p.tree).array_filler.count == 1);
+		for (usz i = 1; i <= 3; i++)
+		{
+			tree::Node element = parsed.container_init.items[i].get(&p.tree);
+			assert(element.kind == tree::NodeKind.STRUCT_INIT_EXPR, "each selected element keeps the record shape named by the suffix path");
+			assert(element.container_init.items.len == 1);
+			tree::Node value_node = element.container_init.items[0].get(&p.tree);
+			assert(value_node.kind == tree::NodeKind.INT_LITERAL);
+			assert(p.tree.tok_slice(value_node.literal.literal_tok) == "7", "the suffix-path value lands in the field, not on the element");
+		}
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void range_designator_with_subscript_suffix_repeats_per_row() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-subscript-suffix-initializer.c", "{ [0 ... 1][1] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+
+		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
+		type_store::QualType matrix = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.FIXED, 2));
+
+		tree::Node parsed = p.parse_initializer(matrix)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 2);
+		for (usz i = 0; i < 2; i++)
+		{
+			tree::Node parsed_row = parsed.container_init.items[i].get(&p.tree);
+			assert(parsed_row.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed_row.container_init.items.len == 2,
+				"the range repeats the subscript suffix inside every selected row");
+			assert(parsed_row.container_init.items[0].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+			tree::Node cell = parsed_row.container_init.items[1].get(&p.tree);
+			assert(cell.kind == tree::NodeKind.INT_LITERAL && p.tree.tok_slice(cell.literal.literal_tok) == "7");
+		}
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void nested_range_designators_fill_fixed_matrix() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("nested-range-initializer.c", "{ [0 ... 1][0 ... 1] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+
+		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
+		type_store::QualType matrix = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.FIXED, 2));
+
+		tree::Node parsed = p.parse_initializer(matrix)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 2);
+		for (usz i = 0; i < 2; i++)
+		{
+			tree::Node parsed_row = parsed.container_init.items[i].get(&p.tree);
+			assert(parsed_row.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed_row.container_init.items.len == 2);
+			for (usz j = 0; j < 2; j++)
+			{
+				tree::Node cell = parsed_row.container_init.items[j].get(&p.tree);
+				assert(cell.kind == tree::NodeKind.INT_LITERAL);
+				assert(p.tree.tok_slice(cell.literal.literal_tok) == "7");
+			}
+		}
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void range_repeats_nested_brace_value_as_struct_ast() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-nested-brace-initializer.c", "{ [0 ... 1] = { .value = 7 } }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+
+		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
+		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
+		type_store::QualType leaf = comp.type_store.put(type_store::type_record(comp.intern_string("Leaf"), leaf_fields[..], layout, false));
+		type_store::QualType leaves = comp.type_store.put(type_store::type_array(leaf, type_store::ArrayLenKind.FIXED, 3));
+
+		tree::Node parsed = p.parse_initializer(leaves)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 3);
+		for (usz i = 0; i < 2; i++)
+		{
+			tree::Node element = parsed.container_init.items[i].get(&p.tree);
+			assert(element.kind == tree::NodeKind.STRUCT_INIT_EXPR, "a braced range value is a struct node for every selected element");
+			assert(element.container_init.container_qt == leaf, "the nested aggregate keeps its record type");
+			assert(p.tree.tok_slice(element.container_init.l_brace_tok) == "{", "the nested aggregate keeps its opening brace");
+			assert(element.container_init.items.len == 1);
+			tree::Node value_node = element.container_init.items[0].get(&p.tree);
+			assert(value_node.kind == tree::NodeKind.INT_LITERAL && p.tree.tok_slice(value_node.literal.literal_tok) == "7");
+		}
+		assert(parsed.container_init.items[2].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+		assert(parsed.container_init.items[2].get(&p.tree).array_filler.count == 1);
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void duplicate_scalar_override_reports_token_locations() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("duplicate-override-locations.c", "{ [1] = 7, [1] = 999999 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
+
+		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 3);
+		tree::Node replaced = parsed.container_init.items[1].get(&p.tree);
+		assert(replaced.kind == tree::NodeKind.INT_LITERAL && p.tree.tok_slice(replaced.literal.literal_tok) == "999999", "the later designator wins");
+		tree::Node trailing_filler = parsed.container_init.items[2].get(&p.tree);
+		assert(trailing_filler.kind == tree::NodeKind.ARRAY_FILLER_EXPR && trailing_filler.array_filler.count == 1,
+			"the fixed array retains its trailing uninitialized element");
+
+		tokens::TokenIndex first_tok = token_with_text(&p, "7");
+		tokens::TokenIndex second_tok = token_with_text(&p, "999999");
+		source::ExpandedLocation first_loc = p.tree.tokens[(usz)first_tok].loc.expand(&comp);
+		source::ExpandedLocation second_loc = p.tree.tokens[(usz)second_tok].loc.expand(&comp);
+		assert(d.messages.len() == 2);
+		assert(d.messages[0].kind == diagnostics::MessageKind.WARNING);
+		assert(d.messages[0].text == "initializer overrides previous initialization");
+		assert(d.messages[0].has_location && d.messages[0].location.line_no == second_loc.line_no && d.messages[0].location.col == second_loc.col,
+			"the override warning points at the new value token");
+		assert(d.messages[1].kind == diagnostics::MessageKind.NOTE);
+		assert(d.messages[1].text == "previous initialization");
+		assert(d.messages[1].has_location && d.messages[1].location.line_no == first_loc.line_no && d.messages[1].location.col == first_loc.col,
+			"the previous-initialization note points at the replaced value token");
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void range_duplicate_override_reports_original_token_locations() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-duplicate-override-locations.c",
+			"{ [1 ... 2].value = 7, [1 ... 2].value = 999999 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+
+		type_store::RecordField[1] fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
+		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
+		type_store::QualType leaf = comp.type_store.put(type_store::type_record(comp.intern_string("Leaf"), fields[..], layout, false));
+		type_store::QualType leaves = comp.type_store.put(type_store::type_array(leaf, type_store::ArrayLenKind.FIXED, 3));
+
+		tree::Node parsed = p.parse_initializer(leaves)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 3);
+		for (usz i = 1; i <= 2; i++)
+		{
+			tree::Node element = parsed.container_init.items[i].get(&p.tree);
+			assert(element.kind == tree::NodeKind.STRUCT_INIT_EXPR);
+			tree::Node value_node = element.container_init.items[0].get(&p.tree);
+			assert(value_node.kind == tree::NodeKind.INT_LITERAL && p.tree.tok_slice(value_node.literal.literal_tok) == "999999",
+				"the later range replaces the value at each selected destination");
+		}
+
+		tokens::TokenIndex first_tok = token_with_text(&p, "7");
+		tokens::TokenIndex second_tok = token_with_text(&p, "999999");
+		source::ExpandedLocation first_loc = p.tree.tokens[(usz)first_tok].loc.expand(&comp);
+		source::ExpandedLocation second_loc = p.tree.tokens[(usz)second_tok].loc.expand(&comp);
+		assert(d.messages.len() == 2);
+		assert(d.messages[0].kind == diagnostics::MessageKind.WARNING);
+		assert(d.messages[0].text == "initializer overrides previous initialization");
+		assert(d.messages[0].has_location && d.messages[0].location.line_no == second_loc.line_no && d.messages[0].location.col == second_loc.col,
+			"the range override warning points at the new value token");
+		assert(d.messages[1].kind == diagnostics::MessageKind.NOTE);
+		assert(d.messages[1].text == "previous initialization");
+		assert(d.messages[1].has_location && d.messages[1].location.line_no == first_loc.line_no && d.messages[1].location.col == first_loc.col,
+			"the prior range note points at the original value token copied to the selected destinations");
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void reversed_range_designator_is_an_error() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("reversed-range-initializer.c", "{ [3 ... 1] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
+
+		// Like other designator errors, an end before the start fails the initializer.
+		// No ParserDiag for an empty range exists yet; this test pins only the kind and count.
+		assert(@catch(p.parse_initializer(array_type)) == parser::PARSING_FAILED, "a range whose end precedes its start fails");
+		assert(d.messages.len() == 1, "one diagnostic for the empty range");
+		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void single_element_range_designator_is_valid() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("single-range-initializer.c", "{ [2 ... 2] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
+
+		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed.container_init.items.len == 2, "a start equal to the end selects one element");
+		assert(parsed.container_init.items[0].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+		assert(parsed.container_init.items[0].get(&p.tree).array_filler.count == 2);
+		tree::Node selected = parsed.container_init.items[1].get(&p.tree);
+		assert(selected.kind == tree::NodeKind.INT_LITERAL && p.tree.tok_slice(selected.literal.literal_tok) == "7");
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void range_end_out_of_bounds_is_an_error() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-end-oob-initializer.c", "{ [1 ... 4] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
+
+		// The start is in bounds, so only the range end can trip OOB_ARRAY_DESIGNATOR.
+		assert(@catch(p.parse_initializer(array_type)) == parser::PARSING_FAILED, "a range end past the array bound fails like a start past it");
+		assert(d.messages.len() == 1);
+		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);
+		assert(d.messages[0].text == "array designator index 4 exceeds array bounds");
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void range_start_out_of_bounds_is_an_error() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("range-start-oob-initializer.c", "{ [3 ... 3] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
+
+		assert(@catch(p.parse_initializer(array_type)) == parser::PARSING_FAILED);
+		assert(d.messages.len() == 1);
+		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);
+		assert(d.messages[0].text == "array designator index 3 exceeds array bounds");
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void inferred_array_length_from_range_end() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("inferred-range-initializer.c", "{ [2 ... 4] = 7 }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
+
+		tree::Node parsed = p.parse_initializer(incomplete)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR);
+		assert(parsed.container_init.container_qt.base(&comp).ty.array.len.kind == type_store::ArrayLenKind.FIXED);
+		assert(parsed.container_init.container_qt.base(&comp).ty.array.len.len == 5, "an incomplete array takes its length from the greatest range end plus one");
+		assert(parsed.container_init.items.len == 4, "the leading gap is one filler, then the three selected elements");
+		assert(parsed.container_init.items[0].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+		assert(parsed.container_init.items[0].get(&p.tree).array_filler.count == 2);
+		for (usz i = 1; i < 4; i++)
+		{
+			tree::Node selected = parsed.container_init.items[i].get(&p.tree);
+			assert(selected.kind == tree::NodeKind.INT_LITERAL && p.tree.tok_slice(selected.literal.literal_tok) == "7");
+		}
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void inferred_outer_length_from_nested_range_end() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		Source src = comp.add_source_from_buffer("inferred-nested-range-initializer.c", "{ [1 ... 2] = { 5, 6 } }")!!;
+		Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
+		pp.add_token(eof)!!;
+		parser::Parser p;
+		p.init(&pp, {});
+		p.bind_finalized_tokens();
+		p.bind_initializer_parser(&grammar_parse_initializer_test_integer);
+
+		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
+		type_store::QualType rows = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.INCOMPLETE));
+
+		tree::Node parsed = p.parse_initializer(rows)!!.node.get(&p.tree);
+		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR);
+		assert(parsed.container_init.container_qt.base(&comp).ty.array.len.len == 3, "the outer bound comes from the nested range end");
+		assert(parsed.container_init.items.len == 3);
+		assert(parsed.container_init.items[0].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+		assert(parsed.container_init.items[0].get(&p.tree).array_filler.count == 1);
+		for (usz i = 1; i <= 2; i++)
+		{
+			tree::Node parsed_row = parsed.container_init.items[i].get(&p.tree);
+			assert(parsed_row.kind == tree::NodeKind.ARRAY_INIT_EXPR && parsed_row.container_init.items.len == 2);
+			assert(p.tree.tok_slice(parsed_row.container_init.items[0].get(&p.tree).literal.literal_tok) == "5");
+			assert(p.tree.tok_slice(parsed_row.container_init.items[1].get(&p.tree).literal.literal_tok) == "6");
+		}
+		assert(d.messages.len() == 0);
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+alias InitAssignFn = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
+alias InitIceFn = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode folding);
+
+<* IExpressionGrammar over this file's initializer test productions. *>
+struct InitGrammar (parser::IExpressionGrammar)
+{
+	void* context;
+	InitAssignFn assign;
+	InitIceFn ice;
+}
+
+fn parser_result::Result? InitGrammar.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> self.assign(self.context, p, eval);
+fn parser_result::Result? InitGrammar.integer_constant_expression(&self, parser::Parser* p,
+	parser::ConstDeclFoldingMode folding, bool eval) @dynamic
+	=> self.ice(self.context, p, folding);
+
+InitGrammar grammar_parse_initializer_test_integer = { null, &parse_initializer_test_integer, &parse_initializer_test_ice };

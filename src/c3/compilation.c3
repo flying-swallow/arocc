@@ -16,7 +16,7 @@ excuse FATAL_ERROR;
 *>
 enum CompDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
 {
-		BACKSLASH_NEWLINE_ESCAPE { "backslash and newline separated by space", WARNING, { .has_opt = true, .opt = Option.BACKSLASH_NEWLINE_ESCAPE } },
+	BACKSLASH_NEWLINE_ESCAPE { "backslash and newline separated by space", WARNING, { .has_opt = true, .opt = Option.BACKSLASH_NEWLINE_ESCAPE } },
 	MS_SEARCH_RULE { "#include resolved using non-portable Microsoft search rules as: %s", WARNING, { .has_opt = true, .opt = Option.MICROSOFT_INCLUDE, .extension = true } },
 	CTRL_Z_EOF { "treating Ctrl-Z as end-of-file is a Microsoft extension", OFF, { .has_opt = true, .opt = Option.MICROSOFT_END_OF_FILE, .extension = true } },
 }

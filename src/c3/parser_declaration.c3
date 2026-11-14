@@ -2,7 +2,7 @@
 // specifiers and binds them to the reusable declarator, initializer and
 // statement productions.
 module aro::parser_declaration;
-import aro::parser, aro::parser_statement, aro::parser_result, aro::parser_declarator;
+import aro::parser, aro::parser_statement, aro::parser_result, aro::parser_declarator, aro::parser_asm;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::symbol_stack;
 import aro::string_interner, aro::value, aro::parser_diagnostics, aro::bigint;
 import aro::lang_opts, aro::compilation, aro::value_interner;
@@ -10,6 +10,7 @@ import aro::attribute;
 import aro::attribute_wip, aro::parser_attribute;
 import aro::parser_primary, aro::text_literal_semantics;
 import aro::source;
+import aro::pragmas::pack;
 import std::collections::list;
 import std::core::dstring;
 
@@ -38,6 +39,8 @@ enum StorageClass : char
 struct DeclSpec
 {
 	type_store::QualType qt;
+	type_store::NodeIndex tag_decl_node;
+	bool has_tag_decl_node;
 	tokens::TokenIndex auto_tok;
 	tokens::TokenIndex auto_type_tok;
 	tokens::TokenIndex c23_auto_tok;
@@ -51,7 +54,7 @@ struct DeclSpec
 // Keeps mutually recursive declaration and statement productions together.
 // A declaration callback may use `statements` for function bodies and local
 // declarations; Parser.parse remains responsible for top-level recovery.
-struct DeclarationParser (parser::IParserHandler)
+struct DeclarationParser (parser::IParserHandler, parser::IExpressionGrammar, parser_statement::ILocalDeclarationGrammar)
 {
 	Declaration declaration;
 	TypeName type_name;
@@ -72,6 +75,13 @@ struct DeclarationParser (parser::IParserHandler)
 	bool has_typed_type_name;
 	bool has_implicit_typedefs;
 	bool has_local_declaration_statement;
+}
+
+<* IDeclaratorGrammar for one declarator: the declaration grammar plus the attributes being collected. *>
+struct DeclaratorCallbackContext (parser_declarator::IDeclaratorGrammar)
+{
+	DeclarationParser* declaration_parser;
+	attribute_wip::Wip* wip;
 }
 
 <* Format auto-declaration diagnostics before passing them to Parser.emit_parser_diag,
@@ -104,20 +114,28 @@ fn void? emit_deduced_type_requires_initializer(parser::Parser* p, bool auto_typ
 	{
 		return p.err(parser_diagnostics::ParserDiag.C23_AUTO_REQUIRES_INITIALIZER, tok);
 	}
-	DString message;
-	message.init(tmem);
-	message.appendf("declaration of variable '%s' with deduced type requires an initializer", name);
-	return p.emit_parser_diag(parser_diagnostics::ParserDiag.AUTO_TYPE_REQUIRES_INITIALIZER, message.str_view(), tok);
+	String message = string::tformat("declaration of variable '%s' with deduced type requires an initializer", name);
+	return p.emit_parser_diag(parser_diagnostics::ParserDiag.AUTO_TYPE_REQUIRES_INITIALIZER, message, tok);
 }
 
 <* Parse a declaration initializer with the value rule selected from its
-   constexpr and storage-duration specifiers. constexpr takes precedence. *>
+   constexpr and storage-duration specifiers. constexpr takes precedence.
+   When a declaration node is supplied, its name is visible to the initializer
+   through a temporary scope, as in parse_auto_type_initializer; the caller
+   binds the declaration only after the initializer succeeds. *>
 fn parser_result::Result? DeclarationParser.parse_variable_initializer(&self, parser::Parser* p,
-	type_store::QualType target, bool constexpr_decl, bool static_duration, bool eval = true)
+	type_store::QualType target, bool constexpr_decl, bool static_duration, bool eval = true,
+	type_store::NodeOptIndex declaration = type_store::NODE_NULL, string_interner::StringId name = string_interner::EMPTY,
+	tokens::TokenIndex name_tok = 0)
 {
-	p.bind_initializer_parser((void*)self, &initializer_assignment_expression, &initializer_integer_constant_expression);
+	p.bind_initializer_parser(self);
 	parser::InitContext context = constexpr_decl ? parser::InitContext.CONSTEXPR :
 		static_duration ? parser::InitContext.STATIC : parser::InitContext.RUNTIME;
+	if (declaration.is_null()) return p.parse_initializer_with_context(target, context, eval);
+	p.push_scope();
+	defer p.pop_scope();
+	p.define_symbol({ .kind = symbol_stack::SymbolKind.DEF, .name = name, .qt = target,
+		.tok = name_tok, .node = declaration.unwrap(), .val = value::NONE });
 	return p.parse_initializer_with_context(target, context, eval);
 }
 
@@ -133,7 +151,7 @@ fn parser_result::Result? DeclarationParser.parse_auto_type_initializer(&self, p
 	defer p.pop_scope();
 	p.define_symbol({ .kind = symbol_stack::SymbolKind.DEF, .name = name, .qt = type_store::INVALID,
 		.tok = name_tok, .node = declaration, .val = value::NONE });
-	p.bind_initializer_parser((void*)self, &initializer_assignment_expression, &initializer_integer_constant_expression);
+	p.bind_initializer_parser(self);
 	parser::AutoTypeDeclContext previous_auto_type_decl = p.auto_type_decl;
 	if (deduce) p.auto_type_decl = { .active = true, .name = name, .node = declaration };
 	defer p.auto_type_decl = previous_auto_type_decl;
@@ -151,9 +169,7 @@ fn parser_result::Result? DeclarationParser.parse_auto_type_initializer(&self, p
 		p.err_dyn(diag, initializer_tok)!;
 	}
 
-	parser_result::Result? maybe_initializer = p.parse_initializer_with_context(type_store::INVALID, context, eval);
-	if (catch f = maybe_initializer) return f~;
-	parser_result::Result initializer = maybe_initializer;
+	parser_result::Result initializer = p.parse_initializer_with_context(type_store::INVALID, context, eval)!;
 	if (init_list) return initializer;
 	if (p.tree.is_bitfield(initializer.node))
 	{
@@ -210,12 +226,8 @@ fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 	type_store::QualType old_return_qt = self.statements.function_return_qt;
 	tokens::TokenIndex old_function_name_tok = self.statements.function_name_tok;
 	bool old_has_function_context = self.statements.has_function_context;
-	void* old_local_declaration_context = self.statements.local_declaration_context;
-	parser_statement::LocalDeclarationStatement old_local_declaration_statement = self.statements.local_declaration_statement;
-	bool old_has_local_declaration_statement = self.statements.has_local_declaration_statement;
-	parser_statement::StatementExpression old_expression = self.statements.expression;
-	parser_statement::StatementIntegerConstantExpression old_integer_constant_expression = self.statements.integer_constant_expression;
-	bool old_has_integer_constant_expression = self.statements.has_integer_constant_expression;
+	parser_statement::ILocalDeclarationGrammar old_local_declarations = self.statements.local_declarations;
+	parser::IExpressionGrammar old_expressions = self.statements.expressions;
 	parser::FunctionContext old_parser_function_context = p.function_context;
 	self.statements.loop_depth = 0;
 	self.statements.switch_depth = 0;
@@ -223,15 +235,8 @@ fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 	self.statements.function_name_tok = self.function_name_tok;
 	self.statements.has_function_context = self.has_function_context;
 	p.set_function_context(self.has_function_context ? self.function_context : (parser::FunctionContext){});
-	self.statements.local_declaration_context = (void*)self;
-	self.statements.local_declaration_statement = &local_declaration_statement_callback;
-	self.statements.has_local_declaration_statement = true;
-	if (!self.statements.expression) self.statements.expression = &declaration_statement_expression;
-	if (!self.statements.has_integer_constant_expression)
-	{
-		self.statements.integer_constant_expression = &declaration_statement_integer_constant_expression;
-		self.statements.has_integer_constant_expression = true;
-	}
+	self.statements.local_declarations = self;
+	if (!self.statements.expressions) self.statements.expressions = self;
 	defer
 	{
 		self.statements.loop_depth = old_loop_depth;
@@ -239,31 +244,33 @@ fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 		self.statements.function_return_qt = old_return_qt;
 		self.statements.function_name_tok = old_function_name_tok;
 		self.statements.has_function_context = old_has_function_context;
-		self.statements.local_declaration_context = old_local_declaration_context;
-		self.statements.local_declaration_statement = old_local_declaration_statement;
-		self.statements.has_local_declaration_statement = old_has_local_declaration_statement;
-		self.statements.expression = old_expression;
-		self.statements.integer_constant_expression = old_integer_constant_expression;
-		self.statements.has_integer_constant_expression = old_has_integer_constant_expression;
+		self.statements.local_declarations = old_local_declarations;
+		self.statements.expressions = old_expressions;
 		p.set_function_context(old_parser_function_context);
 	}
 	self.body_binding.statements = &self.statements;
-	return parser_statement::parse_body_callback((void*)&self.body_binding, p);
+	return self.body_binding.parse(p);
 }
 
-fn type_store::NodeIndex? local_declaration_statement_callback(void* context, parser::Parser* p)
+<* ILocalDeclarationGrammar for the statement grammar. *>
+fn type_store::NodeIndex? DeclarationParser.parse_local_declaration(&self, parser::Parser* p) @dynamic
 {
-	DeclarationParser* self = (DeclarationParser*)context;
 	self.statements.parser = p;
 	if (self.has_local_declaration_statement) return self.local_declaration_statement(self.context, p);
-	return self.parse_local_declaration_statement(p);
+	type_store::NodeIndex? parsed = self.parse_local_declaration_statement(p,
+		self.statements.prefix_declaration_attributes);
+	if (@ok(parsed) && parsed!!.get(&p.tree).kind == tree::NodeKind.DECL_STMT)
+	{
+		self.statements.prefix_declaration_attributes_consumed = true;
+	}
+	return parsed;
 }
 
 fn void? DeclarationParser.handle_declaration(&self, parser::Parser* p) @dynamic
 {
 	self.statements.parser = p;
 	self.active_parser = p;
-	p.bind_initializer_parser((void*)self, &initializer_assignment_expression, &initializer_integer_constant_expression);
+	p.bind_initializer_parser(self);
 	if (self.has_declaration) return self.declaration(self.context, p);
 	return self.parse_declaration(p);
 }
@@ -294,21 +301,16 @@ fn type_store::QualType? DeclarationParser.handle_typed_type_name(&self, parser:
 }
 
 <* DeclaratorParser seam; forwards to the handler method. *>
-fn type_store::QualType? typed_type_name_callback(void* context, parser::Parser* p)
-{
-	return ((DeclarationParser*)context).handle_typed_type_name(p);
-}
+fn type_store::QualType? DeclaratorCallbackContext.declarator_type_name(&self, parser::Parser* p) @dynamic
+	=> self.declaration_parser.handle_typed_type_name(p);
 
 fn parser::TypeNameProbe? DeclarationParser.handle_typed_type_name_probe(&self, parser::Parser* p) @dynamic
 {
 	return self.probe_typed_type_name(p);
 }
 
-struct TypeSpecifierToken
-{
-	bool matched;
-	type_store::BuilderSpecifier specifier;
-}
+<* `type_specifier_token`: the token is not a plain type-specifier keyword. *>
+excuse NOT_TYPE_SPECIFIER;
 
 <* Declaration application can mark an attribute as type-only. Keep the
    specifier-prefix state intact when the same Wip is reused for comma-separated
@@ -351,7 +353,9 @@ fn type_store::QualType? enum_underlying_callback(void* context, parser::Parser*
 struct TagAttributeContext
 {
 	DeclarationParser* declaration_parser;
-	attribute_wip::Wip wip;
+	attribute_wip::Wip* wip;
+	type_store::NodeIndex* tag_decl_node_out;
+	bool* has_tag_decl_node_out;
 }
 
 fn void? tag_attribute_callback(void* context, parser::Parser* p, parser::TagHeader header, parser::TagAttributeStage stage)
@@ -360,14 +364,26 @@ fn void? tag_attribute_callback(void* context, parser::Parser* p, parser::TagHea
 	switch (stage)
 	{
 		case parser::TagAttributeStage.PARSE_HEADER:
-			return tag_context.declaration_parser.append_attributes(p, &tag_context.wip);
+			tag_context.declaration_parser.append_attributes(p, tag_context.wip)!;
+			return;
 		case parser::TagAttributeStage.APPLY_HEADER:
-			return tag_context.wip.apply_decl_attrs_extra(p, header.decl_node, header.qt, type_store::NODE_NULL);
+			type_store::QualType type_qt = tag_context.wip.apply_type_attrs(p, header.qt)!;
+			assert(type_qt.eql(header.qt, p.comp), "type attributes on a tag must preserve its qualified type");
+			tag_context.wip.apply_decl_attrs_extra(p, header.decl_node, header.qt, header.decl_node.pack())!;
+			tag_context.wip.top = (uint)tag_context.wip.attrs.len();
+			*tag_context.tag_decl_node_out = header.decl_node;
+			*tag_context.has_tag_decl_node_out = true;
+			return;
 		case parser::TagAttributeStage.PARSE_BODY_END:
 			tag_context.wip.top = (uint)tag_context.wip.attrs.len();
-			return tag_context.declaration_parser.append_attributes(p, &tag_context.wip);
+			tag_context.declaration_parser.append_attributes(p, tag_context.wip)!;
+			return;
 		case parser::TagAttributeStage.APPLY_BODY_END:
-			return tag_context.wip.apply_decl_attrs_extra(p, header.decl_node, header.qt, header.decl_node.pack());
+			type_store::QualType type_qt = tag_context.wip.apply_type_attrs(p, header.qt)!;
+			assert(type_qt.eql(header.qt, p.comp), "type attributes on a tag must preserve its qualified type");
+			tag_context.wip.apply_decl_attrs_extra(p, header.decl_node, header.qt, header.decl_node.pack())!;
+			tag_context.wip.top = (uint)tag_context.wip.attrs.len();
+			return;
 	}
 }
 
@@ -382,14 +398,13 @@ fn void? DeclarationParser.apply_tag_body_end_attributes(&self, parser::Parser* 
 	seed.tag_attributes(seed.tag_attribute_context, p, tag_header, parser::TagAttributeStage.APPLY_BODY_END)!;
 }
 
-fn type_store::QualType? DeclarationParser.parse_record_specifier(&self, parser::Parser* p, bool is_enum)
+fn type_store::QualType? DeclarationParser.parse_record_specifier(&self, parser::Parser* p, bool is_enum,
+	attribute_wip::Wip* declaration_wip, type_store::NodeIndex* tag_decl_node_out,
+	bool* has_tag_decl_node_out)
 {
-	TagAttributeContext tag_context;
-	tag_context.declaration_parser = (DeclarationParser*)self;
-	tag_context.wip.init(p.comp.gpa);
-	defer tag_context.wip.free();
-	attribute_wip::State state = tag_context.wip.state(true);
-	defer tag_context.wip.restore(state);
+	*has_tag_decl_node_out = false;
+	TagAttributeContext tag_context = { .declaration_parser = (DeclarationParser*)self, .wip = declaration_wip,
+		.tag_decl_node_out = tag_decl_node_out, .has_tag_decl_node_out = has_tag_decl_node_out };
 	return p.record_spec_with_body(&record_body_callback, (void*)self, is_enum,
 		&enum_underlying_callback, (void*)self, &tag_attribute_callback, (void*)&tag_context);
 }
@@ -413,7 +428,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_underlying(&self, parser::
 		return f~;
 	}
 	DeclSpec spec = maybe_spec!!;
-	return spec.qt;
+	return wip.apply_pending_calling_conventions(p, spec.qt);
 }
 
 fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::Parser* p, parser::ContainerBodySeed seed)
@@ -482,6 +497,7 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		}
 		if (p.is_at(tokenizer::TokenId.SEMICOLON))
 		{
+			field_wip.apply_pending_calling_conventions(p, spec.qt)!;
 			// C23 anonymous aggregate members and the common compiler extension
 			// spelling both have a type specifier followed directly by ';'.
 			if (!spec.qt.is(p.comp, type_store::TypeTag.STRUCT) && !spec.qt.is(p.comp, type_store::TypeTag.UNION))
@@ -506,14 +522,14 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		{
 			// Only an unnamed bit-field (`int : 3;`) has an abstract member declarator.
 			bool member_abstract = p.is_at(tokenizer::TokenId.COLON);
-			parser_declarator::ParsedDeclarator? maybe_field = self.declarator_parser(p).parse_declarator(spec.qt, member_abstract);
-			if (catch f = maybe_field) return f~;
-			parser_declarator::ParsedDeclarator field_decl = maybe_field;
-			self.append_attributes(p, &field_wip)!;
-			type_store::QualType field_qt = field_wip.apply_type_attrs(p, field_decl.qt)!;
+			DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = &field_wip };
+			parser_declarator::ParsedDeclarator field_decl = self.declarator_parser(p, &callback_context).parse_declarator(spec.qt, member_abstract)!;
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &field_wip);
 			defer attribute_use_state.free();
+			self.append_attributes(p, &field_wip)!;
+			type_store::QualType field_qt = field_wip.apply_type_attrs(p, field_decl.qt)!;
+			field_qt = field_wip.apply_pending_calling_conventions(p, field_qt)!;
 			type_store::NodeOptIndex bit_width_node = type_store::NODE_NULL;
 			uint bit_width = type_store::BIT_WIDTH_NULL;
 			if (p.is_at(tokenizer::TokenId.COLON))
@@ -595,8 +611,19 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 	self.apply_tag_body_end_attributes(p, seed)!;
 
 	type_store::RecordField[] record_fields = fields.array_view();
+	pack::PackValue current_pack = seed.pack_value;
+	if (p.comp.langopts.emulate == lang_opts::Compiler.GCC || p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
+	{
+		current_pack = {};
+		if (try pack_handler = p.comp.pragmas.get("pack"))
+		{
+			pack::PackState* pack_state = (pack::PackState*)pack_handler.ptr;
+			current_pack = pack_state.current_value();
+		}
+	}
+	uint pragma_pack = current_pack.has_value ? (uint)current_pack.value : 0;
 	type_store::RecordLayout? maybe_layout = type_store::compute(record_fields,
-		seed.decl_node.pack(), seed.is_union, p.comp, &p.tree.attr_map, 0);
+		seed.decl_node.pack(), seed.is_union, p.comp, &p.tree.attr_map, pragma_pack);
 	if (catch f = maybe_layout) return f~;
 	type_store::RecordLayout layout = maybe_layout;
 	type_store::Type record_type = type_store::type_record(seed.name, record_fields,
@@ -972,7 +999,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 	return seed.qt;
 }
 
-fn TypeSpecifierToken type_specifier_token(tokenizer::TokenId id)
+fn type_store::BuilderSpecifier? type_specifier_token(tokenizer::TokenId id)
 {
 	type_store::BuilderSpecifierTag tag = type_store::BuilderSpecifierTag.NONE;
 	switch (id)
@@ -1008,38 +1035,30 @@ fn TypeSpecifierToken type_specifier_token(tokenizer::TokenId id)
 		case KEYWORD_BF16: tag = type_store::BuilderSpecifierTag.BF16;
 		case KEYWORD_INT128: tag = type_store::BuilderSpecifierTag.INT128;
 		case KEYWORD_INT24: tag = type_store::BuilderSpecifierTag.INT24;
-		default: return {};
+		default: return NOT_TYPE_SPECIFIER~;
 	}
-	return { .matched = true, .specifier = { .tag = tag } };
+	return { .tag = tag };
 }
-
-fn bool is_typeof_token(tokenizer::TokenId id)
-{
-	switch (id)
-	{
-		case KEYWORD_TYPEOF: case KEYWORD_TYPEOF1: case KEYWORD_TYPEOF2: case KEYWORD_TYPEOF_UNQUAL:
-			return true;
-		default: return false;
-	}
-}
-
-fn bool is_const_token(tokenizer::TokenId id) => id == KEYWORD_CONST || id == KEYWORD_CONST1 || id == KEYWORD_CONST2;
-fn bool is_volatile_token(tokenizer::TokenId id) => id == KEYWORD_VOLATILE || id == KEYWORD_VOLATILE1 || id == KEYWORD_VOLATILE2;
-fn bool is_restrict_token(tokenizer::TokenId id) => id == KEYWORD_RESTRICT || id == KEYWORD_RESTRICT1 || id == KEYWORD_RESTRICT2;
 
 fn bool DeclarationParser.starts_decl_specifier(&self, parser::Parser* p)
 {
 	if (p.at_eof()) return false;
 	tokenizer::TokenId id = p.tree.tokens[(usz)p.tok_i].id;
-	if (type_specifier_token(id).matched || is_const_token(id) || is_volatile_token(id) || is_restrict_token(id)) return true;
+	if (@ok(type_specifier_token(id)) || (id.canonical() == KEYWORD_CONST) || (id.canonical() == KEYWORD_VOLATILE) || (id.canonical() == KEYWORD_RESTRICT)) return true;
 	switch (id)
 	{
 		case KEYWORD_BIT_INT: case KEYWORD_TYPEOF: case KEYWORD_TYPEOF1: case KEYWORD_TYPEOF2: case KEYWORD_TYPEOF_UNQUAL:
 		case KEYWORD_AUTO: case KEYWORD_AUTO_TYPE: case KEYWORD_TYPEDEF: case KEYWORD_EXTERN:
 		case KEYWORD_STATIC: case KEYWORD_REGISTER: case KEYWORD_THREAD_LOCAL: case KEYWORD_THREAD:
 		case KEYWORD_CONSTEXPR: case KEYWORD_INLINE: case KEYWORD_INLINE1: case KEYWORD_INLINE2:
-	case KEYWORD_ATOMIC: case KEYWORD_STRUCT: case KEYWORD_UNION: case KEYWORD_ENUM:
-	case KEYWORD_ATTRIBUTE1: case KEYWORD_ATTRIBUTE2: case KEYWORD_DECLSPEC:
+		case KEYWORD_ALIGNAS: case KEYWORD_C23_ALIGNAS:
+		case KEYWORD_ATOMIC: case KEYWORD_STRUCT: case KEYWORD_UNION: case KEYWORD_ENUM:
+		case KEYWORD_CDECL: case KEYWORD_CDECL2:
+		case KEYWORD_FASTCALL: case KEYWORD_FASTCALL2: case KEYWORD_REGCALL:
+		case KEYWORD_STDCALL: case KEYWORD_STDCALL2:
+		case KEYWORD_THISCALL: case KEYWORD_THISCALL2:
+		case KEYWORD_VECTORCALL: case KEYWORD_VECTORCALL2:
+		case KEYWORD_ATTRIBUTE1: case KEYWORD_ATTRIBUTE2: case KEYWORD_DECLSPEC:
 			return true;
 		case IDENTIFIER: case EXTENDED_IDENTIFIER:
 			symbol_stack::Symbol sym;
@@ -1055,16 +1074,20 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 {
 	tokens::TokenIndex start_tok = p.tok_i;
 	attribute_wip::State saved_wip = wip.state(false);
+	AttributeUseSnapshot saved_attribute_use;
+	saved_attribute_use.init(p, wip);
+	defer saved_attribute_use.free();
+	DeclSpec result = {};
 	bool committed = false;
 	defer
 	{
 		if (!committed)
 		{
 			wip.restore(saved_wip);
-			p.tok_i = start_tok;
+			saved_attribute_use.restore(wip);
+			if (!result.recognized) p.tok_i = start_tok;
 		}
 	}
-	DeclSpec result = {};
 	type_store::Builder builder = { .parser = p };
 	bool consumed = false;
 	while (!p.at_eof())
@@ -1073,21 +1096,75 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		if (attr_count > 0) continue;
 		tokens::TokenIndex tok = p.tok_i;
 		tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
-		TypeSpecifierToken specifier = type_specifier_token(id);
-		if (is_typeof_token(id))
+		type_store::BuilderSpecifier? specifier = type_specifier_token(id);
+		if ((id.canonical() == KEYWORD_TYPEOF || id == KEYWORD_TYPEOF_UNQUAL))
 		{
+			result.recognized = true;
 			type_store::QualType? typeof_type = self.parse_typeof_specifier(p, id);
 			if (catch typeof_type) return PARSING_FAILED~;
 			if (catch builder.combine_from_typeof(typeof_type, tok)) return PARSING_FAILED~;
 			consumed = true; result.recognized = true; continue;
 		}
+		if (id == KEYWORD_ALIGNAS || id == KEYWORD_C23_ALIGNAS)
+		{
+			result.recognized = true;
+			String spelling = p.tree.tok_slice(tok);
+			if (id == KEYWORD_C23_ALIGNAS)
+			{
+				if (p.comp.langopts.standard.at_least(C23))
+				{
+					p.emit_parser_diag(parser_diagnostics::ParserDiag.PRE_C23_COMPAT,
+						keyword_diag_text(spelling, "is incompatible with C standards before C23"), tok)!;
+				}
+			}
+			else if (p.comp.langopts.standard.at_least(C11))
+			{
+				p.emit_parser_diag(parser_diagnostics::ParserDiag.PRE_C11_COMPAT,
+					keyword_diag_text(spelling, "is incompatible with C standards before C11"), tok)!;
+			}
+			else
+			{
+				p.emit_parser_diag(parser_diagnostics::ParserDiag.C11_EXTENSION,
+					keyword_diag_text(spelling, "is a C11 extension"), tok)!;
+			}
+			p.advance();
+			tokens::TokenIndex opener = p.tok_i;
+			if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
+			parser_result::Result arg;
+			parser::TypeNameProbe? maybe_type_name = p.probe_typed_type_name();
+			if (catch maybe_type_name) return PARSING_FAILED~;
+			parser::TypeNameProbe type_name = maybe_type_name;
+			if (type_name.matched)
+			{
+				type_store::QualType qt = type_name.qt;
+				if (!qt.alignable(p.comp))
+				{
+					p.err(parser_diagnostics::ParserDiag.INVALID_ALIGNOF, tok, p.fmt_qt(qt))!;
+				}
+				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.ALIGNAS_TYPE,
+					.alignas_type = { .alignas_tok = tok, .qt = qt } });
+				arg = { .node = node, .qt = qt, .val = value::NONE };
+			}
+			else
+			{
+				parser_result::Result? maybe_expr = p.integer_const_expr(true,
+					parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING);
+				if (catch maybe_expr) return PARSING_FAILED~;
+				arg = maybe_expr;
+			}
+			if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
+			parser_result::Result[1] args = { arg };
+			wip.add_keyword(p, tok, args[..]);
+			consumed = true; result.recognized = true; continue;
+		}
 		if (id == KEYWORD_BIT_INT)
 		{
+			result.recognized = true;
 			p.err(parser_diagnostics::ParserDiag.BIT_INT, tok)!;
 			p.advance();
 			tokens::TokenIndex opener = p.tok_i;
 			if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-			parser_result::Result? maybe_width = p.integer_const_expr();
+			parser_result::Result? maybe_width = p.integer_const_expr(true, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
 			if (catch maybe_width) return PARSING_FAILED~;
 			parser_result::Result width = maybe_width;
 			if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
@@ -1105,16 +1182,18 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.BIT_INT, .bits = bits }, tok)) return PARSING_FAILED~;
 			consumed = true; result.recognized = true; continue;
 		}
-		if (specifier.matched)
+		if (try specifier)
 		{
-			if (catch builder.combine(specifier.specifier, tok)) return PARSING_FAILED~;
+			result.recognized = true;
+			if (catch builder.combine(specifier, tok)) return PARSING_FAILED~;
 			p.advance(); consumed = true; result.recognized = true; continue;
 		}
-		if (is_const_token(id)) { builder.has_const = true; builder.const_tok = tok; p.advance(); consumed = true; result.recognized = true; continue; }
-		if (is_volatile_token(id)) { builder.has_volatile = true; builder.volatile_tok = tok; p.advance(); consumed = true; result.recognized = true; continue; }
-		if (is_restrict_token(id)) { builder.has_restrict = true; builder.restrict_tok = tok; p.advance(); consumed = true; result.recognized = true; continue; }
+		if ((id.canonical() == KEYWORD_CONST)) { builder.has_const = true; builder.const_tok = tok; p.advance(); consumed = true; result.recognized = true; continue; }
+		if ((id.canonical() == KEYWORD_VOLATILE)) { builder.has_volatile = true; builder.volatile_tok = tok; p.advance(); consumed = true; result.recognized = true; continue; }
+		if ((id.canonical() == KEYWORD_RESTRICT)) { builder.has_restrict = true; builder.restrict_tok = tok; p.advance(); consumed = true; result.recognized = true; continue; }
 		if (id == KEYWORD_AUTO_TYPE)
 		{
+			result.recognized = true;
 			p.err(parser_diagnostics::ParserDiag.AUTO_TYPE_EXTENSION, tok)!;
 			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.AUTO_TYPE }, tok)) return PARSING_FAILED~;
 			result.auto_type_tok = tok;
@@ -1122,12 +1201,14 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		}
 		if (id == KEYWORD_AUTO && p.comp.langopts.standard.at_least(C23))
 		{
+			result.recognized = true;
 			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.C23_AUTO }, tok)) return PARSING_FAILED~;
 			result.c23_auto_tok = tok;
 			p.advance(); consumed = true; result.recognized = true; continue;
 		}
 		if (id == KEYWORD_ATOMIC)
 		{
+			result.recognized = true;
 			p.advance(); consumed = true; result.recognized = true;
 			if (p.is_at(tokenizer::TokenId.L_PAREN))
 			{
@@ -1143,7 +1224,9 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		}
 		if (id == KEYWORD_STRUCT || id == KEYWORD_UNION || id == KEYWORD_ENUM)
 		{
-			type_store::QualType? record_type = self.parse_record_specifier(p, id == KEYWORD_ENUM);
+			result.recognized = true;
+			type_store::QualType? record_type = self.parse_record_specifier(p, id == KEYWORD_ENUM, wip,
+				&result.tag_decl_node, &result.has_tag_decl_node);
 			if (catch record_type) return PARSING_FAILED~;
 			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.OTHER, .other = record_type }, tok)) return PARSING_FAILED~;
 			consumed = true; result.recognized = true; continue;
@@ -1168,13 +1251,14 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 				p.advance(); consumed = true; result.recognized = true; continue;
 			}
 		}
-		if (id == IDENTIFIER || id == EXTENDED_IDENTIFIER)
+		if (id.is_identifier())
 		{
 			if (builder.type.tag != type_store::BuilderSpecifierTag.NONE) break;
 			symbol_stack::Symbol typedef_symbol;
 			string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(tok));
 			if (p.find_typedef(name, tok, true, &typedef_symbol)!)
 			{
+				result.recognized = true;
 				p.mark_used(typedef_symbol.node);
 				if (!builder.combine_typedef(typedef_symbol.qt)) break;
 				p.advance(); consumed = true; result.recognized = true; continue;
@@ -1235,18 +1319,12 @@ fn type_store::QualType? DeclarationParser.parse_typed_type_name(&self, parser::
 			spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
 		spec.qt = type_store::INVALID;
 	}
-	parser_declarator::DeclaratorParser declarator = {
-		.parser = p,
-		.type_name = &typed_type_name_callback,
-		.parameter_declaration = &parameter_declaration_callback,
-		.has_parameter_declaration = true,
-		.context = (void*)self,
-	};
-	type_store::QualType? maybe_qt = declarator.abstract_declarator(spec.qt);
-	if (catch f = maybe_qt) return f~;
-	type_store::QualType qt = maybe_qt;
+	DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = &wip };
+	parser_declarator::DeclaratorParser declarator = { .parser = p, .grammar = &callback_context };
+	type_store::QualType qt = declarator.abstract_declarator(spec.qt)!;
 	self.append_attributes(p, &wip)!;
-	return wip.apply_type_attrs(p, qt);
+	qt = wip.apply_type_attrs(p, qt)!;
+	return wip.apply_pending_calling_conventions(p, qt);
 }
 
 fn parser::TypeNameProbe? DeclarationParser.probe_typed_type_name(&self, parser::Parser* p)
@@ -1330,31 +1408,19 @@ fn void? implicit_typedef_prelude(void* context, parser::Parser* p)
 	assert((usz)p.tree.root_decls.len() <= EXPECTED_IMPLICIT_TYPEDEF_MAX);
 }
 
-<* Adapter callbacks keep initializer grammar on Parser's composed
+<* IExpressionGrammar: initializer grammar uses Parser's composed
    assignment-expression and integer-constant-expression entry points. *>
-fn parser_result::Result? initializer_assignment_expression(void* context, parser::Parser* p, bool eval)
-{
-	return p.assign_expr(eval);
-}
+fn parser_result::Result? DeclarationParser.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> p.assign_expr(eval);
 
-fn parser_result::Result? initializer_integer_constant_expression(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode folding_mode)
-{
-	return p.integer_const_expr(true, folding_mode);
-}
+fn parser_result::Result? DeclarationParser.integer_constant_expression(&self, parser::Parser* p,
+	parser::ConstDeclFoldingMode folding_mode, bool eval) @dynamic
+	=> p.integer_const_expr(eval, folding_mode);
 
 <* The default statement binding must use the same parser-owned expression
    composition as declarations and initializers. *>
-fn parser_result::Result? declaration_statement_expression(void* context, parser::Parser* p, bool eval)
-{
-	return p.expr(eval);
-}
-
-fn parser_result::Result? declaration_statement_integer_constant_expression(void* context,
-	parser::Parser* p, parser::ConstDeclFoldingMode folding_mode, bool eval)
-{
-	return p.integer_const_expr(eval, folding_mode);
-}
+fn parser_result::Result? DeclarationParser.expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> p.expr(eval);
 
 fn symbol_stack::SymbolContext DeclarationParser.symbol_context(&self, parser::Parser* p)
 {
@@ -1374,29 +1440,26 @@ fn uint? DeclarationParser.append_attributes(&self, parser::Parser* p, attribute
 	return count;
 }
 
-fn parser_declarator::DeclaratorParser DeclarationParser.declarator_parser(&self, parser::Parser* p)
+fn parser_declarator::DeclaratorParser DeclarationParser.declarator_parser(&self, parser::Parser* p,
+	DeclaratorCallbackContext* callback_context)
 {
-	return {
-		.parser = p,
-		.context = (void*)self,
-		.type_name = &typed_type_name_callback,
-		.parameter_declaration = &parameter_declaration_callback,
-		.has_parameter_declaration = true,
-	};
+	return { .parser = p, .grammar = callback_context };
 }
 
 <* Parse one parameter declaration in DeclaratorParser's temporary prototype
    scope. Named parameters get their own typed AST nodes and ordinary symbols;
    unnamed parameters remain available as type-only FuncParam entries. *>
-fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, parser::Parser* p)
+fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, parser::Parser* p,
+	attribute_wip::Wip* wip)
 {
-	attribute_wip::Wip wip;
-	wip.init(p.comp.gpa);
-	defer wip.free();
 	attribute_wip::State wip_state = wip.state(true);
+	// Outer declarators may already have conventions queued while waiting for
+	// their completed type. Parameter parsing sees only conventions added in
+	// this parameter's Wip scope; restore reinstates the outer cursor afterward.
+	wip.pending_calling_conventions_cursor = (uint)wip.pending_calling_conventions.len();
 	defer wip.restore(wip_state);
 	tokens::TokenIndex first_tok = p.tok_i;
-	DeclSpec? maybe_spec = self.parse_decl_spec(p, &wip);
+	DeclSpec? maybe_spec = self.parse_decl_spec(p, wip);
 	fault spec_fault = @catch(maybe_spec);
 	DeclSpec spec;
 	if (spec_fault)
@@ -1420,7 +1483,19 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 		}
 		else
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_TOKEN, "expected parameter declaration", first_tok)!;
+			if (p.at_eof())
+			{
+				p.err(parser_diagnostics::ParserDiag.EXPECTED_EOF, p.diag_index(), "parameter declaration")!;
+			}
+			else if (p.tree.tokens[(usz)first_tok].id == tokenizer::TokenId.INVALID)
+			{
+				p.err(parser_diagnostics::ParserDiag.EXPECTED_INVALID, first_tok, "parameter declaration")!;
+			}
+			else
+			{
+				p.err(parser_diagnostics::ParserDiag.EXPECTED_TOKEN, first_tok,
+					"parameter declaration", p.tree.tokens[(usz)first_tok].id.symbol())!;
+			}
 			return PARSING_FAILED~;
 		}
 	}
@@ -1447,14 +1522,14 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 		spec.qt = type_store::INVALID;
 	}
 
-	parser_declarator::DeclaratorParser declarator = self.declarator_parser(p);
+	DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = wip };
+	parser_declarator::DeclaratorParser declarator = self.declarator_parser(p, &callback_context);
 	bool allow_abstract = !parameter_declarator_has_name(p);
-	parser_declarator::ParsedDeclarator? maybe_parsed = declarator.parse_declarator(spec.qt, allow_abstract);
-	if (catch f = maybe_parsed) return f~;
-	parser_declarator::ParsedDeclarator parsed = maybe_parsed;
+	parser_declarator::ParsedDeclarator parsed = declarator.parse_declarator(spec.qt, allow_abstract)!;
 	type_store::QualType qt = parsed.qt;
-	self.append_attributes(p, &wip)!;
+	self.append_attributes(p, wip)!;
 	qt = wip.apply_type_attrs(p, qt)!;
+	qt = wip.apply_pending_calling_conventions(p, qt)!;
 	if (qt.is(p.comp, type_store::TypeTag.ARRAY) || qt.is(p.comp, type_store::TypeTag.FUNC))
 	{
 		qt = qt.decay(p.comp);
@@ -1481,11 +1556,8 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 	return { .qt = qt, .name = name, .name_tok = (type_store::TokenIndex)name_tok, .node = param_node };
 }
 
-fn type_store::FuncParam? parameter_declaration_callback(void* context, parser::Parser* p)
-{
-	DeclarationParser* self = (DeclarationParser*)context;
-	return self.parse_parameter_declaration(p);
-}
+fn type_store::FuncParam? DeclaratorCallbackContext.declarator_parameter(&self, parser::Parser* p) @dynamic
+	=> self.declaration_parser.parse_parameter_declaration(p, self.wip);
 
 <* Decide whether an optional parameter declarator carries an identifier.
    The declarator parser owns the grammar itself; this small lookahead only
@@ -1494,7 +1566,7 @@ fn bool parameter_declarator_group_has_name(parser::Parser* p, tokens::TokenInde
 {
 	if ((usz)open + 1 >= (usz)p.tok_end) return false;
 	tokenizer::TokenId first = p.tree.tokens[(usz)open + 1].id;
-	if (first == IDENTIFIER || first == EXTENDED_IDENTIFIER) return true;
+	if (first.is_identifier()) return true;
 	if (first != ASTERISK && first != L_PAREN) return false;
 	uint parens = 0;
 	uint brackets = 0;
@@ -1522,7 +1594,7 @@ fn bool parameter_declarator_has_name(parser::Parser* p)
 	if (p.at_eof()) return false;
 	usz i = (usz)p.tok_i;
 	tokenizer::TokenId id = p.tree.tokens[i].id;
-	if (id == IDENTIFIER || id == EXTENDED_IDENTIFIER) return true;
+	if (id.is_identifier()) return true;
 	if (id == L_PAREN) return parameter_declarator_group_has_name(p, p.tok_i);
 	if (id != ASTERISK) return false;
 	while (i < (usz)p.tok_end)
@@ -1531,11 +1603,11 @@ fn bool parameter_declarator_has_name(parser::Parser* p)
 		if (id == ASTERISK)
 		{
 			i++;
-			while (i < (usz)p.tok_end && (is_const_token(p.tree.tokens[i].id) ||
-				is_volatile_token(p.tree.tokens[i].id) || is_restrict_token(p.tree.tokens[i].id))) i++;
+			while (i < (usz)p.tok_end && ((p.tree.tokens[i].id.canonical() == KEYWORD_CONST) ||
+				(p.tree.tokens[i].id.canonical() == KEYWORD_VOLATILE) || (p.tree.tokens[i].id.canonical() == KEYWORD_RESTRICT))) i++;
 			continue;
 		}
-		if (id == IDENTIFIER || id == EXTENDED_IDENTIFIER) return true;
+		if (id.is_identifier()) return true;
 		if (id == L_PAREN) return parameter_declarator_group_has_name(p, (tokens::TokenIndex)i);
 		return false;
 	}
@@ -1545,9 +1617,10 @@ fn bool parameter_declarator_has_name(parser::Parser* p)
 <* Parse a named declarator with this declaration grammar's parameter rule
    installed for any nested function suffixes. *>
 fn parser_declarator::ParsedDeclarator? DeclarationParser.parse_named_declarator(&self,
-	parser::Parser* p, type_store::QualType base)
+	parser::Parser* p, type_store::QualType base, attribute_wip::Wip* wip)
 {
-	parser_declarator::DeclaratorParser declarator = self.declarator_parser(p);
+	DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = wip };
+	parser_declarator::DeclaratorParser declarator = self.declarator_parser(p, &callback_context);
 	return declarator.parse_declarator(base);
 }
 
@@ -1736,9 +1809,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 	{
 		attribute_wip::State declaration_state = wip.state(true);
 		tokens::TokenIndex spec_tok = p.tok_i;
-		DeclSpec? maybe_spec = self.parse_decl_spec(p, &wip);
-		if (catch f = maybe_spec) return f~;
-		DeclSpec spec = maybe_spec;
+		DeclSpec spec = self.parse_decl_spec(p, &wip)!;
 		if (spec.storage_class != StorageClass.NONE && spec.storage_class != StorageClass.REGISTER)
 		{
 			p.emit_parser_diag(parser_diagnostics::ParserDiag.INVALID_STORAGE_ON_PARAM,
@@ -1746,15 +1817,14 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 		}
 		while (true)
 		{
-			parser_declarator::ParsedDeclarator? maybe_parsed = self.parse_named_declarator(p, spec.qt);
-			if (catch f = maybe_parsed) return f~;
-			parser_declarator::ParsedDeclarator parsed = maybe_parsed;
+			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
 			attribute_wip::State declarator_state = wip.state(false);
-			self.append_attributes(p, &wip)!;
-			type_store::QualType parsed_qt = wip.apply_type_attrs(p, parsed.qt)!;
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
+			self.append_attributes(p, &wip)!;
+			type_store::QualType parsed_qt = wip.apply_type_attrs(p, parsed.qt)!;
+			parsed_qt = wip.apply_pending_calling_conventions(p, parsed_qt)!;
 			if (!parsed.has_name)
 			{
 				p.expected_token_diag(tokenizer::TokenId.IDENTIFIER)!;
@@ -1818,7 +1888,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 						node.param.storage_class = tree::ParamStorageClass.REGISTER;
 					}
 					p.tree.set_node(node, (sz)param.node.unwrap());
-						wip.apply_decl_attrs(p, param.node.unwrap(), param.node)!;
+					wip.apply_decl_attrs(p, param.node.unwrap(), param.node)!;
 					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
 					symbol.qt = qt;
 				}
@@ -1977,10 +2047,8 @@ fn void? static_assert_evaluation_note(parser::Parser* p, type_store::NodeIndex 
 <* Final text for a `'{s}' <tail>` diagnostic template: `spelling` in single quotes, then `tail`. *>
 fn String keyword_diag_text(String spelling, String tail)
 {
-	DString buf;
-	buf.init(tmem);
-	buf.appendf("'%s' %s", spelling, tail);
-	return buf.str_view();
+	String buf = string::tformat("'%s' %s", spelling, tail);
+	return buf;
 }
 
 <* Parse `_Static_assert` or C23 `static_assert`, at file, block or record-member scope:
@@ -2024,9 +2092,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 	p.record_static_assert_eval_note = true;
 	defer p.record_static_assert_eval_note = old_eval_note;
 
-	parser_result::Result? maybe_cond = p.const_expr(true, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
-	if (catch cond_fault = maybe_cond) return cond_fault~;
-	parser_result::Result res = maybe_cond;
+	parser_result::Result res = p.const_expr(true, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
 
 	bool has_message = false;
 	parser_result::Result message = {};
@@ -2039,8 +2105,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 			return PARSING_FAILED~;
 		}
 		parser_primary::PrimaryParser primary = { .parser = p };
-		parser_result::Result? maybe_message = primary.parse_string(p.tok_i);
-		if (catch message_fault = maybe_message) return message_fault~;
+		parser_result::Result maybe_message = primary.parse_string(p.tok_i)!;
 		message = maybe_message;
 		has_message = true;
 	}
@@ -2089,7 +2154,8 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 
 <* Parse a complete declaration and append its declaration nodes to a local
    DECL_STMT or to Tree.root_decls. *>
-fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser::Parser* p, bool local = false)
+fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser::Parser* p, bool local = false,
+	parser_attribute::AttributeBuffer* prefix_attributes = null)
 {
 	self.active_parser = p;
 	attribute_wip::Wip wip;
@@ -2118,7 +2184,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		bool? consumed = p.replay_pragma();
 		fault pragma_fault = @catch(consumed);
 		if (pragma_fault) return pragma_fault~;
-		return self.parse_declaration_impl(p, local);
+		return self.parse_declaration_impl(p, local, prefix_attributes);
 	}
 	// Zig rootItem and compoundStmtItem try staticAssert before declarations.
 	type_store::NodeIndex? maybe_static_assert = self.parse_static_assert(p);
@@ -2135,6 +2201,14 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		p.tree.root_decls.push(static_assert_node);
 		return (type_store::NodeIndex)0;
 	}
+	if (local && prefix_attributes != null)
+	{
+		// Prefix statement attributes are parsed by StatementParser before it
+		// knows whether this is a declaration. Avoid evaluating them if the
+		// declaration probe is going to fall back to an expression statement.
+		if (!self.starts_decl_specifier(p)) return tree::NULL_NODE~;
+		parser_statement::append_statement_attributes(p, prefix_attributes, &wip)!;
+	}
 	tokens::TokenIndex first_tok = p.tok_i;
 	usz first_spec_node = (usz)p.tree.nodes.len();
 	DeclSpec? maybe_spec = self.parse_decl_spec(p, &wip);
@@ -2143,6 +2217,17 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 	{
 		if (spec_fault != NO_DECL_SPEC) return spec_fault~;
 		if (local) return tree::NULL_NODE~; // not a declaration: the statement parser tries an expression
+		// Zig `externalDeclaration`: file-scope `asm("...");`.
+		type_store::NodeIndex? global_asm = parser_asm::parse_global_asm(p);
+		if (catch asm_fault = global_asm)
+		{
+			if (asm_fault != parser::NOT_ASM) return asm_fault~;
+		}
+		else
+		{
+			p.tree.root_decls.push(global_asm);
+			return (type_store::NodeIndex)0;
+		}
 		p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_EXTERNAL_DECL,
 			"expected external declaration", p.diag_index())!;
 		// At file scope an unexpected compound statement is one malformed item.
@@ -2156,12 +2241,14 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 	declarations.init(p.comp.gpa);
 	defer declarations.free();
 	bool has_tag_declaration = false;
-	// Parser.zig appends tag declarations to decl_buf while parsing the type
-	// specifier. The callback parser reserves and completes those nodes in the
-	// Tree, so collect them here before appending this declaration's declarators.
-	for (usz i = first_spec_node; i < (usz)p.tree.nodes.len(); i++)
+	// A record definition can create additional tag nodes while its body is
+	// parsed. Only the tag reached by this declaration's type specifier belongs
+	// beside the resulting declarator; nested anonymous/member tags stay inside
+	// the record tree.
+	if (spec.has_tag_decl_node && (usz)spec.tag_decl_node >= first_spec_node &&
+		(usz)spec.tag_decl_node < (usz)p.tree.nodes.len())
 	{
-		type_store::NodeIndex spec_node_index = (type_store::NodeIndex)i;
+		type_store::NodeIndex spec_node_index = spec.tag_decl_node;
 		tree::Node spec_node = spec_node_index.get(&p.tree);
 		if (spec_node.kind == tree::NodeKind.STRUCT_DECL || spec_node.kind == tree::NodeKind.UNION_DECL ||
 			spec_node.kind == tree::NodeKind.ENUM_DECL || spec_node.kind == tree::NodeKind.STRUCT_FORWARD_DECL ||
@@ -2180,6 +2267,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 	}
 	if (p.is_at(tokenizer::TokenId.SEMICOLON))
 	{
+		wip.apply_pending_calling_conventions(p, spec.qt)!;
 		tokens::TokenIndex semi = p.tok_i;
 		p.advance();
 		if (!has_tag_declaration) declarations.push(self.add_empty_declaration(p, semi));
@@ -2189,17 +2277,28 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		bool warned_auto_single_declarator = false;
 		while (true)
 		{
-			parser_declarator::ParsedDeclarator? maybe_parsed = self.parse_named_declarator(p, spec.qt);
-			if (catch f = maybe_parsed) return f~;
-			parser_declarator::ParsedDeclarator parsed = maybe_parsed;
+			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
 			attribute_wip::State declarator_wip_state = wip.state(false);
-			self.append_attributes(p, &wip)!;
-			tokens::TokenIndex name_tok = parsed.name_tok;
-			string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(name_tok));
-			type_store::QualType qt = wip.apply_type_attrs(p, parsed.qt)!;
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
+			// Zig `initDeclarator`: attributes, optional asm label, attributes.
+			self.append_attributes(p, &wip)!;
+			parser_asm::AsmLabel? asm_label = parser_asm::parse_asm_label(p);
+			if (catch label_fault = asm_label)
+			{
+				if (label_fault != parser::NOT_ASM) return label_fault~;
+			}
+			else
+			{
+				parser_result::Result[1] label_args = { asm_label.label };
+				wip.add_keyword(p, asm_label.asm_tok, label_args[..]);
+				self.append_attributes(p, &wip)!;
+			}
+			tokens::TokenIndex name_tok = parsed.name_tok;
+			string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(name_tok));
+			type_store::QualType qt = wip.apply_type_attrs(p, parsed.qt)!;
+			qt = wip.apply_pending_calling_conventions(p, qt)!;
 			bool has_auto_type = spec.qt.is_auto();
 			if (!local && spec.storage_class == StorageClass.AUTO)
 			{
@@ -2335,7 +2434,8 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				tokens::TokenIndex old_function_name_tok = self.function_name_tok;
 				parser::FunctionContext old_function_context = self.function_context;
 				bool old_has_function_context = self.has_function_context;
-				self.function_return_qt = qt.is_invalid() ? type_store::INVALID : fn_type.return_type;
+				self.function_return_qt = qt.is_invalid() || fn_type.return_type.is(p.comp, type_store::TypeTag.FUNC) ||
+					fn_type.return_type.is(p.comp, type_store::TypeTag.ARRAY) ? type_store::INVALID : fn_type.return_type;
 				self.function_name_tok = name_tok;
 				self.function_context = { .active = true, .declaration = function_node.pack(),
 					.function_name_tok = name_tok, .function_qt = qt,
@@ -2419,8 +2519,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					p.emit_parser_diag(parser_diagnostics::ParserDiag.ILLEGAL_INITIALIZER,
 						"illegal initializer (only variables can be initialized)", p.tok_i)!;
 					p.advance(); // Consume '=' before reporting the malformed initializer.
-					parser_result::Result? ignored_initializer = self.parse_variable_initializer(p, qt, false, false);
-					if (catch f = ignored_initializer) return f~;
+					parser_result::Result ignored_initializer = self.parse_variable_initializer(p, qt, false, false)!;
 				}
 				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.FUNCTION, .function = {
 					.name_tok = name_tok, .qt = qt,
@@ -2448,7 +2547,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				type_store::NodeOptIndex previous = type_store::NODE_NULL;
 				bool static_duration = !local || spec.storage_class == StorageClass.STATIC ||
 					spec.storage_class == StorageClass.EXTERN || spec.thread_local;
-				if (!has_auto_type)
+				if (!has_auto_type && !initializer_present)
 				{
 					self.bind_declaration_symbol(p, name, qt, name_tok, node, false,
 						local ? spec.storage_class != StorageClass.EXTERN : initializer_present,
@@ -2470,7 +2569,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					else
 					{
 						maybe_initializer = self.parse_variable_initializer(p, qt,
-							spec.constexpr_decl, static_duration);
+							spec.constexpr_decl, static_duration, true, node.pack(), name, name_tok);
 					}
 					if (catch f = maybe_initializer) return f~;
 					parser_result::Result initializer = maybe_initializer;
@@ -2488,12 +2587,9 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					initialized.variable.initializer = initializer.node.pack();
 					initialized.variable.qt = completed_qt;
 					p.tree.set_node(initialized, (sz)node);
-					if (has_auto_type)
-					{
-						self.bind_declaration_symbol(p, name, completed_qt, name_tok, node, false,
-							local ? spec.storage_class != StorageClass.EXTERN : initializer_present,
-							spec.constexpr_decl, &previous)!;
-					}
+					self.bind_declaration_symbol(p, name, completed_qt, name_tok, node, false,
+						local ? spec.storage_class != StorageClass.EXTERN : initializer_present,
+						spec.constexpr_decl, &previous)!;
 					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
 					if (symbol.node == node)
 					{
@@ -2554,12 +2650,12 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
    iteration and recovery. *>
 fn void? DeclarationParser.parse_declaration(&self, parser::Parser* p)
 {
-	type_store::NodeIndex? parsed = self.parse_declaration_impl(p, false);
-	if (catch f = parsed) return f~;
+	type_store::NodeIndex parsed = self.parse_declaration_impl(p, false)!;
 	return;
 }
 
-fn type_store::NodeIndex? DeclarationParser.parse_local_declaration_statement(&self, parser::Parser* p)
+fn type_store::NodeIndex? DeclarationParser.parse_local_declaration_statement(&self, parser::Parser* p,
+	parser_attribute::AttributeBuffer* prefix_attributes = null)
 {
-	return self.parse_declaration_impl(p, true);
+	return self.parse_declaration_impl(p, true, prefix_attributes);
 }

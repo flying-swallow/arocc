@@ -350,7 +350,7 @@ fn char[] Value.to_bytes(self, Compilation* comp)
 fn bool Value.add(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) return float_value::add(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_value::add(res, lhs, rhs, qt, comp);
 
 	InternerKey lhs_key = comp.interner.get(lhs.ref());
 	InternerKey rhs_key = comp.interner.get(rhs.ref());
@@ -405,7 +405,7 @@ fn bool Value.decrement(&res, Value val, QualType qt, Compilation* comp) => res.
 fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ulong elem_size = 0)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) return float_value::sub(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_value::sub(res, lhs, rhs, qt, comp);
 
 	InternerKey lhs_key = comp.interner.get(lhs.ref());
 	InternerKey rhs_key = comp.interner.get(rhs.ref());
@@ -463,7 +463,7 @@ fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ul
 fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) return float_value::mul(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_value::mul(res, lhs, rhs, qt, comp);
 
 	BigIntSpace lhs_space;
 	BigIntSpace rhs_space;
@@ -492,7 +492,7 @@ fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 fn bool Value.div(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float()) return float_value::div(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_value::div(res, lhs, rhs, qt, comp);
 
 	BigIntSpace lhs_space;
 	BigIntSpace rhs_space;

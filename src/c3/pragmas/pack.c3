@@ -21,25 +21,21 @@ enum Diagnostic : char
 	EMPTY_STACK,
 }
 
-alias TokenIdFn = fn tokenizer::TokenId(void* ctx, uint index);
-alias TokenTextFn = fn String(void* ctx, uint index);
-// Return false only after the host has emitted its number-token diagnostic.
-alias ParseIntegerFn = fn bool(void* ctx, uint index, ulong* value);
-alias DiagnoseFn = fn void(void* ctx, uint index, Diagnostic kind, ulong value);
-
 <*
- Adapter supplied by the parser/preprocessor. Indices address the expanded
- token stream; strings returned by `token_text` are borrowed. The integer
- callback should use the compiler's ordinary numeric token parser.
+ Token access and reporting for the pack grammar, supplied by the parser or a
+ test. Indices address the expanded token stream; strings returned by
+ `token_text` are borrowed.
 *>
-struct ParserAdapter
+interface IParserAdapter
 {
-	void* ctx;
-	uint token_count;
-	TokenIdFn token_id;
-	TokenTextFn token_text;
-	ParseIntegerFn parse_integer;
-	DiagnoseFn diagnose;
+	<* Tokens at indices >= token_count() are past the directive. *>
+	fn uint token_count();
+	fn tokenizer::TokenId token_id(uint index);
+	fn String token_text(uint index);
+	<* Use the compiler's ordinary pp-number parser. Return false only after it
+	   has emitted its number-token diagnostic. *>
+	fn bool parse_integer(uint index, ulong* value);
+	fn void diagnose(uint index, Diagnostic kind, ulong value);
 }
 
 <* A natural alignment is represented by `has_value == false`. *>
@@ -55,8 +51,9 @@ struct StackEntry
 	PackValue value;
 }
 
-<* Standalone pack pragma state, independent of target and parser ownership. *>
-struct PackState
+<* Pack pragma state and its pragma::IPragma handler (Zig pragmas/pack.zig).
+   Allocated by `make_handler` and freed by `deinit`. *>
+struct PackState (pragma::IPragma)
 {
 	PackValue current;
 	List{StackEntry} stack;
@@ -122,16 +119,16 @@ fn bool PackState.pop(&self)
 	return true;
 }
 
-fn bool is_token(ParserAdapter* parser, uint index, tokenizer::TokenId id)
-	=> index < parser.token_count && parser.token_id(parser.ctx, index) == id;
+fn bool is_token(IParserAdapter parser, uint index, tokenizer::TokenId id)
+	=> index < parser.token_count() && parser.token_id(index) == id;
 
-fn void report(ParserAdapter* parser, uint index, Diagnostic kind, ulong value = 0)
+fn void report(IParserAdapter parser, uint index, Diagnostic kind, ulong value = 0)
 {
-	parser.diagnose(parser.ctx, index, kind, value);
+	parser.diagnose(index, kind, value);
 }
 
 <* Parse a `pack(...)` body. `lparen_index` points at the opening parenthesis. *>
-fn HandleResult PackState.handle(&self, ParserAdapter* parser, uint lparen_index)
+fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index)
 {
 	if (!is_token(parser, lparen_index, tokenizer::TokenId.L_PAREN))
 	{
@@ -140,16 +137,16 @@ fn HandleResult PackState.handle(&self, ParserAdapter* parser, uint lparen_index
 	}
 
 	uint index = lparen_index + 1;
-	if (index >= parser.token_count)
+	if (index >= parser.token_count())
 	{
 		report(parser, index, Diagnostic.RPAREN);
 		return { .ok = false, .next_index = index };
 	}
 
-	tokenizer::TokenId id = parser.token_id(parser.ctx, index);
+	tokenizer::TokenId id = parser.token_id(index);
 	if (id == tokenizer::TokenId.IDENTIFIER)
 	{
-		String action = parser.token_text(parser.ctx, index);
+		String action = parser.token_text(index);
 		uint action_index = index;
 		index++;
 		if (action == "show")
@@ -171,12 +168,12 @@ fn HandleResult PackState.handle(&self, ParserAdapter* parser, uint lparen_index
 		if (is_token(parser, index, tokenizer::TokenId.COMMA))
 		{
 			index++;
-			if (index >= parser.token_count)
+			if (index >= parser.token_count())
 			{
 				report(parser, index, Diagnostic.INTEGER_OR_IDENTIFIER);
 				return { .ok = false, .next_index = index };
 			}
-			id = parser.token_id(parser.ctx, index);
+			id = parser.token_id(index);
 			if (id == tokenizer::TokenId.PP_NUM)
 			{
 				if (!read_pack_value(parser, index, &new_value)) return { .ok = false, .next_index = index };
@@ -185,7 +182,7 @@ fn HandleResult PackState.handle(&self, ParserAdapter* parser, uint lparen_index
 			}
 			else if (id == tokenizer::TokenId.IDENTIFIER)
 			{
-				label = parser.token_text(parser.ctx, index);
+				label = parser.token_text(index);
 				has_label = true;
 				index++;
 				if (is_token(parser, index, tokenizer::TokenId.COMMA))
@@ -245,7 +242,7 @@ fn HandleResult PackState.handle(&self, ParserAdapter* parser, uint lparen_index
 	return finish(parser, index);
 }
 
-fn HandleResult finish(ParserAdapter* parser, uint index)
+fn HandleResult finish(IParserAdapter parser, uint index)
 {
 	if (!is_token(parser, index, tokenizer::TokenId.R_PAREN))
 	{
@@ -255,10 +252,10 @@ fn HandleResult finish(ParserAdapter* parser, uint index)
 	return { .ok = true, .next_index = index + 1 };
 }
 
-fn bool read_pack_value(ParserAdapter* parser, uint index, char* out)
+fn bool read_pack_value(IParserAdapter parser, uint index, char* out)
 {
 	ulong value = 0;
-	if (!parser.parse_integer(parser.ctx, index, &value)) return false;
+	if (!parser.parse_integer(index, &value)) return false;
 	if (value != 1 && value != 2 && value != 4 && value != 8 && value != 16)
 	{
 		report(parser, index, Diagnostic.INTEGER);
@@ -268,21 +265,28 @@ fn bool read_pack_value(ParserAdapter* parser, uint index, char* out)
 	return true;
 }
 
-fn tokenizer::TokenId parser_token_id(void* ctx, uint index)
+<* IParserAdapter over the parser's expanded token tree, ending at the directive's newline. *>
+struct TreeParserAdapter (IParserAdapter)
 {
-	parser::Parser* p = (parser::Parser*)ctx;
-	return p.tree.tokens[(usz)index].id;
+	parser::Parser* p;
+	uint end;
 }
 
-fn String parser_token_text(void* ctx, uint index)
+fn uint TreeParserAdapter.token_count(&self) @dynamic => self.end;
+
+fn tokenizer::TokenId TreeParserAdapter.token_id(&self, uint index) @dynamic
 {
-	parser::Parser* p = (parser::Parser*)ctx;
-	return p.tree.tok_slice((tokens::TokenIndex)index);
+	return self.p.tree.tokens[(usz)index].id;
 }
 
-fn bool parser_parse_integer(void* ctx, uint index, ulong* out)
+fn String TreeParserAdapter.token_text(&self, uint index) @dynamic
 {
-	parser::Parser* p = (parser::Parser*)ctx;
+	return self.p.tree.tok_slice((tokens::TokenIndex)index);
+}
+
+fn bool TreeParserAdapter.parse_integer(&self, uint index, ulong* out) @dynamic
+{
+	parser::Parser* p = self.p;
 	tokens::TreeToken tok = p.tree.tokens[(usz)index];
 	number_literal::NumberLiteralParser literal = {
 		.comp = p.comp,
@@ -297,9 +301,9 @@ fn bool parser_parse_integer(void* ctx, uint index, ulong* out)
 	return true;
 }
 
-fn void parser_diagnose(void* ctx, uint index, Diagnostic kind, ulong value)
+fn void TreeParserAdapter.diagnose(&self, uint index, Diagnostic kind, ulong value) @dynamic
 {
-	parser::Parser* p = (parser::Parser*)ctx;
+	parser::Parser* p = self.p;
 	String message = "invalid #pragma pack directive";
 	diagnostics::Option opt = diagnostics::Option.IGNORED_PRAGMAS;
 	switch (kind)
@@ -319,49 +323,32 @@ fn void parser_diagnose(void* ctx, uint index, Diagnostic kind, ulong value)
 	if (catch p.diagnostics.add_with_location(p.comp, msg, p.pp.expansion_slice((tokens::TokenIndex)index), true)) return;
 }
 
-fn pragma::PragmaResult parser_adapter(void* ctx, void* parser_ctx, tokens::TokenIndex start_idx)
+fn pragma::PragmaResult PackState.parser_handler(&self, parser::Parser* p, tokens::TokenIndex start_idx) @dynamic
 {
-	PackState* state = (PackState*)ctx;
-	parser::Parser* p = (parser::Parser*)parser_ctx;
 	uint begin = start_idx + 1;
 	uint end = begin;
 	while ((usz)end < p.tree.tokens.len && p.tree.tokens[(usz)end].id != tokenizer::TokenId.NL && p.tree.tokens[(usz)end].id != tokenizer::TokenId.EOF) end++;
-	ParserAdapter adapter = {
-		.ctx = p,
-		.token_count = end,
-		.token_id = &parser_token_id,
-		.token_text = &parser_token_text,
-		.parse_integer = &parser_parse_integer,
-		.diagnose = &parser_diagnose,
-	};
+	TreeParserAdapter adapter = { .p = p, .end = end };
 	// A malformed pack pragma emits a warning and is ignored; it does not make
 	// the translation unit fail. The parser consumes the rest of the directive.
-	state.handle(&adapter, begin);
+	self.handle(&adapter, begin);
 	return pragma::PragmaResult.HANDLED;
 }
 
-fn void reset_adapter(void* ctx, compilation::Compilation* comp)
+<* Each parse starts from natural alignment with an empty stack. *>
+fn void PackState.before_parse(&self, compilation::Compilation* comp) @dynamic => self.reset();
+
+fn void PackState.deinit(&self, compilation::Compilation* comp) @dynamic
 {
-	((PackState*)ctx).reset();
+	Allocator allocator = self.allocator;
+	self.free();
+	alloc::free(allocator, self);
 }
 
-fn void destroy_adapter(void* ctx, compilation::Compilation* comp)
-{
-	PackState* state = (PackState*)ctx;
-	Allocator allocator = state.allocator;
-	state.free();
-	alloc::free(allocator, state);
-}
-
-<* Allocate state owned by the pragma registry and expose it through Handler.ctx. *>
-fn pragma::Handler make_handler(Allocator allocator)
+<* Allocate the pack handler; Registry.free releases it through `deinit`. *>
+fn PackState* make_handler(Allocator allocator)
 {
 	PackState* state = (PackState*)alloc::calloc(allocator, PackState::size);
 	state.init(allocator);
-	return {
-		.ctx = state,
-		.parser = &parser_adapter,
-		.before_parse = &reset_adapter,
-		.destroy = &destroy_adapter,
-	};
+	return state;
 }

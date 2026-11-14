@@ -81,32 +81,20 @@ fn void Toolchain.err(&self, String fmt, args...) @format(1)
 {
 	// A standalone Toolchain may not have a diagnostics sink.
 	if (!self.diagnostics) return;
-	DString text;
-	text.init(self.a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	(void)self.diagnostics.add({ .kind = ERROR, .text = text.str_view() });
+	@pool() { (void)self.diagnostics.add({ .kind = ERROR, .text = string::tformat(fmt, ...args) }); };
 }
 
 fn void Toolchain.fatal(&self, String fmt, args...) @format(1)
 {
 	// A standalone Toolchain may not have a diagnostics sink.
 	if (!self.diagnostics) return;
-	DString text;
-	text.init(self.a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	(void)self.diagnostics.add({ .kind = FATAL_ERROR, .text = text.str_view() });
+	@pool() { (void)self.diagnostics.add({ .kind = FATAL_ERROR, .text = string::tformat(fmt, ...args) }); };
 }
 
 fn void Toolchain.warn_off_option(&self, diagnostics::Option opt, String fmt, args...) @format(2)
 {
 	if (!self.diagnostics) return;
-	DString text;
-	text.init(self.a);
-	defer text.free();
-	text.appendf(fmt, ...args)!!;
-	(void)self.diagnostics.add({ .kind = OFF, .text = text.str_view(), .has_opt = true, .opt = opt });
+	@pool() { (void)self.diagnostics.add({ .kind = OFF, .text = string::tformat(fmt, ...args), .has_opt = true, .opt = opt }); };
 }
 
 fn Target* Toolchain.get_target(&self) => &self.env.target;

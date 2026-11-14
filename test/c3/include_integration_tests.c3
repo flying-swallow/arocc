@@ -14,13 +14,13 @@ macro check(left, right)
 
 excuse NO_TEST_FILE;
 
-struct CallbackState { uint calls; pragma::IncludePragmaResult result; }
+<* Include-only pragma handler: counts calls and returns `result`. *>
+struct CallbackState (pragma::IPragma) { uint calls; pragma::IncludePragmaResult result; }
 
-fn pragma::IncludePragmaResult include_callback(void* ctx, preprocessor::Preprocessor* pp, source::Source src)
+fn pragma::IncludePragmaResult CallbackState.before_include(&self, preprocessor::Preprocessor* pp, source::Source src) @dynamic
 {
-	CallbackState* state = (CallbackState*)ctx;
-	state.calls++;
-	return state.result;
+	self.calls++;
+	return self.result;
 }
 
 fn bool tree_exists(void* ctx, String path)
@@ -94,8 +94,8 @@ fn void include_callback_skip_and_fatal_contract() @test
 		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
 		pp.preserve_whitespace = true;
 		CallbackState state = { .result = pragma::IncludePragmaResult.SKIP_INCLUDE };
-		pragma::Handler h = { .ctx = (void*)&state, .before_include = &include_callback };
-		assert(comp.pragmas.add("include", h));
+		bool added = comp.pragmas.add("include", &state);
+		assert(added);
 		pp.add_token(pp.preprocess(main)!!)!!;
 		check(state.calls, 1);
 		DString output;
@@ -125,8 +125,8 @@ fn void include_callback_skip_and_fatal_contract() @test
 		opts.base_file = main.id;
 		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
 		CallbackState state = { .result = pragma::IncludePragmaResult.FATAL };
-		pragma::Handler h = { .ctx = (void*)&state, .before_include = &include_callback };
-		assert(comp.pragmas.add("include", h));
+		bool added = comp.pragmas.add("include", &state);
+		assert(added);
 		check(@catch(pp.preprocess(main)), compilation::FATAL_ERROR);
 		check(state.calls, 1);
 		pp.free();
@@ -149,7 +149,8 @@ fn void pragma_once_repeated_include_preprocessing() @test
 		Compilation comp;
 		comp.init(&ta);
 		setup_files(&tree, &comp);
-		assert(comp.pragmas.add("once", once::handler(&ta)));
+		bool added = comp.pragmas.add("once", once::handler(&ta));
+		assert(added);
 		Source main = comp.add_source_from_buffer("/work/main.c", "#include <once.h>\n#include <once.h>\n")!!;
 		DepFile deps;
 		deps.init(&ta, "out.o", MAKE);
@@ -771,7 +772,8 @@ fn void include_poisoned_header_identifier_is_diagnosed() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		setup_files(&tree, &comp);
-		assert(comp.pragmas.add("GCC", gcc::make_handler(&ta)));
+		bool added = comp.pragmas.add("GCC", gcc::make_handler(&ta));
+		assert(added);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;

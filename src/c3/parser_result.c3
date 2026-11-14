@@ -15,6 +15,9 @@ struct Result
 	value::Value val;
 }
 
+<* The operation requesting a scalar coercion selects the wording for pointer diagnostics. *>
+enum CoercionContext : char { EXPRESSION, INITIALIZATION, ASSIGNMENT, RETURN, ARGUMENT }
+
 <* Append an attribute message using Zig's stringEscape formatting. *>
 fn void append_escaped(DString* buf, String text)
 {
@@ -173,17 +176,169 @@ fn void Result.implicit_cast(&self, parser::Parser* p, tree::CastKind kind)
 	} });
 }
 
+<* Get the pointer constant carried by array/function decay when the node supports it. *>
+fn value::Value pointer_value(parser::Parser* p, type_store::NodeIndex node, value::Value offset)
+{
+	tree::Node n = node.get(&p.tree);
+	switch (n.kind)
+	{
+		case tree::NodeKind.DECL_REF_EXPR:
+			// Zig looks up this name as a symbol, but predefined function-name identifiers are
+			// not declared symbols. Use the declaration stored on the reference instead (option B:
+			// keep the 'not a compile-time constant' check; make values fold instead).
+			return value::pointer({ .node = (uint)n.decl_ref.decl, .offset = offset.ref() }, p.comp);
+		case tree::NodeKind.STRING_LITERAL_EXPR:
+			if (try saved = p.tree.value_of(node))
+			{
+				return saved;
+			}
+			else
+			{
+				return value::NONE;
+			}
+		default: return value::NONE;
+	}
+}
+
+<* Add a byte offset only when both values fit ptrdiff_t; leave the accumulator unchanged on failure. *>
+fn bool add_offset_checked(value::Value* offset_so_far, value::Value delta, compilation::Compilation* comp)
+{
+	if (offset_so_far.is_none() || delta.is_none() ||
+		!offset_so_far.is(value_interner::InternerKeyTag.INT, comp) ||
+		!delta.is(value_interner::InternerKeyTag.INT, comp)) return false;
+	value::Value updated = value::NONE;
+	if (updated.add(*offset_so_far, delta, comp.type_store.ptrdiff, comp)) return false;
+	*offset_so_far = updated;
+	return true;
+}
+
+<* Resolve a saved pointer expression only when its value is a symbolic address. *>
+fn value::Value compute_saved_pointer_offset(parser::Parser* p, type_store::NodeIndex node, value::Value offset)
+{
+	if (offset.is_none() || !offset.is(value_interner::InternerKeyTag.INT, p.comp)) return value::NONE;
+	if (try saved = p.tree.value_of(node))
+	{
+		if (!saved.is(value_interner::InternerKeyTag.POINTER, p.comp)) return value::NONE;
+		value_interner::InternerKey key = p.comp.interner.get(saved.ref());
+		value::Value base_offset = value::from_ref(key.pointer.offset);
+		value::Value combined = value::NONE;
+		if (!base_offset.is(value_interner::InternerKeyTag.INT, p.comp) ||
+			combined.add(base_offset, offset, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
+		return value::pointer({ .node = key.pointer.node, .offset = combined.ref() }, p.comp);
+	}
+	return value::NONE;
+}
+
+<* Walk supported lvalue paths from a declaration or saved symbolic pointer. *>
+fn value::Value compute_offset_extra(parser::Parser* p, type_store::NodeIndex node, value::Value* offset_so_far)
+{
+	tree::Node n = node.get(&p.tree);
+	switch (n.kind)
+	{
+		case tree::NodeKind.CAST:
+		{
+			value::Value saved_pointer = compute_saved_pointer_offset(p, node, *offset_so_far);
+			if (!saved_pointer.is_none()) return saved_pointer;
+			// Array decay preserves the address of the array lvalue. Other casts
+			// need a saved symbolic pointer before they can serve as an address base.
+			if (n.cast.kind == tree::CastKind.ARRAY_TO_POINTER)
+			{
+				return compute_offset_extra(p, n.cast.operand, offset_so_far);
+			}
+			return value::NONE;
+		}
+		case tree::NodeKind.PAREN_EXPR:
+			return compute_offset_extra(p, n.unary.operand, offset_so_far);
+		case tree::NodeKind.DECL_REF_EXPR:
+			return pointer_value(p, node, *offset_so_far);
+		case tree::NodeKind.DEREF_EXPR:
+			return compute_saved_pointer_offset(p, n.unary.operand, *offset_so_far);
+		case tree::NodeKind.ARRAY_ACCESS_EXPR:
+		{
+			if (try index_val = p.tree.value_of(n.array_access.index))
+			{
+				if (!index_val.is(value_interner::InternerKeyTag.INT, p.comp)) return value::NONE;
+				if (try elem_size = n.array_access.qt.sizeof_or_null(p.comp))
+				{
+					value::Value delta = value::NONE;
+					if (delta.mul(value::int_u64(elem_size, p.comp), index_val, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
+					if (!add_offset_checked(offset_so_far, delta, p.comp)) return value::NONE;
+
+					type_store::QualType base_qt = n.array_access.base.qt(&p.tree);
+					if (base_qt.is_pointer(p.comp))
+					{
+						tree::Node base = n.array_access.base.get(&p.tree);
+						if (base.kind == tree::NodeKind.CAST && base.cast.kind == tree::CastKind.ARRAY_TO_POINTER)
+						{
+							return compute_offset_extra(p, n.array_access.base, offset_so_far);
+						}
+						return compute_saved_pointer_offset(p, n.array_access.base, *offset_so_far);
+					}
+					return compute_offset_extra(p, n.array_access.base, offset_so_far);
+				}
+			}
+			return value::NONE;
+		}
+		case tree::NodeKind.MEMBER_ACCESS_EXPR:
+		{
+			type_store::QualType ty = n.member_access.base.qt(&p.tree).non_atomic(p.comp);
+			if (try record_ty = ty.get_record(p.comp))
+			{
+				if (n.member_access.member_index >= record_ty.fields.len) return value::NONE;
+				ulong field_offset_bits = record_ty.fields[n.member_access.member_index].layout.offset_bits;
+				if (field_offset_bits % 8 != 0) return value::NONE;
+				ulong field_offset_bytes = field_offset_bits / 8;
+				value::Value field_offset = value::int_u64(field_offset_bytes, p.comp);
+				if (!add_offset_checked(offset_so_far, field_offset, p.comp)) return value::NONE;
+				return compute_offset_extra(p, n.member_access.base, offset_so_far);
+			}
+			return value::NONE;
+		}
+		case tree::NodeKind.MEMBER_ACCESS_PTR_EXPR:
+		{
+			type_store::QualType ty = n.member_access.base.qt(&p.tree).non_atomic(p.comp);
+			if (try pointer = ty.get(p.comp, type_store::TypeTag.POINTER)) ty = pointer.pointer.child;
+			ty = ty.non_atomic(p.comp);
+			if (try record_ty = ty.get_record(p.comp))
+			{
+				if (n.member_access.member_index >= record_ty.fields.len) return value::NONE;
+				ulong field_offset_bits = record_ty.fields[n.member_access.member_index].layout.offset_bits;
+				if (field_offset_bits % 8 != 0) return value::NONE;
+				ulong field_offset_bytes = field_offset_bits / 8;
+				value::Value field_offset = value::int_u64(field_offset_bytes, p.comp);
+				if (!add_offset_checked(offset_so_far, field_offset, p.comp)) return value::NONE;
+				return compute_saved_pointer_offset(p, n.member_access.base, *offset_so_far);
+			}
+			return value::NONE;
+		}
+		default: return value::NONE;
+	}
+}
+
+<* Compute a result's symbolic address from its declaration or saved pointer base, if supported. *>
+fn value::Value compute_offset(parser::Parser* p, Result res)
+{
+	// This is an address offset, not the value stored in the lvalue.
+	value::Value offset = value::ZERO;
+	return compute_offset_extra(p, res.node, &offset);
+}
+
 <* Convert an lvalue or decay an array/function designator to a pointer. *>
 fn void Result.lval_conversion(&self, parser::Parser* p)
 {
 	if (self.qt.is_invalid()) return;
 	if (self.qt.is(p.comp, type_store::TypeTag.FUNC))
 	{
+		// Folding a function designator to its symbol pointer makes `f == 0`, `if (f)`, and _Bool
+		// conversion constant. An undefined weak function may resolve to null at runtime, so these
+		// folds can disagree with the runtime value. Kept as-is for Zig parity.
+		self.val = pointer_value(p, self.node, value::ZERO);
 		self.qt = self.qt.decay(p.comp);
 		self.implicit_cast(p, tree::CastKind.FUNCTION_TO_POINTER);
 	}
 	else if (self.qt.is(p.comp, type_store::TypeTag.ARRAY))
 	{
+		self.val = pointer_value(p, self.node, value::ZERO);
 		self.qt = self.qt.decay(p.comp);
 		self.implicit_cast(p, tree::CastKind.ARRAY_TO_POINTER);
 	}
@@ -267,7 +422,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 	{
 		self.qt = dest.to_real(p.comp);
 		self.implicit_cast(p, tree::CastKind.BOOL_TO_INT);
-		if (!dst.is_real())
+		if (!dst.is_real)
 		{
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
@@ -276,7 +431,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 	else if (self.qt.is_float(p.comp))
 	{
 		value::Value old_val = self.val;
-		if (src.is_real() && !dst.is_real())
+		if (src.is_real && !dst.is_real)
 		{
 			type_store::QualType real_dest = dest.to_real(p.comp);
 			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(real_dest, p.comp);
@@ -286,7 +441,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
 		}
-		else if (!src.is_real() && dst.is_real())
+		else if (!src.is_real && dst.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
 			self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
@@ -300,10 +455,10 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = dest;
-			self.implicit_cast(p, src.is_real() ? tree::CastKind.FLOAT_TO_INT : tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT);
+			self.implicit_cast(p, src.is_real ? tree::CastKind.FLOAT_TO_INT : tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT);
 		}
 	}
-	else if (src.is_pointer())
+	else if (src.is_pointer)
 	{
 		// Pointer representations are target-defined; Value has no safe
 		// pointer-to-integer evaluator, so retain the AST conversion only.
@@ -314,7 +469,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		}
 		self.qt = dest.to_real(p.comp);
 		self.implicit_cast(p, tree::CastKind.POINTER_TO_INT);
-		if (!dst.is_real())
+		if (!dst.is_real)
 		{
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
@@ -323,10 +478,10 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 	else
 	{
 		value::Value old_val = self.val;
-		type_store::QualType value_dest = dst.is_real() ? dest : dest.to_real(p.comp);
+		type_store::QualType value_dest = dst.is_real ? dest : dest.to_real(p.comp);
 		value::IntCastChangeKind change_kind = self.val.int_cast(value_dest, p.comp);
 		if (implicit) self.int_conversion_warning(p, tok, original, dest, old_val, change_kind)!;
-		if (src.is_real() && !dst.is_real())
+		if (src.is_real && !dst.is_real)
 		{
 			type_store::QualType real_dest = dest.to_real(p.comp);
 			self.qt = real_dest;
@@ -334,7 +489,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
 		}
-		else if (!src.is_real() && dst.is_real())
+		else if (!src.is_real && dst.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
 			self.implicit_cast(p, tree::CastKind.COMPLEX_INT_TO_REAL);
@@ -344,7 +499,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		else
 		{
 			self.qt = dest;
-			self.implicit_cast(p, src.is_real() ? tree::CastKind.INT_CAST : tree::CastKind.COMPLEX_INT_CAST);
+			self.implicit_cast(p, src.is_real ? tree::CastKind.INT_CAST : tree::CastKind.COMPLEX_INT_CAST);
 		}
 	}
 }
@@ -360,15 +515,15 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 		self.val.int_to_float(real_dest, p.comp);
 		self.qt = real_dest;
 		self.implicit_cast(p, tree::CastKind.BOOL_TO_FLOAT);
-		if (!dst.is_real())
+		if (!dst.is_real)
 		{
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
 		}
 	}
-	else if (src.is_int())
+	else if (src.is_int)
 	{
-		if (src.is_real() && !dst.is_real())
+		if (src.is_real && !dst.is_real)
 		{
 			type_store::QualType real_dest = dest.to_real(p.comp);
 			self.val.int_to_float(real_dest, p.comp);
@@ -381,11 +536,11 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 		{
 			self.val.int_to_float(dest, p.comp);
 			self.qt = dest;
-			self.implicit_cast(p, !src.is_real() && dst.is_real() ? tree::CastKind.COMPLEX_INT_TO_REAL :
-				(!src.is_real() ? tree::CastKind.COMPLEX_INT_TO_COMPLEX_FLOAT : tree::CastKind.INT_TO_FLOAT));
+			self.implicit_cast(p, !src.is_real && dst.is_real ? tree::CastKind.COMPLEX_INT_TO_REAL :
+				(!src.is_real ? tree::CastKind.COMPLEX_INT_TO_COMPLEX_FLOAT : tree::CastKind.INT_TO_FLOAT));
 		}
 	}
-	else if (src.is_real() && !dst.is_real())
+	else if (src.is_real && !dst.is_real)
 	{
 		type_store::QualType real_dest = dest.to_real(p.comp);
 		if (self.qt.float_rank(p.comp) != real_dest.float_rank(p.comp))
@@ -398,7 +553,7 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 		self.qt = dest;
 		self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
 	}
-	else if (!src.is_real() && dst.is_real())
+	else if (!src.is_real && dst.is_real)
 	{
 		type_store::QualType real_src = self.qt.to_real(p.comp);
 		self.qt = real_src;
@@ -415,7 +570,7 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 	{
 		self.val.float_cast(dest, p.comp);
 		self.qt = dest;
-		self.implicit_cast(p, !src.is_real() ? tree::CastKind.COMPLEX_FLOAT_CAST : tree::CastKind.FLOAT_CAST);
+		self.implicit_cast(p, !src.is_real ? tree::CastKind.COMPLEX_FLOAT_CAST : tree::CastKind.FLOAT_CAST);
 	}
 }
 
@@ -428,7 +583,7 @@ fn void Result.null_to_pointer(&self, parser::Parser* p, type_store::QualType de
 }
 
 <* Convert a scalar integer, bool, nullptr or pointer to a pointer type. *>
-fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex tok = 0, bool implicit = true)
+fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex tok = 0, bool implicit = true, CoercionContext context = CoercionContext.EXPRESSION)
 {
 	type_store::QualType original = self.qt;
 	type_store::ScalarKind src = self.qt.scalar_kind(p.comp);
@@ -437,7 +592,7 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 		self.qt = dest;
 		self.implicit_cast(p, tree::CastKind.BOOL_TO_POINTER);
 	}
-	else if (src.is_int())
+	else if (src.is_int)
 	{
 		if (implicit && !self.val.is_zero(p.comp))
 		{
@@ -453,7 +608,7 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 	{
 		self.null_to_pointer(p, dest);
 	}
-	else if (src.is_pointer() && !self.qt.eql(dest, p.comp))
+	else if (src.is_pointer && !self.qt.eql(dest, p.comp))
 	{
 		type_store::QualType from_child = self.qt.child_type(p.comp);
 		type_store::QualType to_child = dest.child_type(p.comp);
@@ -464,18 +619,59 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 				(from_child.is_restrict && !to_child.is_restrict);
 			if (from_child.eql(to_child, p.comp) && discards_qualifiers)
 			{
-				self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_ASSIGN_DISCARDS_QUALS, p.fmt_qt(dest), p.fmt_qt(original))!;
+				switch (context)
+				{
+					case INITIALIZATION:
+						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_INIT_DISCARDS_QUALS, p.fmt_qt(dest), p.fmt_qt(original))!;
+					case ASSIGNMENT: case EXPRESSION:
+						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_ASSIGN_DISCARDS_QUALS, p.fmt_qt(dest), p.fmt_qt(original))!;
+					case RETURN:
+						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_RET_DISCARDS_QUALS, p.fmt_qt(original), p.fmt_qt(dest))!;
+					case ARGUMENT:
+						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_ARG_DISCARDS_QUALS, p.fmt_qt(original), p.fmt_qt(dest))!;
+				}
 			}
 			else if (!from_child.eql(to_child, p.comp))
 			{
 				bool sign_only = from_child.same_rank_different_sign(to_child, p.comp);
-				if (sign_only)
+				switch (context)
 				{
-					self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ASSIGN_SIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
-				}
-				else
-				{
-					self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ASSIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+					case INITIALIZATION:
+						if (sign_only)
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_INIT_SIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+						}
+						else
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_INIT, p.fmt_qt(dest), p.fmt_qt(original))!;
+						}
+					case ASSIGNMENT: case EXPRESSION:
+						if (sign_only)
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ASSIGN_SIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+						}
+						else
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ASSIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+						}
+					case RETURN:
+						if (sign_only)
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_RETURN_SIGN, p.fmt_qt(original), p.fmt_qt(dest))!;
+						}
+						else
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_RETURN, p.fmt_qt(original), p.fmt_qt(dest))!;
+						}
+					case ARGUMENT:
+						if (sign_only)
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ARG_SIGN, p.fmt_qt(original), p.fmt_qt(dest))!;
+						}
+						else
+						{
+							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ARG, p.fmt_qt(original), p.fmt_qt(dest))!;
+						}
 				}
 			}
 		}
@@ -491,16 +687,17 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 0, bool implicit = true)
 {
 	type_store::ScalarKind src = self.qt.scalar_kind(p.comp);
-	if (src.is_pointer())
+	if (src == type_store::ScalarKind.BOOL) return;
+	if (src.is_pointer)
 	{
 		self.val.bool_cast(p.comp);
 		self.qt = type_store::BOOL;
 		self.implicit_cast(p, tree::CastKind.POINTER_TO_BOOL);
 	}
-	else if (src.is_int())
+	else if (src.is_int)
 	{
 		self.val.bool_cast(p.comp);
-		if (!src.is_real())
+		if (!src.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
 			self.implicit_cast(p, tree::CastKind.COMPLEX_INT_TO_REAL);
@@ -508,9 +705,9 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 		self.qt = type_store::BOOL;
 		self.implicit_cast(p, tree::CastKind.INT_TO_BOOL);
 	}
-	else if (src.is_float())
+	else if (src.is_float)
 	{
-		if (!src.is_real())
+		if (!src.is_real)
 		{
 			// A complex value is true when either component is nonzero. The
 			// float-to-int evaluator intentionally converts only its real part.
@@ -522,7 +719,7 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(type_store::BOOL, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, self.qt, type_store::BOOL, old_val, change_kind)!;
 		}
-		if (!src.is_real())
+		if (!src.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
 			self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
@@ -533,9 +730,10 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 }
 
 <* Assignment-style scalar/vector coercion. Returns false when no supported conversion exists. *>
-fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex tok = 0)
+fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex tok = 0, CoercionContext context = CoercionContext.EXPRESSION)
 {
-	self.value_conversion(p);
+	self.lval_conversion(p);
+	if (self.qt.is_invalid()) return true;
 	self.atomic_to_non_atomic(p);
 	type_store::Type? dest_vec = dest.get(p.comp, type_store::TypeTag.VECTOR);
 	type_store::Type? src_vec = self.qt.get(p.comp, type_store::TypeTag.VECTOR);
@@ -553,7 +751,7 @@ fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType des
 			return false;
 		}
 		type_store::QualType elem = dv.vector.elem;
-		if (!(self.coerce_scalar(p, elem, tok)!)) return false;
+		if (!(self.coerce_scalar(p, elem, tok, context)!)) return false;
 		self.save_value(p);
 		self.qt = dest.unqualified();
 		self.implicit_cast(p, tree::CastKind.VECTOR_SPLAT);
@@ -566,34 +764,34 @@ fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType des
 		self.cast_to_bool(p, tok)!;
 		return true;
 	}
-	if (dst.is_int() && (src.is_int() || src.is_float()))
+	if (dst.is_int && (src.is_int || src.is_float))
 	{
 		self.cast_to_int(p, dest.unqualified(), tok)!;
 		return true;
 	}
-	if (dst.is_int() && src.is_pointer() && src != type_store::ScalarKind.BLOCK_POINTER)
+	if (dst.is_int && src.is_pointer && src != type_store::ScalarKind.BLOCK_POINTER)
 	{
 		self.cast_to_int(p, dest.unqualified(), tok)!;
 		return true;
 	}
-	if (dst.is_float() && (src.is_int() || src.is_float()))
+	if (dst.is_float && (src.is_int || src.is_float))
 	{
 		self.cast_to_float(p, dest.unqualified(), tok)!;
 		return true;
 	}
-	if (dst.is_pointer() && (src == type_store::ScalarKind.NULLPTR_T || self.val.is_zero(p.comp)))
+	if (dst.is_pointer && (src == type_store::ScalarKind.NULLPTR_T || self.val.is_zero(p.comp)))
 	{
 		self.null_to_pointer(p, dest.unqualified());
 		return true;
 	}
-	if (dst.is_pointer() && src.is_int())
+	if (dst.is_pointer && src.is_int)
 	{
-		self.cast_to_pointer(p, dest.unqualified(), tok)!;
+		self.cast_to_pointer(p, dest.unqualified(), tok, true, context)!;
 		return true;
 	}
-	if (dst.is_pointer() && src.is_pointer())
+	if (dst.is_pointer && src.is_pointer)
 	{
-		self.cast_to_pointer(p, dest.unqualified(), tok)!;
+		self.cast_to_pointer(p, dest.unqualified(), tok, true, context)!;
 		return true;
 	}
 	return dest.eql(self.qt, p.comp);
@@ -657,17 +855,17 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 		{
 			self.cast_to_bool(p, l_paren, false)!;
 		}
-		else if (dst.is_int() && (src.is_int() || src.is_float() || src.is_pointer()))
+		else if (dst.is_int && (src.is_int || src.is_float || src.is_pointer))
 		{
 			self.cast_to_int(p, dest.unqualified(), l_paren, false)!;
 		}
-		else if (dst.is_float() && (src.is_int() || src.is_float()))
+		else if (dst.is_float && (src.is_int || src.is_float))
 		{
 			self.cast_to_float(p, dest.unqualified(), l_paren, false)!;
 		}
-		else if (dst.is_pointer() && (src.is_int() || src.is_pointer() || src == type_store::ScalarKind.NULLPTR_T))
+		else if (dst.is_pointer && (src.is_int || src.is_pointer || src == type_store::ScalarKind.NULLPTR_T))
 		{
-			if (src.is_int() && !src.is_real()) return false;
+			if (src.is_int && !src.is_real) return false;
 			self.cast_to_pointer(p, dest.unqualified(), l_paren, false)!;
 		}
 		else { return false; }
@@ -703,7 +901,7 @@ fn void? Result.usual_arithmetic_conversion(&self, Result* rhs, parser::Parser* 
 			rhs.val = value::NONE;
 			return;
 		}
-		if (rhs.coerce_scalar(p, self.qt, tok)!) return;
+		if (rhs.coerce_scalar(p, self.qt, tok, CoercionContext.EXPRESSION)!) return;
 		self.qt = type_store::INVALID;
 		self.val = value::NONE;
 		rhs.val = value::NONE;
@@ -712,7 +910,7 @@ fn void? Result.usual_arithmetic_conversion(&self, Result* rhs, parser::Parser* 
 	if (try bv = b_vec)
 	{
 		assert(bv.tag == type_store::TypeTag.VECTOR);
-		if (self.coerce_scalar(p, rhs.qt, tok)!) return;
+		if (self.coerce_scalar(p, rhs.qt, tok, CoercionContext.EXPRESSION)!) return;
 		self.qt = type_store::INVALID;
 		self.val = value::NONE;
 		rhs.val = value::NONE;
@@ -780,15 +978,12 @@ fn void Result.restore_saved_value(&self, parser::Parser* p)
 	if (try saved = p.tree.value_of(self.node)) self.val = saved;
 }
 
-struct InitializerValueIssue
-{
-	bool found;
-	tokens::TokenIndex tok;
-}
+<* `first_missing_value`: every initializer expression has a saved value. *>
+excuse NO_MISSING_VALUE;
 
-<* Find the first initializer expression without a saved value. Omitted
-   aggregate elements are zero and therefore do not produce an issue. *>
-fn InitializerValueIssue initializer_value_issue(parser::Parser* p, type_store::NodeIndex node_index)
+<* Token of the first initializer expression without a saved value, or
+   NO_MISSING_VALUE. Omitted aggregate elements are zero and never missing. *>
+fn tokens::TokenIndex? first_missing_value(parser::Parser* p, type_store::NodeIndex node_index)
 {
 	tree::Node node = node_index.get(&p.tree);
 	switch (node.kind)
@@ -798,34 +993,33 @@ fn InitializerValueIssue initializer_value_issue(parser::Parser* p, type_store::
 		{
 			foreach (item : node.container_init.items)
 			{
-				InitializerValueIssue issue = initializer_value_issue(p, item);
-				if (issue.found) return issue;
+				if (try tok = first_missing_value(p, item)) return tok;
 			}
-			return {};
+			return NO_MISSING_VALUE~;
 		}
 		case tree::NodeKind.UNION_INIT_EXPR:
-			if (node.union_init.initializer.is_null()) return {};
-			return initializer_value_issue(p, node.union_init.initializer.unwrap());
+			if (node.union_init.initializer.is_null()) return NO_MISSING_VALUE~;
+			return first_missing_value(p, node.union_init.initializer.unwrap());
 		case tree::NodeKind.DEFAULT_INIT_EXPR:
 		case tree::NodeKind.ARRAY_FILLER_EXPR:
 		case tree::NodeKind.STRING_LITERAL_EXPR:
 		case tree::NodeKind.NULLPTR_LITERAL:
-			return {};
+			return NO_MISSING_VALUE~;
 		case tree::NodeKind.CAST:
 			// NULL is represented by a dedicated interner sentinel and save_value
 			// intentionally does not put it in the tree's ordinary value map.
-			if (node.cast.kind == tree::CastKind.NULL_TO_POINTER) return {};
+			if (node.cast.kind == tree::CastKind.NULL_TO_POINTER) return NO_MISSING_VALUE~;
 			if (try saved = p.tree.value_of(node_index))
 			{
-				if (!saved.is_none()) return {};
+				if (!saved.is_none()) return NO_MISSING_VALUE~;
 			}
-			return initializer_value_issue(p, node.cast.operand);
+			return first_missing_value(p, node.cast.operand);
 		default:
 			if (try saved = p.tree.value_of(node_index))
 			{
-				if (!saved.is_none()) return {};
+				if (!saved.is_none()) return NO_MISSING_VALUE~;
 			}
-			return { .found = true, .tok = node_index.tok(&p.tree) };
+			return node_index.tok(&p.tree);
 	}
 }
 
@@ -835,11 +1029,11 @@ fn bool? Result.require_initializer_value(&self, parser::Parser* p, parser::Init
 	tokens::TokenIndex tok)
 {
 	if (context == parser::InitContext.RUNTIME || !self.val.is_none()) return true;
-	InitializerValueIssue issue = initializer_value_issue(p, self.node);
-	if (!issue.found) return true;
+	tokens::TokenIndex? missing_tok = first_missing_value(p, self.node);
+	if (catch missing_tok) return true;
 	// The top-level token is a fallback for synthetic nodes without a usable
 	// token index; ordinary aggregate failures point at the first missing child.
-	tokens::TokenIndex diagnostic_tok = (usz)issue.tok < p.tree.tokens.len ? issue.tok : tok;
+	tokens::TokenIndex diagnostic_tok = (usz)missing_tok < p.tree.tokens.len ? missing_tok : tok;
 	switch (context)
 	{
 		case RUNTIME: return true;

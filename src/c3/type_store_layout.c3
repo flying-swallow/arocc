@@ -20,25 +20,8 @@ fn ulong align_forward(ulong value, ulong alignment)
 <* Type.Int.bits *>
 fn ushort TypeInt.bits(self, Compilation* comp)
 {
-	Target* t = &comp.target;
-	switch (self)
-	{
-		case CHAR:
-		case SCHAR:
-		case UCHAR: return t.c_type_bit_size(CHAR);
-		case SHORT: return t.c_type_bit_size(SHORT);
-		case USHORT: return t.c_type_bit_size(USHORT);
-		case INT: return t.c_type_bit_size(INT);
-		case UINT: return t.c_type_bit_size(UINT);
-		case LONG: return t.c_type_bit_size(LONG);
-		case ULONG: return t.c_type_bit_size(ULONG);
-		case LONG_LONG: return t.c_type_bit_size(LONGLONG);
-		case ULONG_LONG: return t.c_type_bit_size(ULONGLONG);
-		case INT128:
-		case UINT128: return 128;
-		case INT24:
-		case UINT24: return 24;
-	}
+	if (self.fixed_bits) return self.fixed_bits;
+	return comp.target.c_type_bit_size(self.ctype);
 }
 
 <*
@@ -47,26 +30,9 @@ fn ushort TypeInt.bits(self, Compilation* comp)
 *>
 fn ushort TypeFloat.bits(self, Compilation* comp)
 {
-	Target* t = &comp.target;
-	switch (self)
-	{
-		case BF16:
-		case FP16:
-		case FLOAT16: return 16;
-		case FLOAT: return t.c_type_bit_size(FLOAT);
-		case DOUBLE: return t.c_type_bit_size(DOUBLE);
-		case LONG_DOUBLE: return t.c_type_bit_size(LONGDOUBLE);
-		case FLOAT128: return 128;
-		case FLOAT32: return 32;
-		case FLOAT64: return 64;
-		case FLOAT32X: return 32 * 2;
-		case FLOAT64X: return 64 * 2;
-		case FLOAT128X: unreachable("_Float128x is not supported");
-		case DFLOAT32: return 32;
-		case DFLOAT64: return 64;
-		case DFLOAT128: return 128;
-		case DFLOAT64X: return 64 * 2;
-	}
+	if (self == FLOAT128X) unreachable("_Float128x is not supported");
+	if (self.fixed_bits) return self.fixed_bits;
+	return comp.target.c_type_bit_size(self.ctype);
 }
 
 <* Compilation.getCharSignedness *>

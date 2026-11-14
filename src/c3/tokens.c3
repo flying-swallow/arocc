@@ -79,41 +79,8 @@ fn bool Precedence.lt(self, Precedence b) => (ichar)self < (ichar)b;
 <* Zig `Tree.Token.precedence[id]`: PREC_INVALID for non-operators. *>
 fn Precedence precedence(TokenId id)
 {
-	switch (id)
-	{
-		case COMMA: return PREC_COMMA;
-		case EQUAL:
-		case ASTERISK_EQUAL:
-		case SLASH_EQUAL:
-		case PERCENT_EQUAL:
-		case PLUS_EQUAL:
-		case MINUS_EQUAL:
-		case ANGLE_BRACKET_ANGLE_BRACKET_LEFT_EQUAL:
-		case ANGLE_BRACKET_ANGLE_BRACKET_RIGHT_EQUAL:
-		case AMPERSAND_EQUAL:
-		case CARET_EQUAL:
-		case PIPE_EQUAL: return PREC_ASSIGN;
-		case QUESTION_MARK: return PREC_CONDITIONAL;
-		case PIPE_PIPE: return PREC_BOOL_OR;
-		case AMPERSAND_AMPERSAND: return PREC_BOOL_AND;
-		case PIPE: return PREC_BIT_OR;
-		case CARET: return PREC_BIT_XOR;
-		case AMPERSAND: return PREC_BIT_AND;
-		case EQUAL_EQUAL:
-		case BANG_EQUAL: return PREC_EQUALITY;
-		case ANGLE_BRACKET_RIGHT:
-		case ANGLE_BRACKET_RIGHT_EQUAL:
-		case ANGLE_BRACKET_LEFT:
-		case ANGLE_BRACKET_LEFT_EQUAL: return PREC_COMPARISON;
-		case ANGLE_BRACKET_ANGLE_BRACKET_RIGHT:
-		case ANGLE_BRACKET_ANGLE_BRACKET_LEFT: return PREC_SHIFT;
-		case PLUS:
-		case MINUS: return PREC_ADDITIVE;
-		case ASTERISK:
-		case SLASH:
-		case PERCENT: return PREC_MULTIPLICATIVE;
-		default: return PREC_INVALID;
-	}
+	if (!id.props.binary_prec) return PREC_INVALID;
+	return (Precedence)id.props.binary_prec;
 }
 
 // ---------------------------------------------------------------------------

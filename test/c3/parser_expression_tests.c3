@@ -2,7 +2,7 @@
 // scope. The callback supplies primary tokens; unary and parenthesis parsing
 // are part of the expression engine under test.
 module parser_expression_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_diagnostics, aro::parser_expression, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_diagnostics, aro::parser_expression, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
 import aro::parser_frontend;
@@ -93,7 +93,8 @@ fn void check_expression(String text, tree::NodeKind expected_kind, long expecte
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
 		UnaryContext context = { .symbols = &symbols, .identifier = x, .second_identifier = x };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_unary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result? maybe_result = expression.parse();
 		if (catch parse_error = maybe_result)
 		{
@@ -105,7 +106,7 @@ fn void check_expression(String text, tree::NodeKind expected_kind, long expecte
 		{
 			assert(!expect_failure, "malformed expression unexpectedly parsed");
 			parser_result::Result result = maybe_result;
-			assert(result.node.tag(&p.tree).kind == expected_kind);
+			assert(result.node.kind(&p.tree) == expected_kind);
 			assert(result.val.to_i64(&comp)!! == expected_value);
 			if (conditional_right_assoc)
 			{
@@ -155,10 +156,10 @@ fn void sizeof_type_name_has_no_expression_operand() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
 		UnaryContext context;
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context,
-			.primary_expression = &parse_seeded_unary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result result = expression.parse()!!;
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.SIZEOF_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.SIZEOF_EXPR);
 		assert((ulong)result.val.to_i64(&comp)!! == type_store::INT.sizeof_or_null(&comp)!!);
 		Node node = result.node.get(&p.tree);
 		assert(node.type_info.expr == type_store::NODE_NULL);
@@ -194,10 +195,10 @@ fn void alignof_type_name_has_no_expression_operand() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
 		UnaryContext context;
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context,
-			.primary_expression = &parse_seeded_unary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result result = expression.parse()!!;
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.ALIGNOF_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.ALIGNOF_EXPR);
 		assert(result.val.to_i64(&comp)!! == type_store::INT.alignof(&comp));
 		Node node = result.node.get(&p.tree);
 		assert(node.type_info.expr == type_store::NODE_NULL);
@@ -263,12 +264,11 @@ fn void binary_expression_uses_preprocessed_tokens_and_seeded_symbol_types() @te
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
 		UnaryContext context = { .symbols = &symbols, .identifier = x, .second_identifier = x };
-		parser_expression::ExpressionParser expression = {
-			.parser = &p, .context = &context, .primary_expression = &parse_seeded_unary,
-		};
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result result = expression.parse()!!;
 		assert(result.qt.eql(type_store::INT, &comp));
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.ADD_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(result.val.to_i64(&comp)!! == 5);
 		assert(p.tok_i == 3 && p.at_eof());
 
@@ -316,9 +316,10 @@ fn void assignment_expression_is_right_associative() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
 		UnaryContext context = { .symbols = &symbols, .identifier = x, .second_identifier = y };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_unary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result result = expression.parse()!!;
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.ASSIGN_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.ASSIGN_EXPR);
 		Node inner = result.node.get(&p.tree);
 		assert(inner.binary.rhs.get(&p.tree).kind == tree::NodeKind.ASSIGN_EXPR);
 		p.tree.free();
@@ -443,13 +444,30 @@ fn bool has_expression_diagnostic(ExpressionFixture* f, String text)
 	return false;
 }
 
+fn void parser_owned_address_of_local_object_carries_pointer_value() @test
+{
+	ExpressionFixture f;
+	f.init("&object\n");
+	defer f.free();
+	NodeIndex object_decl = f.seed_symbol("object", symbol_stack::SymbolKind.DEF, type_store::INT);
+	UnaryContext context = { .symbols = &f.parser.symbols,
+		.identifier = f.comp.intern_string("object"), .second_identifier = f.comp.intern_string("object") };
+
+	parser_result::Result address = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
+	assert(address.node.kind(&f.parser.tree) == tree::NodeKind.ADDR_OF_EXPR);
+	assert(address.val.is(value_interner::InternerKeyTag.POINTER, &f.comp));
+	value_interner::InternerKey pointer = f.comp.interner.get(address.val.ref());
+	assert(pointer.pointer.node == (uint)object_decl);
+	assert(value::from_ref(pointer.pointer.offset).is_zero(&f.comp));
+}
+
 fn void parser_owned_sizeof_alignof_disambiguate_type_names_and_expressions() @test
 {
 	ExpressionFixture f;
 	f.init("sizeof(int)\n");
 	defer f.free();
 	parser_result::Result sized_type = f.parser.expr()!!;
-	assert(sized_type.node.tag(&f.parser.tree).kind == tree::NodeKind.SIZEOF_EXPR);
+	assert(sized_type.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	Node sized_type_node = sized_type.node.get(&f.parser.tree);
 	assert(sized_type_node.type_info.expr == type_store::NODE_NULL);
 	assert(sized_type_node.type_info.operand_qt.eql(type_store::INT, &f.comp));
@@ -460,7 +478,7 @@ fn void parser_owned_sizeof_alignof_disambiguate_type_names_and_expressions() @t
 	f.init("alignof(Alias)\n", "expr.c", lang_opts::Standard.C23);
 	f.seed_symbol("Alias", symbol_stack::SymbolKind.TYPEDEF, type_store::LONG);
 	parser_result::Result aligned_type = f.parser.expr()!!;
-	assert(aligned_type.node.tag(&f.parser.tree).kind == tree::NodeKind.ALIGNOF_EXPR);
+	assert(aligned_type.node.kind(&f.parser.tree) == tree::NodeKind.ALIGNOF_EXPR);
 	Node aligned_type_node = aligned_type.node.get(&f.parser.tree);
 	assert(aligned_type_node.type_info.expr == type_store::NODE_NULL);
 	assert(aligned_type_node.type_info.operand_qt.eql(type_store::LONG, &f.comp));
@@ -473,7 +491,7 @@ fn void parser_owned_sizeof_alignof_disambiguate_type_names_and_expressions() @t
 	UnaryContext context = { .symbols = &f.parser.symbols,
 		.identifier = f.comp.intern_string("object"), .second_identifier = f.comp.intern_string("object") };
 	parser_result::Result sized_expression = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
-	assert(sized_expression.node.tag(&f.parser.tree).kind == tree::NodeKind.SIZEOF_EXPR);
+	assert(sized_expression.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	Node sized_expression_node = sized_expression.node.get(&f.parser.tree);
 	assert(sized_expression_node.type_info.expr != type_store::NODE_NULL);
 	NodeIndex sized_operand = sized_expression_node.type_info.expr.unpack()!!;
@@ -494,7 +512,7 @@ fn void parser_owned_type_name_probe_restores_only_nonmatches_and_propagates_fau
 	UnaryContext context = { .symbols = &f.parser.symbols,
 		.identifier = f.comp.intern_string("object"), .second_identifier = f.comp.intern_string("object") };
 	parser_result::Result miss = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
-	assert(miss.node.tag(&f.parser.tree).kind == tree::NodeKind.SIZEOF_EXPR);
+	assert(miss.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	assert(miss.node.get(&f.parser.tree).type_info.expr != type_store::NODE_NULL);
 	assert(f.parser.at_eof(), "a consuming non-match must restore the expression cursor");
 	assert(f.diagnostics.messages.len() == 0);
@@ -544,7 +562,7 @@ fn void parser_owned_unary_folding_respects_eval_suppression() @test
 	defer f.free();
 	UnaryContext context = { .symbols = &f.parser.symbols };
 	parser_result::Result unevaluated_size = f.parser.expr_with_primary(&context, &parse_seeded_unary, false)!!;
-	assert(unevaluated_size.node.tag(&f.parser.tree).kind == tree::NodeKind.SIZEOF_EXPR);
+	assert(unevaluated_size.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	// sizeof computes its result from the checked type even when its enclosing
 	// expression suppresses value evaluation.
 	assert((ulong)unevaluated_size.val.to_i64(&f.comp)!! == type_store::INT.sizeof_or_null(&f.comp)!!);
@@ -553,7 +571,7 @@ fn void parser_owned_unary_folding_respects_eval_suppression() @test
 	f.init("__imag 7\n");
 	context = { .symbols = &f.parser.symbols };
 	parser_result::Result suppressed_imaginary_part = f.parser.expr_with_primary(&context, &parse_seeded_unary, false)!!;
-	assert(suppressed_imaginary_part.node.tag(&f.parser.tree).kind == tree::NodeKind.IMAG_EXPR);
+	assert(suppressed_imaginary_part.node.kind(&f.parser.tree) == tree::NodeKind.IMAG_EXPR);
 	assert(suppressed_imaginary_part.val.is_none());
 }
 
@@ -566,7 +584,7 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	f.init("42\n");
 	defer f.free();
 	parser_result::Result signed_result = f.parser.expr()!!;
-	assert(signed_result.node.tag(&f.parser.tree).kind == tree::NodeKind.INT_LITERAL);
+	assert(signed_result.node.kind(&f.parser.tree) == tree::NodeKind.INT_LITERAL);
 	assert(signed_result.qt == type_store::INT);
 	assert(signed_result.qt.bit_sizeof(&f.comp) == type_store::INT.bit_sizeof(&f.comp));
 	assert(signed_result.qt.signedness(&f.comp) == SIGNED);
@@ -576,7 +594,7 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	f.free();
 	f.init("42u\n");
 	parser_result::Result unsigned_result = f.parser.expr()!!;
-	assert(unsigned_result.node.tag(&f.parser.tree).kind == tree::NodeKind.INT_LITERAL);
+	assert(unsigned_result.node.kind(&f.parser.tree) == tree::NodeKind.INT_LITERAL);
 	assert(unsigned_result.qt == type_store::UINT);
 	assert(unsigned_result.qt.bit_sizeof(&f.comp) == type_store::UINT.bit_sizeof(&f.comp));
 	assert(unsigned_result.qt.signedness(&f.comp) == UNSIGNED);
@@ -587,7 +605,7 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	f.free();
 	f.init("1.5f\n");
 	parser_result::Result float_result = f.parser.expr()!!;
-	assert(float_result.node.tag(&f.parser.tree).kind == tree::NodeKind.FLOAT_LITERAL);
+	assert(float_result.node.kind(&f.parser.tree) == tree::NodeKind.FLOAT_LITERAL);
 	assert(float_result.qt == type_store::FLOAT && float_result.qt.is_float(&f.comp));
 	assert(float_result.qt.bit_sizeof(&f.comp) == type_store::FLOAT.bit_sizeof(&f.comp));
 	assert(!float_result.val.is_none() && float_result.val.is(value_interner::InternerKeyTag.FLOAT, &f.comp));
@@ -599,7 +617,7 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	f.free();
 	f.init("1.5\n");
 	parser_result::Result double_result = f.parser.expr()!!;
-	assert(double_result.node.tag(&f.parser.tree).kind == tree::NodeKind.FLOAT_LITERAL);
+	assert(double_result.node.kind(&f.parser.tree) == tree::NodeKind.FLOAT_LITERAL);
 	assert(double_result.qt == type_store::DOUBLE && double_result.qt.is_float(&f.comp));
 	assert(double_result.qt.bit_sizeof(&f.comp) == type_store::DOUBLE.bit_sizeof(&f.comp));
 	assert(double_result.val.is(value_interner::InternerKeyTag.FLOAT, &f.comp));
@@ -611,7 +629,7 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	f.free();
 	f.init("7i\n");
 	parser_result::Result imaginary = f.parser.expr()!!;
-	assert(imaginary.node.tag(&f.parser.tree).kind == tree::NodeKind.IMAGINARY_LITERAL);
+	assert(imaginary.node.kind(&f.parser.tree) == tree::NodeKind.IMAGINARY_LITERAL);
 	assert(imaginary.qt.is(&f.comp, type_store::TypeTag.COMPLEX));
 	assert(imaginary.qt.child_type(&f.comp) == type_store::INT);
 	Node imaginary_node = imaginary.node.get(&f.parser.tree);
@@ -629,7 +647,7 @@ fn void parser_owned_primary_decodes_characters_and_concatenates_strings() @test
 	f.init("'A'\n");
 	defer f.free();
 	parser_result::Result character = f.parser.expr()!!;
-	assert(character.node.tag(&f.parser.tree).kind == tree::NodeKind.CHAR_LITERAL);
+	assert(character.node.kind(&f.parser.tree) == tree::NodeKind.CHAR_LITERAL);
 	Node character_node = character.node.get(&f.parser.tree);
 	assert(character.qt == type_store::INT && character_node.char_literal.kind == tree::CharLiteralKind.ASCII);
 	assert(character.val.to_i64(&f.comp)!! == 65);
@@ -638,7 +656,7 @@ fn void parser_owned_primary_decodes_characters_and_concatenates_strings() @test
 	f.free();
 	f.init("\"ab\" \"cd\"\n");
 	parser_result::Result string = f.parser.expr()!!;
-	assert(string.node.tag(&f.parser.tree).kind == tree::NodeKind.STRING_LITERAL_EXPR);
+	assert(string.node.kind(&f.parser.tree) == tree::NodeKind.STRING_LITERAL_EXPR);
 	Node string_node = string.node.get(&f.parser.tree);
 	assert(string_node.char_literal.kind == tree::CharLiteralKind.ASCII);
 	type_store::Type array = string.qt.get_type(&f.comp);
@@ -658,7 +676,7 @@ fn void parser_owned_primary_resolves_ordinary_enum_and_typedef_symbols() @test
 	defer f.free();
 	NodeIndex object_decl = f.seed_symbol("object", symbol_stack::SymbolKind.DEF, type_store::LONG);
 	parser_result::Result object = f.parser.expr()!!;
-	assert(object.node.tag(&f.parser.tree).kind == tree::NodeKind.DECL_REF_EXPR);
+	assert(object.node.kind(&f.parser.tree) == tree::NodeKind.DECL_REF_EXPR);
 	assert(object.node.get(&f.parser.tree).decl_ref.decl == object_decl);
 	assert(object.qt == type_store::LONG && f.parser.at_eof());
 
@@ -667,7 +685,7 @@ fn void parser_owned_primary_resolves_ordinary_enum_and_typedef_symbols() @test
 	NodeIndex enum_decl = f.seed_symbol("answer", symbol_stack::SymbolKind.ENUMERATION,
 		type_store::INT, value::int_i64(19, &f.comp));
 	parser_result::Result answer = f.parser.expr()!!;
-	assert(answer.node.tag(&f.parser.tree).kind == tree::NodeKind.ENUMERATION_REF);
+	assert(answer.node.kind(&f.parser.tree) == tree::NodeKind.ENUMERATION_REF);
 	assert(answer.node.get(&f.parser.tree).decl_ref.decl == enum_decl);
 	assert(answer.val.to_i64(&f.comp)!! == 19 && f.parser.at_eof());
 
@@ -720,7 +738,7 @@ fn void parser_owned_grouping_and_cast_disambiguation_preserve_cursor() @test
 	assert(f.diagnostics.messages.len() == 0, "a speculative type-name miss must not diagnose");
 	f.parser.tok_i = 0;
 	parser_result::Result grouped = f.parser.expr()!!;
-	assert(grouped.node.tag(&f.parser.tree).kind == tree::NodeKind.PAREN_EXPR);
+	assert(grouped.node.kind(&f.parser.tree) == tree::NodeKind.PAREN_EXPR);
 	assert(grouped.node.get(&f.parser.tree).unary.operand.get(&f.parser.tree).decl_ref.decl == object_decl);
 	assert(f.parser.tok_i + 1 == f.parser.tok_end && f.parser.at_eof());
 
@@ -728,7 +746,7 @@ fn void parser_owned_grouping_and_cast_disambiguation_preserve_cursor() @test
 	f.init("(Alias) 3\n");
 	f.seed_symbol("Alias", symbol_stack::SymbolKind.TYPEDEF, type_store::LONG);
 	parser_result::Result cast = f.parser.expr()!!;
-	assert(cast.node.tag(&f.parser.tree).kind == tree::NodeKind.CAST);
+	assert(cast.node.kind(&f.parser.tree) == tree::NodeKind.CAST);
 	Node cast_node = cast.node.get(&f.parser.tree);
 	assert(cast_node.cast.qt == type_store::LONG && !cast_node.cast.implicit);
 	assert(cast.qt == type_store::LONG && cast.val.to_i64(&f.comp)!! == 3);
@@ -748,7 +766,7 @@ fn void parser_owned_grouping_and_cast_disambiguation_preserve_cursor() @test
 	parser_result::Result? rejected_cast = f.parser.expr();
 	if (catch rejected_cast) {}
 	else { assert(false, "a pointer-to-float cast must be rejected"); }
-	assert(has_expression_diagnostic(&f, "pointer cannot be cast to type float"));
+	assert(has_expression_diagnostic(&f, "pointer cannot be cast to type 'float'"));
 }
 
 fn void parser_owned_generic_selects_typed_and_default_associations() @test
@@ -759,7 +777,7 @@ fn void parser_owned_generic_selects_typed_and_default_associations() @test
 	f.init("_Generic(1, int: 11, default: 22)\n");
 	defer f.free();
 	parser_result::Result typed = f.parser.expr()!!;
-	assert(typed.node.tag(&f.parser.tree).kind == tree::NodeKind.GENERIC_EXPR);
+	assert(typed.node.kind(&f.parser.tree) == tree::NodeKind.GENERIC_EXPR);
 	Node typed_node = typed.node.get(&f.parser.tree);
 	assert(typed_node.generic.chosen.get(&f.parser.tree).kind == tree::NodeKind.GENERIC_ASSOCIATION_EXPR);
 	assert(typed_node.generic.rest.len == 1);
@@ -769,7 +787,7 @@ fn void parser_owned_generic_selects_typed_and_default_associations() @test
 	f.init("_Generic(1L, int: 11, default: 22)\n");
 	parser_result::Result fallback = f.parser.expr()!!;
 	Node fallback_node = fallback.node.get(&f.parser.tree);
-	assert(fallback.node.tag(&f.parser.tree).kind == tree::NodeKind.GENERIC_EXPR);
+	assert(fallback.node.kind(&f.parser.tree) == tree::NodeKind.GENERIC_EXPR);
 	assert(fallback_node.generic.chosen.get(&f.parser.tree).kind == tree::NodeKind.GENERIC_DEFAULT_EXPR);
 	assert(fallback.val.to_i64(&f.comp)!! == 22 && f.parser.at_eof());
 }
@@ -782,9 +800,9 @@ fn void parser_owned_generic_diagnoses_duplicates_and_rejects_bad_unselected_arm
 	f.init("_Generic(1, int: 11, int: 12)\n");
 	defer f.free();
 	parser_result::Result duplicate = f.parser.expr()!!;
-	assert(duplicate.node.tag(&f.parser.tree).kind == tree::NodeKind.GENERIC_EXPR);
-	assert(has_expression_diagnostic(&f, "type int in generic association compatible with previously specified type"));
-	assert(has_expression_diagnostic(&f, "compatible type int specified here"));
+	assert(duplicate.node.kind(&f.parser.tree) == tree::NodeKind.GENERIC_EXPR);
+	assert(has_expression_diagnostic(&f, "type 'int' in generic association compatible with previously specified type"));
+	assert(has_expression_diagnostic(&f, "compatible type 'int' specified here"));
 	assert(duplicate.val.to_i64(&f.comp)!! == 11);
 
 	f.free();
@@ -846,8 +864,9 @@ fn void parser_owned_unavailable_statement_and_specialized_builtin_forms_fail() 
 
 fn void parser_owned_constexpr_references_respect_symbol_kind_and_restore_folding_mode() @test
 {
-	// Source-derived: only CONSTEXPR symbols participate in const-declaration
-	// folding, and const_expr restores its caller's mode after each entry.
+	// Source-derived: CONSTEXPR references always fold, including under NO_CONST_DECL_FOLDING
+	// (Zig primaryExpr returns sym.val early for constexpr); ordinary non-const DEF values do not fold.
+	// const_expr restores the caller's mode after each entry.
 	ExpressionFixture f;
 	f.init("ordinary\n");
 	defer f.free();
@@ -875,7 +894,7 @@ fn void parser_owned_constexpr_references_respect_symbol_kind_and_restore_foldin
 		value::int_i64(42, &f.comp));
 	parser_result::Result suppressed = f.parser.const_expr(true,
 		parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING)!!;
-	assert(suppressed.val.is_none());
+	assert(suppressed.val.to_i64(&f.comp)!! == 42, "constexpr symbols fold even under NO_CONST_DECL_FOLDING (Parser.zig:10736)");
 	assert(f.parser.const_decl_folding == parser::ConstDeclFoldingMode.FOLD_CONST_DECLS);
 }
 

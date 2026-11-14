@@ -525,6 +525,29 @@ fn void include_next_normalizes_include_dir_spelling() @test
 	check(ta.allocation_count(), 0);
 }
 
+fn void include_next_bare_includer_name_waits_on_nothing() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/inc/y.h", "next");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({ { .kind = NORMAL, .path = "/inc" } });
+		// Zig dirname("x.h") is null, so FindInclude never waits and /inc is searched.
+		Source includer = add_source(&comp, "x.h");
+		Source next = comp.search_include("y.h", includer.id, ANGLE_BRACKETS, NEXT, null)!!;
+		check(next.path, "/inc/y.h");
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
 fn void include_next_root_wait_dir_matches_slash_dir() @test
 {
 	TrackingAllocator ta;
@@ -548,6 +571,43 @@ fn void include_next_root_wait_dir_matches_slash_dir() @test
 		// The includer "/a.h" waits on "/", so the "/" entry must clear the wait.
 		Source next = comp.search_include("a.h", first.id, ANGLE_BRACKETS, NEXT, null)!!;
 		check(next.path, "/x/a.h");
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void include_next_slash_name_waits_on_candidate_dirname() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/a/inc/sub/y.h", "a sub");
+		tree.add_file("/b/sub/y.h", "b sub");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({
+			{ .kind = NORMAL, .path = "/a/inc" },
+			{ .kind = NORMAL, .path = "/b" },
+		});
+		// Zig FindInclude.check (src/aro/Compilation.zig ~2583): while waiting, a candidate
+		// clears the wait only when the candidate's dirname equals the includer's dirname.
+		// Includer /a/inc/x.h waits on /a/inc. Under /a/inc the candidate is /a/inc/sub/y.h,
+		// whose dirname /a/inc/sub never equals /a/inc, so the wait never clears and every
+		// candidate, including /b/sub/y.h, is rejected.
+		Source main = add_source(&comp, "/a/inc/x.h");
+		check(@catch(comp.search_include("sub/y.h", main.id, ANGLE_BRACKETS, NEXT, null)), preprocessor::FILE_NOT_FOUND);
+		// Includer /a/inc/sub/z.h waits on /a/inc/sub. The /a/inc candidate /a/inc/sub/y.h has
+		// dirname /a/inc/sub, which matches, so it clears the wait and is itself skipped:
+		// /a/inc/sub/y.h must NOT be returned even though it exists. The search then continues
+		// to -I /b and finds /b/sub/y.h.
+		Source sub = add_source(&comp, "/a/inc/sub/z.h");
+		Source next = comp.search_include("sub/y.h", sub.id, ANGLE_BRACKETS, NEXT, null)!!;
+		check(next.path, "/b/sub/y.h");
 		comp.free();
 		tree.free();
 	}

@@ -1,10 +1,11 @@
-// #pragma once callbacks for the shared compilation pragma registry.
+// #pragma once handler for the shared compilation pragma registry.
 module aro::pragmas::once;
 import aro::pragma, aro::preprocessor, aro::source, aro::tokens, aro::tokenizer, aro::compilation;
 import std::collections::map;
 import std::core::mem::alloc, std::core::mem::allocators;
 
-struct Once
+<* Zig pragmas/once.zig. Allocated by `handler` and freed by `deinit`. *>
+struct Once (pragma::IPragma)
 {
 	HashMap{uint, bool} sources;
 	uint preprocess_count;
@@ -22,36 +23,35 @@ fn void Once.free(&self)
 	self.sources.free();
 	*self = {};
 }
-fn void Once.after_parse(&self) => self.sources.clear();
-fn bool Once.before_include(&self, source::SourceId id) => self.sources.has_key((uint)id);
+fn void Once.clear(&self) => self.sources.clear();
+fn bool Once.seen(&self, source::SourceId id) => self.sources.has_key((uint)id);
 
 // Return true only when this source was already marked in a different
 // preprocess pass, matching STOP_PREPROCESSING for repeated processing.
 fn bool Once.mark(&self, source::SourceId id, uint current_preprocess_count)
 {
-	bool repeated = self.preprocess_count != current_preprocess_count && self.before_include(id);
+	bool repeated = self.preprocess_count != current_preprocess_count && self.seen(id);
 	self.sources.set((uint)id, true);
 	self.preprocess_count = current_preprocess_count;
 	return repeated;
 }
 
-fn void destroy(void* ctx, compilation::Compilation* comp)
+fn void Once.deinit(&self, compilation::Compilation* comp) @dynamic
 {
-	Once* state = (Once*)ctx;
-	Allocator allocator = state.allocator;
-	state.free();
-	alloc::free(allocator, state);
+	Allocator allocator = self.allocator;
+	self.free();
+	alloc::free(allocator, self);
 }
 
-// Allocate the state so Registry.free can release it through destroy.
-fn pragma::Handler handler(Allocator allocator)
+<* Allocate the handler; Registry.free releases it through `deinit`. *>
+fn Once* handler(Allocator allocator)
 {
 	Once* state = (Once*)alloc::calloc(allocator, Once::size);
 	state.init(allocator);
-	return { .ctx = state, .preprocess = &preprocess, .before_include = &before_include, .after_parse = &after_parse, .destroy = &destroy, .preserve_tokens = &preserve_tokens };
+	return state;
 }
 
-fn pragma::PragmaResult preprocess(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx)
+fn pragma::PragmaResult Once.preprocessor_handler(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic
 {
 	if ((sz)start_idx >= pp.tokens.len()) return pragma::PragmaResult.UNKNOWN;
 	TreeToken name_tok = pp.tokens[(sz)start_idx];
@@ -71,22 +71,16 @@ fn pragma::PragmaResult preprocess(void* ctx, preprocessor::Preprocessor* pp, to
 		if (catch pp.err(diag_tok, preprocessor::PpDiag.PRAGMA_ONCE_IN_MAIN_FILE)) return pragma::PragmaResult.FATAL;
 		return pragma::PragmaResult.HANDLED;
 	}
-	Once* state = (Once*)ctx;
-	if (state.mark(name_tok.loc.id, pp.preprocess_count)) return pragma::PragmaResult.STOP_PREPROCESSING;
+	if (self.mark(name_tok.loc.id, pp.preprocess_count)) return pragma::PragmaResult.STOP_PREPROCESSING;
 	return pragma::PragmaResult.HANDLED;
 }
 
-fn pragma::IncludePragmaResult before_include(void* ctx, preprocessor::Preprocessor* pp, source::Source src)
+fn pragma::IncludePragmaResult Once.before_include(&self, preprocessor::Preprocessor* pp, source::Source src) @dynamic
 {
-	Once* state = (Once*)ctx;
-	if (state.before_include(src.id)) return pragma::IncludePragmaResult.SKIP_INCLUDE;
+	if (self.seen(src.id)) return pragma::IncludePragmaResult.SKIP_INCLUDE;
 	return pragma::IncludePragmaResult.CONTINUE;
 }
 
-fn void after_parse(void* ctx, compilation::Compilation* comp)
-{
-	Once* state = (Once*)ctx;
-	state.after_parse();
-}
+fn void Once.after_parse(&self, compilation::Compilation* comp) @dynamic => self.clear();
 
-fn bool preserve_tokens(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) { return false; }
+fn bool Once.preserve_tokens(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic => false;

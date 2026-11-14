@@ -234,9 +234,9 @@ fn void literal_overflow() @test
 		v = int_lit(comp, HEX, "1'0000'0000'0000'0000", U);
 		expect_diags(v, { INT_LITERAL_TOO_BIG });
 		check(u64_of(comp, v.val), 0);
-		test::eq(NumberValueDiag.INT_LITERAL_TOO_BIG.template().fmt,
+		test::eq(NumberValueDiag.INT_LITERAL_TOO_BIG.fmt,
 			"integer literal is too large to be represented in any integer type");
-		test::eq(NumberValueDiag.IMPLICITLY_UNSIGNED_LITERAL.template().fmt,
+		test::eq(NumberValueDiag.IMPLICITLY_UNSIGNED_LITERAL.fmt,
 			"integer literal is too large to be represented in a signed integer type, interpreting as unsigned");
 	};
 }
@@ -385,7 +385,7 @@ fn void imaginary_integers() @test
 		v = int_lit(comp, DECIMAL, "9223372036854775808", I);
 		expect_diags(v, { IMPLICITLY_UNSIGNED_LITERAL, GNU_IMAGINARY_CONSTANT });
 		assert(v.literal_qt == type_store::INT128);
-		test::eq(NumberValueDiag.GNU_IMAGINARY_CONSTANT.template().fmt, "imaginary constants are a GNU extension");
+		test::eq(NumberValueDiag.GNU_IMAGINARY_CONSTANT.fmt, "imaginary constants are a GNU extension");
 	};
 }
 
@@ -579,7 +579,7 @@ fn void pp_values() @test
 	assert(p.rejected);
 	check(p.diags.len, 1);
 	assert(p.diags.items[0] == FLOAT_LITERAL_IN_EXPR);
-	test::eq(NumberValueDiag.FLOAT_LITERAL_IN_EXPR.template().fmt, "floating point literal in preprocessor expression");
+	test::eq(NumberValueDiag.FLOAT_LITERAL_IN_EXPR.fmt, "floating point literal in preprocessor expression");
 	// [source] imaginary integer is rejected too; unsigned suffix stays unsigned
 	p = pp(DECIMAL, "1", I);
 	assert(p.rejected);

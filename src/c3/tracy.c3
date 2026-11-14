@@ -134,8 +134,7 @@ fn void*? TracyAllocator.resize(&self, void* old_pointer, sz new_size, sz alignm
 		self.release(old_pointer, false);
 		return null;
 	}
-	void*? result = self.parent.resize(old_pointer, new_size, alignment);
-	if (catch err = result) return err~;
+	void* result = self.parent.resize(old_pointer, new_size, alignment)!;
 	$if ENABLE_ALL:
 	{
 		if (self.has_name)

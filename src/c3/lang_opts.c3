@@ -9,7 +9,7 @@
 module aro::lang_opts;
 import aro::char_info, aro::target;
 
-faultdef INVALID_STANDARD;
+excuse INVALID_STANDARD;
 
 enum Compiler : char
 {

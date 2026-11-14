@@ -502,4 +502,6 @@ enum ParserDiag : ushort (String fmt, MessageKind kind, ParserDiagMeta meta)
 	PRIMARY_UNAVAILABLE { "%s", ERROR, {} },
 	// C3-only: Parser.parse_translation_unit without a grammar handler.
 	GRAMMAR_UNAVAILABLE { "parser grammar callback is unavailable", ERROR, {} },
+	// C3-only: promoted anonymous-record member name found in more than one anonymous member at the same level.
+	AMBIGUOUS_MEMBER { "member '%s' is ambiguous; found in multiple anonymous struct or union members", ERROR, {} },
 }

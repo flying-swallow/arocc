@@ -235,7 +235,8 @@ fn void bytes_values() @test
 		assert(value::elem(value::NONE, value::ZERO, comp).is_none());
 		// Bytes operands make add/sub unknown.
 		Value r = value::ONE;
-		assert(!r.add(s, value::ONE, type_store::INT, comp));
+		bool add_result_1 = r.add(s, value::ONE, type_store::INT, comp);
+		assert(!add_result_1);
 		assert(r.is_none());
 		r = value::ONE;
 		assert(!r.sub(s, value::ONE, type_store::INT, comp));
@@ -316,26 +317,32 @@ fn void add_sub() @test
 	@with_comp(; Compilation* comp)
 	{
 		Value r = value::NONE;
-		assert(!r.add(u(comp, 2), u(comp, 3), type_store::INT, comp));
+		bool add_result_2 = r.add(u(comp, 2), u(comp, 3), type_store::INT, comp);
+		assert(!add_result_2);
 		expect(comp, r, u(comp, 5));
 
 		// fixture arithmetic overflow: 0xFFFFFFFF + 1 == 0 and 1 + 0xFFFFFFFF == 0 (unsigned int).
-		assert(r.add(u(comp, 0xFFFF_FFFF), value::ONE, type_store::UINT, comp));
+		bool add_result_3 = r.add(u(comp, 0xFFFF_FFFF), value::ONE, type_store::UINT, comp);
+		assert(add_result_3);
 		expect(comp, r, value::ZERO);
-		assert(r.add(value::ONE, u(comp, 0xFFFF_FFFF), type_store::UINT, comp));
+		bool add_result_4 = r.add(value::ONE, u(comp, 0xFFFF_FFFF), type_store::UINT, comp);
+		assert(add_result_4);
 		expect(comp, r, value::ZERO);
 		// fixture arithmetic overflow: 0 - 0x00000001 == 0xFFFFFFFF.
 		assert(r.sub(value::ZERO, value::ONE, type_store::UINT, comp));
 		expect(comp, r, u(comp, 0xFFFF_FFFF));
 
 		// source-derived: INT_MAX + 1 wraps to INT_MIN with overflow.
-		assert(r.add(i(comp, 2147483647), value::ONE, type_store::INT, comp));
+		bool add_result_5 = r.add(i(comp, 2147483647), value::ONE, type_store::INT, comp);
+		assert(add_result_5);
 		expect(comp, r, i(comp, -2147483648));
-		assert(!r.add(i(comp, -2147483647), i(comp, -1), type_store::INT, comp));
+		bool add_result_6 = r.add(i(comp, -2147483647), i(comp, -1), type_store::INT, comp);
+		assert(!add_result_6);
 		expect(comp, r, i(comp, -2147483648));
 		// `res` may alias an operand.
 		r = i(comp, 40);
-		assert(!r.add(r, r, type_store::LONG, comp));
+		bool add_result_7 = r.add(r, r, type_store::LONG, comp);
+		assert(!add_result_7);
 		expect(comp, r, u(comp, 80));
 
 		// negate / decrement.
@@ -354,11 +361,14 @@ fn void add_sub() @test
 		// source-derived >128-bit: (2^255 - 1) + 1 in signed _BitInt(256) wraps to -2^255.
 		QualType s256 = bit_int(comp, 256, SIGNED);
 		QualType u256 = bit_int(comp, 256, UNSIGNED);
-		assert(r.add(ones(comp, 255), value::ONE, s256, comp));
+		bool add_result_8 = r.add(ones(comp, 255), value::ONE, s256, comp);
+		assert(add_result_8);
 		expect(comp, r, pow2(comp, 255, false));
-		assert(!r.add(ones(comp, 255), value::ONE, u256, comp));
+		bool add_result_9 = r.add(ones(comp, 255), value::ONE, u256, comp);
+		assert(!add_result_9);
 		expect(comp, r, pow2(comp, 255));
-		assert(r.add(ones(comp, 256), value::ONE, u256, comp));
+		bool add_result_10 = r.add(ones(comp, 256), value::ONE, u256, comp);
+		assert(add_result_10);
 		expect(comp, r, value::ZERO);
 		// 2^200 - 2^130 in u256, carries across limbs.
 		assert(!r.sub(pow2(comp, 200), pow2(comp, 130), u256, comp));
@@ -675,15 +685,19 @@ fn void pointers() @test
 
 		// p + 3 (int *): offset 12 bytes, same node; 3 + p is the same.
 		Value r = value::NONE;
-		assert(!r.add(p, u(comp, 3), int_ptr, comp));
+		bool add_result_11 = r.add(p, u(comp, 3), int_ptr, comp);
+		assert(!add_result_11);
 		expect(comp, r, value::pointer({ .node = 1, .offset = u(comp, 12).ref() }, comp));
-		assert(!r.add(u(comp, 3), p, int_ptr, comp));
+		bool add_result_12 = r.add(u(comp, 3), p, int_ptr, comp);
+		assert(!add_result_12);
 		expect(comp, r, value::pointer({ .node = 1, .offset = u(comp, 12).ref() }, comp));
 		// p4 + (-1) is back at p (pointer dedup by offset value).
-		assert(!r.add(p4, i(comp, -1), int_ptr, comp));
+		bool add_result_13 = r.add(p4, i(comp, -1), int_ptr, comp);
+		assert(!add_result_13);
 		expect(comp, r, p);
 		// void * arithmetic scales by 1 (sizeof unknown -> 1).
-		assert(!r.add(p, u(comp, 3), type_store::VOID_POINTER, comp));
+		bool add_result_14 = r.add(p, u(comp, 3), type_store::VOID_POINTER, comp);
+		assert(!add_result_14);
 		expect(comp, r, value::pointer({ .node = 1, .offset = u(comp, 3).ref() }, comp));
 
 		// fixture pointer subtraction: `&c[1] - &c[0]` for char is 1.
@@ -705,7 +719,8 @@ fn void pointers() @test
 		expect(comp, r, p);
 
 		// Offsets wrap in ptrdiff_t (long): node + LONG_MAX elements of 4 bytes overflows.
-		assert(r.add(p, i(comp, long::max), int_ptr, comp));
+		bool add_result_15 = r.add(p, i(comp, long::max), int_ptr, comp);
+		assert(add_result_15);
 		Value off = r.is_pointer(comp) ? value::from_ref(comp.interner.get(r.ref()).pointer.offset) : value::NONE;
 		expect(comp, off, i(comp, -4), "LONG_MAX * 4 wraps to -4 in ptrdiff_t");
 	};

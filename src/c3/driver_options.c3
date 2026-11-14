@@ -75,6 +75,10 @@ struct DriverOptions
 	bool has_hosted;
 	String optimization;
 	bool has_optimization;
+	<* Force whole-program IR generation regardless of optimization level. *>
+	bool whole_program;
+	<* Prefer the in-process IR object emitter over the external assembler. *>
+	bool integrated_as;
 	String code_model;
 	bool has_code_model;
 	String debug_format;
@@ -95,6 +99,9 @@ struct DriverOptions
 	bool verbose_ast;
 	bool verbose_pp;
 	bool verbose_ir;
+	<* Run the internal IR verifier before dumping or rendering IR. *>
+	bool verify_ir;
+	bool x86_64_spill_all;
 	bool verbose_linker_args;
 	bool apple_kext;
 	bool common;

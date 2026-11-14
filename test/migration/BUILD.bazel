@@ -167,6 +167,85 @@ sh_test(
     ],
 )
 
+# Native Linux x86-64 acceptance for the Ir backend: each case is compiled with
+# aro_c3 -O1 (AST -> Ir -> x86_64 assembly -> as), linked with the host cc, run,
+# and its exit status compared with its `// expect N` line.
+sh_test(
+    name = "native_ir_backend_integration",
+    srcs = ["native_ir_backend_integration.sh"],
+    args = [
+        "$(location //:aro_c3)",
+        "$(location @native_assembler_tools//:cc)",
+        "$(locations :ir_backend_cases)",
+    ],
+    data = [
+        "//:aro_c3",
+        ":ir_backend_cases",
+        "@native_assembler_tools//:cc",
+        "@native_assembler_tools//:as",
+    ],
+)
+
+# The same native cases at -O0: the Ir backend with no Ir passes (GCC-style;
+# Zig arocc sends -O0 to its data-only assembly stub instead).
+sh_test(
+    name = "native_ir_backend_integration_o0",
+    srcs = ["native_ir_backend_integration.sh"],
+    args = [
+        "$(location //:aro_c3)",
+        "$(location @native_assembler_tools//:cc)",
+        "$(locations :ir_backend_cases)",
+    ],
+    data = [
+        "//:aro_c3",
+        ":ir_backend_cases",
+        "@native_assembler_tools//:cc",
+        "@native_assembler_tools//:as",
+    ],
+    env = {"ARO_C3_OPT": "-O0"},
+)
+
+# Exercise the same native cases with every Ir value assigned a stack slot.
+sh_test(
+    name = "native_ir_backend_integration_spill_all",
+    srcs = ["native_ir_backend_integration.sh"],
+    args = [
+        "$(location //:aro_c3)",
+        "$(location @native_assembler_tools//:cc)",
+        "$(locations :ir_backend_cases)",
+    ],
+    data = [
+        "//:aro_c3",
+        ":ir_backend_cases",
+        "@native_assembler_tools//:cc",
+        "@native_assembler_tools//:as",
+    ],
+    env = {"ARO_C3_FLAGS": "--x86-64-spill-all"},
+)
+
+filegroup(
+    name = "ir_backend_cases",
+    srcs = glob(["ir_backend_cases/*.c"]),
+)
+
+# Native Linux x86-64 differential: compare default system-as objects with
+# -fintegrated-as objects by linking each through the host cc and running it.
+sh_test(
+    name = "native_ir_backend_object_differential",
+    srcs = ["native_ir_backend_object_differential.sh"],
+    args = [
+        "$(location //:aro_c3)",
+        "$(location @native_assembler_tools//:cc)",
+        "$(locations :ir_backend_cases)",
+    ],
+    data = [
+        "//:aro_c3",
+        ":ir_backend_cases",
+        "@native_assembler_tools//:cc",
+        "@native_assembler_tools//:as",
+    ],
+)
+
 # Typed-IR probe for the AST-lowering migration boundary. The probe uses direct
 # Builder fixtures and hand-built AST fixtures; expected outcomes are source-derived.
 c3_binary(
@@ -233,6 +312,25 @@ c3_test(
     data = [
         "declaration_regression_cases.txt",
         ":declaration_fixture_tree",
+        ":frontend_probe",
+    ],
+    deps = [
+        ":runner_lib",
+        "//:aro_c3_lib",
+    ],
+)
+
+filegroup(
+    name = "attribute_fixture_tree",
+    srcs = glob(["attribute_fixtures/**"]),
+)
+
+c3_test(
+    name = "attribute_regression",
+    srcs = ["attribute_regression.c3"],
+    data = [
+        "attribute_regression_cases.txt",
+        ":attribute_fixture_tree",
         ":frontend_probe",
     ],
     deps = [

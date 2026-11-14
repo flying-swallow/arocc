@@ -983,8 +983,8 @@ fn void? Wip.check_linkage_attrs(&self, parser::Parser* p, type_store::NodeIndex
 		attribute::Attribute attr = p.tree.attr_map.get(ref);
 		bool invalid_weak = attr.args.tag == attribute::AttributeTag.WEAK && internal_linkage;
 		bool invalid_selectany = attr.args.tag == attribute::AttributeTag.SELECTANY && (internal_linkage || node.kind == tree::NodeKind.FUNCTION);
-		if (invalid_weak) { if (!bad_weak) self.emit(p, { .name = attr.name, .tok = attr.tok }, attribute_diagnostics::AttrDiag.INVALID_WEAK)!; bad_weak = true; continue; }
-		if (invalid_selectany) { if (!bad_selectany) self.emit(p, { .name = attr.name, .tok = attr.tok }, attribute_diagnostics::AttrDiag.INVALID_SELECTANY)!; bad_selectany = true; continue; }
+		if (invalid_weak) { if (!bad_weak) self.emit(p, { .name = attr.name, .syntax = attr.syntax, .tok = attr.tok }, attribute_diagnostics::AttrDiag.INVALID_WEAK)!; bad_weak = true; continue; }
+		if (invalid_selectany) { if (!bad_selectany) self.emit(p, { .name = attr.name, .syntax = attr.syntax, .tok = attr.tok }, attribute_diagnostics::AttrDiag.INVALID_SELECTANY)!; bad_selectany = true; continue; }
 		self.applied[(sz)kept] = ref;
 		kept++;
 	}

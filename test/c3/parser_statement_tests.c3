@@ -172,9 +172,10 @@ fn void statement_compounds_unwind_scopes_and_parse_control_flow() @test
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
-		assert(body.tag(&p.tree).kind == tree::NodeKind.COMPOUND_STMT);
+		assert(body.kind(&p.tree) == tree::NodeKind.COMPOUND_STMT);
 		assert(p.symbols.active_len == original_scopes, "compound scope must be popped after parsing");
 		assert(p.at_eof());
 		p.free(); pp.free(); comp.free(); d.free();
@@ -195,7 +196,8 @@ fn void compound_scope_unwinds_on_parse_error() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body()!!;
 		assert(p.symbols.active_len == original_scopes);
 		assert(p.at_eof(), "recovery must consume the unmatched block closing brace");
@@ -218,8 +220,8 @@ fn void compound_body_recovers_after_failed_statement() @test
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
 		RecoveryExpressionFixture fixture = { .fail_next = true };
-		parser_statement::StatementParser statements = { .parser = &p, .context = &fixture,
-			.expression = &fixture_recovery_expression };
+		StatementGrammar statements_grammar = { .context = &fixture, .expr = &fixture_recovery_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::Node parsed_body = body.get(&p.tree);
 		assert(parsed_body.kind == tree::NodeKind.COMPOUND_STMT);
@@ -247,9 +249,8 @@ fn void compound_body_keeps_next_statement_after_advanced_failure() @test
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ int broken; return 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p,
-			.local_declaration_statement = &fixture_failed_local_declaration,
-			.has_local_declaration_statement = true, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .local = &fixture_failed_local_declaration, .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::Node parsed_body = body.get(&p.tree);
 		assert(parsed_body.kind == tree::NodeKind.COMPOUND_STMT);
@@ -275,7 +276,8 @@ fn void compound_body_recovers_two_failed_statements_in_one_body() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_fail_identifier_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_fail_identifier_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::NodeCompoundStmt compound = body.get(&p.tree).compound_stmt;
 		assert(compound.body.len == 2, "both statements after the two failed items must be retained");
@@ -310,9 +312,8 @@ fn void compound_body_keeps_statement_after_declaration_consumed_its_semicolon()
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ int broken; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p,
-			.local_declaration_statement = &fixture_failed_declaration_through_semicolon,
-			.has_local_declaration_statement = true, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .local = &fixture_failed_declaration_through_semicolon, .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::NodeCompoundStmt compound = body.get(&p.tree).compound_stmt;
 		assert(compound.body.len == 1, "the failed declaration must be skipped");
@@ -356,8 +357,8 @@ fn void compound_body_recovery_tracks_delimiter_kinds_independently() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		RecoveryExpressionFixture fixture = { .fail_next = true };
-		parser_statement::StatementParser statements = { .parser = &p, .context = &fixture,
-			.expression = &fixture_advance_then_fail_expression };
+		StatementGrammar statements_grammar = { .context = &fixture, .expr = &fixture_advance_then_fail_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::NodeCompoundStmt parsed_body = body.get(&p.tree).compound_stmt;
 		assert(parsed_body.body.len == 1, "a ')' must not close the unmatched '[' nesting depth");
@@ -383,8 +384,8 @@ fn void compound_body_recovery_consumes_unmatched_closing_brace() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		RecoveryExpressionFixture fixture = { .fail_next = true };
-		parser_statement::StatementParser statements = { .parser = &p, .context = &fixture,
-			.expression = &fixture_advance_then_fail_expression };
+		StatementGrammar statements_grammar = { .context = &fixture, .expr = &fixture_advance_then_fail_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		assert(body.get(&p.tree).compound_stmt.body.len == 0);
 		assert(p.is_at(tokenizer::TokenId.PP_NUM), "tokens after the consumed block must remain for the enclosing parser");
@@ -405,10 +406,11 @@ fn void gnu_asm_basic_statement_and_qualifiers_parse() @test
 		source::Source src = comp.add_source_from_buffer("asm.c", "__asm__ volatile inline (\"nop\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_asm::AsmParser asm_parser = { .parser = &p, .asm_string = &fixture_asm_string, .has_asm_string = true };
-		parser_statement::StatementParser statements = { .parser = &p, .asm_parser = asm_parser, .has_asm_parser = true, .expression = &fixture_expression };
+		parser_asm::AsmParser asm_parser = { .asm_string = &fixture_asm_string };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .asm_parser = &asm_parser, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex node = statements.parse_statement()!!;
-		assert(node.tag(&p.tree).kind == tree::NodeKind.ASM_STMT);
+		assert(node.kind(&p.tree) == tree::NodeKind.ASM_STMT);
 		assert(p.at_eof());
 		p.free(); pp.free(); comp.free(); d.free();
 	}
@@ -427,9 +429,34 @@ fn void gnu_asm_requires_string_and_trailing_semicolon() @test
 		source::Source src = comp.add_source_from_buffer("asm.c", "asm(1)")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_asm::AsmParser asm_parser = { .parser = &p, .asm_string = &fixture_asm_string, .has_asm_string = true };
-		assert(@catch(asm_parser.parse_statement()) == parser::PARSING_FAILED);
+		parser_asm::AsmParser asm_parser = { .asm_string = &fixture_asm_string };
+		assert(@catch(asm_parser.parse_asm_statement(&p)) == parser::PARSING_FAILED);
 		assert(d.messages.len() > 0);
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void installed_asm_parser_falls_through_for_non_asm_statements() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("asm.c", "; {} asm(\"nop\");")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
+		parser_asm::AsmParser asm_parser = { .asm_string = &fixture_asm_string };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .asm_parser = &asm_parser, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
+		assert(statements.parse_statement()!!.kind(&p.tree) == tree::NodeKind.NULL_STMT);
+		assert(statements.parse_statement()!!.kind(&p.tree) == tree::NodeKind.COMPOUND_STMT);
+		assert(statements.parse_statement()!!.kind(&p.tree) == tree::NodeKind.ASM_STMT);
+		assert(p.at_eof());
+		assert(d.messages.len() == 0);
 		p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);
@@ -447,7 +474,8 @@ fn void return_statements_preserve_value_and_void_operand_shapes() @test
 		source::Source src = comp.add_source_from_buffer("return.c", "{ return 1; return; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::NodeCompoundStmt compound = body.get(&p.tree).compound_stmt;
 		assert(compound.body.len == 2);
@@ -456,7 +484,7 @@ fn void return_statements_preserve_value_and_void_operand_shapes() @test
 		assert(first.kind == tree::NodeKind.RETURN_STMT);
 		assert(first.return_stmt.operand == tree::ReturnOperandKind.EXPR);
 		assert(first.return_stmt.return_qt.is_invalid());
-		assert(first.return_stmt.expr.tag(&p.tree).kind == tree::NodeKind.INT_LITERAL);
+		assert(first.return_stmt.expr.kind(&p.tree) == tree::NodeKind.INT_LITERAL);
 		assert(first.return_stmt.expr.qt(&p.tree).eql(type_store::INT, &comp));
 		assert(second.kind == tree::NodeKind.RETURN_STMT);
 		assert(second.return_stmt.operand == tree::ReturnOperandKind.NONE);
@@ -499,8 +527,8 @@ fn void function_return_context_types_and_validates_returns() @test
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		tokens::TokenIndex function_name = p.tok_i;
 		p.advance();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression,
-			.function_return_qt = type_store::INT, .function_name_tok = function_name, .has_function_context = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .function_return_qt = type_store::INT, .function_name_tok = function_name, .has_function_context = true, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body(true)!!;
 		tree::NodeCompoundStmt compound = body.get(&p.tree).compound_stmt;
 		assert(compound.body.len == 2);
@@ -517,7 +545,7 @@ fn void function_return_context_types_and_validates_returns() @test
 	assert(ta.allocation_count() == 0);
 }
 
-fn void incompatible_return_reports_type_diagnostic() @test
+fn void pointer_to_integer_return_uses_conversion_diagnostic() @test
 {
 	TrackingAllocator ta;
 	ta.init(mem);
@@ -530,14 +558,14 @@ fn void incompatible_return_reports_type_diagnostic() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		tokens::TokenIndex function_name = p.tok_i; p.advance();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_pointer_expression,
-			.function_return_qt = type_store::INT, .function_name_tok = function_name, .has_function_context = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_pointer_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .function_return_qt = type_store::INT, .function_name_tok = function_name, .has_function_context = true, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body(true)!!;
 		tree::NodeCompoundStmt compound = body.get(&p.tree).compound_stmt;
 		tree::Node returned = compound.body[0].get(&p.tree);
 		assert(returned.return_stmt.return_qt.eql(type_store::INT, &comp));
 		assert(d.messages.len() == 1);
-		test::eq(d.messages[0].text, "returning void * from a function with incompatible result type int");
+		test::eq(d.messages[0].text, "implicit pointer to integer conversion from 'void *' to 'int'");
 		p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);
@@ -556,8 +584,8 @@ fn void void_function_returning_value_is_diagnosed() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		tokens::TokenIndex function_name = p.tok_i; p.advance();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression,
-			.function_return_qt = type_store::VOID, .function_name_tok = function_name, .has_function_context = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .function_return_qt = type_store::VOID, .function_name_tok = function_name, .has_function_context = true, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body(true)!!;
 		tree::NodeCompoundStmt compound = body.get(&p.tree).compound_stmt;
 		tree::Node returned = compound.body[0].get(&p.tree);
@@ -581,7 +609,8 @@ fn void switch_duplicate_cases_defaults_and_out_of_switch_diagnostics() @test
 		source::Source src = comp.add_source_from_buffer("switch.c", "{ switch (1) { case 1: ; case 1: ; default: ; default: ; } case 1: ; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body()!!;
 		assert(d.messages.len() == 5);
 		test::eq(d.messages[0].text, "duplicate case value '1'");
@@ -606,8 +635,8 @@ fn void switch_case_ranges_keep_typed_bounds_and_detect_interior_duplicates() @t
 		source::Source src = comp.add_source_from_buffer("switch-range.c", "{ switch (0) { case 2 ... 5: ; case 4: ; case 8: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_switch_expression,
-			.integer_constant_expression = &fixture_switch_integer_constant_expression, .has_integer_constant_expression = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_switch_expression, .ice = &fixture_switch_integer_constant_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::NodeCompoundStmt outer = body.get(&p.tree).compound_stmt;
 		assert(outer.body.len == 1);
@@ -620,8 +649,8 @@ fn void switch_case_ranges_keep_typed_bounds_and_detect_interior_duplicates() @t
 		assert(!range.case_stmt.end.is_null(), "GNU case range should retain an end node");
 		type_store::NodeIndex range_start = range.case_stmt.start;
 		type_store::NodeIndex range_end = range.case_stmt.end.unwrap();
-		assert(range_start.tag(&p.tree).kind == tree::NodeKind.INT_LITERAL);
-		assert(range_end.tag(&p.tree).kind == tree::NodeKind.INT_LITERAL);
+		assert(range_start.kind(&p.tree) == tree::NodeKind.INT_LITERAL);
+		assert(range_end.kind(&p.tree) == tree::NodeKind.INT_LITERAL);
 		assert(range_start.qt(&p.tree).eql(type_store::INT, &comp));
 		assert(range_end.qt(&p.tree).eql(type_store::INT, &comp));
 		assert(p.tree.tok_slice(range_start.get(&p.tree).literal.literal_tok) == "2");
@@ -648,8 +677,8 @@ fn void switch_overlapping_case_ranges_are_duplicate_cases() @test
 		source::Source src = comp.add_source_from_buffer("switch-overlap.c", "{ switch (0) { case 2 ... 5: ; case 4 ... 8: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_switch_expression,
-			.integer_constant_expression = &fixture_switch_integer_constant_expression, .has_integer_constant_expression = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_switch_expression, .ice = &fixture_switch_integer_constant_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex body = statements.parse_body()!!;
 		tree::NodeCompoundStmt outer = body.get(&p.tree).compound_stmt;
 		tree::Node switch_node = outer.body[0].get(&p.tree);
@@ -680,8 +709,8 @@ fn void switch_unavailable_case_values_are_diagnosed_in_source_order() @test
 		source::Source src = comp.add_source_from_buffer("switch-unavailable.c", "{ switch (0) { case 1 ... 2: ; case 3: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_switch_expression_with_unavailable_values,
-			.integer_constant_expression = &fixture_unavailable_switch_integer_constant_expression, .has_integer_constant_expression = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_switch_expression_with_unavailable_values, .ice = &fixture_unavailable_switch_integer_constant_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body()!!;
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[0].text, "case value must be an integer constant expression");
@@ -705,8 +734,8 @@ fn void descending_switch_case_range_reports_empty_range() @test
 		source::Source src = comp.add_source_from_buffer("switch-empty-range.c", "{ switch (0) { case 5 ... 3: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_switch_expression,
-			.integer_constant_expression = &fixture_switch_integer_constant_expression, .has_integer_constant_expression = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_switch_expression, .ice = &fixture_switch_integer_constant_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body()!!;
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "empty case range specified");
@@ -729,8 +758,8 @@ fn void switch_case_bound_requires_a_real_integer_type() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		parser::ConstDeclFoldingMode previous_mode = p.const_decl_folding;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_switch_expression,
-			.integer_constant_expression = &fixture_pointer_integer_constant_expression, .has_integer_constant_expression = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_switch_expression, .ice = &fixture_pointer_integer_constant_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body()!!;
 		assert(p.const_decl_folding == previous_mode, "failed case bound must restore constant folding mode");
 		assert(d.messages.len() == 1);
@@ -754,7 +783,8 @@ fn void computed_goto_requires_address_of_label_expression() @test
 		source::Source src = comp.add_source_from_buffer("goto.c", "{ goto *1; } { goto *1; &&target; target: ; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_full_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_full_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body(true)!!;
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "computed goto in function with no address-of-label expressions");
@@ -778,15 +808,16 @@ fn void malformed_function_body_clears_label_and_scope_state() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex recovered_body = statements.parse_body(true)!!;
-		assert(recovered_body.tag(&p.tree).kind == tree::NodeKind.COMPOUND_STMT);
+		assert(recovered_body.kind(&p.tree) == tree::NodeKind.COMPOUND_STMT);
 		assert(!statements.in_function);
 		assert(statements.labels.len() == 0 && statements.gotos.len() == 0);
 		assert(p.symbols.active_len == original_scopes);
 		// Recovery consumed the malformed function's closing brace.
 		type_store::NodeIndex next_body = statements.parse_body(true)!!;
-		assert(next_body.tag(&p.tree).kind == tree::NodeKind.COMPOUND_STMT);
+		assert(next_body.kind(&p.tree) == tree::NodeKind.COMPOUND_STMT);
 		tree::NodeCompoundStmt second_body = next_body.get(&p.tree).compound_stmt;
 		assert(second_body.body.len == 1, "the second body should contain its goto statement");
 		assert(second_body.body[0].get(&p.tree).kind == tree::NodeKind.GOTO_STMT);
@@ -845,19 +876,20 @@ fn void statement_attributes_attach_and_validate_argument_counts() @test
 		source::Source src = comp.add_source_from_buffer("stmt-attrs.c", "__attribute__((unused)) first: ; [[gnu::unused]] second: ; __attribute__((unused(1))) third: ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex first = statements.parse_statement()!!;
-		assert(first.tag(&p.tree).kind == tree::NodeKind.LABELED_STMT);
+		assert(first.kind(&p.tree) == tree::NodeKind.LABELED_STMT);
 		attribute_map::AttrRef[] attrs = p.tree.attr_map.attrs(first.pack());
 		assert(attrs.len == 1);
 		assert(p.tree.attr_map.get(attrs[0]).args.tag == attribute::AttributeTag.UNUSED);
 		type_store::NodeIndex second = statements.parse_statement()!!;
-		assert(second.tag(&p.tree).kind == tree::NodeKind.LABELED_STMT);
+		assert(second.kind(&p.tree) == tree::NodeKind.LABELED_STMT);
 		attribute_map::AttrRef[] c23_attrs = p.tree.attr_map.attrs(second.pack());
 		assert(c23_attrs.len == 1);
 		assert(p.tree.attr_map.get(c23_attrs[0]).args.tag == attribute::AttributeTag.UNUSED);
 		type_store::NodeIndex third = statements.parse_statement()!!;
-		assert(third.tag(&p.tree).kind == tree::NodeKind.LABELED_STMT);
+		assert(third.kind(&p.tree) == tree::NodeKind.LABELED_STMT);
 		assert(p.tree.attr_map.attrs(third.pack()).len == 0);
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[0].text, "[[]] attributes are a C23 extension");
@@ -880,16 +912,16 @@ fn void fallthrough_statement_attribute_is_accepted_before_case_inside_switch() 
 			"switch (1) { case 0: __attribute__((fallthrough)); case 1: break; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_switch_expression,
-			.integer_constant_expression = &fixture_switch_integer_constant_expression, .has_integer_constant_expression = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_switch_expression, .ice = &fixture_switch_integer_constant_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex switch_stmt = statements.parse_statement()!!;
-		assert(switch_stmt.tag(&p.tree).kind == tree::NodeKind.SWITCH_STMT);
+		assert(switch_stmt.kind(&p.tree) == tree::NodeKind.SWITCH_STMT);
 		tree::NodeCompoundStmt switch_body = switch_stmt.get(&p.tree).switch_stmt.body.get(&p.tree).compound_stmt;
 		assert(switch_body.body.len == 2);
 		tree::Node first_case = switch_body.body[0].get(&p.tree);
 		assert(first_case.kind == tree::NodeKind.CASE_STMT);
 		type_store::NodeIndex fallthrough_stmt = first_case.case_stmt.body;
-		assert(fallthrough_stmt.tag(&p.tree).kind == tree::NodeKind.NULL_STMT);
+		assert(fallthrough_stmt.kind(&p.tree) == tree::NodeKind.NULL_STMT);
 		attribute_map::AttrRef[] attrs = p.tree.attr_map.attrs(fallthrough_stmt.pack());
 		assert(attrs.len == 1);
 		assert(p.tree.attr_map.get(attrs[0]).args.tag == attribute::AttributeTag.FALLTHROUGH);
@@ -911,9 +943,10 @@ fn void fallthrough_statement_attribute_outside_switch_is_diagnosed() @test
 		source::Source src = comp.add_source_from_buffer("stmt-fallthrough.c", "__attribute__((fallthrough));")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex stmt = statements.parse_statement()!!;
-		assert(stmt.tag(&p.tree).kind == tree::NodeKind.NULL_STMT);
+		assert(stmt.kind(&p.tree) == tree::NodeKind.NULL_STMT);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "'fallthrough' attribute outside a switch statement");
 		p.free(); pp.free(); comp.free(); d.free();
@@ -1021,9 +1054,10 @@ fn void label_interposed_gnu_attributes_attach_to_labeled_node() @test
 		source::Source src = comp.add_source_from_buffer("label-attrs.c", "__attribute__((unused)) target: __attribute__((unused)) ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		type_store::NodeIndex labeled = statements.parse_statement()!!;
-		assert(labeled.tag(&p.tree).kind == tree::NodeKind.LABELED_STMT);
+		assert(labeled.kind(&p.tree) == tree::NodeKind.LABELED_STMT);
 		attribute_map::AttrRef[] attrs = p.tree.attr_map.attrs(labeled.pack());
 		assert(attrs.len == 2, "leading and label-interposed attributes must both attach to the label");
 		assert(p.tree.attr_map.get(attrs[0]).args.tag == attribute::AttributeTag.UNUSED);
@@ -1050,12 +1084,13 @@ fn void malformed_statement_attributes_and_scopes_are_restored() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
 		statements.parse_body()!!;
 		assert(p.symbols.active_len == original_scopes);
 		assert(p.is_at(tokenizer::TokenId.SEMICOLON), "recovery must leave the following statement at the cursor");
 		type_store::NodeIndex next = statements.parse_statement()!!;
-		assert(next.tag(&p.tree).kind == tree::NodeKind.NULL_STMT);
+		assert(next.kind(&p.tree) == tree::NodeKind.NULL_STMT);
 		assert(p.tree.attr_map.attrs(next.pack()).len == 0, "failed statement attributes must not leak");
 		assert(p.symbols.active_len == original_scopes);
 		p.free(); pp.free(); comp.free(); d.free();
@@ -1077,20 +1112,19 @@ fn void gnu_statement_expression_wraps_compound_and_uses_final_expression_type()
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		p.set_function_context({ .active = true });
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .context = &statements,
-			.primary = &fixture_postfix_primary, .expression = &fixture_postfix_expression,
-			.statement_expression_context = &statements,
-			.statement_expression_body = &fixture_statement_expression_body, .has_statement_expression_body = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
+		parser_postfix::CallbackParts postfix_parts = { .context = &statements, .primary = &fixture_postfix_primary, .nested = &fixture_postfix_expression, .statement_expression_context = &statements, .statement_expression_body = &fixture_statement_expression_body };
+		parser_postfix::PostfixParser postfix = { .parser = &p, .parts = &postfix_parts, .statement_body = &postfix_parts };
 		parser_result::Result result = postfix.parse()!!;
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.STMT_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.STMT_EXPR);
 		assert(result.qt.eql(type_store::INT, &comp));
 		tree::Node statement_expr = result.node.get(&p.tree);
 		assert(statement_expr.unary.qt.eql(type_store::INT, &comp));
-		assert(statement_expr.unary.operand.tag(&p.tree).kind == tree::NodeKind.COMPOUND_STMT);
+		assert(statement_expr.unary.operand.kind(&p.tree) == tree::NodeKind.COMPOUND_STMT);
 		tree::NodeCompoundStmt body = statement_expr.unary.operand.get(&p.tree).compound_stmt;
 		assert(body.body.len == 1);
-		assert(body.body[0].tag(&p.tree).kind == tree::NodeKind.INT_LITERAL);
+		assert(body.body[0].kind(&p.tree) == tree::NodeKind.INT_LITERAL);
 		assert(p.at_eof());
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "use of GNU statement expression extension");
@@ -1114,11 +1148,10 @@ fn void gnu_statement_expression_file_scope_diagnostics_are_ordered() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .context = &statements,
-			.primary = &fixture_postfix_primary, .expression = &fixture_postfix_expression,
-			.statement_expression_context = &statements,
-			.statement_expression_body = &fixture_statement_expression_body, .has_statement_expression_body = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
+		parser_postfix::CallbackParts postfix_parts = { .context = &statements, .primary = &fixture_postfix_primary, .nested = &fixture_postfix_expression, .statement_expression_context = &statements, .statement_expression_body = &fixture_statement_expression_body };
+		parser_postfix::PostfixParser postfix = { .parser = &p, .parts = &postfix_parts, .statement_body = &postfix_parts };
 		assert(@catch(postfix.parse()) == parser_postfix::PARSING_FAILED);
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[0].text, "use of GNU statement expression extension");
@@ -1142,15 +1175,14 @@ fn void gnu_statement_expression_without_final_expression_has_void_type() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		p.set_function_context({ .active = true });
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .context = &statements,
-			.primary = &fixture_postfix_primary, .expression = &fixture_postfix_expression,
-			.statement_expression_context = &statements,
-			.statement_expression_body = &fixture_statement_expression_body, .has_statement_expression_body = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
+		parser_postfix::CallbackParts postfix_parts = { .context = &statements, .primary = &fixture_postfix_primary, .nested = &fixture_postfix_expression, .statement_expression_context = &statements, .statement_expression_body = &fixture_statement_expression_body };
+		parser_postfix::PostfixParser postfix = { .parser = &p, .parts = &postfix_parts, .statement_body = &postfix_parts };
 		parser_result::Result result = postfix.parse()!!;
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.STMT_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.STMT_EXPR);
 		assert(result.qt.eql(type_store::VOID, &comp));
-		assert(result.node.get(&p.tree).unary.operand.tag(&p.tree).kind == tree::NodeKind.COMPOUND_STMT);
+		assert(result.node.get(&p.tree).unary.operand.kind(&p.tree) == tree::NodeKind.COMPOUND_STMT);
 		assert(p.at_eof());
 		p.free(); pp.free(); comp.free(); d.free();
 	}
@@ -1175,11 +1207,10 @@ fn void malformed_gnu_statement_expression_restores_attribute_and_scope_state() 
 		usz original_attributes = (usz)p.tree.attr_map.attributes.len();
 		usz original_extra = (usz)p.tree.attr_map.extra.len();
 		usz original_decl_attrs = (usz)p.tree.attr_map.decl_attrs.len();
-		parser_statement::StatementParser statements = { .parser = &p, .expression = &fixture_expression };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .context = &statements,
-			.primary = &fixture_postfix_primary, .expression = &fixture_postfix_expression,
-			.statement_expression_context = &statements,
-			.statement_expression_body = &fixture_statement_expression_body, .has_statement_expression_body = true };
+		StatementGrammar statements_grammar = { .expr = &fixture_expression };
+		parser_statement::StatementParser statements = { .parser = &p, .expressions = &statements_grammar, .local_declarations = &statements_grammar };
+		parser_postfix::CallbackParts postfix_parts = { .context = &statements, .primary = &fixture_postfix_primary, .nested = &fixture_postfix_expression, .statement_expression_context = &statements, .statement_expression_body = &fixture_statement_expression_body };
+		parser_postfix::PostfixParser postfix = { .parser = &p, .parts = &postfix_parts, .statement_body = &postfix_parts };
 		assert(@catch(postfix.parse()) == parser_postfix::PARSING_FAILED);
 		assert(p.symbols.active_len == original_scopes);
 		assert(p.tree.attr_map.attributes.len() == (sz)original_attributes);
@@ -1192,17 +1223,18 @@ fn void malformed_gnu_statement_expression_restores_attribute_and_scope_state() 
 
 // Probe for pragma replay between compound-statement items. Preprocessing reports
 // HANDLED so no unknown-pragma note is emitted; the parser callback is what counts.
-struct PragmaCompoundProbe
+<* Pragma handler counting parser replays; preprocessing just accepts the pragma. *>
+struct PragmaCompoundProbe (pragma::IPragma)
 {
 	uint parse_calls;
 }
 
-fn pragma::PragmaResult pragma_compound_preprocess(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx)
-=> pragma::PragmaResult.HANDLED;
+fn pragma::PragmaResult PragmaCompoundProbe.preprocessor_handler(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic
+	=> pragma::PragmaResult.HANDLED;
 
-fn pragma::PragmaResult pragma_compound_parse(void* ctx, void* parser, tokens::TokenIndex start_idx)
+fn pragma::PragmaResult PragmaCompoundProbe.parser_handler(&self, parser::Parser* p, tokens::TokenIndex start_idx) @dynamic
 {
-	((PragmaCompoundProbe*)ctx).parse_calls++;
+	self.parse_calls++;
 	return pragma::PragmaResult.HANDLED;
 }
 
@@ -1217,8 +1249,8 @@ fn void parser_replays_pragma_inside_compound_statement() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		PragmaCompoundProbe probe = {};
-		pragma::Handler h = { .ctx = (void*)&probe, .preprocess = &pragma_compound_preprocess, .parser = &pragma_compound_parse };
-		assert(comp.pragmas.add("probe", h));
+		bool added_probe = comp.pragmas.add("probe", &probe);
+		assert(added_probe);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		source::Source src = comp.add_source_from_buffer("pragma_compound.c",
 			"void f(void)\n{\nint x;\n#pragma probe\nx = 1;\n#pragma probe\n}\n")!!;
@@ -1241,4 +1273,35 @@ fn void parser_replays_pragma_inside_compound_statement() @test
 		parsed.free(); p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);
+}
+
+alias StmtExprFn = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
+alias StmtIceFn = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode mode, bool eval);
+alias StmtLocalFn = fn type_store::NodeIndex?(void* context, parser::Parser* p);
+
+<* Statement grammar over this file's callback fixtures; a null callback is parser::HOOK_ABSENT. *>
+struct StatementGrammar (parser::IExpressionGrammar, parser_statement::ILocalDeclarationGrammar)
+{
+	void* context;
+	StmtExprFn expr;
+	StmtIceFn ice;
+	void* local_context;
+	StmtLocalFn local;
+}
+
+fn parser_result::Result? StatementGrammar.expression(&self, parser::Parser* p, bool eval) @dynamic
+{
+	if (!self.expr) return parser::HOOK_ABSENT~;
+	return self.expr(self.context, p, eval);
+}
+fn parser_result::Result? StatementGrammar.integer_constant_expression(&self, parser::Parser* p,
+	parser::ConstDeclFoldingMode mode, bool eval) @dynamic
+{
+	if (!self.ice) return parser::HOOK_ABSENT~;
+	return self.ice(self.context, p, mode, eval);
+}
+fn type_store::NodeIndex? StatementGrammar.parse_local_declaration(&self, parser::Parser* p) @dynamic
+{
+	if (!self.local) return parser::HOOK_ABSENT~;
+	return self.local(self.local_context, p);
 }

@@ -51,7 +51,7 @@
 // Printing casts to f64 first (Zig does), so it needs only from_f128(.., F64).
 //
 // The integrator (stage 2) makes value.c3's float branches forward here, e.g.
-// `if (scalar_kind.is_float()) return float_value::add(res, lhs, rhs, qt, comp);`
+// `if (scalar_kind.is_float) return float_value::add(res, lhs, rhs, qt, comp);`
 // (aro::value and aro::float_value import each other; c3c 0.8.5 accepts
 // cyclic module imports), and writes test/c3/float_value_tests.c3.
 //

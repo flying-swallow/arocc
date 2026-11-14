@@ -1,0 +1,4 @@
+attribute_pack_layout.c result=pass
+pack_change_inside_record_default.c result=pass
+pack_change_inside_record_clang.c result=pass
+pack_change_inside_record_gcc.c result=pass

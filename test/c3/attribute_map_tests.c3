@@ -44,15 +44,25 @@ fn void compact_payload_round_trips() @test
 		assert(decoded.args.deprecated.has_msg && decoded.args.deprecated.msg == "old");
 		assert(decoded.args.deprecated.has_replacement && decoded.args.deprecated.replacement == "new");
 		Attribute deprecated_reason = attr({ .tag = DEPRECATED, .deprecated = { .has_msg = true, .msg = "legacy" } });
-		assert(map.get(map.put(deprecated_reason)).args.deprecated.msg == "legacy");
+		AttrRef deprecated_reason_ref = map.put(deprecated_reason);
+		decoded = map.get(deprecated_reason_ref);
+		assert(decoded.args.deprecated.msg == "legacy");
 		Attribute unavailable = attr({ .tag = UNAVAILABLE, .unavailable = { .has_msg = true, .msg = "unsupported" } });
-		assert(map.get(map.put(unavailable)).args.unavailable.msg == "unsupported");
+		AttrRef unavailable_ref = map.put(unavailable);
+		decoded = map.get(unavailable_ref);
+		assert(decoded.args.unavailable.msg == "unsupported");
 		Attribute warning = attr({ .tag = WARNING, .warning = "warn" });
-		assert(map.get(map.put(warning)).args.warning == "warn");
+		AttrRef warning_ref = map.put(warning);
+		decoded = map.get(warning_ref);
+		assert(decoded.args.warning == "warn");
 		Attribute error = attr({ .tag = ERROR, .error_msg = "error" });
-		assert(map.get(map.put(error)).args.error_msg == "error");
+		AttrRef error_ref = map.put(error);
+		decoded = map.get(error_ref);
+		assert(decoded.args.error_msg == "error");
 		Attribute warn_result = attr({ .tag = WARN_UNUSED_RESULT, .warn_unused_result = { .has_msg = true, .msg = "check" } });
-		assert(map.get(map.put(warn_result)).args.warn_unused_result.msg == "check");
+		AttrRef warn_result_ref = map.put(warn_result);
+		decoded = map.get(warn_result_ref);
+		assert(decoded.args.warn_unused_result.msg == "check");
 
 		Attribute nn = attr({ .tag = NONNULL, .nonnull = { (uint)2, (uint)5, (uint)9 } });
 		AttrRef nn_ref = map.put(nn);
@@ -61,11 +71,15 @@ fn void compact_payload_round_trips() @test
 		check(decoded.args.nonnull[0], 2);
 		check(decoded.args.nonnull[2], 9);
 		Attribute nn_zero = attr({ .tag = NONNULL, .nonnull = {} });
-		assert(map.get(map.put(nn_zero)).args.nonnull.len == 0);
+		AttrRef nn_zero_ref = map.put(nn_zero);
+		decoded = map.get(nn_zero_ref);
+		assert(decoded.args.nonnull.len == 0);
 		Attribute nn_one = attr({ .tag = NONNULL, .nonnull = { (uint)7 } });
 		check(map.get(map.put(nn_one)).args.nonnull[0], 7);
 		Attribute hidden = attr({ .tag = VISIBILITY, .visibility = HIDDEN });
-		assert(map.get(map.put(hidden)).args.visibility == HIDDEN);
+		AttrRef hidden_ref = map.put(hidden);
+		decoded = map.get(hidden_ref);
+		assert(decoded.args.visibility == HIDDEN);
 		Attribute cleanup = attr({ .tag = CLEANUP, .cleanup = { .function = (NodeIndex)23 } });
 		check(map.get(map.put(cleanup)).args.cleanup.function, 23);
 

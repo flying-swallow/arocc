@@ -171,9 +171,9 @@ fn void parser_starts_at_index_zero_and_bounds_empty_and_eof_buffers() @test
 		empty.bind_finalized_tokens();
 		assert(empty.current() == 0);
 		assert(empty.at_eof());
-		assert(!empty.peek_index().has_value);
-		assert(!empty.peek().has_value);
-		assert(!empty.peek_text().has_value);
+		assert(@catch(empty.peek_index()) == parser::NO_TOKEN);
+		assert(@catch(empty.peek()) == parser::NO_TOKEN);
+		assert(@catch(empty.peek_text()) == parser::NO_TOKEN);
 		empty.advance();
 		assert(empty.current() == 0);
 		empty.free();
@@ -184,8 +184,8 @@ fn void parser_starts_at_index_zero_and_bounds_empty_and_eof_buffers() @test
 		// The EOF token prevents a declaration callback from running, so
 		// exercise the bounded cursor directly against the borrowed slice.
 		p.bind_finalized_tokens();
-		assert(p.peek_index().has_value && p.peek_index().value == 0);
-		assert(p.peek().has_value && p.peek().value.id == EOF);
+		assert(p.peek_index()!! == 0);
+		assert(p.peek()!!.id == EOF);
 		check_eof_bounds(null, &p)!!;
 		Tree result = p.parse()!!;
 		result.free();
@@ -215,12 +215,9 @@ fn void parser_eat_and_expect_preserve_cursor_on_mismatch() @test
 		Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		assert(p.peek_text().has_value);
-		test::eq(p.peek_text().value, "name");
-		TokenIndexOption mismatch = p.eat(SEMICOLON);
-		assert(!mismatch.has_value && p.current() == 0);
-		TokenIndexOption found = p.eat(IDENTIFIER);
-		assert(found.has_value && found.value == 0 && p.current() == 1);
+		test::eq(p.peek_text()!!, "name");
+		assert(@catch(p.eat(SEMICOLON)) == parser::NO_TOKEN && p.current() == 0);
+		assert(p.eat(IDENTIFIER)!! == 0 && p.current() == 1);
 		assert(@catch(p.expect(R_PAREN)) == parser::PARSING_FAILED);
 		assert(p.current() == 1);
 		assert(d.messages.len() == 1);
@@ -703,9 +700,10 @@ fn void declaration_body_installs_only_supplied_function_context_and_restores_it
 		Source src = comp.add_source_from_buffer("function-context.c", "{ 1; } { 2; }\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		FunctionContextBodyCheck check = {};
+		CheckExpressions check_expressions = { &check };
 		parser_declaration::DeclarationParser declarations = {
 			.context = &check,
-			.statements = { .context = &check, .expression = &inspect_function_context_body },
+			.statements = { .expressions = &check_expressions },
 			.function_return_qt = type_store::VOID,
 			.function_context = { .active = true, .variadic = true, .named_param_count = 4 },
 			.has_function_context = false,
@@ -841,8 +839,8 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 		type_store::FuncParam[1] params = { { .qt = type_store::INT } };
 		VaPackPostfixCheck check = { .callee_qt = comp.type_store.put(type_store::type_func(
 			type_store::INT, type_store::FuncKind.VARIADIC, params[..])) };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .context = &check,
-			.primary = &va_pack_test_primary, .expression = &va_pack_test_expression };
+		parser_postfix::CallbackParts postfix_parts = { .context = &check, .primary = &va_pack_test_primary, .nested = &va_pack_test_expression };
+		parser_postfix::PostfixParser postfix = { .parser = &p, .parts = &postfix_parts };
 		parser::VaArgPackCallContext enclosing = { .active = true, .variadic = false, .typed = true };
 		p.va_arg_pack_call = enclosing;
 
@@ -885,3 +883,12 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 	}
 	assert(ta.allocation_count() == 0);
 }
+
+<* Statement expressions routed to `inspect_function_context_body` with the check as context. *>
+struct CheckExpressions (parser::IExpressionGrammar)
+{
+	FunctionContextBodyCheck* check;
+}
+
+fn parser_result::Result? CheckExpressions.expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> inspect_function_context_body(self.check, p, eval);

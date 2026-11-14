@@ -1,0 +1,228 @@
+// Emit lowered x86_64 instructions as GNU assembler text in Intel syntax
+// (the operand order of the Zig encoding table). Every instruction is checked
+// against the ported `encodings.zon` rows first. emit_object.c3 encodes the
+// same lowered rows into object bytes and resolves their fixups.
+module aro::backend::x86_64;
+import aro::backend::ir, std::collections::list, std::core::dstring, std::io;
+
+fn String size_keyword(ushort bits)
+{
+	switch (bits)
+	{
+		case 8: return "byte ptr ";
+		case 16: return "word ptr ";
+		case 32: return "dword ptr ";
+		case 64: return "qword ptr ";
+		default: return "";
+	}
+}
+
+fn void write_operand(DString* out, Operand op)
+{
+	switch (op.kind)
+	{
+		case NONE: break;
+		case REG: out.append_string(op.reg.name);
+		case IMM: out.appendf("%d", op.imm);
+		case TARGET:
+			out.append_string(op.target);
+			if (op.external) out.append_string("@PLT");
+		case MEM:
+			Memory m = op.mem;
+			out.append_string(size_keyword(m.bits));
+			switch (m.base_kind)
+			{
+				case REG:
+					out.appendf("[%s", m.base.name);
+					if (m.disp > 0) out.appendf(" + %d", m.disp);
+					if (m.disp < 0) out.appendf(" - %d", -(long)m.disp);
+					out.append_char(']');
+				case SYMBOL:
+				case LABEL:
+					out.appendf("[rip + %s", m.name);
+					if (m.gotpc) out.append_string("@GOTPCREL");
+					if (m.disp > 0) out.appendf(" + %d", m.disp);
+					if (m.disp < 0) out.appendf(" - %d", -(long)m.disp);
+					out.append_char(']');
+			}
+	}
+}
+
+fn void write_linkage(DString* out, ir::Linkage linkage, String name)
+{
+	switch (linkage)
+	{
+		case EXTERNAL: out.appendf("\t.globl %s\n", name);
+		case INTERNAL: out.appendf("\t.local %s\n", name);
+	}
+}
+
+fn String data_section_name(ir::DataSection section)
+{
+	switch (section)
+	{
+		case EXTERN: return "";
+		case DATA: return ".data";
+		case RODATA: return ".rodata";
+		case BSS: return ".bss";
+		case COMMON: return "";
+	}
+}
+
+fn void write_byte_range(DString* out, char[] bytes, usz start, usz end)
+{
+	if (start >= end) return;
+	out.append_string("\t.byte ");
+	for (usz i = start; i < end; i++)
+	{
+		if (i != start) out.append_string(", ");
+		out.appendf("%d", (uint)bytes[i]);
+	}
+	out.append_char('\n');
+}
+
+fn void write_global_data(DString* out, ir::GlobalData* global)
+{
+	usz pos = 0;
+	ulong last_offset = 0;
+	bool have_last = false;
+	foreach (relocation : global.relocs)
+	{
+		assert(!have_last || relocation.offset >= last_offset, "global relocations are not sorted by offset");
+		last_offset = relocation.offset;
+		have_last = true;
+		usz relocation_pos = (usz)relocation.offset;
+		assert(relocation_pos >= pos && relocation_pos + 8 <= global.bytes.len, "global relocation is outside serialized data");
+		write_byte_range(out, global.bytes, pos, relocation_pos);
+		out.appendf("\t.quad %s", relocation.symbol);
+		if (relocation.addend > 0) out.appendf("+%d", relocation.addend);
+		if (relocation.addend < 0) out.appendf("%d", relocation.addend);
+		out.append_char('\n');
+		pos = relocation_pos + 8;
+	}
+	write_byte_range(out, global.bytes, pos, global.bytes.len);
+	if ((ulong)global.bytes.len < global.size) out.appendf("\t.zero %d\n", global.size - (ulong)global.bytes.len);
+}
+
+fn void write_global_section(DString* out, ir::Decl* decl)
+{
+	ir::GlobalData* global = &decl.global;
+	if (!global.own_section)
+	{
+		out.appendf("\t.section %s\n", data_section_name(global.section));
+		return;
+	}
+	switch (global.section)
+	{
+		case EXTERN: unreachable("external globals do not have a section");
+		case DATA: out.appendf("\t.section .data.%s,\"aw\",@progbits\n", decl.name);
+		case RODATA: out.append_string("\t.section .rodata\n");
+		case BSS: out.appendf("\t.section .bss.%s,\"aw\",@nobits\n", decl.name);
+		case COMMON: unreachable("common globals do not have a section");
+	}
+}
+
+fn void write_global_text(DString* out, ir::Decl* decl)
+{
+	ir::GlobalData* global = &decl.global;
+	if (!decl.is_definition()) return;
+	if (global.section == ir::DataSection.COMMON)
+	{
+		if (decl.linkage == ir::Linkage.INTERNAL) write_linkage(out, decl.linkage, decl.name);
+		uint align = global.align > 0 ? global.align : 1;
+		out.appendf("\t.comm %s, %d, %d\n\n", decl.name, global.size, align);
+		return;
+	}
+	write_linkage(out, decl.linkage, decl.name);
+	write_global_section(out, decl);
+	out.appendf("\t.type %s, @object\n\t.size %s, %d\n", decl.name, decl.name, global.size);
+	uint align = global.align > 0 ? global.align : 1;
+	out.appendf("\t.align %d\n", align);
+	out.appendf("%s:\n", decl.name);
+	if (global.section == ir::DataSection.BSS) { out.appendf("\t.zero %d\n", global.size); }
+	else { write_global_data(out, global); }
+	out.append_char('\n');
+}
+
+<* Append the function's lines; NO_ENCODING if an instruction has no table row. *>
+fn void? Lowering.write_text(&self, DString* out)
+{
+	ir::Decl* decl = self.decl;
+	out.append_string("\t.text\n");
+	write_linkage(out, decl.linkage, decl.name);
+	out.appendf("\t.p2align 4\n\t.type %s, @function\n%s:\n", decl.name, decl.name);
+	foreach (&line : self.lines)
+	{
+		if (line.is_label)
+		{
+			out.appendf("%s:\n", line.label);
+			continue;
+		}
+		if (catch find(line.mnemonic, line.ops[:line.op_count]))
+		{
+			DString shown;
+			shown.init(tmem);
+			foreach (i, op : line.ops[:line.op_count]) { if (i) shown.append_string(", "); write_operand(&shown, op); }
+			self.fail("x86_64 encoding table has no form of '%s %s'", line.mnemonic.name, shown.str_view())!;
+		}
+		out.appendf("\t%s", line.mnemonic.name);
+		foreach (i, op : line.ops[:line.op_count])
+		{
+			out.append_string(i == 0 ? " " : ", ");
+			write_operand(out, op);
+		}
+		out.append_char('\n');
+	}
+	out.appendf("\t.size %s, .-%s\n\n", decl.name, decl.name);
+}
+
+<*
+ Lower every declaration of `ir` to GNU assembler text (Intel syntax),
+ recording per-function failures in `errors` and continuing past them like
+ the Zig Renderer. Returns the text (allocated with `allocator`) or LOWER_FAIL.
+ @return? ir::LOWER_FAIL
+*>
+fn String? render_asm(ir::Ir* ir, Allocator allocator, ir::ErrorList* errors, bool spill_all = false)
+{
+	DString out;
+	out.init(allocator);
+	@pool()
+	{
+		Lowering lowering = { .ir = ir, .errors = errors, .spill_all = spill_all };
+		lowering.strings.init(tmem);
+		lowering.lines.init(tmem);
+		out.append_string("\t.intel_syntax noprefix\n");
+		foreach (&decl : ir.decls)
+		{
+			if (decl.kind == ir::DeclKind.GLOBAL) continue;
+			if (!decl.is_definition()) continue;
+			if (catch f = lowering.lower_decl(decl))
+			{
+				if (f != ir::LOWER_FAIL) { out.free(); return f~; }
+				continue;
+			}
+			if (catch f = lowering.write_text(&out))
+			{
+				if (f != ir::LOWER_FAIL) { out.free(); return f~; }
+			}
+		}
+		foreach (&decl : ir.decls)
+		{
+			if (decl.kind == ir::DeclKind.GLOBAL) write_global_text(&out, decl);
+		}
+		if (lowering.strings.len() != 0)
+		{
+			out.append_string("\t.section .rodata\n");
+			foreach (s : lowering.strings)
+			{
+				out.appendf("%s:\n\t.byte ", s.label);
+				foreach (i, b : s.bytes) { if (i) out.append_string(", "); out.appendf("%d", b); }
+				out.append_char('\n');
+			}
+		}
+	};
+	out.append_string("\t.section .note.GNU-stack,\"\",@progbits\n");
+	defer out.free();
+	if (errors.len() != 0) return ir::LOWER_FAIL~;
+	return out.copy_str(allocator);
+}

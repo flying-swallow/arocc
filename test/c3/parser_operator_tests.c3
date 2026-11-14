@@ -6,7 +6,7 @@
 // parser_expression owns grouping and the built-in unary operator productions.
 // Pointer/null cases still require seeded pointer values and types.
 module parser_operator_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::float_value, aro::value_interner;
 import aro::lang_opts;
@@ -70,7 +70,7 @@ fn parser_result::Result? parse_seeded_primary(void* context, parser::Parser* p,
 // Source-derived: arithmetic expectations use Value's wrapping integer
 // contract; overflow is reported by Value.add/sub/mul as true. Exact integer
 // and IEEE vectors remain in integer_value_tests.c3 and float_vector_tests.c3.
-fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_none = false, bool unsigned_y = false, bool eval = true, bool const_x = false, bool expect_failure = false, bool expect_rhs_cast = false, bool expect_pointer = false, bool expect_size = false, uint expected_warnings = uint::max, type_store::QualType y_type = type_store::INT, long y_number = -1, bool check_shift_rhs_promotion = false, type_store::QualType shift_rhs_qt = type_store::INT, tree::CastKind shift_rhs_cast_kind = tree::CastKind.LVAL_TO_RVAL, String expected_failure_message = "", type_store::QualType x_type = type_store::INT, long x_number = 2147483647)
+fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_none = false, bool unsigned_y = false, bool eval = true, bool const_x = false, bool expect_failure = false, bool expect_rhs_cast = false, bool expect_pointer = false, bool expect_size = false, uint expected_warnings = uint::max, type_store::QualType y_type = type_store::INT, long y_number = -1, bool check_shift_rhs_promotion = false, type_store::QualType shift_rhs_qt = type_store::INT, tree::CastKind shift_rhs_cast_kind = tree::CastKind.LVAL_TO_RVAL, String expected_failure_message = "", type_store::QualType x_type = type_store::INT, long x_number = 2147483647, bool volatile_x = false, bool const_y = false, bool volatile_y = false, bool atomic_y = false)
 {
 	TrackingAllocator ta;
 	ta.init(mem);
@@ -94,8 +94,12 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 		Tree tree;
 		tree.init(&comp, pp.tokens.array_view());
 		type_store::QualType x_qt = const_x ? x_type.with_qualifiers({ .is_const = true }) : x_type;
+		if (volatile_x) x_qt.is_volatile = true;
 		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = x_qt } });
 		type_store::QualType y_qt = unsigned_y && y_type.eql(type_store::INT, &comp) ? type_store::UINT : y_type;
+		if (atomic_y) y_qt = comp.type_store.put(type_store::type_atomic(y_qt));
+		if (const_y) y_qt.is_const = true;
+		if (volatile_y) y_qt.is_volatile = true;
 		value::Value y_val = unsigned_y ? value::int_u64((ulong)(y_number < 0 ? 0xFFFF_FFFF : y_number), &comp) : value::int_i64(y_number < 0 ? 1 : y_number, &comp);
 		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = y_qt } });
 		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = x_qt, .node = xd, .val = value::int_i64(x_number, &comp) });
@@ -104,7 +108,8 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
 		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_primary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result? parsed = expression.parse(tokens::PREC_ANY, eval);
 		if (catch parse_error = parsed)
 		{
@@ -116,7 +121,7 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 			assert(!expect_failure, "invalid operator expression unexpectedly parsed");
 			parser_result::Result result = parsed;
 			assert(p.at_eof(), "operator fixture left trailing tokens");
-			assert(result.node.tag(&p.tree).kind == kind);
+			assert(result.node.kind(&p.tree) == kind);
 			type_store::QualType expected_qt = type_store::INT;
 			if (expect_pointer) expected_qt = comp.type_store.put(type_store::type_pointer(type_store::INT));
 			if (expect_size) expected_qt = comp.type_store.size;
@@ -157,7 +162,14 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 				if (lhs.kind == tree::NodeKind.CAST) { assert(lhs.cast.qt.eql(type_store::INT, &comp)); }
 				else { assert(lhs.literal.qt.eql(type_store::INT, &comp)); }
 			}
-			if (want_none || !eval) { assert(result.val.is_none()); }
+			if (!eval || want_none) { assert(result.val.is_none()); }
+			else if (expect_pointer)
+			{
+				assert(result.val.is(value_interner::InternerKeyTag.POINTER, &comp));
+				value_interner::InternerKey key = comp.interner.get(result.val.ref());
+				assert(key.pointer.node == (uint)xd);
+				assert(value::from_ref(key.pointer.offset).is_zero(&comp));
+			}
 			else { assert(result.val.to_i64(&comp)!! == want); }
 		}
 		if (expected_warnings != uint::max) test::eq(d.warnings, expected_warnings);
@@ -285,7 +297,8 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		PointerContext context = { .symbols = &symbols, .pointer_name = pointer_name, .second_pointer_name = second_pointer_name };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_pointer_primary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_pointer_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result? maybe_result = expression.parse();
 		if (catch parse_error = maybe_result)
 		{
@@ -297,7 +310,7 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 			assert(!expect_failure, "invalid pointer operator expression unexpectedly parsed");
 			parser_result::Result result = maybe_result;
 			assert(p.at_eof(), "pointer operator fixture left trailing tokens");
-			assert(result.node.tag(&p.tree).kind == kind);
+			assert(result.node.kind(&p.tree) == kind);
 			type_store::QualType actual_expected_qt = expect_ptrdiff ? comp.type_store.ptrdiff : expected_qt;
 			assert(result.qt.eql(actual_expected_qt, &comp));
 			value::Value expected_value = value::from_bool(expected_boolean);
@@ -323,7 +336,7 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 				assert(d.messages[0].kind == diagnostics::MessageKind.WARNING);
 				DString expected_message;
 				expected_message.init(tmem);
-				expected_message.appendf("comparison of distinct pointer types (%s and %s)", pointer_qt.tprint(&comp), second_pointer_qt.tprint(&comp));
+				expected_message.appendf("comparison of distinct pointer types ('%s' and '%s')", pointer_qt.tprint(&comp), second_pointer_qt.tprint(&comp));
 				test::eq(d.messages[0].text, expected_message.str_view());
 			}
 		}
@@ -394,10 +407,12 @@ fn void signed_unsigned_and_comparison_operators() @test
 	check_int_expr("2 % 2\n", tree::NodeKind.MOD_EXPR, 0);
 	// Invalid integer-only operators report source operand types even after
 	// integer promotion and usual arithmetic conversion change the working types.
-	check_int_expr("x & y\n", tree::NodeKind.BIT_AND_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression (unsigned char and float)", type_store::UCHAR, 1);
-	check_int_expr("x % y\n", tree::NodeKind.MOD_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression (unsigned char and float)", type_store::UCHAR, 1);
-	check_int_expr("x &= y\n", tree::NodeKind.BIT_AND_ASSIGN_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression (unsigned char and float)", type_store::UCHAR, 1);
-	check_int_expr("x %= y\n", tree::NodeKind.MOD_ASSIGN_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression (unsigned char and float)", type_store::UCHAR, 1);
+	check_int_expr("x & y\n", tree::NodeKind.BIT_AND_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression ('unsigned char' and 'float')", type_store::UCHAR, 1);
+	check_int_expr("x % y\n", tree::NodeKind.MOD_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression ('unsigned char' and 'float')", type_store::UCHAR, 1);
+	check_int_expr("x &= y\n", tree::NodeKind.BIT_AND_ASSIGN_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression ('unsigned char' and 'float')", type_store::UCHAR, 1);
+	check_int_expr("x %= y\n", tree::NodeKind.MOD_ASSIGN_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::FLOAT, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression ('unsigned char' and 'float')", type_store::UCHAR, 1);
+	check_int_expr("x << y\n", tree::NodeKind.SHL_EXPR, 0, false, false, false, false, true, false, false, false, uint::max, type_store::LONG, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression ('float' and '_Atomic(long)')", type_store::FLOAT, 1, false, false, false, true);
+	check_int_expr("x << y\n", tree::NodeKind.SHL_EXPR, 0, false, false, true, true, true, false, false, false, uint::max, type_store::LONG, 1, false, type_store::INT, tree::CastKind.LVAL_TO_RVAL, "invalid operands to binary expression ('const volatile float' and 'const volatile _Atomic(long)')", type_store::FLOAT, 1, true, true, true, true);
 	check_int_expr("2 << 0\n", tree::NodeKind.SHL_EXPR, 2);
 	check_int_expr("2 >> 1\n", tree::NodeKind.SHR_EXPR, 1);
 	// Source-derived: Parser.zig diagnoses invalid counts, then retains the
@@ -437,7 +452,8 @@ fn void assignment_and_compound_assignment_shapes() @test
 
 fn void address_dereference_sizeof_and_alignment() @test
 {
-	check_int_expr("&x\n", tree::NodeKind.ADDR_OF_EXPR, 0, true, false, true, false, false, false, true);
+	// x is seeded with scalar value 2147483647; its address remains the declaration at offset zero.
+	check_int_expr("&x\n", tree::NodeKind.ADDR_OF_EXPR, 0, false, false, true, false, false, false, true);
 	check_int_expr("*&x\n", tree::NodeKind.DEREF_EXPR, 0, true);
 	check_int_expr("sizeof x\n", tree::NodeKind.SIZEOF_EXPR, 4, false, false, true, false, false, false, false, true);
 	check_int_expr("__alignof x\n", tree::NodeKind.ALIGNOF_EXPR, 4, false, false, true, false, false, false, false, true, 1);
@@ -501,7 +517,7 @@ fn void const_expression_entry_accepts_integer_expression() @test
 		OperatorContext context = {};
 		parser_result::Result result = p.integer_const_expr_with_primary(&context, &parse_seeded_primary)!!;
 		assert(p.at_eof(), "integer constant expression fixture left trailing tokens");
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.ADD_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(result.qt.eql(type_store::INT, &comp));
 		assert(result.val.to_i64(&comp)!! == 4);
 		p.tree.free();
@@ -574,7 +590,8 @@ fn void primary_callback_fault_is_propagated() @test
 		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		parser_expression::ExpressionParser expression = { .parser = &p, .primary_expression = &fail_primary };
+		parser_postfix::CallbackParts expression_parts = { .operand = &fail_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		fault failure = @catch(expression.parse(tokens::PREC_ANY));
 		assert(failure == PRIMARY_CALLBACK_FAILURE, "primary callback fault was changed by the operator parser");
 		p.tree.free();
@@ -630,10 +647,11 @@ fn void conditional_uses_common_type_of_both_arms() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_primary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result result = expression.parse()!!;
 		assert(p.at_eof(), "conditional expression fixture left trailing tokens");
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.COND_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.COND_EXPR);
 		assert(result.qt.eql(type_store::DOUBLE, &comp));
 		assert(result.val.opt_ref == double_one.opt_ref);
 		Node conditional = result.node.get(&p.tree);
@@ -681,7 +699,8 @@ fn void short_circuit_and_invalid_forms() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		OperatorContext context = {};
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_primary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result? bad = expression.parse();
 		if (catch parse_error = bad) { assert(parse_error == parser_expression::PARSING_FAILED); }
 		else { assert(false, "incomplete binary expression parsed"); }
@@ -727,10 +746,11 @@ fn void float_operands_keep_arithmetic_ast_type() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_primary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result result = expression.parse()!!;
 		assert(p.at_eof(), "floating operator fixture left trailing tokens");
-		assert(result.node.tag(&p.tree).kind == tree::NodeKind.ADD_EXPR);
+		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(result.qt.eql(type_store::DOUBLE, &comp));
 		assert(result.val.to_float(value_interner::KeyFloatTag.F64, &comp).raw() == 0x4000_0000_0000_0000);
 		p.tree.free();
@@ -784,45 +804,46 @@ fn void complex_arithmetic_and_unary_conjugation_fold() @test
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_expression::ExpressionParser expression = { .parser = &p, .context = &context, .primary_expression = &parse_seeded_primary };
+		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
+		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
 		parser_result::Result addition = expression.parse()!!;
 		assert(!p.at_eof(), "complex operator fixture lost the separator");
-		assert(addition.node.tag(&p.tree).kind == tree::NodeKind.ADD_EXPR);
+		assert(addition.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(addition.qt.eql(complex_double, &comp));
 		assert(addition.val.opt_ref == sum_value.opt_ref);
 		p.advance();
 		parser_result::Result conjugation = expression.parse()!!;
 		assert(!p.at_eof(), "complex operator fixture lost the separator after conjugation");
-		assert(conjugation.node.tag(&p.tree).kind == tree::NodeKind.BIT_NOT_EXPR);
+		assert(conjugation.node.kind(&p.tree) == tree::NodeKind.BIT_NOT_EXPR);
 		assert(conjugation.qt.eql(complex_double, &comp));
 		assert(conjugation.val.opt_ref == conjugate_value.opt_ref);
 		p.advance();
 		parser_result::Result imaginary_x = expression.parse()!!;
-		assert(imaginary_x.node.tag(&p.tree).kind == tree::NodeKind.IMAG_EXPR);
+		assert(imaginary_x.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_x.qt.eql(type_store::DOUBLE, &comp));
 		// Source-derived vector: x has real=1.0 and imaginary=2.0.
 		assert(imaginary_x.val.to_float(value_interner::KeyFloatTag.F64, &comp).raw() == 0x4000_0000_0000_0000);
 		p.advance();
 		parser_result::Result real_x = expression.parse()!!;
-		assert(real_x.node.tag(&p.tree).kind == tree::NodeKind.REAL_EXPR);
+		assert(real_x.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_x.qt.eql(type_store::DOUBLE, &comp));
 		assert(real_x.val.to_float(value_interner::KeyFloatTag.F64, &comp).raw() == 0x3FF0_0000_0000_0000);
 		p.advance();
 		parser_result::Result imaginary_y = expression.parse()!!;
-		assert(imaginary_y.node.tag(&p.tree).kind == tree::NodeKind.IMAG_EXPR);
+		assert(imaginary_y.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_y.val.to_float(value_interner::KeyFloatTag.F64, &comp).raw() == 0x4010_0000_0000_0000);
 		p.advance();
 		parser_result::Result real_y = expression.parse()!!;
-		assert(real_y.node.tag(&p.tree).kind == tree::NodeKind.REAL_EXPR);
+		assert(real_y.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_y.val.to_float(value_interner::KeyFloatTag.F64, &comp).raw() == 0x4008_0000_0000_0000);
 		p.advance();
 		parser_result::Result imaginary_int = expression.parse()!!;
-		assert(imaginary_int.node.tag(&p.tree).kind == tree::NodeKind.IMAG_EXPR);
+		assert(imaginary_int.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_int.qt.eql(type_store::INT, &comp));
 		assert(imaginary_int.val.to_i64(&comp)!! == 0);
 		p.advance();
 		parser_result::Result real_int = expression.parse()!!;
-		assert(real_int.node.tag(&p.tree).kind == tree::NodeKind.REAL_EXPR);
+		assert(real_int.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_int.qt.eql(type_store::INT, &comp));
 		assert(real_int.val.to_i64(&comp)!! == 2);
 		assert(p.at_eof(), "GNU real/imag fixture left trailing tokens");

@@ -132,7 +132,7 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 	bool has_vendor = false;
 	String vendor = "";
 	String name_text = spelling;
-	if (syntax == attribute::AttributeSyntax.STANDARD && self.eat(tokenizer::TokenId.COLON_COLON).has_value)
+	if (syntax == attribute::AttributeSyntax.STANDARD && @ok(self.eat(tokenizer::TokenId.COLON_COLON)))
 	{
 		has_vendor = true;
 		vendor = spelling;
@@ -157,7 +157,7 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 		self.report_unknown_attribute(syntax, has_vendor, vendor, name_text, first_tok)!;
 	}
 
-	if (self.eat(tokenizer::TokenId.L_PAREN).has_value)
+	if (@ok(self.eat(tokenizer::TokenId.L_PAREN)))
 	{
 		tokens::TokenIndex arg_opener = self.tok_i - 1;
 		parsed.has_arg_list = true;
@@ -217,7 +217,7 @@ fn void? parser::Parser.parse_attribute_list(&self, attribute::AttributeSyntax s
 	while (!self.is_at(closing))
 	{
 		if (self.at_eof()) return self.expect_closing(closing, opener);
-		if (self.eat(tokenizer::TokenId.COMMA).has_value) continue;
+		if (@ok(self.eat(tokenizer::TokenId.COMMA))) continue;
 		self.parse_attribute(syntax, out)!;
 	}
 	self.expect_closing(closing, opener)!;
@@ -279,9 +279,10 @@ fn bool? parser::Parser.parse_declspec_attribute_specifier(&self, AttributeBuffe
 }
 
 <*
- Parse every immediately adjacent GNU, C23, or declspec attribute specifier.
- The caller can use the returned count/ranges to mark grammar-specific storage
- state and restore it around each declarator or error path.
+ Parse every immediately adjacent calling-convention keyword, GNU, C23, or
+ declspec attribute specifier. The caller can use the returned count/ranges to
+ mark grammar-specific storage state and restore it around each declarator or
+ error path.
 *>
 fn uint? parser::Parser.parse_attribute_specifiers(&self, AttributeBuffer* out)
 {
@@ -292,6 +293,19 @@ fn uint? parser::Parser.parse_attribute_specifiers(&self, AttributeBuffer* out)
 	uint count = 0;
 	while (true)
 	{
+		tokenizer::TokenId id = self.at_eof() ? tokenizer::TokenId.EOF : self.tree.tokens[(usz)self.tok_i].id;
+		if (id == tokenizer::TokenId.KEYWORD_CDECL || id == tokenizer::TokenId.KEYWORD_CDECL2 ||
+			id == tokenizer::TokenId.KEYWORD_FASTCALL || id == tokenizer::TokenId.KEYWORD_FASTCALL2 ||
+			id == tokenizer::TokenId.KEYWORD_REGCALL ||
+			id == tokenizer::TokenId.KEYWORD_STDCALL || id == tokenizer::TokenId.KEYWORD_STDCALL2 ||
+			id == tokenizer::TokenId.KEYWORD_THISCALL || id == tokenizer::TokenId.KEYWORD_THISCALL2 ||
+			id == tokenizer::TokenId.KEYWORD_VECTORCALL || id == tokenizer::TokenId.KEYWORD_VECTORCALL2)
+		{
+			out.add_keyword(id, self.tok_i);
+			self.advance();
+			count++;
+			continue;
+		}
 		if (self.parse_gnu_attribute_specifier(out)!) { count++; continue; }
 		if (self.parse_c23_attribute_specifier(out)!) { count++; continue; }
 		if (self.parse_declspec_attribute_specifier(out)!) { count++; continue; }

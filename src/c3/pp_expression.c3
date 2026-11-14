@@ -428,7 +428,7 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
  reported with NumberValueDiag directly (same texts).
  @return? compilation::FATAL_ERROR
 *>
-fn void? Preprocessor.err_number_value(&self, TokenWithExpansionLocs tok, NumberValueDiag d) @local
+fn void? Preprocessor.err_number_value(&self, TokenWithExpansionLocs tok, NumberValueDiag d)
 {
 	switch (d)
 	{

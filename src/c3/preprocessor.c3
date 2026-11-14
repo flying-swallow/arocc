@@ -663,11 +663,19 @@ fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, Builti
 	self.hideset.init(comp);
 	self.m_times.init(gpa);
 	comp.pragmas.before_preprocess(comp);
-	defer catch self.free();
 
 	if (!options.has_source_epoch)
 	{
-		self.source_epoch = self.builtins.source_epoch(self.builtins.ctx, self)!;
+		SourceEpoch? epoch = self.builtins.source_epoch(self.builtins.ctx, self);
+		if (catch epoch_fault = epoch)
+		{
+			self.free();
+			return epoch_fault~;
+		}
+		else
+		{
+			self.source_epoch = epoch;
+		}
 	}
 	if (options.add_builtin_macros) self.add_builtin_macros();
 }
@@ -1883,7 +1891,7 @@ fn void? Preprocessor.pragma(&self, Tokenizer* tokenizer, TokenWithExpansionLocs
 	expand_buf.push(pragma_tok);
 	expand_buf.push(tokens::from_raw(name));
 	String handler_name = self.tok_slice(name);
-	pragma::Handler? handler = self.comp.pragmas.get(handler_name);
+	pragma::IPragma? handler = self.comp.pragmas.get(handler_name);
 	uint expansion_index = 0;
 	while (true)
 	{
@@ -1899,7 +1907,7 @@ fn void? Preprocessor.pragma(&self, Tokenizer* tokenizer, TokenWithExpansionLocs
 		bool should_expand = true;
 		if (try h = handler)
 		{
-			if (h.should_expand) should_expand = h.should_expand(h.ctx, expansion_index);
+			if (&h.should_expand_token_at_index) should_expand = h.should_expand_token_at_index(expansion_index);
 		}
 		if (should_expand) self.expand_macro_exhaustive(tokenizer, expand_buf, token_index, token_index + 1, NO_PRAGMA)!;
 		expansion_index++;
@@ -1968,8 +1976,8 @@ fn void? Preprocessor.eval_pragma(&self, TokenWithExpansionLocs name_tok, TokenI
 	String name = self.tree_token_slice(self.tokens[name_idx]);
 	if (try handler = self.comp.pragmas.get(name))
 	{
-		if (!handler.preprocess) return;
-		switch (handler.preprocess(handler.ctx, self, name_idx))
+		if (!&handler.preprocessor_handler) return;
+		switch (handler.preprocessor_handler(self, name_idx))
 		{
 			case HANDLED: return;
 			case UNKNOWN: break;

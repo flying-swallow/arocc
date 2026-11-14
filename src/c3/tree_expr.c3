@@ -6,75 +6,12 @@
 //
 // Families handled here: `NodeKind.family == STMT` (LABELED_STMT ..
 // DECL_STMT) and `== EXPR` (every other expression kind).
-// Storage tags and data layouts: docs/c3-tree-tags.md section 2.
+// Storage forms and data layouts: docs/c3-tree-tags.md section 2.
 //
 // Compact node storage and lvalue/attribute queries follow Tree.zig.
 module aro::tree;
 import aro::tokens, aro::type_store, aro::attribute, aro::attribute_map, aro::compilation, aro::value;
 
-
-fn NodeTag binary_tag(NodeKind kind)
-{
-	switch (kind)
-	{
-		case ASSIGN_EXPR: return ASSIGN_EXPR;
-		case MUL_ASSIGN_EXPR: return MUL_ASSIGN_EXPR;
-		case DIV_ASSIGN_EXPR: return DIV_ASSIGN_EXPR;
-		case MOD_ASSIGN_EXPR: return MOD_ASSIGN_EXPR;
-		case ADD_ASSIGN_EXPR: return ADD_ASSIGN_EXPR;
-		case SUB_ASSIGN_EXPR: return SUB_ASSIGN_EXPR;
-		case SHL_ASSIGN_EXPR: return SHL_ASSIGN_EXPR;
-		case SHR_ASSIGN_EXPR: return SHR_ASSIGN_EXPR;
-		case BIT_AND_ASSIGN_EXPR: return BIT_AND_ASSIGN_EXPR;
-		case BIT_XOR_ASSIGN_EXPR: return BIT_XOR_ASSIGN_EXPR;
-		case BIT_OR_ASSIGN_EXPR: return BIT_OR_ASSIGN_EXPR;
-		case COMMA_EXPR: return COMMA_EXPR;
-		case BOOL_OR_EXPR: return BOOL_OR_EXPR;
-		case BOOL_AND_EXPR: return BOOL_AND_EXPR;
-		case BIT_OR_EXPR: return BIT_OR_EXPR;
-		case BIT_XOR_EXPR: return BIT_XOR_EXPR;
-		case BIT_AND_EXPR: return BIT_AND_EXPR;
-		case EQUAL_EXPR: return EQUAL_EXPR;
-		case NOT_EQUAL_EXPR: return NOT_EQUAL_EXPR;
-		case LESS_THAN_EXPR: return LESS_THAN_EXPR;
-		case LESS_THAN_EQUAL_EXPR: return LESS_THAN_EQUAL_EXPR;
-		case GREATER_THAN_EXPR: return GREATER_THAN_EXPR;
-		case GREATER_THAN_EQUAL_EXPR: return GREATER_THAN_EQUAL_EXPR;
-		case SHL_EXPR: return SHL_EXPR;
-		case SHR_EXPR: return SHR_EXPR;
-		case ADD_EXPR: return ADD_EXPR;
-		case SUB_EXPR: return SUB_EXPR;
-		case MUL_EXPR: return MUL_EXPR;
-		case DIV_EXPR: return DIV_EXPR;
-		case MOD_EXPR: return MOD_EXPR;
-		default: unreachable("not a binary expression");
-	}
-}
-
-fn NodeTag unary_tag(NodeKind kind)
-{
-	switch (kind)
-	{
-		case COMPOUND_ASSIGN_DUMMY_EXPR: return COMPOUND_ASSIGN_DUMMY_EXPR;
-		case ADDR_OF_EXPR: return ADDR_OF_EXPR;
-		case DEREF_EXPR: return DEREF_EXPR;
-		case PLUS_EXPR: return PLUS_EXPR;
-		case NEGATE_EXPR: return NEGATE_EXPR;
-		case BIT_NOT_EXPR: return BIT_NOT_EXPR;
-		case BOOL_NOT_EXPR: return BOOL_NOT_EXPR;
-		case PRE_INC_EXPR: return PRE_INC_EXPR;
-		case PRE_DEC_EXPR: return PRE_DEC_EXPR;
-		case IMAG_EXPR: return IMAG_EXPR;
-		case REAL_EXPR: return REAL_EXPR;
-		case POST_INC_EXPR: return POST_INC_EXPR;
-		case POST_DEC_EXPR: return POST_DEC_EXPR;
-		case PAREN_EXPR: return PAREN_EXPR;
-		case STMT_EXPR: return STMT_EXPR;
-		case COND_DUMMY_EXPR: return COND_DUMMY_EXPR;
-		case IMAGINARY_LITERAL: return IMAGINARY_LITERAL;
-		default: unreachable("not a unary expression");
-	}
-}
 
 fn AsmOperand[] asm_operands(uint[] words, uint start, uint count)
 {
@@ -83,94 +20,138 @@ fn AsmOperand[] asm_operands(uint[] words, uint start, uint count)
 }
 
 <*
- Zig `setNode` for a STMT- or EXPR-family node. Compact-tag choices:
-  - COMPOUND_STMT / DECL_STMT: len > 3 -> extra (data[0] = start,
-    data[1] = len); else *_THREE with pack_elem 0..2.
-  - IF_STMT: init+else -> IF_FULL (data[2] = extra [then, else]);
-    init only -> IF_INIT; else IF_STMT.
-  - FOR_STMT: FOR_FULL (cond/incr in extra), FOR_INIT_COND, FOR_INIT_INCR,
-    FOR_COND_INCR, FOR_INIT, FOR_COND, FOR_INCR, FOR_EVER by which of
-    init/cond/incr are set; data[2] = body.
-  - CONTINUE/BREAK_STMT: data[0] = has_label, data[1] = label.
-  - RETURN_STMT: EXPR -> RETURN_STMT, NONE -> RETURN_NONE_STMT,
-    IMPLICIT -> IMPLICIT_RETURN (data[1] = implicit_value).
-  - ASM_STMT: no operands/clobbers/labels -> ASM_STMT_SIMPLE (data[1] =
-    quals bits); else ASM_STMT[_INLINE][_VOLATILE] by quals with
-    data[1] = labels.len, data[2] = extra start of [outputs.len, inputs.len,
-    clobbers.len, outputs (3 words each), inputs, clobbers, labels].
-  - CAST: EXPLICIT_CAST / IMPLICIT_CAST, data[1] = kind ordinal.
-  - CALL_EXPR: args.len > 1 -> CALL_EXPR (extra [callee, args...],
-    data[2] = args.len + 1); else CALL_EXPR_ONE.
+ Zig `setNode` for a STMT- or EXPR-family node. `repr.kind = node.kind`;
+ the `NodeData` view is named per arm. Compact-form choices (`repr.form`
+ bits, Zig tag in parentheses):
+  - COMPOUND_STMT / DECL_STMT: len > 3 -> `span` over extra; else packed
+    (*_three) with pack_elem 0..2 in `elems`.
+  - IF_STMT: no init -> `if_stmt` (else may be null); has_init -> `if_init`
+    with then_body, or (has_else, if_full) extra start of [then, else].
+  - FOR_STMT: has_init/has_cond/has_incr record the present clauses; all
+    three (for_full) store [init, extra start of [cond, incr]], otherwise the
+    present clauses fill `clauses` in init, cond, incr order.
+  - RETURN_STMT: EXPR -> no bits, NONE -> return_none, IMPLICIT -> implicit
+    (`value` = implicit_value).
+  - ASM_STMT: no operands/clobbers/labels -> packed (quals bits); else
+    asm_inline/asm_volatile from quals, labels.len and extra start of
+    [outputs.len, inputs.len, clobbers.len, outputs (3 words each), inputs,
+    clobbers, labels].
+  - CAST: implicit = cast.implicit.
+  - CALL_EXPR: args.len > 1 -> `extra_list` [callee, args...] (len = args + 1);
+    else packed `call_one`.
   - BUILTIN_CALL_EXPR / ARRAY_INIT_EXPR / STRUCT_INIT_EXPR: len > 2 ->
-    extra; else *_TWO packed.
-  - GENERIC_EXPR: rest.len > 0 -> GENERIC_EXPR (extra [controlling, chosen,
-    rest...], data[2] = rest.len + 2); else GENERIC_EXPR_ZERO.
-  - BINARY_COND/COND/BUILTIN_CHOOSE_EXPR: data[2] = extra [then, else].
-  - BUILTIN_SHUFFLEVECTOR: extra [lhs, rhs, indexes...], data[2] = indexes.len.
-  - ARRAY_FILLER_EXPR: data[1] = low, data[2] = high 32 bits of count.
-  - COMPOUND_LITERAL_EXPR: data[1] = DeclAttr{is_static, register, thread_local}.
-  - CASE_STMT: data[2] = body (Zig writes it through packOptIndex).
+    `typed_span`; else packed `typed_list` (*_two).
+  - GENERIC_EXPR: rest.len > 0 -> `extra_list` [controlling, chosen, rest...]
+    (len = rest + 2); else packed `generic_zero`.
+  - BINARY_COND/COND/BUILTIN_CHOOSE_EXPR: `conditional`, extra [then, else].
+  - BUILTIN_SHUFFLEVECTOR: extra [lhs, rhs, indexes...].
  @require node.kind.family != DECL
 *>
 fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 {
-	uint[3] d = repr.data;
+	repr.kind = node.kind;
+	NodeData* data = &repr.data;
 	switch (node.kind)
 	{
-		case LABELED_STMT: repr.tag = LABELED_STMT; d[0] = (uint)node.labeled_stmt.body; repr.tok = node.labeled_stmt.label_tok;
+		case LABELED_STMT:
+			repr.tok = node.labeled_stmt.label_tok;
+			data.body.body = node.labeled_stmt.body;
 		case COMPOUND_STMT:
 			repr.tok = node.compound_stmt.l_brace_tok;
-			if (node.compound_stmt.body.len > 3) { repr.tag = COMPOUND_STMT; ExtraSpan s = self.add_extra(node.compound_stmt.body); d[0] = s.index; d[1] = s.len; }
-			else { repr.tag = COMPOUND_STMT_THREE; for (usz i = 0; i < 3; i++) d[i] = pack_elem(node.compound_stmt.body, i); }
+			self.encode_node_list(repr, node.compound_stmt.body);
 		case IF_STMT:
-			NodeIfStmt v = node.if_stmt; d[0] = (uint)v.cond; repr.tok = v.if_tok;
-			if (!v.init.is_null()) { if (!v.else_body.is_null()) { repr.tag = IF_FULL; d[1] = (uint)v.init; NodeIndex[2] pair; pair[0] = v.then_body; pair[1] = v.else_body.unwrap(); ExtraSpan s = self.add_extra(pair[:2]); d[2] = s.index; }
-			else { repr.tag = IF_INIT; d[1] = (uint)v.init; d[2] = (uint)v.then_body; } }
-			else { repr.tag = IF_STMT; d[1] = (uint)v.then_body; d[2] = pack_opt_index(v.else_body); }
-		case SWITCH_STMT: repr.tag = SWITCH_STMT; d[0] = (uint)node.switch_stmt.cond; d[1] = pack_opt_index(node.switch_stmt.init); d[2] = (uint)node.switch_stmt.body; repr.tok = node.switch_stmt.switch_tok;
-		case CASE_STMT: repr.tag = CASE_STMT; d[0] = (uint)node.case_stmt.start; d[1] = pack_opt_index(node.case_stmt.end); d[2] = (uint)node.case_stmt.body; repr.tok = node.case_stmt.case_tok;
-		case DEFAULT_STMT: repr.tag = DEFAULT_STMT; d[0] = (uint)node.default_stmt.body; repr.tok = node.default_stmt.default_tok;
-		case WHILE_STMT: repr.tag = WHILE_STMT; d[0] = (uint)node.while_stmt.cond; d[1] = (uint)node.while_stmt.body; repr.tok = node.while_stmt.while_tok;
-		case DO_WHILE_STMT: repr.tag = DO_WHILE_STMT; d[0] = (uint)node.do_while_stmt.cond; d[1] = (uint)node.do_while_stmt.body; repr.tok = node.do_while_stmt.do_tok;
-		case FOR_STMT:
-			NodeForStmt v = node.for_stmt; bool hi = !v.init.is_null(); bool hc = !v.cond.is_null(); bool hn = !v.incr.is_null(); d[2] = (uint)v.body; repr.tok = v.for_tok;
-			if (hi && hc && hn) { repr.tag = FOR_FULL; d[0] = (uint)v.init; NodeIndex[2] pair; pair[0] = (NodeIndex)v.cond; pair[1] = (NodeIndex)v.incr; ExtraSpan s = self.add_extra(pair[:2]); d[1] = s.index; }
-			else if (hi && hc) { repr.tag = FOR_INIT_COND; d[0] = (uint)v.init; d[1] = (uint)v.cond; }
-			else if (hi && hn) { repr.tag = FOR_INIT_INCR; d[0] = (uint)v.init; d[1] = (uint)v.incr; }
-			else if (hc && hn) { repr.tag = FOR_COND_INCR; d[0] = (uint)v.cond; d[1] = (uint)v.incr; }
-			else if (hi) { repr.tag = FOR_INIT; d[0] = (uint)v.init; }
-			else if (hc) { repr.tag = FOR_COND; d[0] = (uint)v.cond; }
-			else if (hn) { repr.tag = FOR_INCR; d[0] = (uint)v.incr; }
-			else { repr.tag = FOR_EVER; }
-		case GOTO_STMT: repr.tag = GOTO_STMT; repr.tok = node.goto_stmt.label_tok;
-		case COMPUTED_GOTO_STMT: repr.tag = COMPUTED_GOTO_STMT; d[0] = (uint)node.computed_goto_stmt.expr; repr.tok = node.computed_goto_stmt.goto_tok;
-		case CONTINUE_STMT: repr.tag = CONTINUE_STMT; d[0] = (uint)node.continue_stmt.has_label; d[1] = (uint)node.continue_stmt.label; repr.tok = node.continue_stmt.continue_tok;
-		case BREAK_STMT: repr.tag = BREAK_STMT; d[0] = (uint)node.break_stmt.has_label; d[1] = (uint)node.break_stmt.label; repr.tok = node.break_stmt.break_tok;
-		case NULL_STMT: repr.tag = NULL_STMT; repr.tok = node.null_stmt.semicolon_or_r_brace_tok;
-		case RETURN_STMT:
-			repr.tok = node.return_stmt.return_tok; d[0] = (uint)node.return_stmt.return_qt;
-			switch (node.return_stmt.operand) { case EXPR: repr.tag = RETURN_STMT; d[1] = (uint)node.return_stmt.expr; case NONE: repr.tag = RETURN_NONE_STMT; case IMPLICIT: repr.tag = IMPLICIT_RETURN; d[1] = (uint)node.return_stmt.implicit_value; }
-		case DECL_STMT:
-			repr.tok = node.decl_stmt.first_tok;
-			if (node.decl_stmt.decls.len > 3) { repr.tag = DECL_STMT; ExtraSpan s = self.add_extra(node.decl_stmt.decls); d[0] = s.index; d[1] = s.len; }
-			else { repr.tag = DECL_STMT_THREE; for (usz i = 0; i < 3; i++) d[i] = pack_elem(node.decl_stmt.decls, i); }
-		case ASM_STMT:
-			repr.tok = node.asm_stmt.asm_tok; d[0] = (uint)node.asm_stmt.asm_str;
-			if (node.asm_stmt.outputs.len == 0 && node.asm_stmt.inputs.len == 0 && node.asm_stmt.clobbers.len == 0 && node.asm_stmt.labels.len == 0)
+			NodeIfStmt v = node.if_stmt;
+			repr.tok = v.if_tok;
+			repr.form.has_init = !v.init.is_null();
+			repr.form.has_else = repr.form.has_init && !v.else_body.is_null();
+			if (!repr.form.has_init)
 			{
-				repr.tag = ASM_STMT_SIMPLE;
-				d[1] = (uint)node.asm_stmt.quals;
+				data.if_stmt = { .cond = v.cond, .then_body = v.then_body, .else_body = v.else_body };
+			}
+			else if (repr.form.has_else)
+			{
+				NodeIndex[2] pair = { v.then_body, v.else_body.unwrap() };
+				data.if_init = { .cond = v.cond, .init = v.init, .then_or_extra = self.add_extra(pair[..]).index };
 			}
 			else
 			{
-				repr.tag = node.asm_stmt.quals.is_inline ? (node.asm_stmt.quals.is_volatile ? ASM_STMT_INLINE_VOLATILE : ASM_STMT_INLINE) : (node.asm_stmt.quals.is_volatile ? ASM_STMT_VOLATILE : ASM_STMT);
-				d[1] = (uint)node.asm_stmt.labels.len; d[2] = (uint)self.extra.len();
-				self.extra.push((uint)node.asm_stmt.outputs.len); self.extra.push((uint)node.asm_stmt.inputs.len); self.extra.push((uint)node.asm_stmt.clobbers.len);
-				foreach (op : node.asm_stmt.outputs) { self.extra.push((uint)op.name); self.extra.push((uint)op.constraint); self.extra.push((uint)op.expr); }
-				foreach (op : node.asm_stmt.inputs) { self.extra.push((uint)op.name); self.extra.push((uint)op.constraint); self.extra.push((uint)op.expr); }
-				foreach (op : node.asm_stmt.clobbers) self.extra.push((uint)op);
-				foreach (label : node.asm_stmt.labels) self.extra.push((uint)label);
+				data.if_init = { .cond = v.cond, .init = v.init, .then_or_extra = (uint)v.then_body };
 			}
+		case SWITCH_STMT:
+			repr.tok = node.switch_stmt.switch_tok;
+			data.switch_stmt = { .cond = node.switch_stmt.cond, .init = node.switch_stmt.init, .body = node.switch_stmt.body };
+		case CASE_STMT:
+			repr.tok = node.case_stmt.case_tok;
+			data.case_stmt = { .start = node.case_stmt.start, .end = node.case_stmt.end, .body = node.case_stmt.body };
+		case DEFAULT_STMT:
+			repr.tok = node.default_stmt.default_tok;
+			data.body.body = node.default_stmt.body;
+		case WHILE_STMT:
+			repr.tok = node.while_stmt.while_tok;
+			data.loop = { .cond = node.while_stmt.cond, .body = node.while_stmt.body };
+		case DO_WHILE_STMT:
+			repr.tok = node.do_while_stmt.do_tok;
+			data.loop = { .cond = node.do_while_stmt.cond, .body = node.do_while_stmt.body };
+		case FOR_STMT:
+			NodeForStmt v = node.for_stmt;
+			repr.tok = v.for_tok;
+			repr.form.has_init = !v.init.is_null(); repr.form.has_cond = !v.cond.is_null(); repr.form.has_incr = !v.incr.is_null();
+			data.for_stmt.body = v.body;
+			if (repr.form.has_init && repr.form.has_cond && repr.form.has_incr)
+			{
+				NodeIndex[2] pair = { v.cond.unwrap(), v.incr.unwrap() };
+				data.for_stmt.clauses = { (uint)v.init, self.add_extra(pair[..]).index };
+			}
+			else
+			{
+				usz slot = 0;
+				foreach (clause : (NodeOptIndex[3]){ v.init, v.cond, v.incr })
+				{
+					if (!clause.is_null()) data.for_stmt.clauses[slot++] = (uint)clause;
+				}
+			}
+		case GOTO_STMT: repr.tok = node.goto_stmt.label_tok;
+		case COMPUTED_GOTO_STMT:
+			repr.tok = node.computed_goto_stmt.goto_tok;
+			data.expr.expr = node.computed_goto_stmt.expr;
+		case CONTINUE_STMT:
+			repr.tok = node.continue_stmt.continue_tok;
+			data.jump = { .has_label = (uint)node.continue_stmt.has_label, .label = node.continue_stmt.label };
+		case BREAK_STMT:
+			repr.tok = node.break_stmt.break_tok;
+			data.jump = { .has_label = (uint)node.break_stmt.has_label, .label = node.break_stmt.label };
+		case NULL_STMT: repr.tok = node.null_stmt.semicolon_or_r_brace_tok;
+		case RETURN_STMT:
+			NodeReturnStmt v = node.return_stmt;
+			repr.tok = v.return_tok;
+			data.return_stmt.qt = v.return_qt;
+			switch (v.operand)
+			{
+				case EXPR: data.return_stmt.value = (uint)v.expr;
+				case NONE: repr.form.return_none = true;
+				case IMPLICIT: repr.form.implicit = true; data.return_stmt.value = (uint)v.implicit_value;
+			}
+		case DECL_STMT:
+			repr.tok = node.decl_stmt.first_tok;
+			self.encode_node_list(repr, node.decl_stmt.decls);
+		case ASM_STMT:
+			NodeAsmStmt v = node.asm_stmt;
+			repr.tok = v.asm_tok;
+			data.asm_stmt.asm_str = v.asm_str;
+			if (v.outputs.len == 0 && v.inputs.len == 0 && v.clobbers.len == 0 && v.labels.len == 0)
+			{
+				repr.form.packed = true;
+				data.asm_stmt.quals_or_labels = (uint)v.quals;
+				break;
+			}
+			repr.form.asm_inline = v.quals.is_inline; repr.form.asm_volatile = v.quals.is_volatile;
+			data.asm_stmt.quals_or_labels = (uint)v.labels.len;
+			data.asm_stmt.extra = (uint)self.extra.len();
+			self.extra.push((uint)v.outputs.len); self.extra.push((uint)v.inputs.len); self.extra.push((uint)v.clobbers.len);
+			foreach (op : v.outputs) { self.extra.push((uint)op.name); self.extra.push((uint)op.constraint); self.extra.push((uint)op.expr); }
+			foreach (op : v.inputs) { self.extra.push((uint)op.name); self.extra.push((uint)op.constraint); self.extra.push((uint)op.expr); }
+			foreach (op : v.clobbers) self.extra.push((uint)op);
+			foreach (label : v.labels) self.extra.push((uint)label);
 		case ASSIGN_EXPR:
 		case MUL_ASSIGN_EXPR:
 		case DIV_ASSIGN_EXPR:
@@ -201,7 +182,8 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 		case MUL_EXPR:
 		case DIV_EXPR:
 		case MOD_EXPR:
-			repr.tag = binary_tag(node.kind); d[0] = (uint)node.binary.qt; d[1] = (uint)node.binary.lhs; d[2] = (uint)node.binary.rhs; repr.tok = node.binary.op_tok;
+			repr.tok = node.binary.op_tok;
+			data.binary = { .qt = node.binary.qt, .lhs = node.binary.lhs, .rhs = node.binary.rhs };
 		case COMPOUND_ASSIGN_DUMMY_EXPR:
 		case ADDR_OF_EXPR:
 		case DEREF_EXPR:
@@ -219,165 +201,260 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 		case STMT_EXPR:
 		case COND_DUMMY_EXPR:
 		case IMAGINARY_LITERAL:
-			repr.tag = unary_tag(node.kind); d[0] = (uint)node.unary.qt; d[1] = (uint)node.unary.operand; repr.tok = node.unary.op_tok;
-		case CAST: repr.tag = node.cast.implicit ? IMPLICIT_CAST : EXPLICIT_CAST; d[0] = (uint)node.cast.qt; d[1] = (uint)node.cast.kind; d[2] = (uint)node.cast.operand; repr.tok = node.cast.l_paren;
-		case ADDR_OF_LABEL: repr.tag = ADDR_OF_LABEL; d[0] = (uint)node.addr_of_label.qt; repr.tok = node.addr_of_label.label_tok;
-		case ARRAY_ACCESS_EXPR: repr.tag = ARRAY_ACCESS_EXPR; d[0] = (uint)node.array_access.qt; d[1] = (uint)node.array_access.base; d[2] = (uint)node.array_access.index; repr.tok = node.array_access.l_bracket_tok;
+			repr.tok = node.unary.op_tok;
+			data.unary = { .qt = node.unary.qt, .operand = node.unary.operand };
+		case CAST:
+			repr.tok = node.cast.l_paren;
+			repr.form.implicit = node.cast.implicit;
+			data.cast = { .qt = node.cast.qt, .kind = (uint)node.cast.kind, .operand = node.cast.operand };
+		case ADDR_OF_LABEL:
+			repr.tok = node.addr_of_label.label_tok;
+			data.typed.qt = node.addr_of_label.qt;
+		case ARRAY_ACCESS_EXPR:
+			repr.tok = node.array_access.l_bracket_tok;
+			data.array_access = { .qt = node.array_access.qt, .base = node.array_access.base, .index = node.array_access.index };
 		case MEMBER_ACCESS_EXPR:
-		case MEMBER_ACCESS_PTR_EXPR: repr.tag = node.kind == MEMBER_ACCESS_EXPR ? MEMBER_ACCESS_EXPR : MEMBER_ACCESS_PTR_EXPR; d[0] = (uint)node.member_access.qt; d[1] = (uint)node.member_access.base; d[2] = node.member_access.member_index; repr.tok = node.member_access.access_tok;
+		case MEMBER_ACCESS_PTR_EXPR:
+			repr.tok = node.member_access.access_tok;
+			data.member_access = { .qt = node.member_access.qt, .base = node.member_access.base, .member_index = node.member_access.member_index };
 		case DECL_REF_EXPR:
-		case ENUMERATION_REF: repr.tag = node.kind == DECL_REF_EXPR ? DECL_REF_EXPR : ENUMERATION_REF; d[0] = (uint)node.decl_ref.qt; d[1] = (uint)node.decl_ref.decl; repr.tok = node.decl_ref.name_tok;
+		case ENUMERATION_REF:
+			repr.tok = node.decl_ref.name_tok;
+			data.decl_ref = { .qt = node.decl_ref.qt, .decl = node.decl_ref.decl };
 		case BOOL_LITERAL:
 		case NULLPTR_LITERAL:
 		case INT_LITERAL:
-		case FLOAT_LITERAL: repr.tag = node.kind == BOOL_LITERAL ? BOOL_LITERAL : node.kind == NULLPTR_LITERAL ? NULLPTR_LITERAL : node.kind == INT_LITERAL ? INT_LITERAL : FLOAT_LITERAL; d[0] = (uint)node.literal.qt; repr.tok = node.literal.literal_tok;
+		case FLOAT_LITERAL:
+			repr.tok = node.literal.literal_tok;
+			data.typed.qt = node.literal.qt;
 		case CHAR_LITERAL:
-		case STRING_LITERAL_EXPR: repr.tag = node.kind == CHAR_LITERAL ? CHAR_LITERAL : STRING_LITERAL_EXPR; d[0] = (uint)node.char_literal.qt; d[1] = (uint)node.char_literal.kind; repr.tok = node.char_literal.literal_tok;
+		case STRING_LITERAL_EXPR:
+			repr.tok = node.char_literal.literal_tok;
+			data.char_literal = { .qt = node.char_literal.qt, .kind = (uint)node.char_literal.kind };
 		case CALL_EXPR:
-			d[0] = (uint)node.call.qt; repr.tok = node.call.l_paren_tok;
-			if (node.call.args.len > 1) { repr.tag = CALL_EXPR; d[1] = (uint)self.extra.len(); d[2] = (uint)node.call.args.len + 1; self.extra.push((uint)node.call.callee); foreach (arg : node.call.args) self.extra.push((uint)arg); }
-			else { repr.tag = CALL_EXPR_ONE; d[1] = (uint)node.call.callee; d[2] = pack_elem(node.call.args, 0); }
+			NodeCall v = node.call;
+			repr.tok = v.l_paren_tok;
+			if (v.args.len > 1)
+			{
+				data.extra_list = { .qt = v.qt, .start = (uint)self.extra.len(), .len = (uint)v.args.len + 1 };
+				self.extra.push((uint)v.callee);
+				foreach (arg : v.args) self.extra.push((uint)arg);
+			}
+			else
+			{
+				repr.form.packed = true;
+				data.call_one = { .qt = v.qt, .callee = v.callee, .arg = (NodeOptIndex)pack_elem(v.args, 0) };
+			}
 		case BUILTIN_CALL_EXPR:
-			d[0] = (uint)node.builtin_call.qt; repr.tok = node.builtin_call.builtin_tok;
-			if (node.builtin_call.args.len > 2) { repr.tag = BUILTIN_CALL_EXPR; ExtraSpan s = self.add_extra(node.builtin_call.args); d[1] = s.index; d[2] = s.len; }
-			else { repr.tag = BUILTIN_CALL_EXPR_TWO; d[1] = pack_elem(node.builtin_call.args, 0); d[2] = pack_elem(node.builtin_call.args, 1); }
-		case BUILTIN_TYPES_COMPATIBLE_P: repr.tag = BUILTIN_TYPES_COMPATIBLE_P; d[0] = (uint)node.types_compatible.lhs; d[1] = (uint)node.types_compatible.rhs; repr.tok = node.types_compatible.builtin_tok;
-		case BUILTIN_CONVERTVECTOR: repr.tag = BUILTIN_CONVERTVECTOR; d[0] = (uint)node.convertvector.dest_qt; d[1] = (uint)node.convertvector.operand; repr.tok = node.convertvector.builtin_tok;
+			repr.tok = node.builtin_call.builtin_tok;
+			self.encode_typed_list(repr, node.builtin_call.qt, node.builtin_call.args);
+		case BUILTIN_TYPES_COMPATIBLE_P:
+			repr.tok = node.types_compatible.builtin_tok;
+			data.types_compatible = { .lhs = node.types_compatible.lhs, .rhs = node.types_compatible.rhs };
+		case BUILTIN_CONVERTVECTOR:
+			repr.tok = node.convertvector.builtin_tok;
+			data.convertvector = { .dest_qt = node.convertvector.dest_qt, .operand = node.convertvector.operand };
 		case BUILTIN_SHUFFLEVECTOR:
-			repr.tag = BUILTIN_SHUFFLEVECTOR; d[0] = (uint)node.shufflevector.qt; d[1] = (uint)self.extra.len(); d[2] = (uint)node.shufflevector.indexes.len; repr.tok = node.shufflevector.builtin_tok;
-			self.extra.push((uint)node.shufflevector.lhs); self.extra.push((uint)node.shufflevector.rhs); foreach (idx : node.shufflevector.indexes) self.extra.push((uint)idx);
+			NodeShufflevector v = node.shufflevector;
+			repr.tok = v.builtin_tok;
+			data.shufflevector = { .qt = v.qt, .start = (uint)self.extra.len(), .index_count = (uint)v.indexes.len };
+			self.extra.push((uint)v.lhs); self.extra.push((uint)v.rhs);
+			foreach (idx : v.indexes) self.extra.push((uint)idx);
 		case SIZEOF_EXPR:
 		case ALIGNOF_EXPR:
 		case COUNTOF_EXPR:
-			repr.tag = node.kind == SIZEOF_EXPR ? SIZEOF_EXPR : node.kind == ALIGNOF_EXPR ? ALIGNOF_EXPR : COUNTOF_EXPR;
-			d[0] = (uint)node.type_info.qt; d[1] = pack_opt_index(node.type_info.expr); d[2] = (uint)node.type_info.operand_qt; repr.tok = node.type_info.op_tok;
+			repr.tok = node.type_info.op_tok;
+			data.type_info = { .qt = node.type_info.qt, .expr = node.type_info.expr, .operand_qt = node.type_info.operand_qt };
 		case GENERIC_EXPR:
-			d[0] = (uint)node.generic.qt; repr.tok = node.generic.generic_tok;
-			if (node.generic.rest.len > 0) { repr.tag = GENERIC_EXPR; d[1] = (uint)self.extra.len(); d[2] = (uint)node.generic.rest.len + 2; self.extra.push((uint)node.generic.controlling); self.extra.push((uint)node.generic.chosen); foreach (item : node.generic.rest) self.extra.push((uint)item); }
-			else { repr.tag = GENERIC_EXPR_ZERO; d[1] = (uint)node.generic.controlling; d[2] = (uint)node.generic.chosen; }
-		case GENERIC_ASSOCIATION_EXPR: repr.tag = GENERIC_ASSOCIATION_EXPR; d[0] = (uint)node.generic_association.association_qt; d[1] = (uint)node.generic_association.expr; repr.tok = node.generic_association.colon_tok;
-		case GENERIC_DEFAULT_EXPR: repr.tag = GENERIC_DEFAULT_EXPR; d[0] = (uint)node.generic_default.expr; repr.tok = node.generic_default.default_tok;
+			NodeGeneric v = node.generic;
+			repr.tok = v.generic_tok;
+			if (v.rest.len > 0)
+			{
+				data.extra_list = { .qt = v.qt, .start = (uint)self.extra.len(), .len = (uint)v.rest.len + 2 };
+				self.extra.push((uint)v.controlling); self.extra.push((uint)v.chosen);
+				foreach (item : v.rest) self.extra.push((uint)item);
+			}
+			else
+			{
+				repr.form.packed = true;
+				data.generic_zero = { .qt = v.qt, .controlling = v.controlling, .chosen = v.chosen };
+			}
+		case GENERIC_ASSOCIATION_EXPR:
+			repr.tok = node.generic_association.colon_tok;
+			data.generic_association = { .qt = node.generic_association.association_qt, .expr = node.generic_association.expr };
+		case GENERIC_DEFAULT_EXPR:
+			repr.tok = node.generic_default.default_tok;
+			data.expr.expr = node.generic_default.expr;
 		case BINARY_COND_EXPR:
 		case COND_EXPR:
 		case BUILTIN_CHOOSE_EXPR:
-			repr.tag = node.kind == BINARY_COND_EXPR ? BINARY_COND_EXPR : node.kind == COND_EXPR ? COND_EXPR : BUILTIN_CHOOSE_EXPR;
-			d[0] = (uint)node.conditional.qt; d[1] = (uint)node.conditional.cond; repr.tok = node.conditional.cond_tok;
-			self.extra.push((uint)node.conditional.then_expr); self.extra.push((uint)node.conditional.else_expr); d[2] = (uint)(self.extra.len() - 2);
+			repr.tok = node.conditional.cond_tok;
+			NodeIndex[2] pair = { node.conditional.then_expr, node.conditional.else_expr };
+			data.conditional = { .qt = node.conditional.qt, .cond = node.conditional.cond, .extra = self.add_extra(pair[..]).index };
 		case ARRAY_INIT_EXPR:
 		case STRUCT_INIT_EXPR:
-			d[0] = (uint)node.container_init.container_qt; repr.tok = node.container_init.l_brace_tok;
-			if (node.container_init.items.len > 2) { repr.tag = node.kind == ARRAY_INIT_EXPR ? ARRAY_INIT_EXPR : STRUCT_INIT_EXPR; ExtraSpan s = self.add_extra(node.container_init.items); d[1] = s.index; d[2] = s.len; }
-			else { repr.tag = node.kind == ARRAY_INIT_EXPR ? ARRAY_INIT_EXPR_TWO : STRUCT_INIT_EXPR_TWO; d[1] = pack_elem(node.container_init.items, 0); d[2] = pack_elem(node.container_init.items, 1); }
-		case UNION_INIT_EXPR: repr.tag = UNION_INIT_EXPR; d[0] = (uint)node.union_init.union_qt; d[1] = node.union_init.field_index; d[2] = pack_opt_index(node.union_init.initializer); repr.tok = node.union_init.l_brace_tok;
-		case ARRAY_FILLER_EXPR: repr.tag = ARRAY_FILLER_EXPR; d[0] = (uint)node.array_filler.qt; d[1] = (uint)node.array_filler.count; d[2] = (uint)(node.array_filler.count >> 32); repr.tok = node.array_filler.last_tok;
-		case DEFAULT_INIT_EXPR: repr.tag = DEFAULT_INIT_EXPR; d[0] = (uint)node.default_init.qt; repr.tok = node.default_init.last_tok;
+			repr.tok = node.container_init.l_brace_tok;
+			self.encode_typed_list(repr, node.container_init.container_qt, node.container_init.items);
+		case UNION_INIT_EXPR:
+			repr.tok = node.union_init.l_brace_tok;
+			data.union_init = { .qt = node.union_init.union_qt, .field_index = node.union_init.field_index, .initializer = node.union_init.initializer };
+		case ARRAY_FILLER_EXPR:
+			repr.tok = node.array_filler.last_tok;
+			data.array_filler = { .qt = node.array_filler.qt, .count_lo = (uint)node.array_filler.count, .count_hi = (uint)(node.array_filler.count >> 32) };
+		case DEFAULT_INIT_EXPR:
+			repr.tok = node.default_init.last_tok;
+			data.typed.qt = node.default_init.qt;
 		case COMPOUND_LITERAL_EXPR:
-			repr.tag = COMPOUND_LITERAL_EXPR; d[0] = (uint)node.compound_literal.qt;
-			DeclAttr attr = { .is_static = node.compound_literal.storage_class == CompoundLiteralStorageClass.STATIC, .register = node.compound_literal.storage_class == CompoundLiteralStorageClass.REGISTER, .thread_local = node.compound_literal.thread_local }; d[1] = (uint)attr; d[2] = (uint)node.compound_literal.initializer; repr.tok = node.compound_literal.l_paren_tok;
-		case BUILTIN_REF: repr.tag = BUILTIN_REF; d[0] = (uint)node.builtin_ref.qt; repr.tok = node.builtin_ref.name_tok;
-		case BUILTIN_VA_ARG_PACK: repr.tag = BUILTIN_VA_ARG_PACK; repr.tok = node.va_arg_pack.builtin_tok;
-		case BUILTIN_VA_ARG_PACK_LEN: repr.tag = BUILTIN_VA_ARG_PACK_LEN; repr.tok = node.va_arg_pack.builtin_tok;
+			NodeCompoundLiteral v = node.compound_literal;
+			repr.tok = v.l_paren_tok;
+			data.compound_literal = { .qt = v.qt, .initializer = v.initializer,
+				.attr = { .is_static = v.storage_class == CompoundLiteralStorageClass.STATIC,
+					.register = v.storage_class == CompoundLiteralStorageClass.REGISTER, .thread_local = v.thread_local } };
+		case BUILTIN_REF:
+			repr.tok = node.builtin_ref.name_tok;
+			data.typed.qt = node.builtin_ref.qt;
+		case BUILTIN_VA_ARG_PACK:
+		case BUILTIN_VA_ARG_PACK_LEN: repr.tok = node.va_arg_pack.builtin_tok;
 		default: unreachable("unsupported expression encoding");
 	}
-	repr.data = d;
 }
 
+<* COMPOUND_STMT / DECL_STMT list: `span` over extra when longer than 3, else packed `elems`. *>
+fn void Tree.encode_node_list(&self, NodeRepr* repr, NodeIndex[] items)
+{
+	if (items.len > 3)
+	{
+		ExtraSpan s = self.add_extra(items);
+		repr.data.span = { .start = s.index, .len = s.len };
+		return;
+	}
+	repr.form.packed = true;
+	for (usz i = 0; i < 3; i++) repr.data.elems[i] = (NodeIndex)pack_elem(items, i);
+}
+
+<* BUILTIN_CALL / ARRAY_INIT / STRUCT_INIT list: `typed_span` when longer than 2, else packed `typed_list`. *>
+fn void Tree.encode_typed_list(&self, NodeRepr* repr, QualType qt, NodeIndex[] items)
+{
+	if (items.len > 2)
+	{
+		ExtraSpan s = self.add_extra(items);
+		repr.data.typed_span = { .qt = qt, .start = s.index, .len = s.len };
+		return;
+	}
+	repr.form.packed = true;
+	repr.data.typed_list = { .qt = qt, .elems = { (NodeIndex)pack_elem(items, 0), (NodeIndex)pack_elem(items, 1) } };
+}
+
+<* Decode an `encode_node_list` list (packed slices alias node storage). *>
+fn NodeIndex[] Tree.decode_node_list(&self, NodeRepr* repr)
+	=> repr.form.packed ? unpack_node_elems(repr, 0, 3) : self.extra_nodes(repr.data.span.start, repr.data.span.len);
+
+<* Decode an `encode_typed_list` list (packed slices alias node storage). *>
+fn NodeIndex[] Tree.decode_typed_list(&self, NodeRepr* repr)
+	=> repr.form.packed ? unpack_node_elems(repr, 1, 2) : self.extra_nodes(repr.data.typed_span.start, repr.data.typed_span.len);
+
 <*
- Zig `Node.Index.get` for a STMT/EXPR storage tag (inverse of
- `encode_expr_stmt`). ASM_STMT* quals come from the tag, with
- is_goto = labels.len > 0. Packed forms alias node storage.
- @require index.tag(self).kind.family != DECL
+ Zig `Node.Index.get` for a STMT/EXPR node (inverse of
+ `encode_expr_stmt`). Non-packed ASM_STMT quals come from the form bits,
+ with is_goto = labels.len > 0. Packed forms alias node storage.
+ @require index.kind(self).family != DECL
 *>
 fn Node Tree.decode_expr_stmt(&self, NodeIndex index)
 {
-	NodeRepr r = self.nodes[(usz)index];
-	NodeRepr* repr_ptr = self.nodes.get_ref((sz)index);
-	uint[3] d = r.data;
-	switch (r.tag)
+	NodeRepr* r = self.nodes.get_ref((sz)index);
+	NodeData d = r.data;
+	switch (r.kind)
 	{
-		case LABELED_STMT: return { .kind = LABELED_STMT, .labeled_stmt = { .label_tok = r.tok, .body = (NodeIndex)d[0] } };
-		case COMPOUND_STMT: return { .kind = COMPOUND_STMT, .compound_stmt = { .l_brace_tok = r.tok, .body = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[0] : (usz)d[1]] } };
-		case COMPOUND_STMT_THREE: return { .kind = COMPOUND_STMT, .compound_stmt = { .l_brace_tok = r.tok, .body = unpack_node_elems(repr_ptr, 0, 3) } };
-		case IF_STMT: return { .kind = IF_STMT, .if_stmt = { .if_tok = r.tok, .init = type_store::NODE_NULL, .cond = (NodeIndex)d[0], .then_body = (NodeIndex)d[1], .else_body = unpack_opt_index(d[2]) } };
-		case IF_INIT: return { .kind = IF_STMT, .if_stmt = { .if_tok = r.tok, .init = unpack_opt_index(d[1]), .cond = (NodeIndex)d[0], .then_body = (NodeIndex)d[2], .else_body = type_store::NODE_NULL } };
-		case IF_FULL: return { .kind = IF_STMT, .if_stmt = { .if_tok = r.tok, .cond = (NodeIndex)d[0], .init = unpack_opt_index(d[1]), .then_body = (NodeIndex)self.extra[(usz)d[2]], .else_body = (NodeOptIndex)(NodeIndex)self.extra[(usz)d[2]+1] } };
-		case SWITCH_STMT: return { .kind = SWITCH_STMT, .switch_stmt = { .switch_tok = r.tok, .cond = (NodeIndex)d[0], .init = unpack_opt_index(d[1]), .body = (NodeIndex)d[2] } };
-		case CASE_STMT: return { .kind = CASE_STMT, .case_stmt = { .case_tok = r.tok, .start = (NodeIndex)d[0], .end = unpack_opt_index(d[1]), .body = (NodeIndex)d[2] } };
-		case DEFAULT_STMT: return { .kind = DEFAULT_STMT, .default_stmt = { .default_tok = r.tok, .body = (NodeIndex)d[0] } };
-		case WHILE_STMT: return { .kind = WHILE_STMT, .while_stmt = { .while_tok = r.tok, .cond = (NodeIndex)d[0], .body = (NodeIndex)d[1] } };
-		case DO_WHILE_STMT: return { .kind = DO_WHILE_STMT, .do_while_stmt = { .do_tok = r.tok, .cond = (NodeIndex)d[0], .body = (NodeIndex)d[1] } };
-		case FOR_FULL: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = unpack_opt_index(d[0]), .cond = unpack_opt_index(self.extra[(usz)d[1]]), .incr = unpack_opt_index(self.extra[(usz)d[1]+1]), .body = (NodeIndex)d[2] } };
-		case FOR_INIT_COND: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = unpack_opt_index(d[0]), .cond = unpack_opt_index(d[1]), .incr = type_store::NODE_NULL, .body = (NodeIndex)d[2] } };
-		case FOR_INIT_INCR: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = unpack_opt_index(d[0]), .cond = type_store::NODE_NULL, .incr = unpack_opt_index(d[1]), .body = (NodeIndex)d[2] } };
-		case FOR_COND_INCR: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = type_store::NODE_NULL, .cond = unpack_opt_index(d[0]), .incr = unpack_opt_index(d[1]), .body = (NodeIndex)d[2] } };
-		case FOR_INIT: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = unpack_opt_index(d[0]), .cond = type_store::NODE_NULL, .incr = type_store::NODE_NULL, .body = (NodeIndex)d[2] } };
-		case FOR_COND: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = type_store::NODE_NULL, .cond = unpack_opt_index(d[0]), .incr = type_store::NODE_NULL, .body = (NodeIndex)d[2] } };
-		case FOR_INCR: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = type_store::NODE_NULL, .cond = type_store::NODE_NULL, .incr = unpack_opt_index(d[0]), .body = (NodeIndex)d[2] } };
-		case FOR_EVER: return { .kind = FOR_STMT, .for_stmt = { .for_tok = r.tok, .init = type_store::NODE_NULL, .cond = type_store::NODE_NULL, .incr = type_store::NODE_NULL, .body = (NodeIndex)d[2] } };
+		case LABELED_STMT: return { .kind = LABELED_STMT, .labeled_stmt = { .label_tok = r.tok, .body = d.body.body } };
+		case COMPOUND_STMT: return { .kind = COMPOUND_STMT, .compound_stmt = { .l_brace_tok = r.tok, .body = self.decode_node_list(r) } };
+		case IF_STMT:
+			if (!r.form.has_init) return { .kind = IF_STMT, .if_stmt = { .if_tok = r.tok, .init = type_store::NODE_NULL, .cond = d.if_stmt.cond, .then_body = d.if_stmt.then_body, .else_body = d.if_stmt.else_body } };
+			if (!r.form.has_else) return { .kind = IF_STMT, .if_stmt = { .if_tok = r.tok, .init = d.if_init.init, .cond = d.if_init.cond, .then_body = (NodeIndex)d.if_init.then_or_extra, .else_body = type_store::NODE_NULL } };
+			NodeIndex[] pair = self.extra_nodes(d.if_init.then_or_extra, 2);
+			return { .kind = IF_STMT, .if_stmt = { .if_tok = r.tok, .cond = d.if_init.cond, .init = d.if_init.init, .then_body = pair[0], .else_body = pair[1].pack() } };
+		case SWITCH_STMT: return { .kind = SWITCH_STMT, .switch_stmt = { .switch_tok = r.tok, .cond = d.switch_stmt.cond, .init = d.switch_stmt.init, .body = d.switch_stmt.body } };
+		case CASE_STMT: return { .kind = CASE_STMT, .case_stmt = { .case_tok = r.tok, .start = d.case_stmt.start, .end = d.case_stmt.end, .body = d.case_stmt.body } };
+		case DEFAULT_STMT: return { .kind = DEFAULT_STMT, .default_stmt = { .default_tok = r.tok, .body = d.body.body } };
+		case WHILE_STMT: return { .kind = WHILE_STMT, .while_stmt = { .while_tok = r.tok, .cond = d.loop.cond, .body = d.loop.body } };
+		case DO_WHILE_STMT: return { .kind = DO_WHILE_STMT, .do_while_stmt = { .do_tok = r.tok, .cond = d.loop.cond, .body = d.loop.body } };
+		case FOR_STMT:
+			NodeForStmt f = { .for_tok = r.tok, .init = type_store::NODE_NULL, .cond = type_store::NODE_NULL, .incr = type_store::NODE_NULL, .body = d.for_stmt.body };
+			if (r.form.has_init && r.form.has_cond && r.form.has_incr)
+			{
+				NodeIndex[] pair = self.extra_nodes(d.for_stmt.clauses[1], 2);
+				f.init = (NodeOptIndex)d.for_stmt.clauses[0]; f.cond = pair[0].pack(); f.incr = pair[1].pack();
+			}
+			else
+			{
+				usz slot = 0;
+				if (r.form.has_init) f.init = (NodeOptIndex)d.for_stmt.clauses[slot++];
+				if (r.form.has_cond) f.cond = (NodeOptIndex)d.for_stmt.clauses[slot++];
+				if (r.form.has_incr) f.incr = (NodeOptIndex)d.for_stmt.clauses[slot++];
+			}
+			return { .kind = FOR_STMT, .for_stmt = f };
 		case GOTO_STMT: return { .kind = GOTO_STMT, .goto_stmt = { .label_tok = r.tok } };
-		case COMPUTED_GOTO_STMT: return { .kind = COMPUTED_GOTO_STMT, .computed_goto_stmt = { .goto_tok = r.tok, .expr = (NodeIndex)d[0] } };
-		case CONTINUE_STMT: return { .kind = CONTINUE_STMT, .continue_stmt = { .continue_tok = r.tok, .has_label = d[0] != 0, .label = (tokens::TokenIndex)d[1] } };
-		case BREAK_STMT: return { .kind = BREAK_STMT, .break_stmt = { .break_tok = r.tok, .has_label = d[0] != 0, .label = (tokens::TokenIndex)d[1] } };
+		case COMPUTED_GOTO_STMT: return { .kind = COMPUTED_GOTO_STMT, .computed_goto_stmt = { .goto_tok = r.tok, .expr = d.expr.expr } };
+		case CONTINUE_STMT: return { .kind = CONTINUE_STMT, .continue_stmt = { .continue_tok = r.tok, .has_label = d.jump.has_label != 0, .label = d.jump.label } };
+		case BREAK_STMT: return { .kind = BREAK_STMT, .break_stmt = { .break_tok = r.tok, .has_label = d.jump.has_label != 0, .label = d.jump.label } };
 		case NULL_STMT: return { .kind = NULL_STMT, .null_stmt = { .semicolon_or_r_brace_tok = r.tok } };
-		case RETURN_STMT: return { .kind = RETURN_STMT, .return_stmt = { .return_tok = r.tok, .return_qt = (QualType)d[0], .operand = EXPR, .expr = (NodeIndex)d[1] } };
-		case RETURN_NONE_STMT: return { .kind = RETURN_STMT, .return_stmt = { .return_tok = r.tok, .return_qt = (QualType)d[0], .operand = NONE } };
-		case IMPLICIT_RETURN: return { .kind = RETURN_STMT, .return_stmt = { .return_tok = r.tok, .return_qt = (QualType)d[0], .operand = IMPLICIT, .implicit_value = d[1] != 0 } };
-		case DECL_STMT: return { .kind = DECL_STMT, .decl_stmt = { .first_tok = r.tok, .decls = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[0] : (usz)d[1]] } };
-		case DECL_STMT_THREE: return { .kind = DECL_STMT, .decl_stmt = { .first_tok = r.tok, .decls = unpack_node_elems(repr_ptr, 0, 3) } };
-		case CALL_EXPR_ONE: return { .kind = CALL_EXPR, .call = { .l_paren_tok = r.tok, .qt = (QualType)d[0], .callee = (NodeIndex)d[1], .args = unpack_node_elems(repr_ptr, 2, 1) } };
-		case CALL_EXPR: return { .kind = CALL_EXPR, .call = { .l_paren_tok = r.tok, .qt = (QualType)d[0], .callee = (NodeIndex)self.extra[(usz)d[1]], .args = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[1]+1 : (usz)d[2]-1] } };
-		case BUILTIN_CALL_EXPR_TWO: return { .kind = BUILTIN_CALL_EXPR, .builtin_call = { .builtin_tok = r.tok, .qt = (QualType)d[0], .args = unpack_node_elems(repr_ptr, 1, 2) } };
-		case BUILTIN_CALL_EXPR: return { .kind = BUILTIN_CALL_EXPR, .builtin_call = { .builtin_tok = r.tok, .qt = (QualType)d[0], .args = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[1] : (usz)d[2]] } };
-		case BUILTIN_TYPES_COMPATIBLE_P: return { .kind = BUILTIN_TYPES_COMPATIBLE_P, .types_compatible = { .builtin_tok = r.tok, .lhs = (QualType)d[0], .rhs = (QualType)d[1] } };
-		case BUILTIN_CONVERTVECTOR: return { .kind = BUILTIN_CONVERTVECTOR, .convertvector = { .builtin_tok = r.tok, .dest_qt = (QualType)d[0], .operand = (NodeIndex)d[1] } };
-		case BUILTIN_SHUFFLEVECTOR: return { .kind = BUILTIN_SHUFFLEVECTOR, .shufflevector = { .builtin_tok = r.tok, .qt = (QualType)d[0], .lhs = (NodeIndex)self.extra[(usz)d[1]], .rhs = (NodeIndex)self.extra[(usz)d[1]+1], .indexes = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[1]+2 : (usz)d[2]] } };
-		case BUILTIN_REF: return { .kind = BUILTIN_REF, .builtin_ref = { .name_tok = r.tok, .qt = (QualType)d[0] } };
+		case RETURN_STMT:
+			if (r.form.return_none) return { .kind = RETURN_STMT, .return_stmt = { .return_tok = r.tok, .return_qt = d.return_stmt.qt, .operand = NONE } };
+			if (r.form.implicit) return { .kind = RETURN_STMT, .return_stmt = { .return_tok = r.tok, .return_qt = d.return_stmt.qt, .operand = IMPLICIT, .implicit_value = d.return_stmt.value != 0 } };
+			return { .kind = RETURN_STMT, .return_stmt = { .return_tok = r.tok, .return_qt = d.return_stmt.qt, .operand = EXPR, .expr = (NodeIndex)d.return_stmt.value } };
+		case DECL_STMT: return { .kind = DECL_STMT, .decl_stmt = { .first_tok = r.tok, .decls = self.decode_node_list(r) } };
+		case CALL_EXPR:
+			if (r.form.packed) return { .kind = CALL_EXPR, .call = { .l_paren_tok = r.tok, .qt = d.call_one.qt, .callee = d.call_one.callee, .args = unpack_node_elems(r, 2, 1) } };
+			NodeIndex[] callee_args = self.extra_nodes(d.extra_list.start, d.extra_list.len);
+			return { .kind = CALL_EXPR, .call = { .l_paren_tok = r.tok, .qt = d.extra_list.qt, .callee = callee_args[0], .args = callee_args[1..] } };
+		case BUILTIN_CALL_EXPR: return { .kind = BUILTIN_CALL_EXPR, .builtin_call = { .builtin_tok = r.tok, .qt = d.typed_list.qt, .args = self.decode_typed_list(r) } };
+		case BUILTIN_TYPES_COMPATIBLE_P: return { .kind = BUILTIN_TYPES_COMPATIBLE_P, .types_compatible = { .builtin_tok = r.tok, .lhs = d.types_compatible.lhs, .rhs = d.types_compatible.rhs } };
+		case BUILTIN_CONVERTVECTOR: return { .kind = BUILTIN_CONVERTVECTOR, .convertvector = { .builtin_tok = r.tok, .dest_qt = d.convertvector.dest_qt, .operand = d.convertvector.operand } };
+		case BUILTIN_SHUFFLEVECTOR:
+			NodeIndex[] operands = self.extra_nodes(d.shufflevector.start, d.shufflevector.index_count + 2);
+			return { .kind = BUILTIN_SHUFFLEVECTOR, .shufflevector = { .builtin_tok = r.tok, .qt = d.shufflevector.qt, .lhs = operands[0], .rhs = operands[1], .indexes = operands[2..] } };
+		case BUILTIN_REF: return { .kind = BUILTIN_REF, .builtin_ref = { .name_tok = r.tok, .qt = d.typed.qt } };
 		case BUILTIN_VA_ARG_PACK: return { .kind = BUILTIN_VA_ARG_PACK, .va_arg_pack = { .builtin_tok = r.tok } };
 		case BUILTIN_VA_ARG_PACK_LEN: return { .kind = BUILTIN_VA_ARG_PACK_LEN, .va_arg_pack = { .builtin_tok = r.tok } };
 		case BOOL_LITERAL:
 		case NULLPTR_LITERAL:
 		case INT_LITERAL:
-		case FLOAT_LITERAL: return { .kind = r.tag.kind, .literal = { .literal_tok = r.tok, .qt = (QualType)d[0] } };
+		case FLOAT_LITERAL: return { .kind = r.kind, .literal = { .literal_tok = r.tok, .qt = d.typed.qt } };
 		case CHAR_LITERAL:
-		case STRING_LITERAL_EXPR: return { .kind = r.tag.kind, .char_literal = { .literal_tok = r.tok, .qt = (QualType)d[0], .kind = (CharLiteralKind)d[1] } };
+		case STRING_LITERAL_EXPR: return { .kind = r.kind, .char_literal = { .literal_tok = r.tok, .qt = d.char_literal.qt, .kind = (CharLiteralKind)d.char_literal.kind } };
 		case SIZEOF_EXPR:
 		case ALIGNOF_EXPR:
-		case COUNTOF_EXPR: return { .kind = r.tag.kind, .type_info = { .qt = (QualType)d[0], .op_tok = r.tok, .expr = unpack_opt_index(d[1]), .operand_qt = (QualType)d[2] } };
-		case GENERIC_EXPR: return { .kind = GENERIC_EXPR, .generic = { .generic_tok = r.tok, .qt = (QualType)d[0], .controlling = (NodeIndex)self.extra[(usz)d[1]], .chosen = (NodeIndex)self.extra[(usz)d[1]+1], .rest = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[1]+2 : (usz)d[2]-2] } };
-		case GENERIC_EXPR_ZERO: return { .kind = GENERIC_EXPR, .generic = { .generic_tok = r.tok, .qt = (QualType)d[0], .controlling = (NodeIndex)d[1], .chosen = (NodeIndex)d[2] } };
-		case GENERIC_ASSOCIATION_EXPR: return { .kind = GENERIC_ASSOCIATION_EXPR, .generic_association = { .colon_tok = r.tok, .association_qt = (QualType)d[0], .expr = (NodeIndex)d[1] } };
-		case GENERIC_DEFAULT_EXPR: return { .kind = GENERIC_DEFAULT_EXPR, .generic_default = { .default_tok = r.tok, .expr = (NodeIndex)d[0] } };
+		case COUNTOF_EXPR: return { .kind = r.kind, .type_info = { .qt = d.type_info.qt, .op_tok = r.tok, .expr = d.type_info.expr, .operand_qt = d.type_info.operand_qt } };
+		case GENERIC_EXPR:
+			if (r.form.packed) return { .kind = GENERIC_EXPR, .generic = { .generic_tok = r.tok, .qt = d.generic_zero.qt, .controlling = d.generic_zero.controlling, .chosen = d.generic_zero.chosen } };
+			NodeIndex[] items = self.extra_nodes(d.extra_list.start, d.extra_list.len);
+			return { .kind = GENERIC_EXPR, .generic = { .generic_tok = r.tok, .qt = d.extra_list.qt, .controlling = items[0], .chosen = items[1], .rest = items[2..] } };
+		case GENERIC_ASSOCIATION_EXPR: return { .kind = GENERIC_ASSOCIATION_EXPR, .generic_association = { .colon_tok = r.tok, .association_qt = d.generic_association.qt, .expr = d.generic_association.expr } };
+		case GENERIC_DEFAULT_EXPR: return { .kind = GENERIC_DEFAULT_EXPR, .generic_default = { .default_tok = r.tok, .expr = d.expr.expr } };
 		case BINARY_COND_EXPR:
 		case COND_EXPR:
-		case BUILTIN_CHOOSE_EXPR: return { .kind = r.tag.kind, .conditional = { .cond_tok = r.tok, .qt = (QualType)d[0], .cond = (NodeIndex)d[1], .then_expr = (NodeIndex)self.extra[(usz)d[2]], .else_expr = (NodeIndex)self.extra[(usz)d[2]+1] } };
-		case ARRAY_INIT_EXPR_TWO:
-		case STRUCT_INIT_EXPR_TWO: return { .kind = r.tag.kind, .container_init = { .l_brace_tok = r.tok, .container_qt = (QualType)d[0], .items = unpack_node_elems(repr_ptr, 1, 2) } };
+		case BUILTIN_CHOOSE_EXPR:
+			NodeIndex[] branches = self.extra_nodes(d.conditional.extra, 2);
+			return { .kind = r.kind, .conditional = { .cond_tok = r.tok, .qt = d.conditional.qt, .cond = d.conditional.cond, .then_expr = branches[0], .else_expr = branches[1] } };
 		case ARRAY_INIT_EXPR:
-		case STRUCT_INIT_EXPR: return { .kind = r.tag.kind, .container_init = { .l_brace_tok = r.tok, .container_qt = (QualType)d[0], .items = ((NodeIndex*)self.extra.array_view().ptr)[(usz)d[1] : (usz)d[2]] } };
-		case UNION_INIT_EXPR: return { .kind = UNION_INIT_EXPR, .union_init = { .l_brace_tok = r.tok, .union_qt = (QualType)d[0], .field_index = d[1], .initializer = unpack_opt_index(d[2]) } };
-		case ARRAY_FILLER_EXPR: return { .kind = ARRAY_FILLER_EXPR, .array_filler = { .last_tok = r.tok, .qt = (QualType)d[0], .count = ((ulong)d[2] << 32) | d[1] } };
-		case DEFAULT_INIT_EXPR: return { .kind = DEFAULT_INIT_EXPR, .default_init = { .last_tok = r.tok, .qt = (QualType)d[0] } };
+		case STRUCT_INIT_EXPR: return { .kind = r.kind, .container_init = { .l_brace_tok = r.tok, .container_qt = d.typed_list.qt, .items = self.decode_typed_list(r) } };
+		case UNION_INIT_EXPR: return { .kind = UNION_INIT_EXPR, .union_init = { .l_brace_tok = r.tok, .union_qt = d.union_init.qt, .field_index = d.union_init.field_index, .initializer = d.union_init.initializer } };
+		case ARRAY_FILLER_EXPR: return { .kind = ARRAY_FILLER_EXPR, .array_filler = { .last_tok = r.tok, .qt = d.array_filler.qt, .count = ((ulong)d.array_filler.count_hi << 32) | d.array_filler.count_lo } };
+		case DEFAULT_INIT_EXPR: return { .kind = DEFAULT_INIT_EXPR, .default_init = { .last_tok = r.tok, .qt = d.typed.qt } };
 		case COMPOUND_LITERAL_EXPR:
-			DeclAttr attr = (DeclAttr)d[1];
+			DeclAttr attr = d.compound_literal.attr;
 			CompoundLiteralStorageClass storage = attr.is_static ? CompoundLiteralStorageClass.STATIC : attr.register ? CompoundLiteralStorageClass.REGISTER : CompoundLiteralStorageClass.AUTO;
-			return { .kind = COMPOUND_LITERAL_EXPR, .compound_literal = { .l_paren_tok = r.tok, .qt = (QualType)d[0], .thread_local = attr.thread_local, .storage_class = storage, .initializer = (NodeIndex)d[2] } };
+			return { .kind = COMPOUND_LITERAL_EXPR, .compound_literal = { .l_paren_tok = r.tok, .qt = d.compound_literal.qt, .thread_local = attr.thread_local, .storage_class = storage, .initializer = d.compound_literal.initializer } };
 		case ASM_STMT:
-		case ASM_STMT_INLINE:
-		case ASM_STMT_VOLATILE:
-		case ASM_STMT_INLINE_VOLATILE:
-			uint start = d[2]; uint out_len = self.extra[(usz)start]; uint in_len = self.extra[(usz)start+1]; uint clobber_len = self.extra[(usz)start+2];
+			if (r.form.packed) return { .kind = ASM_STMT, .asm_stmt = { .asm_tok = r.tok, .asm_str = d.asm_stmt.asm_str, .quals = (GnuAsmQualifiers)d.asm_stmt.quals_or_labels } };
+			uint label_len = d.asm_stmt.quals_or_labels;
+			uint start = d.asm_stmt.extra; uint out_len = self.extra[(usz)start]; uint in_len = self.extra[(usz)start+1]; uint clobber_len = self.extra[(usz)start+2];
 			uint out_start = start + 3; uint in_start = out_start + out_len * 3; uint clobber_start = in_start + in_len * 3; uint label_start = clobber_start + clobber_len;
-			NodeIndex[] clobbers = ((NodeIndex*)self.extra.array_view().ptr)[(usz)clobber_start : (usz)clobber_len];
-			NodeIndex[] labels = ((NodeIndex*)self.extra.array_view().ptr)[(usz)label_start : (usz)d[1]];
-			GnuAsmQualifiers aq = { .is_inline = r.tag == ASM_STMT_INLINE || r.tag == ASM_STMT_INLINE_VOLATILE, .is_volatile = r.tag == ASM_STMT_VOLATILE || r.tag == ASM_STMT_INLINE_VOLATILE, .is_goto = d[1] > 0 };
+			GnuAsmQualifiers aq = { .is_inline = r.form.asm_inline, .is_volatile = r.form.asm_volatile, .is_goto = label_len > 0 };
 			// The operand records are serialized into `extra` as three words
 			// each. Start each view at its word offset before interpreting it as
 			// AsmOperand; the entire extra buffer need not be record-aligned.
 			uint[] words = self.extra.array_view();
-			return { .kind = ASM_STMT, .asm_stmt = { .asm_tok = r.tok, .asm_str = (NodeIndex)d[0], .outputs = asm_operands(words, out_start, out_len), .inputs = asm_operands(words, in_start, in_len), .clobbers = clobbers, .labels = labels, .quals = aq } };
-		case ASM_STMT_SIMPLE:
-			GnuAsmQualifiers simple_q = (GnuAsmQualifiers)d[1];
-			return { .kind = ASM_STMT, .asm_stmt = { .asm_tok = r.tok, .asm_str = (NodeIndex)d[0], .quals = simple_q } };
+			return { .kind = ASM_STMT, .asm_stmt = { .asm_tok = r.tok, .asm_str = d.asm_stmt.asm_str, .outputs = asm_operands(words, out_start, out_len), .inputs = asm_operands(words, in_start, in_len), .clobbers = self.extra_nodes(clobber_start, clobber_len), .labels = self.extra_nodes(label_start, label_len), .quals = aq } };
 		case COMMA_EXPR:
 		case ASSIGN_EXPR:
 		case MUL_ASSIGN_EXPR:
@@ -407,7 +484,7 @@ fn Node Tree.decode_expr_stmt(&self, NodeIndex index)
 		case SUB_EXPR:
 		case MUL_EXPR:
 		case DIV_EXPR:
-		case MOD_EXPR: return { .kind = r.tag.kind, .binary = { .qt = (QualType)d[0], .lhs = (NodeIndex)d[1], .op_tok = r.tok, .rhs = (NodeIndex)d[2] } };
+		case MOD_EXPR: return { .kind = r.kind, .binary = { .qt = d.binary.qt, .lhs = d.binary.lhs, .op_tok = r.tok, .rhs = d.binary.rhs } };
 		case COMPOUND_ASSIGN_DUMMY_EXPR:
 		case ADDR_OF_EXPR:
 		case DEREF_EXPR:
@@ -424,15 +501,14 @@ fn Node Tree.decode_expr_stmt(&self, NodeIndex index)
 		case PAREN_EXPR:
 		case STMT_EXPR:
 		case COND_DUMMY_EXPR:
-		case IMAGINARY_LITERAL: return { .kind = r.tag.kind, .unary = { .qt = (QualType)d[0], .op_tok = r.tok, .operand = (NodeIndex)d[1] } };
-		case EXPLICIT_CAST:
-		case IMPLICIT_CAST: return { .kind = CAST, .cast = { .qt = (QualType)d[0], .l_paren = r.tok, .kind = (CastKind)d[1], .operand = (NodeIndex)d[2], .implicit = r.tag == IMPLICIT_CAST } };
-		case ADDR_OF_LABEL: return { .kind = ADDR_OF_LABEL, .addr_of_label = { .label_tok = r.tok, .qt = (QualType)d[0] } };
-		case ARRAY_ACCESS_EXPR: return { .kind = ARRAY_ACCESS_EXPR, .array_access = { .l_bracket_tok = r.tok, .qt = (QualType)d[0], .base = (NodeIndex)d[1], .index = (NodeIndex)d[2] } };
-		case MEMBER_ACCESS_EXPR: return { .kind = MEMBER_ACCESS_EXPR, .member_access = { .qt = (QualType)d[0], .base = (NodeIndex)d[1], .access_tok = r.tok, .member_index = d[2] } };
-		case MEMBER_ACCESS_PTR_EXPR: return { .kind = MEMBER_ACCESS_PTR_EXPR, .member_access = { .qt = (QualType)d[0], .base = (NodeIndex)d[1], .access_tok = r.tok, .member_index = d[2] } };
-		case DECL_REF_EXPR: return { .kind = DECL_REF_EXPR, .decl_ref = { .name_tok = r.tok, .qt = (QualType)d[0], .decl = (NodeIndex)d[1] } };
-		case ENUMERATION_REF: return { .kind = ENUMERATION_REF, .decl_ref = { .name_tok = r.tok, .qt = (QualType)d[0], .decl = (NodeIndex)d[1] } };
+		case IMAGINARY_LITERAL: return { .kind = r.kind, .unary = { .qt = d.unary.qt, .op_tok = r.tok, .operand = d.unary.operand } };
+		case CAST: return { .kind = CAST, .cast = { .qt = d.cast.qt, .l_paren = r.tok, .kind = (CastKind)d.cast.kind, .operand = d.cast.operand, .implicit = r.form.implicit } };
+		case ADDR_OF_LABEL: return { .kind = ADDR_OF_LABEL, .addr_of_label = { .label_tok = r.tok, .qt = d.typed.qt } };
+		case ARRAY_ACCESS_EXPR: return { .kind = ARRAY_ACCESS_EXPR, .array_access = { .l_bracket_tok = r.tok, .qt = d.array_access.qt, .base = d.array_access.base, .index = d.array_access.index } };
+		case MEMBER_ACCESS_EXPR:
+		case MEMBER_ACCESS_PTR_EXPR: return { .kind = r.kind, .member_access = { .qt = d.member_access.qt, .base = d.member_access.base, .access_tok = r.tok, .member_index = d.member_access.member_index } };
+		case DECL_REF_EXPR:
+		case ENUMERATION_REF: return { .kind = r.kind, .decl_ref = { .name_tok = r.tok, .qt = d.decl_ref.qt, .decl = d.decl_ref.decl } };
 		default: unreachable("expression decoding not implemented");
 	}
 }

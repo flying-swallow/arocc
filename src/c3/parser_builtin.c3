@@ -1,6 +1,6 @@
 // Typed parsers for specialized expression builtins. The caller supplies the
-// same expression productions used elsewhere and installs primary_expression
-// as ExpressionParser's optional builtin hook.
+// same expression productions used elsewhere and installs the BuiltinParser
+// as ExpressionParser's optional `parser::IBuiltinParser`.
 module aro::parser_builtin;
 import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer;
 import aro::type_store, aro::value, aro::compilation, aro::parser_diagnostics, aro::lang_opts;
@@ -12,27 +12,39 @@ import std::core::dstring;
 
 excuse PARSING_FAILED;
 
-alias AssignmentExpression = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias IntegerConstantExpression = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode mode, bool eval);
-
-<* Expression grammar supplied by the owning parser. Callbacks must consume
-   exactly one expression and leave the parser at its following token. *>
-struct BuiltinParser
+<* Specialized builtin grammar. Operand expressions come from the owner's
+   `expressions` grammar, whose productions must consume exactly one expression
+   and leave the parser at its following token. `parser` is set on each
+   `parse_builtin_primary` call. *>
+struct BuiltinParser (parser::IBuiltinParser)
 {
 	parser::Parser* parser;
-	void* context;
-	AssignmentExpression assignment_expression;
-	IntegerConstantExpression integer_constant_expression;
+	parser::IExpressionGrammar expressions;
 	tokens::TokenIndex opener;
+}
+
+<* Zig `assignExpr` through the owner's grammar. HOOK_ABSENT when it provides none. *>
+fn parser_result::Result? BuiltinParser.assign_expr(&self, bool eval)
+{
+	parser::IExpressionGrammar g = self.expressions;
+	if (!g || !&g.assignment_expression) return parser::HOOK_ABSENT~;
+	return g.assignment_expression(self.parser, eval);
+}
+
+<* Zig `integerConstExpr` through the owner's grammar. HOOK_ABSENT when it provides none. *>
+fn parser_result::Result? BuiltinParser.integer_const_expr(&self, parser::ConstDeclFoldingMode mode, bool eval)
+{
+	parser::IExpressionGrammar g = self.expressions;
+	if (!g || !&g.integer_constant_expression) return parser::HOOK_ABSENT~;
+	return g.integer_constant_expression(self.parser, mode, eval);
 }
 
 <* ExpressionParser builtin hook. It resolves the source spelling through the
    normal builtin cache, dispatches only the supported common tags, and leaves
    every other identifier to ordinary primary-expression parsing. *>
-fn parser_result::Result? builtin_primary_expression(void* context, parser::Parser* p, bool eval)
+fn parser_result::Result? BuiltinParser.parse_builtin_primary(&self, parser::Parser* p, bool eval) @dynamic
 {
-	BuiltinParser* configured = (BuiltinParser*)context;
-	if (configured == null) return parser_expression::NO_EXPRESSION~;
+	BuiltinParser* configured = self;
 	String spelling = p.tree.tok_slice(p.tok_i);
 	builtins::Expanded? maybe_expanded = p.comp.builtins.get_or_create(p.comp, spelling);
 	if (catch maybe_expanded) return parser_expression::NO_EXPRESSION~;
@@ -229,9 +241,7 @@ fn parser_result::Result? BuiltinParser.bit_cast(&self, tokens::TokenIndex built
 	type_store::QualType dest = p.parse_typed_type_name() ?? type_store::INVALID;
 	if (dest.is_invalid()) return PARSING_FAILED~;
 	if (catch self.comma()) return PARSING_FAILED~;
-	parser_result::Result? parsed = self.assignment_expression(self.context, p, eval);
-	if (catch caught_fault = parsed) return caught_fault~;
-	parser_result::Result operand = parsed;
+	parser_result::Result operand = self.assign_expr(eval)!;
 	operand.lval_conversion(p);
 	if (catch self.close()) return PARSING_FAILED~;
 	operand.save_value(p);
@@ -248,15 +258,11 @@ fn parser_result::Result? BuiltinParser.shufflevector(&self, tokens::TokenIndex 
 	parser::Parser* p = self.parser;
 	if (catch self.open()) return PARSING_FAILED~;
 	tokens::TokenIndex lhs_tok = p.tok_i;
-	parser_result::Result? maybe_lhs = self.assignment_expression(self.context, p, eval);
-	if (catch caught_fault = maybe_lhs) return caught_fault~;
-	parser_result::Result lhs = maybe_lhs;
+	parser_result::Result lhs = self.assign_expr(eval)!;
 	lhs.value_conversion(p);
 	if (catch self.comma()) return PARSING_FAILED~;
 	tokens::TokenIndex rhs_tok = p.tok_i;
-	parser_result::Result? maybe_rhs = self.assignment_expression(self.context, p, eval);
-	if (catch caught_fault = maybe_rhs) return caught_fault~;
-	parser_result::Result rhs = maybe_rhs;
+	parser_result::Result rhs = self.assign_expr(eval)!;
 	rhs.value_conversion(p);
 	value::Value negative_one = value::int_i64(-1, p.comp);
 	List{type_store::NodeIndex} indexes;
@@ -266,9 +272,7 @@ fn parser_result::Result? BuiltinParser.shufflevector(&self, tokens::TokenIndex 
 	{
 		p.advance();
 		tokens::TokenIndex index_tok = p.tok_i;
-		parser_result::Result? maybe_index = self.integer_constant_expression(self.context, p, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval);
-		if (catch caught_fault = maybe_index) return caught_fault~;
-		parser_result::Result index = maybe_index;
+		parser_result::Result index = self.integer_const_expr(parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval)!;
 		if (!index.qt.is_int(p.comp) || index.val.is_none())
 		{
 			p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR, "expression is not an integer constant expression", index_tok)!;
@@ -313,9 +317,7 @@ fn parser_result::Result? BuiltinParser.va_arg(&self, tokens::TokenIndex builtin
 	parser::Parser* p = self.parser;
 	if (catch self.open()) return PARSING_FAILED~;
 	tokens::TokenIndex list_tok = p.tok_i;
-	parser_result::Result? maybe_list = self.assignment_expression(self.context, p, eval);
-	if (catch caught_fault = maybe_list) return caught_fault~;
-	parser_result::Result va_list = maybe_list;
+	parser_result::Result va_list = self.assign_expr(eval)!;
 	va_list.lval_conversion(p);
 	if (catch self.comma()) return PARSING_FAILED~;
 	type_store::QualType result_qt = p.parse_typed_type_name() ?? type_store::INVALID;
@@ -444,15 +446,14 @@ fn parser_result::Result? BuiltinParser.offsetof(&self, tokens::TokenIndex built
 		{
 			tokens::TokenIndex bracket_tok = p.tok_i;
 			p.advance();
-			parser_result::Result? maybe_index;
-			if (self.assignment_expression != null)
+			// Prefer the full assignment grammar; fall back to an integer constant expression.
+			parser_result::Result? maybe_index = self.assign_expr(eval);
+			if (catch absent = maybe_index)
 			{
-				maybe_index = self.assignment_expression(self.context, p, eval);
-			}
-			else
-			{
-				maybe_index = self.integer_constant_expression(self.context, p,
-					parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval);
+				if (absent == parser::HOOK_ABSENT)
+				{
+					maybe_index = self.integer_const_expr(parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval);
+				}
 			}
 			if (catch caught_fault = maybe_index) { self.recover_offsetof(); return caught_fault~; }
 			parser_result::Result index = maybe_index;
@@ -521,9 +522,7 @@ fn parser_result::Result? BuiltinParser.convertvector(&self, tokens::TokenIndex 
 {
 	parser::Parser* p = self.parser;
 	if (catch self.open()) return PARSING_FAILED~;
-	parser_result::Result? parsed = self.assignment_expression(self.context, p, eval);
-	if (catch caught_fault = parsed) return caught_fault~;
-	parser_result::Result operand = parsed;
+	parser_result::Result operand = self.assign_expr(eval)!;
 	operand.value_conversion(p);
 	if (catch self.comma()) return PARSING_FAILED~;
 	type_store::QualType dest = p.parse_typed_type_name() ?? type_store::INVALID;
@@ -542,12 +541,12 @@ fn parser_result::Result? BuiltinParser.convertvector(&self, tokens::TokenIndex 
 			}
 			else
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.CONVERTVECTOR_ARG, "second argument to __builtin_convertvector must be a vector type", builtin_tok)!;
+				p.err(parser_diagnostics::ParserDiag.CONVERTVECTOR_ARG, builtin_tok, "second")!;
 			}
 		}
 		else
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.CONVERTVECTOR_ARG, "first argument to __builtin_convertvector must be a vector type", builtin_tok)!;
+			p.err(parser_diagnostics::ParserDiag.CONVERTVECTOR_ARG, builtin_tok, "first")!;
 		}
 	}
 	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CONVERTVECTOR, .convertvector = {
@@ -586,9 +585,7 @@ fn parser_result::Result? BuiltinParser.choose_expr(&self, bool eval = true)
 	parser::Parser* p = self.parser;
 	if (catch self.open()) return PARSING_FAILED~;
 	tokens::TokenIndex cond_tok = p.tok_i;
-	parser_result::Result? maybe_cond = self.integer_constant_expression(self.context, p, parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING, eval);
-	if (catch caught_fault = maybe_cond) return caught_fault~;
-	parser_result::Result cond = maybe_cond;
+	parser_result::Result cond = self.integer_const_expr(parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING, eval)!;
 	if (cond.val.is_none())
 	{
 		p.emit_parser_diag(parser_diagnostics::ParserDiag.BUILTIN_CHOOSE_COND, "'__builtin_choose_expr' requires a constant expression", cond_tok)!;
@@ -596,13 +593,9 @@ fn parser_result::Result? BuiltinParser.choose_expr(&self, bool eval = true)
 	}
 	bool select_then = cond.val.to_bool(p.comp);
 	if (catch self.comma()) return PARSING_FAILED~;
-	parser_result::Result? maybe_then = self.assignment_expression(self.context, p, eval && select_then);
-	if (catch caught_fault = maybe_then) return caught_fault~;
-	parser_result::Result then_expr = maybe_then;
+	parser_result::Result then_expr = self.assign_expr(eval && select_then)!;
 	if (catch self.comma()) return PARSING_FAILED~;
-	parser_result::Result? maybe_else = self.assignment_expression(self.context, p, eval && !select_then);
-	if (catch caught_fault = maybe_else) return caught_fault~;
-	parser_result::Result else_expr = maybe_else;
+	parser_result::Result else_expr = self.assign_expr(eval && !select_then)!;
 	if (catch self.close()) return PARSING_FAILED~;
 	parser_result::Result selected = select_then ? then_expr : else_expr;
 	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CHOOSE_EXPR, .conditional = {

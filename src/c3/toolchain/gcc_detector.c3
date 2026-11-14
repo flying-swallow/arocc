@@ -95,7 +95,7 @@ fn String GccDetector.own(&self, String s)
  appendToolPath: when valid, appends join(parent_lib_path, "..", gcc_triple,
  "bin") (allocated with `a`, owned by the caller) to `program_paths`.
 *>
-fn void GccDetector.append_tool_path(&self, Allocator a, List{String}* program_paths)
+fn void GccDetector.append_tool_path(&self, Allocator a, List{String} * program_paths)
 {
 	if (!self.is_valid) return;
 	program_paths.push(discovery::join(a, { self.parent_lib_path, "..", self.gcc_triple, "bin" }));
@@ -256,7 +256,7 @@ const String[] X86_64_ANDROID_TRIPLES = { "x86_64-linux-android" };
 fn void collect_lib_dirs_and_triples(Env* env, Candidates* out)
 {
 	Target* target = &env.target;
-	if (target.os.tag == ILLUMOS) return; // TODO in Zig
+	if (target.os.tag == ILLUMOS) return;  // TODO in Zig
 	if (target.abi.is_android())
 	{
 		switch (target.cpu.arch)
@@ -512,8 +512,16 @@ fn void? GccDetector.discover(&self, Env* env)
 			if (catch lib_dir) continue;
 			if (!env.exists(lib_dir)) continue;
 
-			bool gcc_dir_exists = env.joined_exists({ lib_dir, "/gcc" });
-			bool gcc_cross_dir_exists = env.joined_exists({ lib_dir, "/gcc-cross" });
+			bool gcc_dir_exists = env.joined_exists(
+				{
+					lib_dir, "/gcc"
+				}
+			);
+			bool gcc_cross_dir_exists = env.joined_exists(
+				{
+					lib_dir, "/gcc-cross"
+				}
+			);
 
 			self.scan_lib_dir_for_gcc_triple(env, lib_dir, triple_str, false, gcc_dir_exists, gcc_cross_dir_exists)!;
 			foreach (candidate : c.triple_aliases.slice())
@@ -527,8 +535,16 @@ fn void? GccDetector.discover(&self, Env* env)
 			if (catch lib_dir) continue;
 			if (!env.exists(lib_dir)) continue;
 
-			bool gcc_dir_exists = env.joined_exists({ lib_dir, "/gcc" });
-			bool gcc_cross_dir_exists = env.joined_exists({ lib_dir, "/gcc-cross" });
+			bool gcc_dir_exists = env.joined_exists(
+				{
+					lib_dir, "/gcc"
+				}
+			);
+			bool gcc_cross_dir_exists = env.joined_exists(
+				{
+					lib_dir, "/gcc-cross"
+				}
+			);
 			foreach (candidate : c.biarch_triple_aliases.slice())
 			{
 				self.scan_lib_dir_for_gcc_triple(env, lib_dir, candidate, true, gcc_dir_exists, gcc_cross_dir_exists)!;
@@ -639,17 +655,11 @@ fn bool? find_biarch_multilibs(Env* env, Detected* result, String[2] path, bool 
 	bool is_x32 = target.abi == GNUX32 || target.abi == MUSLX32;
 	ushort target_ptr_width = target.ptr_bit_width();
 	Want want;
-	if (target_ptr_width == 32 && multilib_filter.exists(&alt_32, env))
+	if ((target_ptr_width == 32 && multilib_filter.exists(&alt_32, env)) ||
+	(target_ptr_width == 64 && is_x32 && multilib_filter.exists(&alt_x32, env)) ||
+	(target_ptr_width == 64 && !is_x32 && multilib_filter.exists(&alt_64, env)))
 	{
 		want = WANT64;
-	}
-	else if (target_ptr_width == 64 && is_x32 && multilib_filter.exists(&alt_x32, env))
-	{
-		want = WANT64;
-	}
-	else if (target_ptr_width == 64 && !is_x32 && multilib_filter.exists(&alt_64, env))
-	{
-		want = WANT32;
 	}
 	else if (target_ptr_width == 32)
 	{
@@ -677,9 +687,11 @@ fn bool? find_biarch_multilibs(Env* env, Detected* result, String[2] path, bool 
 	result.push(alt_x32);
 
 	result.filter(multilib_filter, env);
-	return result.select({
-		target_ptr_width == 64 && !is_x32 ? "+m64" : "-m64",
-		target_ptr_width == 32 ? "+m32" : "-m32",
-		target_ptr_width == 64 && is_x32 ? "+mx32" : "-mx32",
-	});
+	return result.select(
+		{
+			target_ptr_width == 64 && !is_x32 ? "+m64" : "-m64",
+			target_ptr_width == 32 ? "+m32" : "-m32",
+			target_ptr_width == 64 && is_x32 ? "+mx32" : "-mx32",
+		}
+	);
 }

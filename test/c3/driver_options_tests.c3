@@ -118,6 +118,23 @@ fn void optimization_and_code_model_enum_names_are_supported() @test
 	assert(@catch(code_gen_options::code_model_from_name("huge")) == code_gen_options::UNKNOWN_CODE_MODEL);
 }
 
+fn void verbose_ir_does_not_enable_hidden_ir_verification() @test
+{
+	DriverOptions dump_only;
+	dump_only.init(mem);
+	defer dump_only.free();
+	parse_options(&dump_only, { "aro", "--verbose-ir", "source.c" });
+	check(dump_only.verbose_ir, true);
+	check(dump_only.verify_ir, false);
+
+	DriverOptions verify_only;
+	verify_only.init(mem);
+	defer verify_only.free();
+	parse_options(&verify_only, { "aro", "--verify-ir", "source.c" });
+	check(verify_only.verify_ir, true);
+	check(verify_only.verbose_ir, false);
+}
+
 fn void debug_format_enum_contract_is_available() @test
 {
 	CodeGenOptions options = code_gen_options::DEFAULT;
@@ -149,6 +166,24 @@ fn void verbose_linker_arguments_option_is_recorded() @test
 	defer opts.free();
 	parse_options(&opts, { "aro", "--verbose-linker-args", "source.c" });
 	check(opts.verbose_linker_args, true);
+}
+
+fn void integrated_assembler_options_follow_argument_order() @test
+{
+	DriverOptions opts;
+	opts.init(mem);
+	defer opts.free();
+	check(opts.integrated_as, false);
+
+	parse_options(&opts, { "aro", "-fintegrated-as", "source.c" });
+	check(opts.integrated_as, true);
+	parse_options(&opts, { "aro", "-fno-integrated-as", "source.c" });
+	check(opts.integrated_as, false);
+
+	parse_options(&opts, { "aro", "-fno-integrated-as", "-fintegrated-as", "source.c" });
+	check(opts.integrated_as, true);
+	parse_options(&opts, { "aro", "-fintegrated-as", "-fno-integrated-as", "source.c" });
+	check(opts.integrated_as, false);
 }
 
 fn void pic_pie_policy_tracks_target_and_explicit_requests() @test

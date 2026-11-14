@@ -199,28 +199,38 @@ fn Source? compilation::Compilation.search_include(&self, String filename, Sourc
 		if (try src = search_candidate(self, dir, filename, USER)) return src;
 	}
 	bool wait = false;
-	String wait_dir = "";
 	String wait_norm = "";
 	if (which == NEXT) {
-		// A bare includer name lives in "." and a root-level includer lives in "/".
-		wait_dir = ".";
-		for (usz i = current.path.len; i > 0; i--) if (current.path[i - 1] == '/') { wait_dir = i == 1 ? "/" : current.path[:i - 1]; break; }
-		// Zig compares the normalized candidate dirname with find.wait_for, so the
-		// includer's dirname is normalized too; `//` spellings of -I must match it.
-		wait_norm = normalize_path(self.gpa, wait_dir);
-		// Zig FindInclude.wait_for: skip every candidate until the includer's
-		// directory is reached; an includer outside the search path finds nothing.
-		wait = true;
+		// Zig sets FindInclude.wait_for = std.fs.path.dirname(other_file). A bare
+		// includer name has no dirname (null), so nothing is waited on and every -I
+		// dir is searched. Only a slashed includer waits on its directory.
+		uint slash = current.path.len;
+		for (usz i = current.path.len; i > 0; i--) if (current.path[i - 1] == '/') { slash = (uint)i - 1; break; }
+		if (slash != current.path.len) {
+			// A root-level includer ("/x.h") lives in "/".
+			String wait_dir = slash == 0 ? "/" : current.path[:slash];
+			// Zig compares the normalized candidate dirname with find.wait_for, so the
+			// includer's dirname is normalized too; `//` spellings of -I must match it.
+			wait_norm = normalize_path(self.gpa, wait_dir);
+			// Zig FindInclude.wait_for: skip every candidate until the includer's
+			// directory is reached; an includer outside the search path finds nothing.
+			wait = true;
+		}
 	}
-	// normalize_path always allocates, so only the NEXT path owns wait_norm.
+	// normalize_path always allocates (len >= 1), so only a slashed NEXT includer owns wait_norm.
 	defer if (wait_norm.len) alloc::free(self.gpa, wait_norm.ptr);
 	foreach (dir : self.include_dirs) {
 		bool framework_dir = dir.kind == FRAMEWORK || dir.kind == SYSTEM_FRAMEWORK;
 		if (wait && !framework_dir) {
-			String dir_norm = normalize_path(self.gpa, dir.path);
-			bool same = dir_norm == wait_norm;
-			alloc::free(self.gpa, dir_norm.ptr);
-			if (same) wait = false;
+			// Zig FindInclude.check: while waiting, compare the candidate's dirname
+			// (not the -I dir) with the includer's dirname. A match clears the wait
+			// and skips that candidate; anything else is rejected.
+			String candidate = include_path(self, dir.path, filename);
+			defer alloc::free(self.gpa, candidate.ptr);
+			uint candidate_dir_end = candidate.len;
+			for (usz i = candidate.len; i > 0; i--) if (candidate[i - 1] == '/') { candidate_dir_end = (uint)i - 1; break; }
+			String candidate_dir = candidate_dir_end == candidate.len ? "." : candidate_dir_end == 0 ? "/" : candidate[:candidate_dir_end];
+			if (candidate_dir == wait_norm) wait = false;
 			continue;
 		}
 		if (dir.kind == QUOTE && type == ANGLE_BRACKETS) continue;
@@ -318,9 +328,7 @@ fn bool? provider_has_include(void* ctx, Preprocessor* pp, String filename, Sour
 fn char[]? read_embed_candidate(Compilation* comp, Preprocessor* pp, String path, String dependency_path, ulong limit) {
 	// Keep provider read failures distinct from a candidate that does not exist.
 	// The FileProvider contract passes `limit` through to the file service.
-	char[]? loaded = comp.include_files.read(comp.include_files.ctx, comp.gpa, path, limit);
-	if (catch f = loaded) return f~;
-	char[] bytes = loaded;
+	char[] bytes = comp.include_files.read(comp.include_files.ctx, comp.gpa, path, limit)!;
 	// Zig Compilation.findEmbed records the spelling used in the directive.
 	// That text may be backed by a temporary expansion buffer, so the
 	// dependency sink owns a copy.

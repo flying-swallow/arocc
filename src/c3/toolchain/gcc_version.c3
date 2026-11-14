@@ -88,7 +88,7 @@ fn bool parse_i32(String s, int* out)
 		if (s.len == 1) return false;
 	}
 	long v = 0;
-	bool prev_underscore = true; // no leading '_'
+	bool prev_underscore = true;  // no leading '_'
 	for (; i < s.len; i++)
 	{
 		char c = s[i];
@@ -103,7 +103,7 @@ fn bool parse_i32(String s, int* out)
 		v = v * 10 + (long)(c - '0');
 		if (v > 2147483648) return false;
 	}
-	if (prev_underscore) return false; // trailing '_'
+	if (prev_underscore) return false;  // trailing '_'
 	if (neg) v = -v;
 	if (v > 2147483647 || v < -2147483648) return false;
 	*out = (int)v;

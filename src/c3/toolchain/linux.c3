@@ -32,7 +32,7 @@ fn void Linux.free(&self)
 }
 
 <* Linux.discover: detects the host distro, GCC install/multilib, and paths. *>
-fn void? Linux.discover(&self, discovery::Env* env, List{String}* program_paths, List{String}* file_paths, bool enable_build_id)
+fn void? Linux.discover(&self, discovery::Env* env, List{String} * program_paths, List{String} * file_paths, bool enable_build_id)
 {
 	self.distro_tag = distro::detect(env);
 	self.gcc.discover(env)!;
@@ -42,7 +42,7 @@ fn void? Linux.discover(&self, discovery::Env* env, List{String}* program_paths,
 }
 
 <* Appends paths that exist, preserving Zig's search order and path joins. *>
-fn void Linux.find_paths(&self, discovery::Env* env, List{String}* file_paths)
+fn void Linux.find_paths(&self, discovery::Env* env, List{String} * file_paths)
 {
 	Target* t = &env.target;
 	String os_lib_dir = get_os_lib_dir(t);
@@ -61,7 +61,7 @@ fn void Linux.find_paths(&self, discovery::Env* env, List{String}* file_paths)
 	self.add_existing(env, file_paths, { sysroot, "/usr", "lib" });
 }
 
-fn void Linux.add_existing(&self, discovery::Env* env, List{String}* file_paths, String[] parts)
+fn void Linux.add_existing(&self, discovery::Env* env, List{String} * file_paths, String[] parts)
 {
 	String path = discovery::join(self.a, parts);
 	if (env.exists(path))
@@ -74,7 +74,7 @@ fn void Linux.add_existing(&self, discovery::Env* env, List{String}* file_paths,
 	}
 }
 
-fn void Linux.add_multilib_paths(&self, discovery::Env* env, List{String}* file_paths, String sysroot, String os_lib_dir)
+fn void Linux.add_multilib_paths(&self, discovery::Env* env, List{String} * file_paths, String sysroot, String os_lib_dir)
 {
 	if (!self.gcc.is_valid) return;
 	String gcc_triple = self.gcc.gcc_triple;
@@ -85,7 +85,7 @@ fn void Linux.add_multilib_paths(&self, discovery::Env* env, List{String}* file_
 	if (lib_path.starts_with(sysroot)) self.add_existing(env, file_paths, { lib_path, "..", os_lib_dir });
 }
 
-fn void Linux.add_multiarch_paths(&self, discovery::Env* env, List{String}* file_paths)
+fn void Linux.add_multiarch_paths(&self, discovery::Env* env, List{String} * file_paths)
 {
 	if (!self.gcc.is_valid) return;
 	self.add_existing(env, file_paths, { self.gcc.parent_lib_path, "..", self.gcc.gcc_triple, "lib", self.gcc.selected.os_suffix });
@@ -126,16 +126,24 @@ fn String[] Linux.linker_extra_opts(&self) => self.extra_opts.entries[:self.extr
 *>
 fn void Linux.append_linker_policy(&self, Toolchain* tc, Target* t, bool pie, bool static_pie, bool rdynamic, bool strip,
 	bool shared, bool static_link, bool relocatable, String emulation, String dynamic_linker,
-	List{String}* argv)
+	List{String} * argv)
 {
 	if (pie) argv.push("-pie");
-	if (static_pie) argv.push_all({ "-static", "-pie", "--no-dynamic-linker", "-z", "text" });
+	if (static_pie) argv.push_all(
+	{
+		"-static", "-pie", "--no-dynamic-linker", "-z", "text"
+	}
+	);
 	if (rdynamic) argv.push("-export-dynamic");
 	if (strip) argv.push("-s");
 	argv.push_all(self.linker_extra_opts());
 	argv.push("--eh-frame-hdr");
 	if (emulation.len == 0) return;
-	argv.push_all({ "-m", emulation });
+	argv.push_all(
+	{
+		"-m", emulation
+	}
+	);
 	if (t.cpu.arch.is_riscv()) argv.push("-X");
 	if (shared) argv.push("-shared");
 	if (static_link)

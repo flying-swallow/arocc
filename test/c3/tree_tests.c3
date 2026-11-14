@@ -26,17 +26,17 @@ fn void empty_decl_round_trip_and_growth() @test
 			tree.init(&comp, {});
 			NodeIndex first = tree.add_node({ .kind = NodeKind.EMPTY_DECL, .empty_decl = { .semicolon = 0 } });
 			check(first, 0);
-			check(first.tag(&tree), NodeTag.EMPTY_DECL);
+			check(first.kind(&tree), NodeKind.EMPTY_DECL);
 			Node got = first.get(&tree);
 			check(got.kind, NodeKind.EMPTY_DECL);
 			check(got.empty_decl.semicolon, 0);
 			NodeIndex[2] compact_fields = { first, first };
 			NodeIndex compact = tree.add_node({ .kind = NodeKind.STRUCT_DECL, .container_decl = { .name_or_kind_tok = 0, .container_qt = type_store::VOID, .fields = compact_fields[..] } });
-			check(compact.tag(&tree), NodeTag.STRUCT_DECL_TWO);
+			check(compact.kind(&tree), NodeKind.STRUCT_DECL); assert(compact.form(&tree).packed);
 			check(compact.get(&tree).container_decl.fields.len, 2);
 			NodeIndex[3] long_fields = { first, first, first };
 			NodeIndex extended = tree.add_node({ .kind = NodeKind.STRUCT_DECL, .container_decl = { .name_or_kind_tok = 0, .container_qt = type_store::VOID, .fields = long_fields[..] } });
-			check(extended.tag(&tree), NodeTag.STRUCT_DECL);
+			check(extended.kind(&tree), NodeKind.STRUCT_DECL); assert(!extended.form(&tree).packed);
 			uint first_added_index = (uint)tree.nodes.len();
 			for (uint i = 0; i < 256; i++)
 			{
@@ -67,7 +67,7 @@ fn void declaration_expression_and_statement_round_trips() @test
 			Tree tree;
 			tree.init(&comp, {});
 			NodeIndex decl = tree.add_node({ .kind = NodeKind.VARIABLE, .variable = { .name_tok = 11, .qt = type_store::INT, .storage_class = VariableStorageClass.STATIC, .thread_local = true, .implicit = true, .initializer = type_store::NODE_NULL, .definition = (NodeOptIndex)(uint)7 } });
-			check(decl.tag(&tree), NodeTag.VARIABLE);
+			check(decl.kind(&tree), NodeKind.VARIABLE); assert(!decl.form(&tree).defined);
 			Node decoded_decl = decl.get(&tree);
 			check(decoded_decl.variable.name_tok, 11);
 			assert(decoded_decl.variable.qt == type_store::INT);
@@ -80,7 +80,7 @@ fn void declaration_expression_and_statement_round_trips() @test
 			NodeIndex lhs = tree.add_node({ .kind = NodeKind.INT_LITERAL, .literal = { .literal_tok = 21, .qt = type_store::INT } });
 			NodeIndex rhs = tree.add_node({ .kind = NodeKind.INT_LITERAL, .literal = { .literal_tok = 22, .qt = type_store::INT } });
 			NodeIndex sum = tree.add_node({ .kind = NodeKind.ADD_EXPR, .binary = { .qt = type_store::INT, .lhs = lhs, .op_tok = 23, .rhs = rhs } });
-			check(sum.tag(&tree), NodeTag.ADD_EXPR);
+			check(sum.kind(&tree), NodeKind.ADD_EXPR);
 			Node decoded_sum = sum.get(&tree);
 			check(decoded_sum.binary.lhs, lhs);
 			check(decoded_sum.binary.rhs, rhs);
@@ -90,7 +90,7 @@ fn void declaration_expression_and_statement_round_trips() @test
 			assert(!tree.is_lval(sum));
 
 			NodeIndex call = tree.add_node({ .kind = NodeKind.CALL_EXPR, .call = { .l_paren_tok = 24, .qt = type_store::INT, .callee = sum, .args = { lhs, rhs } } });
-			check(call.tag(&tree), NodeTag.CALL_EXPR);
+			check(call.kind(&tree), NodeKind.CALL_EXPR); assert(!call.form(&tree).packed);
 			Node decoded_call = call.get(&tree);
 			check(decoded_call.call.callee, sum);
 			check(decoded_call.call.args.len, 2);
@@ -98,7 +98,7 @@ fn void declaration_expression_and_statement_round_trips() @test
 			check(decoded_call.call.args[1], rhs);
 
 			NodeIndex stmt = tree.add_node({ .kind = NodeKind.RETURN_STMT, .return_stmt = { .return_tok = 25, .return_qt = type_store::INT, .operand = ReturnOperandKind.EXPR, .expr = sum } });
-			check(stmt.tag(&tree), NodeTag.RETURN_STMT);
+			check(stmt.kind(&tree), NodeKind.RETURN_STMT);
 			Node decoded_stmt = stmt.get(&tree);
 			check(decoded_stmt.return_stmt.expr, sum);
 			check(decoded_stmt.return_stmt.operand, ReturnOperandKind.EXPR);
@@ -127,18 +127,18 @@ fn void compact_expression_boundaries_and_borrowed_slices() @test
 			NodeIndex c = tree.add_node({ .kind = NodeKind.INT_LITERAL, .literal = { .literal_tok = 4, .qt = type_store::INT } });
 			NodeIndex[] no_args = {};
 			NodeIndex zero = tree.add_node({ .kind = NodeKind.CALL_EXPR, .call = { .l_paren_tok = 4, .qt = type_store::INT, .callee = callee, .args = no_args } });
-			check(zero.tag(&tree), NodeTag.CALL_EXPR_ONE);
+			check(zero.kind(&tree), NodeKind.CALL_EXPR); assert(zero.form(&tree).packed);
 			check(zero.get(&tree).call.args.len, 0);
 			NodeIndex[1] one_arg = { a };
 			NodeIndex one = tree.add_node({ .kind = NodeKind.CALL_EXPR, .call = { .l_paren_tok = 5, .qt = type_store::INT, .callee = callee, .args = one_arg[..] } });
-			check(one.tag(&tree), NodeTag.CALL_EXPR_ONE);
+			check(one.kind(&tree), NodeKind.CALL_EXPR); assert(one.form(&tree).packed);
 			check(one.get(&tree).call.args[0], a);
 			NodeIndex[2] two_args = { a, b };
 			NodeIndex two = tree.add_node({ .kind = NodeKind.CALL_EXPR, .call = { .l_paren_tok = 6, .qt = type_store::INT, .callee = callee, .args = two_args[..] } });
-			check(two.tag(&tree), NodeTag.CALL_EXPR);
+			check(two.kind(&tree), NodeKind.CALL_EXPR); assert(!two.form(&tree).packed);
 			NodeIndex[3] three_args = { a, b, c };
 			NodeIndex three = tree.add_node({ .kind = NodeKind.CALL_EXPR, .call = { .l_paren_tok = 7, .qt = type_store::INT, .callee = callee, .args = three_args[..] } });
-			check(three.tag(&tree), NodeTag.CALL_EXPR);
+			check(three.kind(&tree), NodeKind.CALL_EXPR); assert(!three.form(&tree).packed);
 			Node before_growth = three.get(&tree);
 			check(before_growth.call.args.len, 3);
 			for (uint i = 0; i < 256; i++) tree.add_node({ .kind = NodeKind.EMPTY_DECL, .empty_decl = { .semicolon = i } });
@@ -175,7 +175,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 			NodeIndex decl = tree.add_node({ .kind = NodeKind.STRUCT_DECL, .container_decl = { .name_or_kind_tok = 4, .container_qt = type_store::INT, .fields = fields[..] } });
 			Node decoded_decl = decl.get(&tree);
 			NodeRepr* decl_repr = tree.nodes.get_ref((sz)decl);
-			assert(decoded_decl.container_decl.fields.ptr == (NodeIndex*)&decl_repr.data[1]);
+			assert(decoded_decl.container_decl.fields.ptr == &decl_repr.data.typed_list.elems[0]);
 			check(decoded_decl.container_decl.fields.len, 2);
 			check(decoded_decl.container_decl.fields[1], b);
 
@@ -183,7 +183,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 			NodeIndex compound = tree.add_node({ .kind = NodeKind.COMPOUND_STMT, .compound_stmt = { .l_brace_tok = 5, .body = body[..] } });
 			Node decoded_compound = compound.get(&tree);
 			NodeRepr* compound_repr = tree.nodes.get_ref((sz)compound);
-			assert(decoded_compound.compound_stmt.body.ptr == (NodeIndex*)&compound_repr.data[0]);
+			assert(decoded_compound.compound_stmt.body.ptr == &compound_repr.data.elems[0]);
 			check(decoded_compound.compound_stmt.body.len, 2);
 			check(decoded_compound.compound_stmt.body[0], a);
 
@@ -191,7 +191,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 			NodeIndex decl_stmt = tree.add_node({ .kind = NodeKind.DECL_STMT, .decl_stmt = { .first_tok = 6, .decls = decls[..] } });
 			Node decoded_stmt = decl_stmt.get(&tree);
 			NodeRepr* stmt_repr = tree.nodes.get_ref((sz)decl_stmt);
-			assert(decoded_stmt.decl_stmt.decls.ptr == (NodeIndex*)&stmt_repr.data[0]);
+			assert(decoded_stmt.decl_stmt.decls.ptr == &stmt_repr.data.elems[0]);
 			check(decoded_stmt.decl_stmt.decls.len, 2);
 			check(decoded_stmt.decl_stmt.decls[1], c);
 
@@ -200,7 +200,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 			NodeIndex call = tree.add_node({ .kind = NodeKind.CALL_EXPR, .call = { .l_paren_tok = 8, .qt = type_store::INT, .callee = callee, .args = call_arg[..] } });
 			Node decoded_call = call.get(&tree);
 			NodeRepr* call_repr = tree.nodes.get_ref((sz)call);
-			assert(decoded_call.call.args.ptr == (NodeIndex*)&call_repr.data[2]);
+			assert(decoded_call.call.args.ptr == (NodeIndex*)&call_repr.data.call_one.arg);
 			check(decoded_call.call.args.len, 1);
 			check(decoded_call.call.args[0], b);
 
@@ -208,7 +208,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 			NodeIndex builtin_call = tree.add_node({ .kind = NodeKind.BUILTIN_CALL_EXPR, .builtin_call = { .builtin_tok = 9, .qt = type_store::INT, .args = builtin_args[..] } });
 			Node decoded_builtin = builtin_call.get(&tree);
 			NodeRepr* builtin_repr = tree.nodes.get_ref((sz)builtin_call);
-			assert(decoded_builtin.builtin_call.args.ptr == (NodeIndex*)&builtin_repr.data[1]);
+			assert(decoded_builtin.builtin_call.args.ptr == &builtin_repr.data.typed_list.elems[0]);
 			check(decoded_builtin.builtin_call.args.len, 2);
 			check(decoded_builtin.builtin_call.args[1], c);
 
@@ -216,7 +216,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 			NodeIndex init = tree.add_node({ .kind = NodeKind.ARRAY_INIT_EXPR, .container_init = { .l_brace_tok = 10, .container_qt = type_store::INT, .items = items[..] } });
 			Node decoded_init = init.get(&tree);
 			NodeRepr* init_repr = tree.nodes.get_ref((sz)init);
-			assert(decoded_init.container_init.items.ptr == (NodeIndex*)&init_repr.data[1]);
+			assert(decoded_init.container_init.items.ptr == &init_repr.data.typed_list.elems[0]);
 			check(decoded_init.container_init.items.len, 2);
 			check(decoded_init.container_init.items[0], b);
 
@@ -259,8 +259,8 @@ fn void sentinels_casts_classification_and_associations() @test
 			assert(!tree.is_bitfield(base));
 			NodeIndex explicit_cast = tree.add_node({ .kind = NodeKind.CAST, .cast = { .qt = type_store::INT, .l_paren = 10, .kind = CastKind.INT_CAST, .operand = base, .implicit = false } });
 			NodeIndex implicit_cast = tree.add_node({ .kind = NodeKind.CAST, .cast = { .qt = type_store::INT, .l_paren = 11, .kind = CastKind.LVAL_TO_RVAL, .operand = decl_ref, .implicit = true } });
-			check(explicit_cast.tag(&tree), NodeTag.EXPLICIT_CAST);
-			check(implicit_cast.tag(&tree), NodeTag.IMPLICIT_CAST);
+			check(explicit_cast.kind(&tree), NodeKind.CAST); assert(!explicit_cast.form(&tree).implicit);
+			check(implicit_cast.kind(&tree), NodeKind.CAST); assert(implicit_cast.form(&tree).implicit);
 			check(explicit_cast.get(&tree).cast.kind, CastKind.INT_CAST);
 			check(implicit_cast.get(&tree).cast.kind, CastKind.LVAL_TO_RVAL);
 			assert(!explicit_cast.get(&tree).is_implicit());
@@ -395,6 +395,86 @@ fn void token_location_round_trip_for_generated_and_source_tokens() @test
 			check(source_derived.loc(&tree).id.index, src.id.index);
 			check(source_derived.loc(&tree).byte_offset, 0);
 			check(source_derived.loc(&tree).line, 1);
+			tree.free();
+		}
+		comp.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void storage_form_round_trips() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Compilation comp;
+		comp.init(&ta);
+		{
+			Tree tree;
+			tree.init(&comp, {});
+			NodeIndex x = tree.add_node({ .kind = NodeKind.INT_LITERAL, .literal = { .literal_tok = 1, .qt = type_store::INT } });
+			NodeIndex y = tree.add_node({ .kind = NodeKind.INT_LITERAL, .literal = { .literal_tok = 2, .qt = type_store::INT } });
+			NodeIndex z = tree.add_node({ .kind = NodeKind.INT_LITERAL, .literal = { .literal_tok = 3, .qt = type_store::INT } });
+			NodeIndex body = tree.add_node({ .kind = NodeKind.NULL_STMT, .null_stmt = { .semicolon_or_r_brace_tok = 4 } });
+
+			// FOR_STMT: every init/cond/incr combination (Zig for_full .. for_ever).
+			for (uint mask = 0; mask < 8; mask++)
+			{
+				NodeOptIndex init = mask & 1 ? x.pack() : type_store::NODE_NULL;
+				NodeOptIndex cond = mask & 2 ? y.pack() : type_store::NODE_NULL;
+				NodeOptIndex incr = mask & 4 ? z.pack() : type_store::NODE_NULL;
+				NodeIndex f = tree.add_node({ .kind = NodeKind.FOR_STMT, .for_stmt = { .for_tok = 5, .init = init, .cond = cond, .incr = incr, .body = body } });
+				check(f.kind(&tree), NodeKind.FOR_STMT);
+				NodeForStmt got = f.get(&tree).for_stmt;
+				assert(got.init == init && got.cond == cond && got.incr == incr, "for mask %d", mask);
+				check(got.body, body);
+				assert(@catch(f.qt_or_null(&tree)) == tree::NO_QT);
+			}
+
+			// IF_STMT: plain (with/without else), init only, init + else.
+			NodeOptIndex[2] inits = { type_store::NODE_NULL, x.pack() };
+			NodeOptIndex[2] elses = { type_store::NODE_NULL, z.pack() };
+			foreach (init : inits)
+			{
+				foreach (else_body : elses)
+				{
+					NodeIndex i = tree.add_node({ .kind = NodeKind.IF_STMT, .if_stmt = { .if_tok = 6, .cond = y, .init = init, .then_body = body, .else_body = else_body } });
+					NodeIfStmt got = i.get(&tree).if_stmt;
+					assert(got.init == init && got.cond == y && got.then_body == body && got.else_body == else_body);
+				}
+			}
+
+			// RETURN_STMT: expr / none / implicit.
+			NodeIndex r_expr = tree.add_node({ .kind = NodeKind.RETURN_STMT, .return_stmt = { .return_tok = 7, .return_qt = type_store::INT, .operand = ReturnOperandKind.EXPR, .expr = x } });
+			NodeIndex r_none = tree.add_node({ .kind = NodeKind.RETURN_STMT, .return_stmt = { .return_tok = 7, .return_qt = type_store::VOID, .operand = ReturnOperandKind.NONE } });
+			NodeIndex r_impl = tree.add_node({ .kind = NodeKind.RETURN_STMT, .return_stmt = { .return_tok = 7, .return_qt = type_store::INT, .operand = ReturnOperandKind.IMPLICIT, .implicit_value = true } });
+			check(r_expr.get(&tree).return_stmt.operand, ReturnOperandKind.EXPR);
+			check(r_expr.get(&tree).return_stmt.expr, x);
+			check(r_none.get(&tree).return_stmt.operand, ReturnOperandKind.NONE);
+			check(r_impl.get(&tree).return_stmt.operand, ReturnOperandKind.IMPLICIT);
+			assert(r_impl.get(&tree).return_stmt.implicit_value);
+
+			// ASM_STMT: simple (packed) and extended with qualifiers.
+			NodeIndex simple = tree.add_node({ .kind = NodeKind.ASM_STMT, .asm_stmt = { .asm_tok = 8, .asm_str = x, .quals = { .is_volatile = true } } });
+			assert(simple.form(&tree).packed);
+			assert(simple.get(&tree).asm_stmt.quals.is_volatile && !simple.get(&tree).asm_stmt.quals.is_inline);
+			NodeIndex[1] clobbers = { y };
+			NodeIndex extended = tree.add_node({ .kind = NodeKind.ASM_STMT, .asm_stmt = { .asm_tok = 8, .asm_str = x, .clobbers = clobbers[..], .quals = { .is_inline = true, .is_volatile = true } } });
+			assert(!extended.form(&tree).packed);
+			NodeAsmStmt got_asm = extended.get(&tree).asm_stmt;
+			assert(got_asm.quals.is_inline && got_asm.quals.is_volatile && !got_asm.quals.is_goto);
+			check(got_asm.clobbers.len, 1);
+			check(got_asm.clobbers[0], y);
+
+			// FUNCTION: prototype vs definition.
+			NodeIndex proto = tree.add_node({ .kind = NodeKind.FUNCTION, .function = { .name_tok = 9, .qt = type_store::INT, .body = type_store::NODE_NULL, .definition = z.pack() } });
+			NodeIndex def = tree.add_node({ .kind = NodeKind.FUNCTION, .function = { .name_tok = 9, .qt = type_store::INT, .body = body.pack(), .definition = type_store::NODE_NULL } });
+			assert(!proto.form(&tree).defined && def.form(&tree).defined);
+			check(proto.get(&tree).function.definition.unwrap(), z);
+			assert(proto.get(&tree).function.body.is_null());
+			check(def.get(&tree).function.body.unwrap(), body);
+			assert(def.get(&tree).function.definition.is_null());
 			tree.free();
 		}
 		comp.free();

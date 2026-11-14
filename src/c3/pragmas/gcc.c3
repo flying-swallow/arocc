@@ -1,7 +1,7 @@
 // Standalone port of src/aro/pragmas/gcc.zig.
 //
-// Registry adapters are provided at the end of this file. The parser callback
-// receives the live parser so pragma replay uses its preprocessor tokens.
+// GccPragma implements pragma::IPragma. The parser handler receives the live
+// parser so pragma replay uses its preprocessor tokens.
 // The handler consumes already-expanded tokens through the terminating NL.
 module aro::pragmas::gcc;
 import aro::preprocessor, aro::tokens, aro::tokenizer, aro::diagnostics;
@@ -11,7 +11,8 @@ import std::collections::list, std::core::mem::allocators, std::core::mem::alloc
 enum Directive : char { WARNING, ERROR, DIAGNOSTIC, POISON }
 enum DiagnosticAction : char { IGNORED, WARNING, ERROR, FATAL, PUSH, POP }
 
-struct GccPragma
+<* Zig pragmas/gcc.zig. Allocated by `make_handler` and freed by `deinit`. *>
+struct GccPragma (pragma::IPragma)
 {
 	diagnostics::State original_state;
 	List{diagnostics::State} state_stack;
@@ -30,32 +31,9 @@ fn void GccPragma.free(&self)
 	*self = {};
 }
 
-fn void GccPragma.before_preprocess(&self, preprocessor::Preprocessor* pp)
-{
-	self.original_state = pp.diagnostics.state;
-}
-
-fn void GccPragma.before_parse(&self, preprocessor::Preprocessor* pp)
-{
-	pp.diagnostics.state = self.original_state;
-	self.state_stack.clear();
-}
-
-fn void GccPragma.after_parse(&self, preprocessor::Preprocessor* pp)
-{
-	pp.diagnostics.state = self.original_state;
-	self.state_stack.clear();
-}
-
-fn bool GccPragma.preserve_tokens(&self, preprocessor::Preprocessor* pp, TokenWithExpansionLocs[] line)
-{
-	if (line.len > 1 && line[1].id != NL && text(pp, line[1]) == "poison") return false;
-	return true;
-}
-
 // GCC pragmas are handled during preprocessing. They must not be expanded at
 // parser time; this mirrors shouldExpandTokenAtIndex in the Zig module.
-fn bool should_expand_token_at_index(void* ctx, uint unused_index) { return false; }
+fn bool GccPragma.should_expand_token_at_index(&self, TokenIndex unused_index) @dynamic => false;
 
 fn String text(preprocessor::Preprocessor* pp, TokenWithExpansionLocs tok) => pp.expanded_slice(tok);
 
@@ -231,9 +209,8 @@ fn TokenWithExpansionLocs[] pragma_line(preprocessor::Preprocessor* pp, uint sta
 	return storage.array_view();
 }
 
-fn pragma::PragmaResult preprocess_adapter(void* ctx, preprocessor::Preprocessor* pp, TokenIndex start_idx)
+fn pragma::PragmaResult GccPragma.preprocessor_handler(&self, preprocessor::Preprocessor* pp, TokenIndex start_idx) @dynamic
 {
-	GccPragma* self = (GccPragma*)ctx;
 	List{TokenWithExpansionLocs} line;
 	line.init(pp.comp.gpa);
 	defer line.free();
@@ -264,11 +241,9 @@ fn pragma::PragmaResult preprocess_adapter(void* ctx, preprocessor::Preprocessor
 	return pragma::PragmaResult.HANDLED;
 }
 
-fn pragma::PragmaResult parser_adapter(void* ctx, void* parser, TokenIndex start_idx)
+fn pragma::PragmaResult GccPragma.parser_handler(&self, parser::Parser* p, TokenIndex start_idx) @dynamic
 {
-	GccPragma* self = (GccPragma*)ctx;
-	parser::Parser* parser_ctx = (parser::Parser*)parser;
-	preprocessor::Preprocessor* pp = parser_ctx.pp;
+	preprocessor::Preprocessor* pp = p.pp;
 	List{TokenWithExpansionLocs} line;
 	line.init(pp.comp.gpa);
 	defer line.free();
@@ -279,58 +254,41 @@ fn pragma::PragmaResult parser_adapter(void* ctx, void* parser, TokenIndex start
 	return pragma::PragmaResult.HANDLED;
 }
 
-fn void before_preprocess_adapter(void* ctx, compilation::Compilation* comp)
+fn void GccPragma.before_preprocess(&self, compilation::Compilation* comp) @dynamic
 {
-	GccPragma* self = (GccPragma*)ctx;
 	self.original_state = comp.diagnostics.state;
 }
 
-fn void before_parse_adapter(void* ctx, compilation::Compilation* comp)
+fn void GccPragma.before_parse(&self, compilation::Compilation* comp) @dynamic
 {
-	GccPragma* self = (GccPragma*)ctx;
 	comp.diagnostics.state = self.original_state;
 	self.state_stack.clear();
 }
 
-fn void after_parse_adapter(void* ctx, compilation::Compilation* comp)
+fn void GccPragma.after_parse(&self, compilation::Compilation* comp) @dynamic
 {
-	GccPragma* self = (GccPragma*)ctx;
 	comp.diagnostics.state = self.original_state;
 	self.state_stack.clear();
 }
 
-fn bool preserve_adapter(void* ctx, preprocessor::Preprocessor* pp, TokenIndex start_idx)
+fn bool GccPragma.preserve_tokens(&self, preprocessor::Preprocessor* pp, TokenIndex start_idx) @dynamic
 {
 	if ((sz)(start_idx + 1) >= pp.tokens.len()) return true;
 	TokenWithExpansionLocs next = token_at(pp, start_idx + 1);
 	return next.id == NL || text(pp, next) != "poison";
 }
 
-fn void destroy_adapter(void* ctx, compilation::Compilation* comp)
+fn void GccPragma.deinit(&self, compilation::Compilation* comp) @dynamic
 {
-	GccPragma* self = (GccPragma*)ctx;
 	Allocator allocator = self.allocator;
 	self.free();
 	alloc::free(allocator, self);
 }
 
-<*
-	Allocate GCC pragma state and construct the Compilation registry entry.
-	Registry.free owns the state through its destroy callback.
-*>
-fn pragma::Handler make_handler(Allocator allocator)
+<* Allocate the GCC pragma handler; Registry.free releases it through `deinit`. *>
+fn GccPragma* make_handler(Allocator allocator)
 {
 	GccPragma* state = (GccPragma*)alloc::calloc(allocator, GccPragma::size);
 	state.init(allocator);
-	return {
-		.ctx = state,
-		.preprocess = &preprocess_adapter,
-		.parser = &parser_adapter,
-		.before_preprocess = &before_preprocess_adapter,
-		.before_parse = &before_parse_adapter,
-		.after_parse = &after_parse_adapter,
-		.destroy = &destroy_adapter,
-		.preserve_tokens = &preserve_adapter,
-		.should_expand = &should_expand_token_at_index,
-	};
+	return state;
 }

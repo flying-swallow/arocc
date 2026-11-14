@@ -1,10 +1,10 @@
 // Complete direct-child inventory: frozen baseline plus the reference-verified supplemental fixture.
-#elifndef error.c result=pass
+#elifndef error.c result=pass exit=1
 #elifndef.c result=pass
-#embed.c result=pass
+#embed.c result=pass exit=1
 #if constant expression.c result=pass
-#if expression error.c result=pass
-#if expression macro ws.c result=pass
+#if expression error.c result=pass exit=1
+#if expression macro ws.c result=pass exit=1
 #ifdef.c result=pass
 #pragma pack clang.c result=pass
 #pragma pack gcc.c result=pass
@@ -15,25 +15,25 @@
 X macro.c result=pass
 _BitInt change size.c result=pass
 _BitInt min max.c result=pass
-_BitInt.c result=pass
+_BitInt.c result=pass exit=1
 _Float16.c result=pass
-__VA_OPT__.c result=pass
-__auto_type self init.c result=pass
-__auto_type.c result=pass
-__builtin_types_compatible_p.c result=pass
-__float80 clang.c result=pass
+__VA_OPT__.c result=pass exit=1
+__auto_type self init.c result=pass exit=1
+__auto_type.c result=pass exit=1
+__builtin_types_compatible_p.c result=pass exit=1
+__float80 clang.c result=pass exit=1
 __float80.c result=pass
 __func__.c result=pass
 __has_attribute with define.c result=pass
-__has_attribute.c result=pass
-__has_builtin.c result=pass
-__has_extension.c result=pass
-__has_feature.c result=pass
-__has_include.c result=pass
-__has_warning.c result=pass
-__is_identifier.c result=pass
+__has_attribute.c result=pass exit=1
+__has_builtin.c result=pass exit=1
+__has_extension.c result=pass exit=1
+__has_feature.c result=pass exit=1
+__has_include.c result=pass exit=1
+__has_warning.c result=pass exit=1
+__is_identifier.c result=pass exit=1
 __is_target_arch.c result=pass
-__is_target_clang_compat.c result=pass
+__is_target_clang_compat.c result=pass exit=1
 __is_target_darwin.c result=pass
 __is_target_os.c result=pass
 __is_target_os_darwin_ios_clang_compat.c result=pass
@@ -44,13 +44,13 @@ __is_target_variant.c result=pass
 __is_target_vendor.c result=pass
 __is_target_vendor_apple.c result=pass
 __line__.c result=pass
-__mfp8 invalid.c result=pass
+__mfp8 invalid.c result=pass exit=1
 __mfp8 valid.c result=pass
-address of label.c result=pass
-adjust diagnostic levels.c result=pass
+address of label.c result=pass exit=1
+adjust diagnostic levels.c result=pass exit=1
 alignment on typedef msvc.c result=pass
 alignment on typedef.c result=pass
-alignment.c result=pass
+alignment.c result=pass exit=1
 alloc_align attribute.c result=pass
 allow fp16 parameter.c result=pass
 alternate spellings for signed.c result=pass
@@ -61,7 +61,7 @@ apply pasted macro name.c result=pass
 arithmetic conversion floats.c result=pass
 arithmetic overflow.c result=pass
 arm cortex-m0 predefined macros.c result=pass
-arm neon vectors.c result=pass
+arm neon vectors.c result=pass exit=1
 arm-acle-6.4 arm-eabi.c result=pass
 arm-acle-6.4 armv7-a.c result=pass
 arm-acle-6.4 armv7-m.c result=pass
@@ -70,72 +70,72 @@ arm-acle-7.5 llvm-21.c result=pass
 arm-pic-predefines ropi rwpi.c result=pass
 array argument is null.c result=pass
 array argument too small.c result=pass
-array designator too large.c result=pass
-array of invalid.c result=pass
+array designator too large.c result=pass exit=1
+array of invalid.c result=pass exit=1
 array of zero size type.c result=pass
 array subscript with string.c result=pass
-asm.c result=pass
-assembly invalid token.c result=pass
-assignment.c result=pass
+asm.c result=pass exit=1
+assembly invalid token.c result=pass exit=1
+assignment.c result=pass exit=1
 atomic builtin return types.c result=pass
-atomic builtins.c result=pass
+atomic builtins.c result=pass exit=1
 atomic lvalue conversion.c result=pass
-atomic member recovery.c result=pass
+atomic member recovery.c result=pass exit=1
 atomic rvalue types c17.c result=pass
 atomic rvalue types c23.c result=pass
 atomic value contexts.c result=pass
-atomic.c result=pass
-attribute errors.c result=pass
+atomic.c result=pass exit=1
+attribute errors.c result=pass exit=1
 attributed anonymous record.c result=pass
 attributed record fields.c result=pass
 attributed typeof.c result=pass
-attributes.c result=pass
+attributes.c result=pass exit=1
 avr 24-bit int.c result=pass
 avr sizeof long.c result=pass
 basic math.c result=pass
-binary expressions.c result=pass
+binary expressions.c result=pass exit=1
 binary literal.c result=pass
-bitfields.c result=pass
-block types.c result=pass
+bitfields.c result=pass exit=1
+block types.c result=pass exit=1
 bool bitfield packing.c result=pass
-bounds_safety.c result=pass
-builtin choose expr.c result=pass
-builtin complex invalid.c result=pass
+bounds_safety.c result=pass exit=1
+builtin choose expr.c result=pass exit=1
+builtin complex invalid.c result=pass exit=1
 builtin func types.c result=pass
-builtin functions.c result=pass
+builtin functions.c result=pass exit=1
 builtin headers.c result=pass
-builtin macro errors.c result=pass
-builtin_constant_p.c result=pass
-builtins-arm-exclusive.c result=pass
-c11 atomic load errors.c result=pass
+builtin macro errors.c result=pass exit=1
+builtin_constant_p.c result=pass exit=1
+builtins-arm-exclusive.c result=pass exit=1
+c11 atomic load errors.c result=pass exit=1
 c17 char8_t enabled.c result=pass
-c17 char8_t.c result=pass
+c17 char8_t.c result=pass exit=1
 c23 attributes.c result=pass
-c23 auto.c result=pass
-c23 char8_t disabled.c result=pass
+c23 auto.c result=pass exit=1
+c23 char8_t disabled.c result=pass exit=1
 c23 char8_t.c result=pass
 c23 defines.c result=pass
 c23 digit separators.c result=pass
-c23 identifiers.c result=pass
+c23 identifiers.c result=pass exit=1
 c23 keywords.c result=pass
-c23 missing type specifier.c result=pass
+c23 missing type specifier.c result=pass exit=1
 c23 static_assert.c result=pass
 c23 stdarg.c result=pass
 c23 stdint.c result=pass
 c23 true false ast.c result=pass
-c2y countof.c result=pass
-c2y named break.c result=pass
+c2y countof.c result=pass exit=1
+c2y named break.c result=pass exit=1
 c2y octal.c result=pass
-c2y selection header.c result=pass
+c2y selection header.c result=pass exit=1
 c89 standard.c result=pass
 c99 standard.c result=pass
-call undeclared function with invalid type.c result=pass
-call.c result=pass
+call undeclared function with invalid type.c result=pass exit=1
+call.c result=pass exit=1
 calling convention.c result=pass
 cast kinds.c result=pass
 cast to same type.c result=pass
-cast to union.c result=pass
-casts.c result=pass
+cast to union.c result=pass exit=1
+casts.c result=pass exit=1
 char literal sign extension.c result=pass
 clang __BASE_FILE__.c result=pass
 clang __FILE_NAME__.c result=pass
@@ -148,46 +148,46 @@ comma operator.c result=pass
 comment after define.c result=pass
 complex float16.c result=pass
 complex init.c result=pass
-complex numbers clang.c result=pass
+complex numbers clang.c result=pass exit=1
 complex numbers gcc.c result=pass
-complex values.c result=pass
-compound literals.c result=pass
+complex values.c result=pass exit=1
+compound literals.c result=pass exit=1
 compound stmt fallthrough.c result=pass
-concat improperly encoded strings.c result=pass
+concat improperly encoded strings.c result=pass exit=1
 condexpr const folding.c result=pass
-const decl folding.c result=pass
-constexpr.c result=pass
-containers.c result=pass
-convertvector.c result=pass
-darwin __float128.c result=pass
+const decl folding.c result=pass exit=1
+constexpr.c result=pass exit=1
+containers.c result=pass exit=1
+convertvector.c result=pass exit=1
+darwin __float128.c result=pass exit=1
 date expansion.c result=pass
 debug dump macro names.c result=pass
 debug dump macros and results.c result=pass
 debug dump macros.c result=pass
 decayed attributed array.c result=pass
-declspec.c result=pass
+declspec.c result=pass exit=1
 deferred macro expansion.c result=pass
 deprecated vars.c result=pass
 deref void.c result=pass
 designated init skip anonymous.c result=pass
-designated_init.c result=pass
+designated_init.c result=pass exit=1
 digraph pretty print.c result=pass
-digraphs disabled.c result=pass
+digraphs disabled.c result=pass exit=1
 digraphs enabled.c result=pass
-digraphs not supported.c result=pass
+digraphs not supported.c result=pass exit=1
 digraphs.c result=pass
-divide by zero.c result=pass
+divide by zero.c result=pass exit=1
 dollars in identifiers.c result=pass
 double long.c result=pass
 duplicate typedef.c result=pass
-empty computed include.c result=pass
+empty computed include.c result=pass exit=1
 empty macro block expansion.c result=pass
 empty records.c result=pass
 empty va args comma delete c99.c result=pass
 empty variadic paste.c result=pass
-enum attributes clang.c result=pass
-enum attributes gcc.c result=pass
-enum fixed.c result=pass
+enum attributes clang.c result=pass exit=1
+enum attributes gcc.c result=pass exit=1
+enum fixed.c result=pass exit=1
 enum overflow linux.c result=pass
 enum overflow msvc.c result=pass
 enum pointer.c result=pass
@@ -195,39 +195,39 @@ enum sizes linux.c result=pass
 enum sizes windows.c result=pass
 enumerator constants.c result=pass
 expand #pragma args.c result=pass
-expr pretty printing.c result=pass
+expr pretty printing.c result=pass exit=1
 expression statement conversion.c result=pass
-extended identifiers c11.c result=pass
-extended identifiers c99.c result=pass
-extension.c result=pass
+extended identifiers c11.c result=pass exit=1
+extended identifiers c99.c result=pass exit=1
+extension.c result=pass exit=1
 extern variables.c result=pass
 feature as extension pedantic.c result=pass
 feature as extension.c result=pass
 filename_macros.c result=pass
 fixed size integer constants x86_64-linux-gnu.c result=pass
-float array size.c result=pass
-float builtins.c result=pass
+float array size.c result=pass exit=1
+float builtins.c result=pass exit=1
 float eval method.c result=pass
 float header aarch64-linux-gnu.c result=pass
 float header netbsd 6.99.26.c result=pass
 float header x86-64-linux.c result=pass
 float to int.c result=pass
-float types.c result=pass
+float types.c result=pass exit=1
 float values.c result=pass
 for decl stmt.c result=pass
 forever stmt.c result=pass
 fp16 parameter aarch64.c result=pass
-fp16 parameter.c result=pass
+fp16 parameter.c result=pass exit=1
 function macro expansion.c result=pass
-functions.c result=pass
+functions.c result=pass exit=1
 gcc thread.c result=pass
-generated location.c result=pass
+generated location.c result=pass exit=1
 generic ast.c result=pass
-generic.c result=pass
-global register.c result=pass
+generic.c result=pass exit=1
+global register.c result=pass exit=1
 gnu alignof.c result=pass
 gnu designated init extension.c result=pass
-gnu inline assembly statements.c result=pass
+gnu inline assembly statements.c result=pass exit=1
 gnu pointer arith.c result=pass
 gnu variadic macros.c result=pass
 gnu89 standard.c result=pass
@@ -238,28 +238,28 @@ gnuc version default.c result=pass
 gnuc version empty.c result=pass
 gnuc version override.c result=pass
 guard defined outside header.c result=pass
-guard undef.c result=pass
-hash_hash at func macro start.c result=pass
+guard undef.c result=pass exit=1
+hash_hash at func macro start.c result=pass exit=1
 hello world.c result=unsupported
 hide warnings.c result=pass
 idirafter shadows include.c result=pass
 ignored attributes.c result=pass
 imacros flag.c result=pass
-imaginary constants.c result=pass
+imaginary constants.c result=pass exit=1
 implicit main return zero.c result=pass
 implicitly unsigned literal.c result=pass
 include flag.c result=pass
 include framework.c result=pass
-include pragma.c result=pass
+include pragma.c result=pass exit=1
 include umbrella framework.c result=pass
 include_next.c result=pass
 include_next_mixed.c result=pass
-incomplete types.c result=pass
-incorrect guard.c result=pass
-incorrect macro arg count.c result=pass
-incorrect typeof usage.c result=pass
-indirect macro invocation wrong arg count.c result=pass
-initializers.c result=pass
+incomplete types.c result=pass exit=1
+incorrect guard.c result=pass exit=1
+incorrect macro arg count.c result=pass exit=1
+incorrect typeof usage.c result=pass exit=1
+indirect macro invocation wrong arg count.c result=pass exit=1
+initializers.c result=pass exit=1
 int128.c result=pass
 integer conversions 32bit.c result=pass
 integer conversions.c result=pass
@@ -270,34 +270,34 @@ integer literal promotion warning gcc 64.c result=pass
 intmax_t.c result=pass
 intptr_t.c result=pass
 invalid _BitInt pointer.c result=pass
-invalid attributes.c result=pass
+invalid attributes.c result=pass exit=1
 invalid continuation byte at eof.c result=pass
-invalid epoch.c result=pass
-invalid expr inside parens.c result=pass
-invalid k&r functions.c result=pass
-invalid specifier in typename.c result=pass
-invalid types.c result=pass
+invalid epoch.c result=pass exit=1
+invalid expr inside parens.c result=pass exit=1
+invalid k&r functions.c result=pass exit=1
+invalid specifier in typename.c result=pass exit=1
+invalid types.c result=pass exit=1
 iquote.c result=pass
 keyword hidden by macro.c result=pass
-kr_def_deprecated.c result=pass
+kr_def_deprecated.c result=pass exit=1
 labeled return.c result=pass
-latin1.c result=pass
-layout overflow.c result=pass
+latin1.c result=pass exit=1
+layout overflow.c result=pass exit=1
 lazy macro.c result=pass
 least and fast int.c result=pass
 limits header.c result=pass
 line counter.c result=pass
-linkage.c result=pass
+linkage.c result=pass exit=1
 linux __float128.c result=pass
-macro argument evaluation.c result=pass
-macro backtrace limit.c result=pass
-macro backtrace.c result=pass
-macro definition errors.c result=pass
+macro argument evaluation.c result=pass exit=1
+macro backtrace limit.c result=pass exit=1
+macro backtrace.c result=pass exit=1
+macro definition errors.c result=pass exit=1
 macro expands to self after pasting.c result=pass
 macro expansion disabled.c result=pass
 macro expansion exhaustion.c result=pass
 macro expansion to defined parsed.c result=pass
-macro expansion to defined.c result=pass
+macro expansion to defined.c result=pass exit=1
 macro keyword normalization.c result=pass
 macro re-expansion.c result=pass
 macro redefinition.c result=pass
@@ -306,20 +306,20 @@ macro token pasting order.c result=pass
 macro unbalanced parens call.c result=pass
 macro whitespace.c result=pass
 main wrong return type.c result=pass
-member expr.c result=pass
+member expr.c result=pass exit=1
 misplaced attribute.c result=pass
-missing newline before eof.c result=pass
-missing type specifier.c result=pass
+missing newline before eof.c result=pass exit=1
+missing type specifier.c result=pass exit=1
 ms-extensions.c result=pass
 msp430 builtin types.c result=pass
-msvc anonymous default pack clang.c result=pass
+msvc anonymous default pack clang.c result=pass exit=1
 msvc anonymous default pack.c result=pass
-msvc attribute keywords.c result=pass
+msvc attribute keywords.c result=pass exit=1
 msvc boolean bitfield.c result=pass
 msvc flexible array in union.c result=pass
 msvc integer suffixes.c result=pass
-msvc macros.c result=pass
-msvc pointer keywords.c result=pass
+msvc macros.c result=pass exit=1
+msvc pointer keywords.c result=pass exit=1
 msvc required alignment through array.c result=pass
 msvc typedef alignment inheritance clang.c result=pass
 msvc typedef alignment inheritance.c result=pass
@@ -330,33 +330,33 @@ native half type.c result=pass
 negative and too big shift count.c result=pass
 nested #ifs.c result=pass
 nested attributes.c result=pass
-nested invalid struct layout.c result=pass
+nested invalid struct layout.c result=pass exit=1
 nested macro call.c result=pass
-nested unterminated macro clang.c result=pass
-nested unterminated macro gcc.c result=pass
+nested unterminated macro clang.c result=pass exit=1
+nested unterminated macro gcc.c result=pass exit=1
 newline splicing.c result=pass
 nl in macro param.c result=pass
 no declarations.c result=pass
-no declspec.c result=pass
-no dollars in identifiers.c result=pass
-no inline asm.c result=pass
+no declspec.c result=pass exit=1
+no dollars in identifiers.c result=pass exit=1
+no inline asm.c result=pass exit=1
 no optimizations.c result=pass
-non string attribute.c result=pass
-nonnull attribute errors.c result=pass
+non string attribute.c result=pass exit=1
+nonnull attribute errors.c result=pass exit=1
 nonnull attribute.c result=pass
 null directives with #if.c result=pass
-nullability.c result=pass
-nullptr.c result=pass
-numbers.c result=pass
+nullability.c result=pass exit=1
+nullptr.c result=pass exit=1
+numbers.c result=pass exit=1
 object macro expands to function macro.c result=pass
 object macro expansion.c result=pass
 object macro token pasting.c result=pass
-offsetof.c result=pass
+offsetof.c result=pass exit=1
 old style flexible array.c result=pass
 optimize define.c result=pass
 optimize size flags.c result=pass
 packed member address.c result=pass
-parser using typeof types.c result=pass
+parser using typeof types.c result=pass exit=1
 paste operator whitespace.c result=pass
 pic1.c result=pass
 pic2.c result=pass
@@ -369,43 +369,43 @@ pointer index post increment.c result=pass
 pointer subtraction.c result=pass
 ppc elf v1.c result=pass
 ppc elf v2.c result=pass
-pragma changes warning to error in parser.c result=pass
-pragma during parsing.c result=pass
+pragma changes warning to error in parser.c result=pass exit=1
+pragma during parsing.c result=pass exit=1
 pragma once not at start of file.c result=pass
 pragma once self include.c result=pass
-pragma once.c result=pass
-pragma operator.c result=pass
-pragma poison.c result=pass
-pragma warning and error.c result=pass
+pragma once.c result=pass exit=1
+pragma operator.c result=pass exit=1
+pragma poison.c result=pass exit=1
+pragma warning and error.c result=pass exit=1
 pragma without terminating newline.c result=pass
 predefined macro vector.c result=pass
 predefined macros.c result=pass
-preprocessor binary operators.c result=pass
-preserve comments in macros.c result=pass
+preprocessor binary operators.c result=pass exit=1
+preserve comments in macros.c result=pass exit=1
 preserve comments paste whitespace.c result=pass
 preserve comments.c result=pass
 promotion edge cases.c result=pass
 recursive call non-expanded parens.c result=pass
 recursive func macro.c result=pass
 recursive object macro.c result=pass
-redefine invalid typedef.c result=pass
-redefine typedef.c result=pass
-redefinitions.c result=pass
-relocations.c result=pass
+redefine invalid typedef.c result=pass exit=1
+redefine typedef.c result=pass exit=1
+redefinitions.c result=pass exit=1
+relocations.c result=pass exit=1
 repeated paste macro argument.c result=pass
-repeated preprocessor tokens.c result=pass
-return.c result=pass
+repeated preprocessor tokens.c result=pass exit=1
+return.c result=pass exit=1
 riscv hard-float predefined macros.c result=pass
 riscv no-float predefined macros.c result=pass
 riscv single-float predefined macros.c result=pass
 riscv soft-float predefined macros.c result=pass
 rparen hideset in argument expansion.c result=pass
-self_include.c result=pass
-shufflevector.c result=pass
+self_include.c result=pass exit=1
+shufflevector.c result=pass exit=1
 signed char.c result=pass
-signed remainder.c result=pass
-sizeof alignof.c result=pass
-sizeof variably modified types.c result=pass
+signed remainder.c result=pass exit=1
+sizeof alignof.c result=pass exit=1
+sizeof variably modified types.c result=pass exit=1
 source epoch.c result=pass
 spliced newline in char literal.c result=pass
 spliced newline in string literal.c result=pass
@@ -413,17 +413,17 @@ standard attributes.c result=pass
 standard-concatenation-strings-example.c result=pass
 standard-placeholder-example.c result=pass
 standard-redefinition-reexamination-example.c result=pass
-statement expressions.c result=pass
-statements.c result=pass
-static assert messages.c result=pass
-stdarg.c result=pass
-stdckdint.c result=pass
+statement expressions.c result=pass exit=1
+statements.c result=pass exit=1
+static assert messages.c result=pass exit=1
+stdarg.c result=pass exit=1
+stdckdint.c result=pass exit=1
 stdckdint_ast.c result=pass
 stringify backslashes.c result=pass
 stringify invalid escape.c result=pass
-stringify invalid.c result=pass
-strings.c result=pass
-subscript.c result=pass
+stringify invalid.c result=pass exit=1
+strings.c result=pass exit=1
+subscript.c result=pass exit=1
 switch unsigned int.c result=pass
 target_macros driverkit.c result=pass
 target_macros ios.c result=pass
@@ -438,57 +438,57 @@ target_macros unix.c result=pass
 target_macros visionos.c result=pass
 target_macros watchos.c result=pass
 target_macros windows.c result=pass
-tentative array.c result=pass
+tentative array.c result=pass exit=1
 tentative decls defined.c result=pass
-tentative definitions.c result=pass
+tentative definitions.c result=pass exit=1
 token paste delete comma gnu.c result=pass
-transparent_union.c result=pass
+transparent_union.c result=pass exit=1
 two pragmas one define.c result=pass
 type_resolution.c result=pass
-typedef array qualifiers.c result=pass
-typedef extra specifiers disallowed.c result=pass
+typedef array qualifiers.c result=pass exit=1
+typedef extra specifiers disallowed.c result=pass exit=1
 typeof incomplete array.c result=pass
 typeof invalid pointer.c result=pass
 typeof pointer wrong size.c result=pass
 typeof quals.c result=pass
-typeof.c result=pass
+typeof.c result=pass exit=1
 typeof_unqual.c result=pass
 types.c result=pass
-u8 character constant.c result=pass
-ucn identifiers.c result=pass
+u8 character constant.c result=pass exit=1
+ucn identifiers.c result=pass exit=1
 uefi intmax_t.c result=pass
-unaligned u16 string literal.c result=pass
-unary expressions.c result=pass
-unavailable results.c result=pass
-undef.c result=pass
-undefined macro.c result=pass
-unexpected pragmas.c result=pass
-unexpected_type_name.c result=pass
+unaligned u16 string literal.c result=pass exit=1
+unary expressions.c result=pass exit=1
+unavailable results.c result=pass exit=1
+undef.c result=pass exit=1
+undefined macro.c result=pass exit=1
+unexpected pragmas.c result=pass exit=1
+unexpected_type_name.c result=pass exit=1
 unknown pragmas.c result=pass
-unmatched macro paren.c result=pass
+unmatched macro paren.c result=pass exit=1
 unreachable code.c result=pass
 unreachable.c result=pass
 unsigned char.c result=pass
 unspecified expansion.c result=pass
-unterminated char literal.c result=pass
-unterminated comment in preprocessor expression.c result=pass
-unterminated comment.c result=pass
-unterminated macro function at eof clang.c result=pass
-unterminated macro function at eof gcc.c result=pass
+unterminated char literal.c result=pass exit=1
+unterminated comment in preprocessor expression.c result=pass exit=1
+unterminated comment.c result=pass exit=1
+unterminated macro function at eof clang.c result=pass exit=1
+unterminated macro function at eof gcc.c result=pass exit=1
 unterminated string literal.c result=pass
-unused locals.c result=pass
+unused locals.c result=pass exit=1
 unused.c result=pass
-va_arg_pack.c result=pass
+va_arg_pack.c result=pass exit=1
 var args macro functions.c result=pass
 vectorcall.c result=pass
-vectors.c result=pass
+vectors.c result=pass exit=1
 visibility.c result=pass
-vla.c result=pass
+vla.c result=pass exit=1
 void star.c result=pass
 warn unused result.c result=pass
 whitespace macro arguments.c result=pass
-wide character constants.c result=pass
-wide strings.c result=pass
-zero argument macro.c result=pass
+wide character constants.c result=pass exit=1
+wide strings.c result=pass exit=1
+zero argument macro.c result=pass exit=1
 zero length array.c result=pass
 zero length multidimensional array.c result=pass

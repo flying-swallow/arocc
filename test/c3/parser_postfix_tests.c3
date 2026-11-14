@@ -5,11 +5,14 @@
 // Labels on each expectation:
 //   "Source-derived (Parser.zig <fn>)": read from the named reference function.
 //   "C11 <clause>": standard behavior where the reference is silent.
+//   "C3-only (<reason>)": behavior the C3 port defines beyond the reference.
+//   "Clang bounds-safety (<rule>)": -fexperimental-bounds-safety rules, enabled per fixture.
 // Message text is `Message.text` as rendered; types print quoted, e.g. 'int'.
+// Note: QualType.eql ignores top-level qualifiers, so qualifier expectations also assert is_const.
 module parser_postfix_tests;
 import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value;
+import aro::type_store, aro::value, aro::lang_opts;
 import std::core::mem::allocators;
 
 struct PostfixFixture
@@ -22,11 +25,12 @@ struct PostfixFixture
 	bool active;
 }
 
-fn void PostfixFixture.init(&self, String input, String path = "postfix.c")
+fn void PostfixFixture.init(&self, String input, String path = "postfix.c", bool bounds_safety = false)
 {
 	self.allocator.init(mem);
 	self.diagnostics.init_list(&self.allocator);
 	self.comp.init(&self.allocator, null, &self.diagnostics);
+	if (bounds_safety) self.comp.langopts.bounds_safety = lang_opts::BoundsSafety.CLANG;
 	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 	source::Source src = self.comp.add_source_from_buffer(path, input)!!;
 	TokenWithExpansionLocs eof = self.pp.preprocess(src)!!;
@@ -292,7 +296,7 @@ fn void old_style_extra_arguments_warn_and_promote() @test
 	assert(f.diagnostics.messages.len() == 1);
 	assert(f.diagnostics.messages[0].text == "expected 1 argument(s) got 2");
 	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.WARNING);
-	assert(f.diagnostics.messages[0].location.col == 8);
+	assert(f.diagnostics.messages[0].location.col == 10);
 	tree::Node promoted = call.call.args[1].get(&f.parser.tree);
 	assert(promoted.kind == tree::NodeKind.CAST && promoted.cast.qt.eql(type_store::INT, &f.comp));
 }
@@ -309,12 +313,13 @@ fn void old_style_call_without_prototype_warns_and_promotes() @test
 	parser_result::Result parsed = f.parser.expr()!!;
 	assert(f.parser.at_eof());
 	tree::Node call = parsed.node.get(&f.parser.tree);
-	// Source-derived (Parser.zig callExpr, .old_style with no parameters).
+	// Source-derived (Parser.zig callExpr, .old_style with no parameters): arg_index and
+	// typed_params_len are both 0, so first_after is reassigned to the first argument token ('ch').
 	assert(call.kind == tree::NodeKind.CALL_EXPR && call.call.args.len == 1);
 	assert(f.diagnostics.messages.len() == 1);
 	assert(f.diagnostics.messages[0].text == "passing arguments to a function without a prototype is deprecated in all versions of C and is not supported in C23");
 	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.WARNING);
-	assert(f.diagnostics.messages[0].location.col == 6);
+	assert(f.diagnostics.messages[0].location.col == 8);
 	tree::Node promoted = call.call.args[0].get(&f.parser.tree);
 	assert(promoted.kind == tree::NodeKind.CAST && promoted.cast.qt.eql(type_store::INT, &f.comp));
 }
@@ -612,6 +617,202 @@ fn void malformed_closer_reports_expected_bracket_and_macro_use_location() @test
 	assert(f.has_message("to match this '['"));
 }
 
+// Incomplete pointee on a subscript: array_subscript reports PTR_ARITHMETIC_INCOMPLETE at '[' and is not fatal.
+// The ARRAY_ACCESS_EXPR is still built, with an invalid type for the element and the result.
+fn void incomplete_record_pointer_subscript_reports_arithmetic_and_yields_invalid() @test
+{
+	PostfixFixture f;
+	f.init("pointer[0]\n");
+	defer f.free();
+	type_store::QualType incomplete = f.comp.type_store.put(type_store::type_record_incomplete(
+		f.comp.intern_string("Incomplete")));
+	f.seed("pointer", f.comp.type_store.put(type_store::type_pointer(incomplete)));
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(f.parser.at_eof());
+	// Source-derived (Parser.zig suffixExpr .l_bracket): an element type with incomplete size is
+	// rejected at '['; parsing continues, so the access node exists with an invalid type.
+	tree::Node access = parsed.node.get(&f.parser.tree);
+	assert(access.kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(access.array_access.qt.is_invalid());
+	assert(parsed.qt.is_invalid());
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "arithmetic on a pointer to an incomplete type 'struct Incomplete'");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 8);
+}
+
+// Reversed operands, `0[pointer]`: the integer/pointer swap makes the pointer the base before the
+// incomplete-size check, so the same diagnostic is reported at '[' (col 2) and the result is invalid.
+fn void reversed_incomplete_record_pointer_subscript_reports_at_bracket() @test
+{
+	PostfixFixture f;
+	f.init("0[pointer]\n");
+	defer f.free();
+	type_store::QualType incomplete = f.comp.type_store.put(type_store::type_record_incomplete(
+		f.comp.intern_string("Incomplete")));
+	f.seed("pointer", f.comp.type_store.put(type_store::type_pointer(incomplete)));
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(f.parser.at_eof());
+	// Source-derived (Parser.zig suffixExpr .l_bracket): same non-fatal rule as the forward form.
+	tree::Node access = parsed.node.get(&f.parser.tree);
+	assert(access.kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(access.array_access.qt.is_invalid());
+	assert(parsed.qt.is_invalid());
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "arithmetic on a pointer to an incomplete type 'struct Incomplete'");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 2);
+}
+
+// Small integer index: C11 6.5.2.1p2 requires an integer index and C11 6.3.1.1p2 integer-promotes it.
+// Expectation is the promotion cast node in the access AST, not the operand's own type.
+fn void char_and_short_indexes_get_integer_promotion_cast() @test
+{
+	PostfixFixture f;
+	f.init("array[ch]\n");
+	defer f.free();
+	type_store::QualType array_type = f.comp.type_store.put(type_store::type_array(type_store::INT,
+		type_store::ArrayLenKind.FIXED, 4));
+	f.seed("array", array_type);
+	f.seed("ch", type_store::CHAR);
+	// C11 6.3.1.1p2: char index promoted to int; the cast wraps the lvalue-to-rvalue read.
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(f.parser.at_eof());
+	tree::Node access = parsed.node.get(&f.parser.tree);
+	assert(access.kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	tree::Node char_index = access.array_access.index.get(&f.parser.tree);
+	assert(char_index.kind == tree::NodeKind.CAST && char_index.cast.kind == tree::CastKind.INT_CAST);
+	assert(char_index.cast.qt.eql(type_store::INT, &f.comp));
+	assert(char_index.cast.operand.get(&f.parser.tree).kind == tree::NodeKind.CAST);
+	assert(char_index.cast.operand.get(&f.parser.tree).cast.kind == tree::CastKind.LVAL_TO_RVAL);
+	assert(f.diagnostics.messages.len() == 0);
+
+	f.free();
+	f.init("pointer[sh]\n");
+	type_store::QualType pointer = f.comp.type_store.put(type_store::type_pointer(type_store::INT));
+	f.seed("pointer", pointer);
+	f.seed("sh", type_store::SHORT);
+	// C11 6.3.1.1p2: short index promoted to int on the pointer-base path as well.
+	parsed = f.parser.expr()!!;
+	assert(f.parser.at_eof());
+	access = parsed.node.get(&f.parser.tree);
+	assert(access.kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	tree::Node short_index = access.array_access.index.get(&f.parser.tree);
+	assert(short_index.kind == tree::NodeKind.CAST && short_index.cast.kind == tree::CastKind.INT_CAST);
+	assert(short_index.cast.qt.eql(type_store::INT, &f.comp));
+	assert(f.diagnostics.messages.len() == 0);
+}
+
+// Make a clang `__single` pointer to `child`: subscripts are in bounds only at a constant 0.
+fn type_store::QualType make_single_pointer(PostfixFixture* f, type_store::QualType child)
+{
+	type_store::Type ty = type_store::type_pointer(child);
+	ty.pointer.bounds = type_store::PointerBounds.SINGLE;
+	return f.comp.type_store.put(ty);
+}
+
+// Clang bounds-safety (parser_postfix.c3 check_single_subscript): constant 0 is in bounds on __single.
+fn void single_pointer_zero_index_is_in_bounds() @test
+{
+	PostfixFixture f;
+	f.init("pointer[0]\n", "postfix.c", true);
+	defer f.free();
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(f.parser.at_eof());
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(parsed.qt.eql(type_store::INT, &f.comp));
+	assert(f.diagnostics.messages.len() == 0);
+
+	f.free();
+	f.init("0[pointer]\n", "postfix.c", true);
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	// Reversed operands: the pointer is still the base, so the constant 0 is in bounds.
+	parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 0);
+}
+
+// Clang bounds-safety: a non-zero constant index on __single is an error at '[', not fatal.
+fn void single_pointer_nonzero_constant_index_reports_at_bracket() @test
+{
+	PostfixFixture f;
+	f.init("pointer[1]\n", "postfix.c", true);
+	defer f.free();
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "array subscript on single pointer must use a constant index of 0 to be in bounds");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 8);
+}
+
+// Clang bounds-safety: a non-constant index on __single is also an error ("constant or not").
+fn void single_pointer_variable_index_reports_at_bracket() @test
+{
+	PostfixFixture f;
+	f.init("pointer[idx]\n", "postfix.c", true);
+	defer f.free();
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	f.seed("idx", type_store::INT);
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "array subscript on single pointer must use a constant index of 0 to be in bounds");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 8);
+}
+
+// Clang bounds-safety: reversed operands, `1[pointer]`, check the pointer side as base; '[' is col 2.
+fn void single_pointer_reversed_nonzero_index_reports_at_bracket() @test
+{
+	PostfixFixture f;
+	f.init("1[pointer]\n", "postfix.c", true);
+	defer f.free();
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "array subscript on single pointer must use a constant index of 0 to be in bounds");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 2);
+}
+
+// Clang bounds-safety gate: the same __single subscript is silent when bounds-safety is off.
+fn void single_pointer_index_is_silent_without_clang_bounds_safety() @test
+{
+	PostfixFixture f;
+	f.init("pointer[1]\n");
+	defer f.free();
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 0);
+}
+
+// Clang bounds-safety: only __single is restricted. A fixed array (which only decays) and a plain
+// pointer both accept a non-zero index with bounds-safety on.
+fn void fixed_array_and_plain_pointer_are_not_single_under_clang_bounds_safety() @test
+{
+	PostfixFixture f;
+	f.init("array[1]\n", "postfix.c", true);
+	defer f.free();
+	type_store::QualType array_type = f.comp.type_store.put(type_store::type_array(type_store::INT,
+		type_store::ArrayLenKind.FIXED, 4));
+	f.seed("array", array_type);
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 0);
+
+	f.free();
+	f.init("pointer[1]\n", "postfix.c", true);
+	f.seed("pointer", f.comp.type_store.put(type_store::type_pointer(type_store::INT)));
+	parsed = f.parser.expr()!!;
+	assert(parsed.node.get(&f.parser.tree).kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
+	assert(f.diagnostics.messages.len() == 0);
+}
+
 // ---------------------------------------------------------------------------
 // Member access
 // ---------------------------------------------------------------------------
@@ -865,7 +1066,7 @@ fn void anonymous_member_promotion_recurses_through_nested_levels() @test
 	assert(f.diagnostics.messages.len() == 0);
 }
 
-fn void ambiguous_anonymous_members_resolve_to_first_declared() @test
+fn void ambiguous_anonymous_members_are_fatal_at_member_token() @test
 {
 	PostfixFixture f;
 	f.init("object.x\n");
@@ -880,18 +1081,75 @@ fn void ambiguous_anonymous_members_resolve_to_first_declared() @test
 	};
 	type_store::QualType outer = make_record(&f, "AnonymousOuter", outer_fields[..]);
 	f.seed("object", outer);
+	// C3-only (parser_postfix.c3 member_match_count, AMBIGUOUS_MEMBER): 'x' is reachable through two
+	// anonymous members at the same level. Reported once at the member token and the parse is fatal;
+	// no member is picked by declaration order.
+	expect_postfix_failure(&f);
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "member 'x' is ambiguous; found in multiple anonymous struct or union members");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 8);
+}
+
+fn void const_outer_record_qualifies_member_through_anonymous_level() @test
+{
+	PostfixFixture f;
+	f.init("object.plain\n");
+	defer f.free();
+	type_store::RecordField[1] inner_fields = { type_store::record_field(f.comp.intern_string("plain"), type_store::INT) };
+	type_store::QualType inner = make_record(&f, "AnonymousInner", inner_fields[..]);
+	type_store::RecordField[1] outer_fields = {
+		{ .qt = inner, .name = string_interner::EMPTY, .bit_width = type_store::BIT_WIDTH_NULL },
+	};
+	type_store::QualType record = const_of(make_record(&f, "AnonymousOuter", outer_fields[..]));
+	f.seed("object", record);
 	parser_result::Result parsed = f.parser.expr()!!;
-	// Source-derived (Parser.zig fieldAccessExtra): the first anonymous member whose
-	// record contains the name wins, in declaration order. The reference emits no
-	// ambiguity diagnostic for this case.
+	assert(f.parser.at_eof());
+	// C11 6.5.2.3p3, applied at each anonymous level: the const outer record makes the anonymous
+	// member const, and that const level makes the promoted field const.
 	tree::Node access = parsed.node.get(&f.parser.tree);
 	assert(access.kind == tree::NodeKind.MEMBER_ACCESS_EXPR && access.member_access.member_index == 0);
-	// The selected anonymous level is the first one, so the base is its member access.
-	tree::Node selected = access.member_access.base.get(&f.parser.tree);
-	assert(selected.kind == tree::NodeKind.MEMBER_ACCESS_EXPR);
-	assert(selected.member_access.member_index == 0);
-	assert(selected.member_access.qt.eql(first, &f.comp));
-	assert(parsed.qt.eql(type_store::INT, &f.comp));
+	tree::Node anonymous = access.member_access.base.get(&f.parser.tree);
+	assert(anonymous.kind == tree::NodeKind.MEMBER_ACCESS_EXPR);
+	assert(anonymous.member_access.qt.eql(const_of(inner), &f.comp));
+	assert(anonymous.member_access.qt.is_const);
+	assert(parsed.qt.eql(const_of(type_store::INT), &f.comp));
+	assert(parsed.qt.is_const);
+	assert(f.diagnostics.messages.len() == 0);
+}
+
+fn void const_anonymous_member_qualifies_field_two_levels_down() @test
+{
+	PostfixFixture f;
+	f.init("object.deep\n");
+	defer f.free();
+	type_store::RecordField[1] deep_fields = { type_store::record_field(f.comp.intern_string("deep"), type_store::INT) };
+	type_store::QualType deep = make_record(&f, "AnonymousDeep", deep_fields[..]);
+	type_store::RecordField[1] middle_fields = {
+		{ .qt = deep, .name = string_interner::EMPTY, .bit_width = type_store::BIT_WIDTH_NULL },
+	};
+	type_store::QualType middle = make_record(&f, "AnonymousMiddle", middle_fields[..]);
+	type_store::RecordField[1] outer_fields = {
+		{ .qt = const_of(middle), .name = string_interner::EMPTY, .bit_width = type_store::BIT_WIDTH_NULL },
+	};
+	type_store::QualType outer = make_record(&f, "AnonymousOuter", outer_fields[..]);
+	f.seed("object", outer);
+	parser_result::Result parsed = f.parser.expr()!!;
+	assert(f.parser.at_eof());
+	// C11 6.5.2.3p3, applied at each anonymous level: the outer record is mutable, but its const
+	// anonymous member is const, so the field two levels down is const. The outer record adds nothing.
+	tree::Node access = parsed.node.get(&f.parser.tree);
+	assert(access.kind == tree::NodeKind.MEMBER_ACCESS_EXPR && access.member_access.member_index == 0);
+	tree::Node deep_access = access.member_access.base.get(&f.parser.tree);
+	assert(deep_access.kind == tree::NodeKind.MEMBER_ACCESS_EXPR);
+	assert(deep_access.member_access.qt.eql(const_of(deep), &f.comp));
+	assert(deep_access.member_access.qt.is_const);
+	tree::Node middle_access = deep_access.member_access.base.get(&f.parser.tree);
+	assert(middle_access.kind == tree::NodeKind.MEMBER_ACCESS_EXPR);
+	assert(middle_access.member_access.qt.eql(const_of(middle), &f.comp));
+	assert(middle_access.member_access.qt.is_const);
+	assert(parsed.qt.eql(const_of(type_store::INT), &f.comp));
+	assert(parsed.qt.is_const);
 	assert(f.diagnostics.messages.len() == 0);
 }
 
@@ -1043,6 +1301,31 @@ fn void const_pointer_inc_reports_not_assignable() @test
 	expect_postfix_failure(&f);
 	assert(f.diagnostics.messages.len() == 1);
 	assert(f.diagnostics.messages[0].text == "expression is not assignable");
+	assert(f.diagnostics.messages[0].location.col == 8);
+}
+
+// Clang bounds-safety (parser_postfix.c3 check_postfix_update_operand, POINTER_ARITH_SINGLE): postfix
+// ++ and -- on a __single pointer are rejected at the operator. The check returns false, so the postfix
+// parse fails fatally instead of building a recovered update node.
+fn void single_pointer_postfix_update_reports_pointer_bound_and_is_fatal() @test
+{
+	PostfixFixture f;
+	f.init("pointer++\n", "postfix.c", true);
+	defer f.free();
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	expect_postfix_failure(&f);
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "pointer arithmetic on single pointer is out of bounds; consider adding '__counted_by'");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
+	assert(f.diagnostics.messages[0].location.col == 8);
+
+	f.free();
+	f.init("pointer--\n", "postfix.c", true);
+	f.seed("pointer", make_single_pointer(&f, type_store::INT));
+	expect_postfix_failure(&f);
+	assert(f.diagnostics.messages.len() == 1);
+	assert(f.diagnostics.messages[0].text == "pointer arithmetic on single pointer is out of bounds; consider adding '__counted_by'");
+	assert(f.diagnostics.messages[0].kind == diagnostics::MessageKind.ERROR);
 	assert(f.diagnostics.messages[0].location.col == 8);
 }
 

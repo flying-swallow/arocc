@@ -33,25 +33,9 @@ fn Signedness QualType.signedness(self, Compilation* comp)
 			case BOOL: return UNSIGNED;
 			case BIT_INT: return ty.bit_int.signedness;
 			case INT:
-				switch (ty.int_ty)
-				{
-					case CHAR: return char_signedness(comp);
-					case SCHAR:
-					case SHORT:
-					case INT:
-					case INT24:
-					case LONG:
-					case LONG_LONG:
-					case INT128: return SIGNED;
-					case UCHAR:
-					case USHORT:
-					case UINT:
-					case UINT24:
-					case ULONG:
-					case ULONG_LONG:
-					case UINT128: return UNSIGNED;
-				}
-			// Pointer values are signed.
+				if (ty.int_ty == CHAR) return char_signedness(comp);
+				return ty.int_ty.sign;
+				// Pointer values are signed.
 			case POINTER:
 			case NULLPTR_T:
 			case BLOCK: return SIGNED;
@@ -72,25 +56,8 @@ fn uint QualType.float_rank(self, Compilation* comp)
 		switch (ty.tag)
 		{
 			case FLOAT:
-				switch (ty.float_ty)
-				{
-					case BF16: return 0;
-					case FLOAT16: return 1;
-					case FP16: return 2;
-					case FLOAT: return 3;
-					case FLOAT32: return 4;
-					case FLOAT32X: return 5;
-					case DOUBLE: return 6;
-					case FLOAT64: return 7;
-					case FLOAT64X: return 8;
-					case LONG_DOUBLE: return 9;
-					case FLOAT128: return 10;
-					case FLOAT128X: unreachable("_Float128x is not supported");
-					case DFLOAT32: return DECIMAL_FLOAT_RANK + 0;
-					case DFLOAT64: return DECIMAL_FLOAT_RANK + 1;
-					case DFLOAT64X: return DECIMAL_FLOAT_RANK + 2;
-					case DFLOAT128: return DECIMAL_FLOAT_RANK + 3;
-				}
+				if (ty.float_ty == FLOAT128X) unreachable("_Float128x is not supported");
+				return ty.float_ty.rank;
 			case COMPLEX: ty = ty.complex.base(comp).ty;
 			case ATOMIC: ty = ty.atomic.base(comp).ty;
 			default: unreachable("not a floating point type");
@@ -109,25 +76,7 @@ fn ulong QualType.int_rank(self, Compilation* comp)
 			case BIT_INT: return (ulong)ty.bit_int.bits * 8;
 			case BOOL: return 1 + BOOL.bit_sizeof(comp) * 8;
 			case INT:
-				ulong bits8 = (ulong)ty.int_ty.bits(comp) * 8;
-				switch (ty.int_ty)
-				{
-					case CHAR:
-					case SCHAR:
-					case UCHAR: return 2 + bits8;
-					case SHORT:
-					case USHORT: return 3 + bits8;
-					case INT:
-					case UINT: return 4 + bits8;
-					case INT24:
-					case UINT24: return 5 + bits8;
-					case LONG:
-					case ULONG: return 6 + bits8;
-					case LONG_LONG:
-					case ULONG_LONG: return 7 + bits8;
-					case INT128:
-					case UINT128: return 8 + bits8;
-				}
+				return ty.int_ty.rank_class + (ulong)ty.int_ty.bits(comp) * 8;
 			case COMPLEX: ty = ty.complex.base(comp).ty;
 			case ATOMIC: ty = ty.atomic.base(comp).ty;
 			case ENUM:
@@ -172,17 +121,17 @@ fn QualType QualType.promote_int(self, Compilation* comp)
 				if (!ty.enum_ty.has_tag) return INT;
 				ty = ty.enum_ty.tag.base(comp).ty;
 			case BIT_INT: return self;
-			case COMPLEX: return self; // Assume complex integer type
+			case COMPLEX: return self;  // Assume complex integer type
 			case INT:
 				switch (ty.int_ty)
 				{
-					case CHAR:
-					case SCHAR:
-					case UCHAR:
-					case SHORT: return INT;
-					case USHORT: return TypeInt.UCHAR.bits(comp) == TypeInt.INT.bits(comp) ? UINT : INT;
-					default: return self;
-				}
+				case CHAR:
+				case SCHAR:
+				case UCHAR:
+				case SHORT: return INT;
+				case USHORT: return TypeInt.UCHAR.bits(comp) == TypeInt.INT.bits(comp) ? UINT : INT;
+				default: return self;
+			}
 			case ATOMIC: ty = ty.atomic.base(comp).ty;
 			default: unreachable("not an integer type");
 		}
@@ -203,27 +152,21 @@ fn QualType? QualType.promote_bitfield(self, Compilation* comp, uint width)
 }
 
 <* QualType.ScalarKind *>
-enum ScalarKind : char
+enum ScalarKind : char(bool is_int, bool is_float, bool is_real, bool is_pointer, bool is_arithmetic)
 {
-	ENUM,
-	BOOL,
-	INT,
-	FLOAT,
-	POINTER,
-	NULLPTR_T,
-	VOID_POINTER,
-	COMPLEX_INT,
-	COMPLEX_FLOAT,
-	BLOCK_POINTER,
-	NONE,
+	//              is_int is_float is_real is_pointer is_arithmetic
+	ENUM { true, false, true, false, true },
+	BOOL { true, false, true, false, true },
+	INT { true, false, true, false, true },
+	FLOAT { false, true, true, false, true },
+	POINTER { false, false, true, true, false },
+	NULLPTR_T { false, false, true, false, false },
+	VOID_POINTER { false, false, true, true, false },
+	COMPLEX_INT { true, false, false, false, true },
+	COMPLEX_FLOAT { false, true, false, false, true },
+	BLOCK_POINTER { false, false, true, true, false },
+	NONE { false, false, true, false, false },
 }
-
-fn bool ScalarKind.is_int(self) => self == BOOL || self == ENUM || self == INT || self == COMPLEX_INT;
-fn bool ScalarKind.is_float(self) => self == FLOAT || self == COMPLEX_FLOAT;
-fn bool ScalarKind.is_real(self) => self != COMPLEX_INT && self != COMPLEX_FLOAT;
-fn bool ScalarKind.is_pointer(self) => self == POINTER || self == VOID_POINTER || self == BLOCK_POINTER;
-<* Equivalent to is_int() || is_float() *>
-fn bool ScalarKind.is_arithmetic(self) => self.is_int() || self.is_float();
 
 fn ScalarKind QualType.scalar_kind(self, Compilation* comp)
 {
@@ -242,11 +185,11 @@ fn ScalarKind QualType.scalar_kind(self, Compilation* comp)
 			case COMPLEX:
 				switch (ty.complex.base(comp).ty.tag)
 				{
-					case INT:
-					case BIT_INT: return COMPLEX_INT;
-					case FLOAT: return COMPLEX_FLOAT;
-					default: unreachable("complex of a non-arithmetic type");
-				}
+				case INT:
+				case BIT_INT: return COMPLEX_INT;
+				case FLOAT: return COMPLEX_FLOAT;
+				default: unreachable("complex of a non-arithmetic type");
+			}
 			case ATOMIC: ty = ty.atomic.base(comp).ty;
 			case BLOCK: return BLOCK_POINTER;
 			default: return NONE;
@@ -254,14 +197,15 @@ fn ScalarKind QualType.scalar_kind(self, Compilation* comp)
 	}
 }
 
-fn bool QualType.is_int(self, Compilation* comp) => self.scalar_kind(comp).is_int();
+fn bool QualType.is_int(self, Compilation* comp) => self.scalar_kind(comp).is_int;
 fn bool QualType.is_real_int(self, Compilation* comp)
 {
 	ScalarKind sk = self.scalar_kind(comp);
-	return sk.is_int() && sk.is_real();
+	return sk.is_int && sk.is_real;
 }
-fn bool QualType.is_float(self, Compilation* comp) => self.scalar_kind(comp).is_float();
-fn bool QualType.is_pointer(self, Compilation* comp) => self.scalar_kind(comp).is_pointer();
+
+fn bool QualType.is_float(self, Compilation* comp) => self.scalar_kind(comp).is_float;
+fn bool QualType.is_pointer(self, Compilation* comp) => self.scalar_kind(comp).is_pointer;
 
 fn bool QualType.eql_qualified(self, QualType b, Compilation* comp)
 {
@@ -306,7 +250,7 @@ fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 		case COMPLEX: return a_type.complex.eql(b_type.complex, comp);
 		case BIT_INT:
 			return a_type.bit_int.bits == b_type.bit_int.bits && a_type.bit_int.signedness == b_type.bit_int.signedness;
-		// Atomic child type cannot be qualified.
+			// Atomic child type cannot be qualified.
 		case ATOMIC: return a_type.atomic.eql(b_type.atomic, comp);
 		case FUNC:
 			Func a_func = a_type.func;
@@ -329,33 +273,33 @@ fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 						Type pt = param.qt.base(comp).ty;
 						switch (pt.tag)
 						{
-							case BOOL: return false;
-							case INT:
-								switch (pt.int_ty)
-								{
-									case CHAR:
-									case UCHAR:
-									case SCHAR: return false;
-									default: break;
-								}
-							case FLOAT:
-								if (pt.float_ty != DOUBLE) return false;
-							case ENUM:
-								if (comp.langopts.emulate == CLANG && pt.enum_ty.incomplete) return false;
+						case BOOL: return false;
+						case INT:
+							switch (pt.int_ty)
+							{
+							case CHAR:
+							case UCHAR:
+							case SCHAR: return false;
 							default: break;
 						}
+						case FLOAT:
+							if (pt.float_ty != DOUBLE) return false;
+						case ENUM:
+							if (comp.langopts.emulate == CLANG && pt.enum_ty.incomplete) return false;
+						default: break;
 					}
-					return true;
 				}
-				return false;
+				return true;
 			}
-			if ((a_func.kind == NORMAL) != (b_func.kind == NORMAL)) return false;
-			foreach (i, a_param : a_func.params)
-			{
-				// Function parameters cannot be qualified.
-				if (!a_param.qt.eql(b_func.params[i].qt, comp)) return false;
-			}
-			return true;
+			return false;
+		}
+		if ((a_func.kind == NORMAL) != (b_func.kind == NORMAL)) return false;
+		foreach (i, a_param : a_func.params)
+		{
+			// Function parameters cannot be qualified.
+			if (!a_param.qt.eql(b_func.params[i].qt, comp)) return false;
+		}
+		return true;
 		case POINTER: return a_type.pointer.child.eql_qualified(b_type.pointer.child, comp);
 		case ARRAY:
 			ArrayLen a_len = a_type.array.len;
@@ -419,24 +363,10 @@ fn QualType QualType.make_int_unsigned(self, Compilation* comp)
 	switch (ty.tag)
 	{
 		case INT:
-			switch (ty.int_ty)
+			return
 			{
-				case CHAR:
-				case SCHAR:
-				case UCHAR: return UCHAR;
-				case SHORT:
-				case USHORT: return USHORT;
-				case INT:
-				case UINT: return UINT;
-				case LONG:
-				case ULONG: return ULONG;
-				case LONG_LONG:
-				case ULONG_LONG: return ULONG_LONG;
-				case INT128:
-				case UINT128: return UINT128;
-				case INT24:
-				case UINT24: return UINT24;
-			}
+				.index = ty.int_ty.unsigned_of.index
+			};
 		case BIT_INT:
 			return comp.type_store.put(type_bit_int(ty.bit_int.bits, UNSIGNED));
 		default: unreachable("not a real integer type");

@@ -210,10 +210,8 @@ fn void abstract_declarator_suffix_respects_parenthesized_pointer_precedence() @
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		parser_declarator::DeclaratorParser declarator = {
-			.parser = &p,
-			.type_name = &unused_type_name,
-		};
+		UnusedTypeName unused;
+		parser_declarator::DeclaratorParser declarator = { .parser = &p, .grammar = &unused };
 		type_store::QualType pointer_to_array = declarator.abstract_declarator(type_store::INT)!!;
 		type_store::Type pointer = pointer_to_array.get(&comp, type_store::TypeTag.POINTER)!!;
 		assert(pointer.pointer.child.is(&comp, type_store::TypeTag.ARRAY), "(*)[] must be pointer to array");
@@ -904,6 +902,232 @@ fn void source_derived_default_declaration_callbacks_recover_to_next_declaration
 			assert(!node.variable.initializer.is_null(), "the valid declaration should be fully parsed");
 		}
 		assert(found_good, "recovery should leave the following valid declaration in the AST");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: an invalid deduced type in a prototype is diagnosed without
+// stopping parsing of its initializer use or a later declaration.
+fn void source_derived_invalid_auto_type_prototype_recovers() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("invalid_auto_prototype_recovery.c",
+			"void invalid_func(__auto_type); int invalid_int = invalid_func; int good = 7;")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		bool found_invalid_prototype = false;
+		foreach (message : d.messages)
+		{
+			if (message.kind == diagnostics::MessageKind.ERROR &&
+				message.text == "'__auto_type' not allowed in function prototype")
+			{
+				found_invalid_prototype = true;
+			}
+		}
+		assert(found_invalid_prototype, "the invalid prototype parameter should be diagnosed");
+		assert(d.messages.len() == 1, "invalid-type initializer recovery should not add diagnostics");
+
+		bool found_invalid_int = false;
+		bool found_good = false;
+		foreach (decl : result.root_decls)
+		{
+			tree::Node node = decl.get(&result);
+			if (node.kind != tree::NodeKind.VARIABLE) continue;
+			String name = result.tok_slice(node.variable.name_tok);
+			if (name == "invalid_int")
+			{
+				found_invalid_int = true;
+				assert(!node.variable.initializer.is_null(),
+					"the initializer referencing the invalid prototype should be retained");
+			}
+			else if (name == "good")
+			{
+				found_good = true;
+				assert(!node.variable.initializer.is_null(), "the later valid initializer should be retained");
+			}
+		}
+		assert(found_invalid_int, "the declaration initialized from the invalid prototype should be retained");
+		assert(found_good, "recovery should preserve the later valid declaration");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: a file-scope initializer whose __builtin_offsetof fails does not
+// bind its name, so the repeated declaration is not a redefinition.
+fn void source_derived_failed_file_scope_initializers_do_not_redefine() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		type_store::init_named_types(&comp);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("failed_offsetof_redefinition.c",
+			"struct Incomplete; struct Complete { int a; }; int b = __builtin_offsetof(struct Incomplete, x); int b = __builtin_offsetof(struct Complete, missing);")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser::Parser p;
+		p.init(&pp);
+		parser_frontend::FrontendHandler frontend;
+		frontend.bind(&p);
+		tree::Tree result = p.parse()!!;
+
+		bool found_incomplete = false;
+		bool found_missing_member = false;
+		bool found_redefinition = false;
+		for (sz i = 0; i < d.messages.len(); i++)
+		{
+			if (d.messages[i].text.contains("offsetof of incomplete type")) found_incomplete = true;
+			if (d.messages[i].text.contains("no member named 'missing'")) found_missing_member = true;
+			if (d.messages[i].text.contains("redefinition of 'b'")) found_redefinition = true;
+		}
+		assert(found_incomplete, "the incomplete struct offsetof should be diagnosed");
+		assert(found_missing_member, "the missing member offsetof should be diagnosed");
+		assert(!found_redefinition, "a failed offsetof initializer should not leave b defined for the next declaration");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: an extern file-scope variable with an initializer emits
+// EXTERN_INITIALIZER exactly once.
+fn void source_derived_extern_initializer_emits_one_diagnostic() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		d.set("extern-initializer", diagnostics::MessageKind.WARNING)!!;
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("extern_initializer.c", "extern int x = 1;")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		sz extern_count = 0;
+		for (sz i = 0; i < d.messages.len(); i++)
+		{
+			if (d.messages[i].text == "extern variable has initializer") extern_count++;
+		}
+		assert(extern_count == 1, "extern initializer should emit exactly one EXTERN_INITIALIZER diagnostic, got %d", extern_count);
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: a file-scope initializer sees the name it declares, so
+// sizeof(x) in `int x = sizeof(x);` resolves x without a diagnostic.
+fn void source_derived_initializer_sees_its_own_declaration() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		type_store::init_named_types(&comp);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("self_initializer.c", "int x = sizeof(x);")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(d.messages.len() == 0, "sizeof of the declared name should resolve without a diagnostic");
+		assert(result.root_decls.len() == 1);
+		tree::Node node = result.root_decls[0].get(&result);
+		assert(node.kind == tree::NodeKind.VARIABLE);
+		assert(node.variable.qt.eql(type_store::INT, &comp));
+		assert(!node.variable.initializer.is_null(), "the initializer should be retained");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: a successful file-scope definition still makes a later
+// definition of the same name a redefinition.
+fn void source_derived_successful_file_scope_definition_still_redefines() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("successful_redefinition.c", "int y = 1; int y = 2;")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(d.messages.len() > 0, "the second definition should be diagnosed");
+		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);
+		assert(d.messages[0].text == "redefinition of 'y'", "a successful definition should still be redefined by a later one");
 
 		result.free();
 		p.free();
@@ -2545,17 +2769,18 @@ fn void implicit_typedef_prelude_seeds_x86_64_linux_roots_and_symbols() @test
 // Probe for pragma replay inside record and enum bodies. Preprocessing reports
 // HANDLED so no unknown-pragma note is emitted; the token stream keeps the pragma
 // line for the parser callback to replay.
-struct PragmaBodyProbe
+<* Pragma handler counting parser replays; preprocessing just accepts the pragma. *>
+struct PragmaBodyProbe (pragma::IPragma)
 {
 	uint parse_calls;
 }
 
-fn pragma::PragmaResult pragma_body_preprocess(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx)
-=> pragma::PragmaResult.HANDLED;
+fn pragma::PragmaResult PragmaBodyProbe.preprocessor_handler(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic
+	=> pragma::PragmaResult.HANDLED;
 
-fn pragma::PragmaResult pragma_body_parse(void* ctx, void* parser, tokens::TokenIndex start_idx)
+fn pragma::PragmaResult PragmaBodyProbe.parser_handler(&self, parser::Parser* p, tokens::TokenIndex start_idx) @dynamic
 {
-	((PragmaBodyProbe*)ctx).parse_calls++;
+	self.parse_calls++;
 	return pragma::PragmaResult.HANDLED;
 }
 
@@ -2570,8 +2795,8 @@ fn void parser_replays_pragma_inside_struct_and_enum_bodies() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		PragmaBodyProbe probe = {};
-		pragma::Handler h = { .ctx = (void*)&probe, .preprocess = &pragma_body_preprocess, .parser = &pragma_body_parse };
-		assert(comp.pragmas.add("probe", h));
+		bool added_probe = comp.pragmas.add("probe", &probe);
+		assert(added_probe);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		source::Source src = comp.add_source_from_buffer("pragma_bodies.c",
 			"struct S { int a;\n#pragma probe\nint b; };\nenum E { A,\n#pragma probe\nB };\n")!!;
@@ -2676,6 +2901,87 @@ fn uint attr_alignment(tree::Tree* result, type_store::NodeIndex node)
 	return 0;
 }
 
+fn void source_derived_alignas_declaration_specifiers_reach_declarations_fields_and_locals() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		comp.langopts.standard = lang_opts::Standard.C23;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("alignas_decl_spec.c",
+			"typedef int Int; " +++
+			"_Alignas(16) int expr_aligned; _Alignas(int) int type_aligned; " +++
+			"alignas(8) int c23_expr_aligned; alignas(Int) int c23_type_aligned; " +++
+			"struct Fields { _Alignas(16) int member; }; " +++
+			"int local_fn(void) { _Alignas(int) int local; return 0; }")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p; p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 7, "the typedef, aligned objects, record, and function should be retained");
+		assert(attr_alignment(&result, result.root_decls[1]) == 16, "_Alignas expression should attach to the variable");
+		assert(attr_alignment(&result, result.root_decls[2]) == type_store::INT.alignof(&comp),
+			"_Alignas type-name should use the type's alignment");
+		assert(attr_alignment(&result, result.root_decls[3]) == 8, "C23 alignas expression should attach to the variable");
+		assert(attr_alignment(&result, result.root_decls[4]) == type_store::INT.alignof(&comp),
+			"C23 alignas should accept a typedef-name type argument");
+
+		tree::Node record = result.root_decls[5].get(&result);
+		assert(record.kind == tree::NodeKind.STRUCT_DECL && record.container_decl.fields.len == 1);
+		type_store::NodeIndex field_index = record.container_decl.fields[0];
+		assert(attr_alignment(&result, field_index) == 16, "_Alignas should reach record-field construction");
+
+		tree::Node function = result.root_decls[6].get(&result);
+		type_store::NodeIndex body_index = function.function.body.unwrap();
+		tree::Node body = body_index.get(&result);
+		tree::Node local_stmt = body.compound_stmt.body[0].get(&result);
+		assert(local_stmt.kind == tree::NodeKind.DECL_STMT);
+		assert(attr_alignment(&result, local_stmt.decl_stmt.decls[0]) == type_store::INT.alignof(&comp),
+			"_Alignas type-name should be recognized on a local declaration");
+		assert(d.messages.len() == 0, "valid alignment declaration specifiers should not diagnose");
+
+		result.free(); p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void source_derived_alignas_typedef_uses_typedef_attribute_diagnostics() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		comp.langopts.standard = lang_opts::Standard.C23;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("alignas_typedef.c", "_Alignas(16) typedef int AlignedInt;")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p; p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 1);
+		tree::Node typedef_node = result.root_decls[0].get(&result);
+		assert(typedef_node.kind == tree::NodeKind.TYPEDEF);
+		bool found_invalid_target = false;
+		for (sz i = 0; i < d.messages.len(); i++)
+		{
+			if (d.messages[i].text == "'_Alignas' attribute only applies to variables and fields") found_invalid_target = true;
+		}
+		assert(found_invalid_target, "alignment on a typedef should use the typedef attribute diagnostic");
+
+		result.free(); p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
 fn ulong attr_field_offset(compilation::Compilation* comp, type_store::QualType record_qt, uint index)
 {
 	type_store::Type record = record_qt.get(comp, type_store::TypeTag.STRUCT)!!;
@@ -2686,6 +2992,82 @@ fn void use_aarch64_target(compilation::Compilation* comp)
 {
 	comp.target = target::from_triple("aarch64-linux-gnu")!!;
 	comp.langopts.set_target_options(&comp.target);
+}
+
+// source-derived: tag type attributes are consumed as type attributes, while
+// declaration attributes on enum/record tags attach before enum sizing/layout.
+fn void source_derived_gnu_enum_tag_and_trailing_attrs_apply_before_layout() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.langopts.set_emulated_compiler(lang_opts::Compiler.CLANG);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("attr_enum_tag_gnu.c",
+			"enum __attribute__((vector_size(8))) HeaderVector { HV }; enum TailVector { TV } __attribute__((aligned(8))); enum __attribute__((aligned(8))) HeaderAligned { HA }; enum TailPacked { TP = 255 } __attribute__((packed)); struct TailPackedRecord { char c; int i; } __attribute__((packed)); struct TailAlignedRecord { char c; int i; } __attribute__((aligned(8))); ")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 6, "all attributed tag definitions should be retained");
+		type_store::NodeIndex header_vector_index = result.root_decls[0];
+		type_store::NodeIndex tail_vector_index = result.root_decls[1];
+		tree::Node header_vector = header_vector_index.get(&result);
+		tree::Node tail_vector = tail_vector_index.get(&result);
+		assert(header_vector.kind == tree::NodeKind.ENUM_DECL && tail_vector.kind == tree::NodeKind.ENUM_DECL);
+		assert(header_vector.container_decl.container_qt.is(&comp, type_store::TypeTag.ENUM));
+		assert(tail_vector.container_decl.container_qt.is(&comp, type_store::TypeTag.ENUM));
+		assert(attr_tag_count(&result, header_vector_index, attribute::AttributeTag.PACKED) == 0);
+		assert(attr_alignment(&result, tail_vector_index) == 8, "a closing-brace enum alignment should attach to the tag");
+		assert(tail_vector.container_decl.container_qt.alignof(&comp) == 8,
+			"closing-brace enum alignment should affect the enum type");
+		assert(d.messages.len() == 0, "vector_size on an incomplete enum tag should be handled as a type attribute");
+
+		type_store::NodeIndex header_aligned_index = result.root_decls[2];
+		tree::Node header_aligned = header_aligned_index.get(&result);
+		type_store::QualType header_aligned_qt = header_aligned.container_decl.container_qt;
+		assert(attr_alignment(&result, header_aligned_index) == 8, "header aligned should attach to the enum tag node");
+		assert(attr_tag_count(&result, header_aligned_index, attribute::AttributeTag.ALIGNMENT) == 1,
+			"header aligned should be applied exactly once");
+		assert(header_aligned_qt.alignof(&comp) == 8, "header aligned should be effective on the enum type");
+
+		type_store::NodeIndex tail_packed_index = result.root_decls[3];
+		tree::Node tail_packed = tail_packed_index.get(&result);
+		type_store::Type packed_enum = tail_packed.container_decl.container_qt.get(&comp, type_store::TypeTag.ENUM)!!;
+		assert(attr_has_tag(&result, tail_packed_index, attribute::AttributeTag.PACKED), "packed after the enum closing brace should attach to its tag");
+		assert(packed_enum.enum_ty.tag.eql(type_store::UCHAR, &comp), "closing-brace packed should size the enum before choosing its tag type");
+
+		type_store::NodeIndex tail_packed_record_index = result.root_decls[4];
+		tree::Node tail_packed_record = tail_packed_record_index.get(&result);
+		assert(attr_has_tag(&result, tail_packed_record_index, attribute::AttributeTag.PACKED));
+		assert(attr_field_offset(&comp, tail_packed_record.container_decl.container_qt, 1) == 8,
+			"packed after the record closing brace should affect field layout");
+
+		tree::Node tail_aligned_record = result.root_decls[5].get(&result);
+		type_store::Type aligned_record = tail_aligned_record.container_decl.container_qt.get(&comp, type_store::TypeTag.STRUCT)!!;
+		assert(attr_alignment(&result, result.root_decls[5]) == 8, "aligned after the record closing brace should attach to its tag");
+		assert(attr_tag_count(&result, result.root_decls[5], attribute::AttributeTag.ALIGNMENT) == 1,
+			"closing-brace aligned should be applied exactly once");
+		assert(aligned_record.record.layout.pointer_alignment_bits == 64,
+			"closing-brace aligned should affect record layout");
+		assert(d.messages.len() == 0, "valid enum and record tag attributes should not add diagnostics");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
 }
 
 // source-derived: a GNU block-scope declaration whose attribute list mixes an
@@ -3051,6 +3433,50 @@ fn void source_derived_gnu_tag_attrs_attach_to_record_declarations() @test
 	assert(ta.allocation_count() == 0);
 }
 
+// A declaration attribute on a later reference to an existing tag merges with
+// the attributes already attached to that tag declaration.
+fn void source_derived_tag_reference_attributes_preserve_prior_attributes() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("attr_tag_reference.c",
+			"struct __attribute__((packed)) Existing { char c; int i; }; " +++
+			"struct Existing __attribute__((aligned(8))); ")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 1,
+			"a tag reference should update the existing tag without adding another root declaration");
+		type_store::NodeIndex tag_index = result.root_decls[0];
+		tree::Node tag = tag_index.get(&result);
+		assert(tag.kind == tree::NodeKind.STRUCT_DECL);
+		assert(attr_has_tag(&result, tag_index, attribute::AttributeTag.PACKED),
+			"a later aligned tag reference should preserve the original packed attribute");
+		assert(attr_alignment(&result, tag_index) == 8,
+			"the aligned attribute on the tag reference should be merged onto the tag");
+		assert(d.messages.len() == 0, "valid attributes on a tag reference should not diagnose");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
 // source-derived: a C23 standard attribute after the struct keyword attaches to
 // the tag with the same effect as the GNU spelling.
 fn void source_derived_c23_standard_tag_attr_attaches_to_record() @test
@@ -3182,3 +3608,293 @@ fn void source_derived_anonymous_aggregate_tag_attr_affects_outer_layout() @test
 	}
 	assert(ta.allocation_count() == 0);
 }
+
+// source-derived: a type-position calling convention before a parenthesized
+// function declarator reaches the function type inside the declared pointer.
+fn void source_derived_type_position_calling_convention_reaches_function_declarator() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.target = target::from_triple("i386-linux-gnu")!!;
+		comp.langopts.set_target_options(&comp.target);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("callconv_parenthesized_declarator.c",
+			"__attribute__((stdcall)) int (*callback)(void);")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 1);
+		tree::Node callback = result.root_decls[0].get(&result);
+		assert(callback.kind == tree::NodeKind.VARIABLE);
+		type_store::Type callback_pointer = callback.variable.qt.get(&comp, type_store::TypeTag.POINTER)!!;
+		type_store::Func callback_type = callback_pointer.pointer.child.get_func(&comp)!!;
+		assert(callback_type.return_type.eql(type_store::INT, &comp));
+		assert(callback_type.cc == type_store::CallingConvention.STDCALL,
+			"the leading type attribute should reach the function behind the parenthesized pointer declarator");
+		assert(d.messages.len() == 0, "a supported convention on a function pointer type should not diagnose");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: a type-position calling convention is checked against the
+// completed declaration type and emits one non-function diagnostic.
+fn void source_derived_type_position_calling_convention_rejects_final_non_function() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.target = target::from_triple("i386-linux-gnu")!!;
+		comp.langopts.set_target_options(&comp.target);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("callconv_non_function_final_type.c",
+			"__attribute__((stdcall)) int object;")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 1);
+		tree::Node object = result.root_decls[0].get(&result);
+		assert(object.kind == tree::NodeKind.VARIABLE);
+		assert(object.variable.qt.eql(type_store::INT, &comp));
+		assert(d.messages.len() == 1, "the completed non-function type should emit exactly one diagnostic");
+		assert(d.messages[0].kind == diagnostics::MessageKind.WARNING);
+		assert(d.messages[0].text == "'stdcall' only applies to function types; type here is 'int'");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: applying a conflicting type-position convention to a
+// typedef's function type diagnoses and preserves the existing convention.
+fn void source_derived_type_position_calling_convention_preserves_existing_convention() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.target = target::from_triple("i386-linux-gnu")!!;
+		comp.langopts.set_target_options(&comp.target);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("callconv_incompatible_existing_type.c",
+			"typedef __attribute__((fastcall)) int ExistingFn(void); " +++
+			"__attribute__((stdcall)) ExistingFn existing;")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 2);
+		tree::Node function_type = result.root_decls[0].get(&result);
+		assert(function_type.kind == tree::NodeKind.TYPEDEF);
+		type_store::Func original_type = function_type.type_def.qt.get_func(&comp)!!;
+		assert(original_type.cc == type_store::CallingConvention.FASTCALL,
+			"the typedef should retain the convention established by its type attribute");
+
+		tree::Node existing = result.root_decls[1].get(&result);
+		assert(existing.kind == tree::NodeKind.FUNCTION);
+		type_store::Func existing_type = existing.function.qt.get_func(&comp)!!;
+		assert(existing_type.cc == type_store::CallingConvention.FASTCALL,
+			"the incompatible stdcall attribute must not replace the existing fastcall convention");
+		assert(d.messages.len() == 1, "the incompatible conventions should emit exactly one diagnostic");
+		assert(d.messages[0].kind == diagnostics::MessageKind.WARNING);
+		assert(d.messages[0].text == "stdcall and fastcall attributes are not compatible");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: the Microsoft vectorcall keyword is applied to the completed
+// function declaration type on an x86_64 Windows target.
+fn void source_derived_vectorcall_keyword_sets_completed_function_calling_convention() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.target = target::from_triple("x86_64-windows-msvc")!!;
+		comp.langopts.set_target_options(&comp.target);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("vectorcall_keyword.c",
+			"void __attribute__((vectorcall)) gnu_vectorcall(void); " +++
+			"void __vectorcall keyword_vectorcall(void); " +++
+			"__vectorcall void (*callback)(void);")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(result.root_decls.len() == 3);
+		tree::Node gnu_function = result.root_decls[0].get(&result);
+		assert(gnu_function.kind == tree::NodeKind.FUNCTION);
+		type_store::Func gnu_function_type = gnu_function.function.qt.get_func(&comp)!!;
+		assert(gnu_function_type.cc == type_store::CallingConvention.VECTORCALL,
+			"the GNU vectorcall spelling should set the function type's convention");
+		tree::Node keyword_function = result.root_decls[1].get(&result);
+		assert(keyword_function.kind == tree::NodeKind.FUNCTION);
+		type_store::Func keyword_function_type = keyword_function.function.qt.get_func(&comp)!!;
+		assert(keyword_function_type.cc == type_store::CallingConvention.VECTORCALL,
+			"the fixture's void __vectorcall spelling should set the function type's convention");
+		tree::Node callback = result.root_decls[2].get(&result);
+		assert(callback.kind == tree::NodeKind.VARIABLE);
+		type_store::Type callback_pointer = callback.variable.qt.get(&comp, type_store::TypeTag.POINTER)!!;
+		type_store::Func callback_type = callback_pointer.pointer.child.get_func(&comp)!!;
+		assert(callback_type.cc == type_store::CallingConvention.VECTORCALL,
+			"a leading keyword should reach the function behind a parenthesized pointer declarator");
+		assert(d.messages.len() == 0, "a supported vectorcall declaration should not diagnose");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: functions returning a function or array are diagnosed at
+// the function suffix opener; returning a pointer to a function remains valid.
+fn void source_derived_function_return_type_diagnostics_point_at_suffix() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("function_return_types.c",
+			"int *return_func(void)(void);\n" +++
+			"int g(void)[3];\n" +++
+			"int (*h(void))(void);")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(d.messages.len() == 2, "only the function and array return types should be diagnosed");
+		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);
+		assert(d.messages[0].text == "function cannot return a function");
+		assert(d.messages[0].has_location && d.messages[0].location.line_no == 1 && d.messages[0].location.col == 17,
+			"the function return diagnostic should point at return_func's first function suffix opener");
+		assert(d.messages[1].kind == diagnostics::MessageKind.ERROR);
+		assert(d.messages[1].text == "function cannot return an array");
+		assert(d.messages[1].has_location && d.messages[1].location.line_no == 2 && d.messages[1].location.col == 6,
+			"the array return diagnostic should point at g's function suffix opener");
+
+		assert(result.root_decls.len() == 3, "the pointer-to-function return control should be retained");
+		tree::Node control = result.root_decls[2].get(&result);
+		assert(control.kind == tree::NodeKind.FUNCTION);
+		assert(result.tok_slice(control.function.name_tok) == "h");
+		type_store::Func control_type = control.function.qt.get_func(&comp)!!;
+		type_store::Type returned_pointer = control_type.return_type.get(&comp, type_store::TypeTag.POINTER)!!;
+		assert(returned_pointer.pointer.child.is(&comp, type_store::TypeTag.FUNC),
+			"a function may return a pointer to a function");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+// source-derived: an invalid function return type in a definition diagnoses at
+// its suffix without also checking the body's return expression against it.
+fn void source_derived_function_definition_invalid_return_type_has_one_diagnostic() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("function_return_definition.c",
+			"int *return_func(void)(void) { return 0; }")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+
+		assert(d.messages.len() == 1,
+			"the invalid function return type should be the only diagnostic, with no incompatible return from the body");
+		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);
+		assert(d.messages[0].text == "function cannot return a function");
+		assert(d.messages[0].has_location && d.messages[0].location.line_no == 1 && d.messages[0].location.col == 17,
+			"the function return diagnostic should point at return_func's function suffix opener");
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+<* Declarator grammar whose type-name production must not be reached. *>
+struct UnusedTypeName (parser_declarator::IDeclaratorGrammar) { bool unused; }
+
+fn type_store::QualType? UnusedTypeName.declarator_type_name(&self, parser::Parser* p) @dynamic
+	=> unused_type_name(null, p);

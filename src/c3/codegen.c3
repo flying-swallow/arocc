@@ -4,6 +4,7 @@ module aro::codegen;
 import aro::backend::ir, aro::compilation, aro::diagnostics, aro::preprocessor;
 import aro::tree, aro::type_store, aro::value, aro::value_interner, aro::string_interner;
 import std::collections::list, std::collections::map;
+import std::core::dstring;
 
 <* An active switch statement's cases. *>
 struct SwitchCase
@@ -27,15 +28,29 @@ struct Symbol
 	ir::Ref value;
 }
 
+<* A file-scope name allocated for a block-scope static or implicit variable. *>
+struct EmittedVariable
+{
+	type_store::NodeIndex node;
+	String name;
+}
+
 <* CodeGen's public fault is compilation::FATAL_ERROR; allocations panic on OOM. *>
 struct CodeGen
 {
 	tree::Tree* tree;
 	compilation::Compilation* comp;
 	preprocessor::Preprocessor* pp;
+	int tu_id;
+	String current_fn;
+	uint static_counter;
+	uint string_counter;
 	ir::Builder builder;
 	WipSwitch* wip_switch;
 	List{Symbol} symbols;
+	List{EmittedVariable} emitted_block_statics;
+	List{EmittedVariable} implicit_vars;
+	List{EmittedVariable} emitted_strings;
 	List{ir::PhiInput} ret_nodes;
 	List{ir::PhiInput} phi_nodes;
 	List{value_interner::InternerRef} record_elem_buf;
@@ -69,17 +84,23 @@ fn void? CodeGen.fail(&self, String text)
  the Zig implementation.
  @return? compilation::FATAL_ERROR
 *>
-fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp)
+fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = -1)
 {
 	compilation::Compilation* comp = tree.comp;
-	CodeGen c = { .tree = tree, .comp = comp, .pp = pp };
+	CodeGen c = { .tree = tree, .comp = comp, .pp = pp, .tu_id = tu_id };
 	c.builder.init(comp.gpa, &comp.interner);
 	c.symbols.init(comp.gpa);
+	c.emitted_block_statics.init(comp.gpa);
+	c.implicit_vars.init(comp.gpa);
+	c.emitted_strings.init(comp.gpa);
 	c.ret_nodes.init(comp.gpa);
 	c.phi_nodes.init(comp.gpa);
 	c.record_elem_buf.init(comp.gpa);
 	c.record_cache.init(comp.gpa);
 	defer c.symbols.free();
+	defer c.emitted_block_statics.free();
+	defer c.implicit_vars.free();
+	defer c.emitted_strings.free();
 	defer c.ret_nodes.free();
 	defer c.phi_nodes.free();
 	defer c.record_elem_buf.free();
@@ -88,6 +109,10 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp)
 
 	foreach (decl_index : tree.root_decls)
 	{
+		// These caches store names in the per-root builder arena.
+		c.emitted_block_statics.clear();
+		c.implicit_vars.clear();
+		c.emitted_strings.clear();
 		c.builder.arena.free();
 		c.builder.arena.init(comp.gpa, 4096);
 		Node decl = decl_index.get(tree);
@@ -99,9 +124,9 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp)
 				break;
 			case FUNCTION:
 				if (decl.function.body.is_null() || decl.function.is_inline) continue;
-			c.gen_fn(decl.function)!;
+			c.gen_fn(decl_index, decl.function)!;
 			case VARIABLE:
-				c.gen_var(decl.variable)!;
+				c.gen_var(decl.variable, decl_index)!;
 			case GLOBAL_ASM:
 				c.fail("TODO global assembly")!;
 				unreachable();
@@ -110,6 +135,121 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp)
 		}
 	}
 	return c.builder.finish();
+}
+
+<* Return a previously allocated name for a block-scope static, if any. *>
+fn String CodeGen.find_emitted_static(&self, type_store::NodeIndex node)
+{
+	foreach (emitted : self.emitted_block_statics)
+	{
+		if (emitted.node == node) return emitted.name;
+	}
+	return "";
+}
+
+<* Allocate a TU-unique symbol name for a block-scope static. *>
+fn String CodeGen.block_static_name(&self, type_store::NodeIndex node, String variable_name)
+{
+	String existing = self.find_emitted_static(node);
+	if (existing.len != 0) return existing;
+	DString renamed;
+	renamed.init(&self.builder.arena);
+	renamed.appendf("%s.%s.%d", self.current_fn, variable_name, self.static_counter);
+	self.static_counter++;
+	String name = self.symbol_name(renamed.str_view(), true);
+	self.emitted_block_statics.push({ .node = node, .name = name });
+	return name;
+}
+
+<* Return a previously allocated name for an implicit function-name variable. *>
+fn String CodeGen.find_implicit_var(&self, type_store::NodeIndex node)
+{
+	foreach (emitted : self.implicit_vars)
+	{
+		if (emitted.node == node) return emitted.name;
+	}
+	return "";
+}
+
+<* Allocate a stable internal symbol name for __func__ and its aliases. *>
+fn String CodeGen.implicit_var_name(&self, type_store::NodeIndex node)
+{
+	String existing = self.find_implicit_var(node);
+	if (existing.len != 0) return existing;
+	DString renamed;
+	renamed.init(&self.builder.arena);
+	renamed.appendf("__func__.%s", self.current_fn);
+	String name = renamed.str_view();
+	self.implicit_vars.push({ .node = node, .name = name });
+	return name;
+}
+
+fn String CodeGen.find_emitted_string(&self, type_store::NodeIndex node)
+{
+	foreach (emitted : self.emitted_strings)
+	{
+		if (emitted.node == node) return emitted.name;
+	}
+	return "";
+}
+
+<* Whether a node is one of the translation unit's file-scope declarations. *>
+fn bool CodeGen.is_root_declaration(&self, type_store::NodeIndex declaration)
+{
+	foreach (root_decl : self.tree.root_decls) if (root_decl == declaration) return true;
+	return false;
+}
+
+<* Whether a declaration has internal linkage, following parser redeclaration links. *>
+fn bool CodeGen.has_internal_linkage(&self, type_store::NodeIndex declaration)
+{
+	tree::Node node = declaration.get(self.tree);
+	switch (node.kind)
+	{
+		case FUNCTION:
+			if (node.function.is_static) return true;
+			if (!node.function.definition.is_null())
+			{
+				tree::Node definition = node.function.definition.unwrap().get(self.tree);
+				if (definition.kind == tree::NodeKind.FUNCTION && definition.function.is_static) return true;
+			}
+			foreach (root_decl : self.tree.root_decls)
+			{
+				tree::Node prior = root_decl.get(self.tree);
+				if (prior.kind != tree::NodeKind.FUNCTION || !prior.function.is_static) continue;
+				if (root_decl == declaration) return true;
+				if (!prior.function.definition.is_null() && prior.function.definition.unwrap() == declaration) return true;
+			}
+			return false;
+		case VARIABLE:
+			if (!node.variable.definition.is_null())
+			{
+				tree::Node definition = node.variable.definition.unwrap().get(self.tree);
+				if (definition.kind == tree::NodeKind.VARIABLE && definition.variable.storage_class == tree::VariableStorageClass.STATIC)
+				{
+					foreach (root_decl : self.tree.root_decls) if (root_decl == node.variable.definition.unwrap()) return true;
+				}
+			}
+			foreach (root_decl : self.tree.root_decls)
+			{
+				tree::Node prior = root_decl.get(self.tree);
+				if (prior.kind != tree::NodeKind.VARIABLE || prior.variable.storage_class != tree::VariableStorageClass.STATIC) continue;
+				if (root_decl == declaration) return true;
+				if (!prior.variable.definition.is_null() && prior.variable.definition.unwrap() == declaration) return true;
+			}
+			return false;
+		default: return false;
+	}
+}
+
+<* Add the TU suffix only to internal-linkage symbols when whole-program mode supplied an ID. *>
+fn String CodeGen.symbol_name(&self, String name, bool internal)
+{
+	if (self.tu_id < 0 || !internal) return name;
+	DString renamed;
+	renamed.init(&self.builder.arena);
+	renamed.appendf("%s.tu%d", name, self.tu_id);
+	return renamed.str_view();
 }
 
 <*
@@ -193,29 +333,43 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 }
 
 <* Lower one function definition and assemble its return block. *>
-fn void? CodeGen.gen_fn(&self, tree::NodeFunction function)
+fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunction function)
 {
-	String name = self.tree.tok_slice(function.name_tok);
+	String name = self.symbol_name(self.tree.tok_slice(function.name_tok), self.has_internal_linkage(declaration));
+	String old_current_fn = self.current_fn;
+	uint old_static_counter = self.static_counter;
+	defer self.current_fn = old_current_fn;
+	defer self.static_counter = old_static_counter;
+	self.current_fn = name;
+	self.static_counter = 0;
 	type_store::Func func_type = function.qt.base(self.comp).ty.func;
 	self.ret_nodes.clear();
+	// C3 deviation: Zig never clears `symbols`, so a name could resolve to an
+	// earlier function's ALLOC. Locals are per function.
+	self.symbols.clear();
 	self.builder.start_fn();
 	foreach (param : func_type.params)
 	{
 		ir::Ref arg = self.builder.add_arg(self.gen_type(param.qt)!);
 		uint size = (uint)param.qt.sizeof(self.comp);
 		uint alignment = param.qt.alignof(self.comp);
-		ir::Ref alloc = self.builder.add_alloc(size, alignment);
+		ir::Ref alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
 		self.builder.add_store(alloc, arg);
 		self.symbols.push({ .name = param.name, .value = alloc });
 	}
 
 	self.return_label = self.builder.make_label("return");
 	self.gen_stmt(function.body.unwrap())!;
+	// C3 deviations from Zig genFn: a void RET carries NONE (not ref 0), `return;`
+	// jumps reach a placed `return` block, and the single-return shortcut only
+	// replaces the body's final jump when that jump really is the return jump.
 	if (self.ret_nodes.len() == 0)
 	{
-		self.builder.add_inst(ir::InstTag.RET, { .none = 0 }, value_interner::REF_NORETURN);
+		if (!self.builder.block_terminated()) self.builder.add_jump(self.return_label);
+		self.builder.start_block(self.return_label);
+		self.builder.add_inst(ir::InstTag.RET, { .ref = ir::NONE }, value_interner::REF_NORETURN);
 	}
-	else if (self.ret_nodes.len() == 1)
+	else if (self.ret_nodes.len() == 1 && self.is_final_return_jump())
 	{
 		self.builder.body.remove_last()!!;
 		self.builder.add_inst(ir::InstTag.RET, { .ref = self.ret_nodes[0].value }, value_interner::REF_NORETURN);
@@ -227,7 +381,16 @@ fn void? CodeGen.gen_fn(&self, tree::NodeFunction function)
 		ir::Ref phi = self.builder.add_phi(inputs, self.gen_type(func_type.return_type)!);
 		self.builder.add_inst(ir::InstTag.RET, { .ref = phi }, value_interner::REF_NORETURN);
 	}
-	self.builder.finish_fn(name);
+	ir::Linkage linkage = self.has_internal_linkage(declaration) ? ir::Linkage.INTERNAL : ir::Linkage.EXTERNAL;
+	self.builder.finish_fn(name, linkage);
+}
+
+<* The function body's last instruction is the jump to the return block. *>
+fn bool CodeGen.is_final_return_jump(&self)
+{
+	if (self.builder.body.len() == 0) return false;
+	ir::Inst last = self.builder.instructions[(sz)self.builder.body[self.builder.body.len() - 1]];
+	return last.tag == ir::InstTag.JMP && last.data.ref == self.return_label;
 }
 
 <* Emit a unary instruction with the C type's corresponding IR result type. *>

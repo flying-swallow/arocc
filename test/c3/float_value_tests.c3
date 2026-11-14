@@ -89,7 +89,8 @@ fn void value_arithmetic_dispatches_float() @test
 	{
 		Value r = value::NONE;
 		// 0.1 + 0.2 = 0x3FD3333333333334 (IEEE double, source-derived)
-		assert(!r.add(f64v(comp, 0x3FB9_9999_9999_999A), f64v(comp, 0x3FC9_9999_9999_999A), type_store::DOUBLE, comp));
+		bool add_result_1 = r.add(f64v(comp, 0x3FB9_9999_9999_999A), f64v(comp, 0x3FC9_9999_9999_999A), type_store::DOUBLE, comp);
+		assert(!add_result_1);
 		check_value(r, f64v(comp, 0x3FD3_3333_3333_3334));
 		// 1 - 3 = -2.0: int operands are converted to the result type
 		assert(!r.sub(value::ONE, value::int_u64(3, comp), type_store::DOUBLE, comp));
@@ -107,10 +108,12 @@ fn void value_arithmetic_dispatches_float() @test
 		assert(!r.decrement(f64v(comp, D_ONE_HALF), type_store::LONG_DOUBLE, comp));
 		check_float_bits(comp, r, F80, u128(0x3FFE, 0x8000_0000_0000_0000));
 		// __float128: 1 + 1 = 2
-		assert(!r.add(value::ONE, value::ONE, type_store::FLOAT128, comp));
+		bool add_result_2 = r.add(value::ONE, value::ONE, type_store::FLOAT128, comp);
+		assert(!add_result_2);
 		check_float_bits(comp, r, F128, u128(0x4000_0000_0000_0000, 0));
 		// integer path still works: 2 + 3 = 5 in int
-		assert(!r.add(value::int_u64(2, comp), value::int_u64(3, comp), type_store::INT, comp));
+		bool add_result_3 = r.add(value::int_u64(2, comp), value::int_u64(3, comp), type_store::INT, comp);
+		assert(!add_result_3);
 		check_value(r, value::int_u64(5, comp));
 	};
 }
@@ -122,7 +125,8 @@ fn void value_arithmetic_dispatches_complex() @test
 	{
 		QualType cd = complex_of(comp, type_store::DOUBLE);
 		Value r = value::NONE;
-		assert(!r.add(value::ONE, c64v(comp, 0, D_TWO), cd, comp));
+		bool add_result_4 = r.add(value::ONE, c64v(comp, 0, D_TWO), cd, comp);
+		assert(!add_result_4);
 		check_value(r, c64v(comp, D_ONE, D_TWO));
 		assert(!r.mul(c64v(comp, 0, D_TWO), c64v(comp, 0, D_TWO), cd, comp));
 		check_value(r, c64v(comp, D_NEG_FOUR, 0));

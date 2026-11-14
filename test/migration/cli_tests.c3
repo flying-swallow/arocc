@@ -215,6 +215,22 @@ fn bool diagnostics_contain(diagnostics::Diagnostics* d, String text)
 	return false;
 }
 
+fn void preprocessing_errors_return_failure_and_preserve_output() @test
+{
+	String dir = scratch("preprocessing error");
+	String input = put(dir, "input.c", "#error preprocessing-error-probe\nint answer = 42;\n");
+	String output = join(dir, "output.i");
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	int status = run_driver({ "aro", "-E", "-P", "-nostdinc", "-nobuiltininc", "-o", output, input }, &d);
+	assert(status == 1, "preprocessing error did not return exit status 1: %d", status);
+	assert(d.errors != 0 && diagnostics_contain(&d, "preprocessing-error-probe"),
+		"preprocessing error diagnostic was not preserved: %s", cli_diag_text(&d));
+	assert(file::exists(output), "preprocessing error discarded the output file");
+	assert(read(output).contains("int answer = 42;"), "preprocessing error discarded valid preprocessed output");
+	d.free();
+}
+
 fn void multiple_inputs_reset_per_source_diagnostics() @test
 {
 	String dir = scratch("multiple inputs");
@@ -297,10 +313,13 @@ fn void backend_data_only_modes_and_unsupported_cases() @test
 	FakeChild function_child;
 	diagnostics::Diagnostics function_d;
 	function_d.init_list(mem);
-	int function_status = run_driver({ "aro", "-O0", "-S", "-nostdinc", "-nobuiltininc", function_input }, &function_d, null, &function_child);
-	assert(function_status != 0 && diagnostics_contain(&function_d, "TODO: Codegen functions"),
-		"function definition did not report the Zig TODO: Codegen functions diagnostic; diagnostics: %s", cli_diag_text(&function_d));
-	assert(function_child.calls == 0, "unsupported function invoked an assembler; diagnostics: %s", cli_diag_text(&function_d));
+	// Unlike Zig's data-only -O0 assembly stub, -O0 uses the Ir backend with no passes.
+	String function_output = join(dir, "function.s");
+	int function_status = run_driver({ "aro", "-O0", "-S", "-nostdinc", "-nobuiltininc", "-o", function_output, function_input }, &function_d, null, &function_child);
+	assert(function_status == 0 && function_d.errors == 0,
+		"-O0 function definition failed; diagnostics: %s", cli_diag_text(&function_d));
+	assert(read(function_output).contains("answer"), "-O0 -S output does not define the function");
+	assert(function_child.calls == 0, "-S unexpectedly invoked a child process; diagnostics: %s", cli_diag_text(&function_d));
 	function_d.free();
 
 	FakeChild target_child;
@@ -451,12 +470,12 @@ fn void production_cli_renders_color_overrides_to_stderr() @test
 	String input = put(dir, "error.c", "#error color-probe\n");
 	String[] force_on_args = { "-E", "-fcolor-diagnostics", "-nostdinc", "-nobuiltininc", input };
 	ChildResult force_on = run_production_cli(force_on_args);
-	assert(force_on.exit_code != 0, "#error unexpectedly succeeded with forced color");
+	assert(force_on.exit_code == 1, "#error did not fail with forced color");
 	assert(force_on.stderr.contains("\x1b["), "-fcolor-diagnostics did not render ANSI color on stderr: %s", force_on.stderr);
 
 	String[] force_off_args = { "-E", "-fno-color-diagnostics", "-nostdinc", "-nobuiltininc", input };
 	ChildResult force_off = run_production_cli(force_off_args);
-	assert(force_off.exit_code != 0, "#error unexpectedly succeeded with color disabled");
+	assert(force_off.exit_code == 1, "#error did not fail with color disabled");
 	assert(!force_off.stderr.contains("\x1b["), "-fno-color-diagnostics emitted ANSI color on stderr: %s", force_off.stderr);
 }
 
@@ -489,4 +508,115 @@ fn void production_verbose_ast_uses_stdout() @test
 	assert(result.exit_code == 0, "aro_c3 failed while dumping a valid AST: %s", result.stderr);
 	assert(result.stdout.contains("ast_output"), "--verbose-ast did not write the parsed tree to stdout: %s", result.stdout);
 	assert(result.stderr.len == 0, "valid --verbose-ast input emitted unexpected diagnostics: %s", result.stderr);
+}
+
+fn uint count_occurrences(String text, String needle)
+{
+	if (needle.len == 0 || needle.len > text.len) return 0;
+	uint count = 0;
+	for (usz i = 0; i + needle.len <= text.len; i++)
+	{
+		if (text[i:needle.len] == needle) count++;
+	}
+	return count;
+}
+
+fn void production_whole_program_ir_renames_static_helpers() @test
+{
+	String dir = scratch("whole program merged IR");
+	String first = put(dir, "a.c",
+		"static int helper(void) { return 1; }\nint shared(void);\nint a_entry(void) { return helper() + shared(); }\n");
+	String second = put(dir, "b.c",
+		"static int helper(void) { return 2; }\nint shared(void) { return helper(); }\n");
+	String output = join(dir, "out.o");
+	String[] args = { "-fwhole-program", "-c", "--verbose-ir", "-nostdinc", "-nobuiltininc", "-o", output, first, second };
+	ChildResult result = run_production_cli(args);
+	assert(result.stdout.contains("i32 @helper.tu0(") && result.stdout.contains("i32 @helper.tu1("),
+		"merged IR did not rename both TU-local helpers: %s", result.stdout);
+	assert(result.stdout.contains("i32 @a_entry(") && result.stdout.contains("i32 @shared("),
+		"merged IR omitted an external function definition: %s", result.stdout);
+	assert(count_occurrences(result.stdout, "i32 @shared(") == 1,
+		"shared external definition did not appear exactly once: %s", result.stdout);
+	assert(!result.stdout.contains("i32 @helper("), "whole-program IR retained a bare static helper definition: %s", result.stdout);
+	assert(count_occurrences(result.stdout, ") {\n") == 4,
+		"whole-program IR did not emit exactly four function definitions: %s", result.stdout);
+	sz a_entry = result.stdout.index_of("i32 @a_entry(")!!;
+	sz shared = result.stdout.index_of("i32 @shared(")!!;
+	assert(a_entry < shared, "merged IR did not preserve input order: %s", result.stdout);
+}
+
+fn void production_whole_program_duplicate_external_definitions_do_not_dump_ir() @test
+{
+	String dir = scratch("whole program duplicate definitions");
+	String first = put(dir, "a.c", "int shared(void) { return 0; }\n");
+	String second = put(dir, "b.c", "int shared(void) { return 0; }\n");
+	String[] args = { "-fwhole-program", "-c", "--verbose-ir", "-nostdinc", "-nobuiltininc", first, second };
+	ChildResult result = run_production_cli(args);
+	assert(result.exit_code == 1 && result.stderr.contains("multiple definitions of 'shared'"),
+		"duplicate external definitions were not rejected: %s", result.stderr);
+	assert(result.stderr.contains(first) && result.stderr.contains(second),
+		"duplicate definition diagnostic omitted an input path: %s", result.stderr);
+	assert(result.stdout.len == 0, "duplicate external definitions dumped partial IR: %s", result.stdout);
+}
+
+fn void production_whole_program_preserves_static_linkage_across_redeclaration() @test
+{
+	String dir = scratch("whole program static redeclaration");
+	String first = put(dir, "first.c",
+		"static int h(void);\nint h(void) { return 0; }\n");
+	String second = put(dir, "second.c", "static int h(void) { return 1; }\n");
+	String[] args = { "-fwhole-program", "-c", "--verbose-ir", "-nostdinc", "-nobuiltininc", first, second };
+	ChildResult result = run_production_cli(args);
+	assert(result.stdout.contains("i32 @h.tu0(") && result.stdout.contains("i32 @h.tu1("),
+		"static function redeclaration did not retain TU-local linkage: %s", result.stdout);
+}
+
+fn void production_whole_program_merges_external_global_definitions() @test
+{
+	String dir = scratch("whole program global merge");
+	String first = put(dir, "first.c", "int shared; extern int initialized;\n");
+	String second = put(dir, "second.c", "int shared; int initialized = 23;\n");
+	String output = join(dir, "out.o");
+	String[] args = { "-fwhole-program", "-c", "--verbose-ir", "-nostdinc", "-nobuiltininc", "-o", output, first, second };
+	ChildResult result = run_production_cli(args);
+	assert(result.exit_code == 0, "compatible external global declarations failed to merge: %s", result.stderr);
+	assert(count_occurrences(result.stdout, "global @shared size") == 1,
+		"tentative definitions from two TUs were not merged into one global: %s", result.stdout);
+	assert(result.stdout.contains("global @shared size 4 align 4 bss tentative"),
+		"the merged tentative global was not zero-initialized: %s", result.stdout);
+	assert(count_occurrences(result.stdout, "global @initialized size") == 1,
+		"the initialized definition did not replace its extern declaration: %s", result.stdout);
+	assert(result.stdout.contains("global @initialized size 4 align 4 data {\n    bytes \"\\x17\\x00\\x00\\x00\""),
+		"the initialized global was not retained in merged IR: %s", result.stdout);
+	assert(!result.stdout.contains("extern @initialized"),
+		"the merged IR retained an extern declaration alongside its definition: %s", result.stdout);
+}
+
+fn void production_whole_program_rejects_duplicate_initialized_globals() @test
+{
+	String dir = scratch("whole program duplicate globals");
+	String first = put(dir, "first.c", "int shared = 1;\n");
+	String second = put(dir, "second.c", "int shared = 2;\n");
+	String[] args = { "-fwhole-program", "-c", "--verbose-ir", "-nostdinc", "-nobuiltininc", first, second };
+	ChildResult result = run_production_cli(args);
+	assert(result.exit_code == 1 && result.stderr.contains("multiple definitions of 'shared'"),
+		"duplicate initialized globals were not rejected: %s", result.stderr);
+	assert(result.stderr.contains(first) && result.stderr.contains(second),
+		"duplicate global diagnostic omitted an input path: %s", result.stderr);
+	assert(result.stdout.len == 0, "duplicate initialized globals dumped partial IR: %s", result.stdout);
+}
+
+fn void production_optimized_ir_without_whole_program_keeps_per_translation_unit_dumps() @test
+{
+	String dir = scratch("optimized per translation unit IR");
+	String first = put(dir, "a.c",
+		"static int helper(void) { return 1; }\nint shared(void);\nint a_entry(void) { return helper() + shared(); }\n");
+	String second = put(dir, "b.c",
+		"static int helper(void) { return 2; }\nint shared(void) { return helper(); }\n");
+	String[] args = { "-O1", "-c", "--verbose-ir", "-nostdinc", "-nobuiltininc", first, second };
+	ChildResult result = run_production_cli(args);
+	assert(count_occurrences(result.stdout, "i32 @helper(") == 2,
+		"optimized mode did not emit two per-translation-unit definitions with bare helper names: %s", result.stdout);
+	assert(result.stdout.contains("i32 @shared(") && !result.stdout.contains("@helper.tu"),
+		"optimized mode changed ordinary per-TU symbol names: %s", result.stdout);
 }

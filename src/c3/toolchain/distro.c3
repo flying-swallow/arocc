@@ -8,7 +8,7 @@ import aro::toolchain::discovery, aro::target;
 const usz MAX_BYTES = 1024;
 
 <* Value for linker `--hash-style=` argument. `name` is the Zig tag name. *>
-enum HashStyle : char (String name)
+enum HashStyle : char(String name)
 {
 	BOTH { "both" },
 	GNU { "gnu" },
@@ -102,7 +102,7 @@ fn bool next_line(String buf, usz* pos, String* line)
 	usz start = *pos;
 	usz i = start;
 	while (i < buf.len && buf[i] != '\n') i++;
-	*line = buf[start:i - start];
+	*line = buf[start : i - start];
 	*pos = i + 1;
 	return true;
 }
@@ -181,7 +181,7 @@ fn bool contains(String buf, String needle)
 	if (needle.len > buf.len) return false;
 	for (usz i = 0; i + needle.len <= buf.len; i++)
 	{
-		if (buf[i:needle.len] == needle) return true;
+		if (buf[i : needle.len] == needle) return true;
 	}
 	return false;
 }

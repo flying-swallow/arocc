@@ -88,19 +88,49 @@ fn bool preserve_tokens(void* ctx, preprocessor::Preprocessor* pp, tokens::Token
 	return ((CallbackState*)ctx).preserve;
 }
 
-fn pragma::Handler handler(CallbackState* state, pragma::PragmaPreprocessFn preprocess_fn, pragma::PragmaLifecycleFn lifecycle_fn = null)
-=> {
-	.ctx = (void*)state,
-	.preprocess = preprocess_fn,
-	.parser = null,
-	.before_include = null,
-	.before_preprocess = lifecycle_fn,
-	.before_parse = null,
-	.after_parse = null,
-	.destroy = null,
-	.preserve_tokens = null,
-	.should_expand = null,
-};
+alias PreprocessFn = fn pragma::PragmaResult(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx);
+alias LifecycleFn = fn void(void* ctx, compilation::Compilation* comp);
+alias IncludeFn = fn pragma::IncludePragmaResult(void* ctx, preprocessor::Preprocessor* pp, source::Source src);
+alias PreserveFn = fn bool(void* ctx, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx);
+
+<* IPragma over the test callbacks; a null callback behaves like a missing method. *>
+struct CallbackPragma (pragma::IPragma)
+{
+	void* ctx;
+	PreprocessFn preprocess_fn;
+	IncludeFn include_fn;
+	LifecycleFn before_preprocess_fn;
+	LifecycleFn before_parse_fn;
+	LifecycleFn after_parse_fn;
+	LifecycleFn destroy_fn;
+	PreserveFn preserve_fn;
+}
+
+fn pragma::PragmaResult CallbackPragma.preprocessor_handler(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic
+	=> self.preprocess_fn ? self.preprocess_fn(self.ctx, pp, start_idx) : pragma::PragmaResult.UNKNOWN;
+fn pragma::IncludePragmaResult CallbackPragma.before_include(&self, preprocessor::Preprocessor* pp, source::Source src) @dynamic
+	=> self.include_fn ? self.include_fn(self.ctx, pp, src) : pragma::IncludePragmaResult.CONTINUE;
+fn void CallbackPragma.before_preprocess(&self, compilation::Compilation* comp) @dynamic
+{
+	if (self.before_preprocess_fn) self.before_preprocess_fn(self.ctx, comp);
+}
+fn void CallbackPragma.before_parse(&self, compilation::Compilation* comp) @dynamic
+{
+	if (self.before_parse_fn) self.before_parse_fn(self.ctx, comp);
+}
+fn void CallbackPragma.after_parse(&self, compilation::Compilation* comp) @dynamic
+{
+	if (self.after_parse_fn) self.after_parse_fn(self.ctx, comp);
+}
+fn void CallbackPragma.deinit(&self, compilation::Compilation* comp) @dynamic
+{
+	if (self.destroy_fn) self.destroy_fn(self.ctx, comp);
+}
+fn bool CallbackPragma.preserve_tokens(&self, preprocessor::Preprocessor* pp, tokens::TokenIndex start_idx) @dynamic
+	=> self.preserve_fn ? self.preserve_fn(self.ctx, pp, start_idx) : true;
+
+fn CallbackPragma handler(void* state, PreprocessFn preprocess_fn, LifecycleFn lifecycle_fn = null)
+	=> { .ctx = state, .preprocess_fn = preprocess_fn, .before_preprocess_fn = lifecycle_fn };
 
 fn void registration_dispatch_and_handled_lookup() @test
 {
@@ -109,22 +139,29 @@ fn void registration_dispatch_and_handled_lookup() @test
 	CallbackState first = {};
 	CallbackState second = {};
 	CallbackState third = {};
-	assert(registry.add("first", handler(&first, &unknown_preprocess)));
-	assert(registry.add("second", handler(&second, &handled_preprocess)));
-	assert(!registry.add("first", handler(&third, &handled_preprocess)));
+	CallbackPragma first_handler = handler(&first, &unknown_preprocess);
+	CallbackPragma second_handler = handler(&second, &handled_preprocess);
+	CallbackPragma third_handler = handler(&third, &handled_preprocess);
+	bool added_first = registry.add("first", &first_handler);
+	assert(added_first);
+	bool added_second = registry.add("second", &second_handler);
+	assert(added_second);
+	bool duplicate_added = registry.add("first", &third_handler);
+	assert(!duplicate_added);
 	assert(@ok(registry.get("first")));
 	assert(!@ok(registry.get("missing")));
 
-	Handler registered = registry.get("second")!!;
-	PragmaResult result = registered.preprocess(registered.ctx, null, 37);
+	IPragma registered = registry.get("second")!!;
+	PragmaResult result = registered.preprocessor_handler(null, 37);
 	check(result, PragmaResult.HANDLED);
 	check(second.preprocess_calls, 1);
 	check(second.last_start, 37);
 	check(first.preprocess_calls, 0);
 
-	assert(registry.add("third", handler(&third, &handled_preprocess)));
+	bool added_third = registry.add("third", &third_handler);
+	assert(added_third);
 	registered = registry.get("third")!!;
-	result = registered.preprocess(registered.ctx, null, 41);
+	result = registered.preprocessor_handler(null, 41);
 	check(result, PragmaResult.HANDLED);
 	check(first.preprocess_calls, 0);
 	check(second.preprocess_calls, 1);
@@ -138,11 +175,12 @@ fn void compilation_registry_repeats_parse_callbacks_and_destroys_once() @test
 	Compilation comp;
 	comp.init(mem);
 	CallbackState state = {};
-	Handler h = handler(&state, null);
-	h.before_parse = &before_parse;
-	h.after_parse = &after_parse;
-	h.destroy = &destroy;
-	assert(comp.pragmas.add("lifecycle", h));
+	CallbackPragma h = handler(&state, null);
+	h.before_parse_fn = &before_parse;
+	h.after_parse_fn = &after_parse;
+	h.destroy_fn = &destroy;
+	bool added_lifecycle = comp.pragmas.add("lifecycle", &h);
+	assert(added_lifecycle);
 
 	// The parser module is not ported yet; exercise the Compilation-owned
 	// lifecycle dispatch contract and registry-owned destruction directly.
@@ -169,8 +207,9 @@ fn void gcc_diagnostic_state_resets_and_replays_per_parse() @test
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("gcc.c", "#pragma GCC diagnostic ignored \"-Wundef\"\n")!!;
-		Handler gcc_handler = gcc::make_handler(&ta);
-		assert(comp.pragmas.add("GCC", gcc_handler));
+		gcc::GccPragma* gcc_handler = gcc::make_handler(&ta);
+		bool added_gcc = comp.pragmas.add("GCC", gcc_handler);
+		assert(added_gcc);
 
 		// Exercise the registered Compilation callbacks: preprocessing captures
 		// command-line state, then parser callback replay reapplies the pragma.
@@ -181,7 +220,7 @@ fn void gcc_diagnostic_state_resets_and_replays_per_parse() @test
 		assert(d.severity(diagnostics::Option.UNDEF) == diagnostics::MessageKind.OFF);
 		comp.pragmas.before_parse(&comp);
 		assert(d.severity(diagnostics::Option.UNDEF) == diagnostics::MessageKind.WARNING);
-		assert(((gcc::GccPragma*)gcc_handler.ctx).original_state.error_warnings);
+		assert(gcc_handler.original_state.error_warnings);
 		Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
@@ -207,8 +246,12 @@ fn void before_preprocess_visits_registered_handlers_in_order() @test
 	comp.init(mem);
 	CallbackState first = {};
 	CallbackState second = {};
-	assert(comp.pragmas.add("first", handler(&first, null, &before_preprocess)));
-	assert(comp.pragmas.add("second", handler(&second, null, &before_preprocess)));
+	CallbackPragma first_handler = handler(&first, null, &before_preprocess);
+	CallbackPragma second_handler = handler(&second, null, &before_preprocess);
+	bool added_first = comp.pragmas.add("first", &first_handler);
+	assert(added_first);
+	bool added_second = comp.pragmas.add("second", &second_handler);
+	assert(added_second);
 	Preprocessor pp;
 	pp.init(&comp, preprocessor::TESTING)!!;
 	check(first.lifecycle_calls, 1);
@@ -224,10 +267,11 @@ fn void registry_include_and_preserve_callback_contracts() @test
 	Registry registry;
 	registry.init(mem);
 	CallbackState state = { .skip_include = true, .preserve = false };
-	Handler h = handler(&state, null);
-	h.before_include = &before_include;
-	h.preserve_tokens = &preserve_tokens;
-	assert(registry.add("test", h));
+	CallbackPragma h = handler(&state, null);
+	h.include_fn = &before_include;
+	h.preserve_fn = &preserve_tokens;
+	bool added_test = registry.add("test", &h);
+	assert(added_test);
 	check(registry.before_include(null, {}), IncludePragmaResult.SKIP_INCLUDE);
 	check(state.include_calls, 1);
 	assert(!registry.preserve_tokens("test", null, 3));
@@ -247,15 +291,15 @@ fn void include_callback_continue_skip_and_fatal_contract() @test
 	CallbackState first = { .include_result = IncludePragmaResult.CONTINUE };
 	CallbackState skip = { .include_result = IncludePragmaResult.SKIP_INCLUDE };
 	CallbackState last = {};
-	Handler h = handler(&first, null);
-	h.before_include = &before_include;
-	assert(registry.add("continue", h));
-	h = handler(&skip, null);
-	h.before_include = &before_include;
-	assert(registry.add("skip", h));
-	h = handler(&last, null);
-	h.before_include = &before_include;
-	assert(registry.add("last", h));
+	CallbackPragma first_handler = { .ctx = &first, .include_fn = &before_include };
+	CallbackPragma skip_handler = { .ctx = &skip, .include_fn = &before_include };
+	CallbackPragma last_handler = { .ctx = &last, .include_fn = &before_include };
+	bool added_continue = registry.add("continue", &first_handler);
+	assert(added_continue);
+	bool added_skip = registry.add("skip", &skip_handler);
+	assert(added_skip);
+	bool added_last = registry.add("last", &last_handler);
+	assert(added_last);
 	check(registry.before_include(null, {}), IncludePragmaResult.SKIP_INCLUDE);
 	check(first.include_calls, 1);
 	check(skip.include_calls, 1);
@@ -277,15 +321,15 @@ fn void include_fatal_stops_callback_chain() @test
 	CallbackState first = { .include_result = pragma::IncludePragmaResult.CONTINUE };
 	CallbackState fatal = {};
 	CallbackState last = {};
-	Handler h = handler(&first, null);
-	h.before_include = &before_include;
-	assert(registry.add("continue", h));
-	h = handler(&fatal, null);
-	h.before_include = &fatal_include;
-	assert(registry.add("fatal", h));
-	h = handler(&last, null);
-	h.before_include = &before_include;
-	assert(registry.add("last", h));
+	CallbackPragma first_handler = { .ctx = &first, .include_fn = &before_include };
+	CallbackPragma fatal_handler = { .ctx = &fatal, .include_fn = &fatal_include };
+	CallbackPragma last_handler = { .ctx = &last, .include_fn = &before_include };
+	bool added_continue = registry.add("continue", &first_handler);
+	assert(added_continue);
+	bool added_fatal = registry.add("fatal", &fatal_handler);
+	assert(added_fatal);
+	bool added_last = registry.add("last", &last_handler);
+	assert(added_last);
 	check(registry.before_include(null, {}), pragma::IncludePragmaResult.FATAL);
 	check(first.include_calls, 1);
 	check(fatal.include_calls, 1);
@@ -293,8 +337,9 @@ fn void include_fatal_stops_callback_chain() @test
 	registry.free(null);
 }
 
-struct PackFixture
+struct PackFixture (pack::IParserAdapter)
 {
+	uint count;
 	tokenizer::TokenId[] ids;
 	String[] texts;
 	ulong integer;
@@ -303,20 +348,19 @@ struct PackFixture
 	pack::Diagnostic last_diagnostic;
 }
 
-fn tokenizer::TokenId pack_token_id(void* ctx, uint index) => ((PackFixture*)ctx).ids[index];
-fn String pack_token_text(void* ctx, uint index) => ((PackFixture*)ctx).texts[index];
-fn bool pack_parse_integer(void* ctx, uint index, ulong* value)
+fn uint PackFixture.token_count(&self) @dynamic => self.count;
+fn tokenizer::TokenId PackFixture.token_id(&self, uint index) @dynamic => self.ids[index];
+fn String PackFixture.token_text(&self, uint index) @dynamic => self.texts[index];
+fn bool PackFixture.parse_integer(&self, uint index, ulong* value) @dynamic
 {
-	PackFixture* fixture = (PackFixture*)ctx;
-	if (!fixture.integer_ok) return false;
-	*value = fixture.integer;
+	if (!self.integer_ok) return false;
+	*value = self.integer;
 	return true;
 }
-fn void pack_diagnose(void* ctx, uint index, pack::Diagnostic kind, ulong value)
+fn void PackFixture.diagnose(&self, uint index, pack::Diagnostic kind, ulong value) @dynamic
 {
-	PackFixture* fixture = (PackFixture*)ctx;
-	fixture.diagnostics++;
-	fixture.last_diagnostic = kind;
+	self.diagnostics++;
+	self.last_diagnostic = kind;
 }
 
 fn void pack_state_uses_explicit_parser_adapter() @test
@@ -329,15 +373,8 @@ fn void pack_state_uses_explicit_parser_adapter() @test
 		.integer = 4,
 		.integer_ok = true,
 	};
-	pack::ParserAdapter parser = {
-		.ctx = &fixture,
-		.token_count = 7,
-		.token_id = &pack_token_id,
-		.token_text = &pack_token_text,
-		.parse_integer = &pack_parse_integer,
-		.diagnose = &pack_diagnose,
-	};
-	pack::HandleResult result = state.handle(&parser, 0);
+	fixture.count = 7;
+	pack::HandleResult result = state.handle(&fixture, 0);
 	assert(result.ok);
 	check(result.next_index, 7);
 	assert(state.current.has_value);
@@ -346,8 +383,8 @@ fn void pack_state_uses_explicit_parser_adapter() @test
 	assert(state.stack[0].label == "outer");
 	fixture.ids = { tokenizer::TokenId.L_PAREN, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.R_PAREN };
 	fixture.texts = { "(", "pop", ",", "outer", ")" };
-	parser.token_count = 5;
-	result = state.handle(&parser, 0);
+	fixture.count = 5;
+	result = state.handle(&fixture, 0);
 	assert(result.ok);
 	assert(!state.current.has_value);
 	check(state.stack.len(), 0);
@@ -369,15 +406,8 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 		.integer = 3,
 		.integer_ok = true,
 	};
-	pack::ParserAdapter parser = {
-		.ctx = &fixture,
-		.token_count = 3,
-		.token_id = &pack_token_id,
-		.token_text = &pack_token_text,
-		.parse_integer = &pack_parse_integer,
-		.diagnose = &pack_diagnose,
-	};
-	pack::HandleResult result = state.handle(&parser, 0);
+	fixture.count = 3;
+	pack::HandleResult result = state.handle(&fixture, 0);
 	assert(!result.ok);
 	check(fixture.last_diagnostic, pack::Diagnostic.INTEGER);
 	check(fixture.diagnostics, 1);
@@ -385,8 +415,8 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 	fixture.ids = { tokenizer::TokenId.L_PAREN, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.PP_NUM, tokenizer::TokenId.R_PAREN };
 	fixture.texts = { "(", "push", ",", "outer", ",", "4", ")" };
 	fixture.integer = 4;
-	parser.token_count = 7;
-	result = state.handle(&parser, 0);
+	fixture.count = 7;
+	result = state.handle(&fixture, 0);
 	assert(result.ok);
 	check(state.current.value, 4);
 	check(state.stack.len(), 1);
@@ -396,7 +426,7 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 	fixture.ids = { tokenizer::TokenId.L_PAREN, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.PP_NUM, tokenizer::TokenId.R_PAREN };
 	fixture.texts = { "(", "pop", ",", "outer", ",", "8", ")" };
 	fixture.integer = 8;
-	result = state.handle(&parser, 0);
+	result = state.handle(&fixture, 0);
 	assert(!result.ok);
 	check(fixture.last_diagnostic, pack::Diagnostic.UNDEFINED_POP);
 	check(fixture.diagnostics, 2);
@@ -417,14 +447,14 @@ fn void parser_replays_pack_push_pop_and_alignment() @test
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("pack-replay.c", "#pragma pack(push, outer, 4)\n#pragma pack(pop, outer)\n#pragma pack(2)\n")!!;
-		assert(comp.pragmas.add("pack", pack::make_handler(&ta)));
+		bool added_pack = comp.pragmas.add("pack", pack::make_handler(&ta));
+		assert(added_pack);
 		pp.preprocess_extra(src)!!;
 		Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
 		comp.pragmas.before_parse(&comp);
-		Handler h = comp.pragmas.get("pack")!!;
-		pack::PackState* state = (pack::PackState*)h.ctx;
+		pack::PackState* state = (pack::PackState*)comp.pragmas.get("pack")!!.ptr;
 		p.tok_i = 0;
 		assert(p.replay_pragma()!!);
 		assert(state.current_value().has_value);
@@ -452,7 +482,8 @@ fn void parser_reports_pack_pop_underflow() @test
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("pack-underflow.c", "#pragma pack(pop)\n")!!;
-		assert(comp.pragmas.add("pack", pack::make_handler(&ta)));
+		bool added_pack = comp.pragmas.add("pack", pack::make_handler(&ta));
+		assert(added_pack);
 		pp.preprocess_extra(src)!!;
 		Parser p;
 		p.init(&pp, {});
@@ -491,7 +522,9 @@ fn void pragma_operator_and_eof_dispatch() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		CallbackState state = {};
-		assert(comp.pragmas.add("probe", handler(&state, &handled_preprocess)));
+		CallbackPragma probe = handler(&state, &handled_preprocess);
+		bool added_probe = comp.pragmas.add("probe", &probe);
+		assert(added_probe);
 		Source src = comp.add_source_from_buffer("pragma.c", "_Pragma(\"probe\")\n#pragma probe")!!;
 		Preprocessor pp;
 		InitOptions opts = preprocessor::TESTING;
@@ -517,7 +550,8 @@ fn void ms_pragma_operator_dispatches_registered_handler() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.langopts.set_ms_extensions(true);
-		assert(comp.pragmas.add("message", message::handler()));
+		bool added_message = comp.pragmas.add("message", message::handler());
+		assert(added_message);
 		Source src = comp.add_source_from_buffer("ms-pragma.c", "__pragma(message(\"from __pragma\"))\n")!!;
 		Preprocessor pp;
 		InitOptions opts = preprocessor::TESTING;
@@ -544,7 +578,8 @@ fn void pragma_macro_arguments_expand_by_default() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("macro.c", "#define TEXT \"expanded\"\n#pragma message TEXT\n")!!;
-		assert(comp.pragmas.add("message", message::handler()));
+		bool added_message = comp.pragmas.add("message", message::handler());
+		assert(added_message);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.preprocess_extra(src)!!;
@@ -568,8 +603,8 @@ fn void gcc_pragma_arguments_follow_should_expand_policy() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("gcc-macro.c", "#define COMMAND warning\n#pragma GCC COMMAND \"kept\"\n")!!;
-		Handler h = gcc::make_handler(&ta);
-		assert(comp.pragmas.add("GCC", h));
+		bool added_gcc = comp.pragmas.add("GCC", gcc::make_handler(&ta));
+		assert(added_gcc);
 		d.set("unknown-pragmas", WARNING)!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -622,8 +657,9 @@ fn void unknown_stop_and_fatal_results_dispatch_distinctly() @test
 		comp.init(&ta, null, &d);
 		d.set("unknown-pragmas", WARNING)!!;
 		ResultState state = { .result = PragmaResult.UNKNOWN };
-		Handler route_handler = { .ctx = (void*)&state, .preprocess = &selected_result };
-		assert(comp.pragmas.add("route", route_handler));
+		CallbackPragma route_handler = { .ctx = &state, .preprocess_fn = &selected_result };
+		bool added_route = comp.pragmas.add("route", &route_handler);
+		assert(added_route);
 
 		Preprocessor unknown_pp;
 		unknown_pp.init(&comp, preprocessor::TESTING)!!;
@@ -665,7 +701,8 @@ fn void nested_pragma_macro_expansion_uses_generated_location() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("nested.c", "#define INNER _Pragma(\"message \\\"nested\\\"\")\n#define OUTER INNER\nOUTER\n")!!;
-		assert(comp.pragmas.add("message", message::handler()));
+		bool added_message = comp.pragmas.add("message", message::handler());
+		assert(added_message);
 		Preprocessor pp;
 		InitOptions opts = preprocessor::TESTING;
 		opts.add_builtin_macros = true;
@@ -693,17 +730,18 @@ fn void once_provider_state_and_after_parse_reset() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("once.h", "#pragma once\n")!!;
-		Handler h = once::handler(&ta);
-		assert(comp.pragmas.add("once", h));
+		once::Once* h = once::handler(&ta);
+		bool added_once = comp.pragmas.add("once", h);
+		assert(added_once);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		// Invoke the real once handler in include context, then call the provider
 		// state callback directly; include dispatch remains deferred.
 		pp.include_depth = 1;
 		pp.preprocess_extra(src)!!;
-		check(h.before_include(h.ctx, &pp, src), IncludePragmaResult.SKIP_INCLUDE);
+		check(h.before_include(&pp, src), IncludePragmaResult.SKIP_INCLUDE);
 		comp.pragmas.after_parse(&comp);
-		check(h.before_include(h.ctx, &pp, src), IncludePragmaResult.CONTINUE);
+		check(h.before_include(&pp, src), IncludePragmaResult.CONTINUE);
 		pp.free();
 		comp.free();
 		d.free();
@@ -721,9 +759,11 @@ fn void malformed_then_repeated_valid_translation_units_clean_pragma_state() @te
 		d.init_list(&ta);
 		Compilation comp;
 		comp.init(&ta, null, &d);
-		Handler once_handler = once::handler(&ta);
-		assert(comp.pragmas.add("once", once_handler));
-		assert(comp.pragmas.add("message", message::handler()));
+		once::Once* once_handler = once::handler(&ta);
+		bool added_once = comp.pragmas.add("once", once_handler);
+		assert(added_once);
+		bool added_message = comp.pragmas.add("message", message::handler());
+		assert(added_message);
 		Source malformed = comp.add_source_from_buffer("malformed.c", "_Pragma(1)\n")!!;
 		Source valid = comp.add_source_from_buffer("valid.c", "#pragma once\n#pragma message \"valid\"\n")!!;
 
@@ -742,9 +782,9 @@ fn void malformed_then_repeated_valid_translation_units_clean_pragma_state() @te
 			Preprocessor pp;
 			pp.init(&comp, preprocessor::TESTING)!!;
 			pp.include_depth = 1;
-			check(once_handler.before_include(once_handler.ctx, &pp, valid), IncludePragmaResult.CONTINUE);
+			check(once_handler.before_include(&pp, valid), IncludePragmaResult.CONTINUE);
 			pp.preprocess_extra(valid)!!;
-			check(once_handler.before_include(once_handler.ctx, &pp, valid), IncludePragmaResult.SKIP_INCLUDE);
+			check(once_handler.before_include(&pp, valid), IncludePragmaResult.SKIP_INCLUDE);
 			comp.pragmas.before_parse(&comp);
 			comp.pragmas.after_parse(&comp);
 			pp.free();
@@ -766,7 +806,8 @@ fn void pragma_operator_malformed_string_recovers_to_later_pragma() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("bad.c", "_Pragma(1)\n#pragma message \"recovered\"\n")!!;
-		assert(comp.pragmas.add("message", message::handler()));
+		bool added_message = comp.pragmas.add("message", message::handler());
+		assert(added_message);
 		Preprocessor pp;
 		InitOptions opts = preprocessor::TESTING;
 		opts.add_builtin_macros = true;
@@ -792,7 +833,8 @@ fn void malformed_message_pragma_recovers_to_later_message() @test
 		d.init_list(&ta);
 		Compilation comp;
 		comp.init(&ta, null, &d);
-		assert(comp.pragmas.add("message", message::handler()));
+		bool added_message = comp.pragmas.add("message", message::handler());
+		assert(added_message);
 		Source src = comp.add_source_from_buffer("message.c", "#pragma message 1\n#pragma message \"recovered\"\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
