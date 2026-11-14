@@ -400,9 +400,10 @@ fn void unsupported_directives_are_diagnosed() @test
 	};
 	@pp("#ifdef DEFINED\n#pragma once\n#endif\n"; Preprocessor* pp, Diagnostics* d, Source src, fault f, TokenWithExpansionLocs eof)
 	{
-		assert(f == aro::UNSUPPORTED);
-		expect_msg(d, 0, "'#pragma' is not supported yet by the C3 port", 2, 2);
-		check(d.messages.len(), 1);
+		assert(!f);
+		check(d.messages.len(), 0);
+		// Once state is owned by the registered Compilation pragma handler;
+		// registry lifecycle and include callbacks are covered in pragma_tests.
 	};
 	// Skipped include directives are not evaluated.
 	@pp("#ifdef A\n#include <nothing.h>\n#pragma x\n#endif\n"; Preprocessor* pp, Diagnostics* d, Source src, fault f, TokenWithExpansionLocs eof)

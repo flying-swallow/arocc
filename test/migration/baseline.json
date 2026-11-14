@@ -27,34 +27,8 @@
     "aro_version": "0.1.0-dev",
     "minimum_zig_version": "0.18.0-dev.828+9da287565"
   },
-  "reference_status": {
-    "status": "reference not executed: compiler unavailable",
-    "commands_not_run": [
-      "zig build",
-      "zig build test-unit",
-      "zig build test-integration",
-      "zig build test-record",
-      "zig build test-fmt"
-    ],
-    "pass_fail_counts": null,
-    "note": "No pass/fail/skip counts exist for the Zig reference. The counts below are fixture inventories derived from source, not test results. Never claim a green Zig suite or differential parity without logs from a real run."
-  },
-  "recorded_environment": {
-    "recorded_on": "2026-11-03",
-    "zig_required": "0.18.0-dev.828+9da287565 (build.zig.zon minimum_zig_version)",
-    "zig_available": null,
-    "zig_note": "No Zig executable can build this repo here: the required 0.18.0-dev build cannot be downloaded (ziglang.org is blocked). Do not substitute an older Zig; its failures are not Aro regressions.",
-    "c3c": "0.8.5 (/home/user/tools/c3/c3c, git 640091d3303a393f9651d644063b837fc19d05f1, LLVM 23.1.2)",
-    "bazel": "9.1.0 (/home/user/tools/bazel, pinned by .bazelversion)",
-    "python": "3.13 (only needed for this inventory script)"
-  },
-  "reference_commands": {
-    "build": "zig build --cache-dir <ref>/cache --prefix <ref>/out",
-    "test-unit": "zig build test-unit --cache-dir <ref>/cache --prefix <ref>/out",
-    "test-integration": "zig build test-integration --cache-dir <ref>/cache --prefix <ref>/out",
-    "test-record": "zig build test-record --cache-dir <ref>/cache --prefix <ref>/out",
-    "executable": "<ref>/out/bin/arocc"
-  },
+  "execution_results_artifact": "test/migration/reference-results.json",
+  "reference_gate_helper": "python3 test/migration/run_reference_gate.py",
   "c3_build": {
     "binary": "//:aro_c3",
     "smoke_test": "//test/c3:build_smoke",

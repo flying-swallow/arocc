@@ -15,8 +15,8 @@
 // Diagnostics: Zig reports these through `Parser.err(tok_i, ...)`, which
 // first drops extension diagnostics inside `__extension__` and then reports at
 // the token. So they are *returned* in Zig emission order as NumberValueDiag
-// ids; the caller (C parser, pragma handler, preprocessor) reports them with
-// `NumberValueDiag.template()`. The syntax diagnostics of number_literal are
+// ids; the caller (C parser, pragma handler, preprocessor) reports them (the
+// enum carries its fmt/kind/meta, so it can be passed to any emit macro). The syntax diagnostics of number_literal are
 // emitted by NumberLiteralParser itself, before any of these.
 //
 // Deviations from Zig:
@@ -36,68 +36,22 @@ import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::typ
 import aro::value, aro::value_interner, aro::float_value, aro::bigint;
 import aro::number_literal, aro::text_literal;
 
-// ---------------------------------------------------------------------------
-// Zig `Parser.Diagnostic` / `Preprocessor.Diagnostic` constants used by
-// numeric literals (identical text in both Zig tables).
-
-const DiagnosticTemplate DIAG_INT_LITERAL_TOO_BIG = {
-	.fmt = "integer literal is too large to be represented in any integer type",
-	.kind = ERROR,
-};
-
-const DiagnosticTemplate DIAG_IMPLICITLY_UNSIGNED_LITERAL = {
-	.fmt = "integer literal is too large to be represented in a signed integer type, interpreting as unsigned",
-	.kind = WARNING,
-	.has_opt = true,
-	.opt = Option.IMPLICITLY_UNSIGNED_LITERAL,
-	.extension = true,
-};
-
-const DiagnosticTemplate DIAG_GNU_IMAGINARY_CONSTANT = {
-	.fmt = "imaginary constants are a GNU extension",
-	.kind = OFF,
-	.has_opt = true,
-	.opt = Option.GNU_IMAGINARY_CONSTANT,
-	.extension = true,
-};
-
-<* Zig `Preprocessor.Diagnostic.float_literal_in_expr` (pp `#if` only). *>
-const DiagnosticTemplate DIAG_FLOAT_LITERAL_IN_EXPR = {
-	.fmt = "floating point literal in preprocessor expression",
-	.kind = ERROR,
-};
-
 <*
- C3-only (no Zig counterpart): std.fmt.parseFloat rejects a hex float without
- significand digits (`0x.p1`) that number_literal accepted; Zig's
- `catch unreachable` is a safety panic there. Same text as clang.
+ A diagnostic produced by value conversion, reported by the caller at the
+ literal token. None takes arguments. Texts match Zig's `Parser.Diagnostic`
+ and `Preprocessor.Diagnostic` entries of the same names.
 *>
-const DiagnosticTemplate DIAG_HEX_FLOAT_NO_SIGNIFICAND = {
-	.fmt = "hexadecimal floating constant requires a significand",
-	.kind = ERROR,
-};
-
-<* A diagnostic produced by value conversion, reported by the caller at the literal token. None takes arguments. *>
-enum NumberValueDiag : char
+enum NumberValueDiag : char (String fmt, MessageKind kind, DiagMeta meta)
 {
-	INT_LITERAL_TOO_BIG,
-	IMPLICITLY_UNSIGNED_LITERAL,
-	GNU_IMAGINARY_CONSTANT,
-	FLOAT_LITERAL_IN_EXPR,
-	HEX_FLOAT_NO_SIGNIFICAND,
-}
-
-<* The DiagnosticTemplate of a NumberValueDiag (its `fmt` is the final text). *>
-fn DiagnosticTemplate NumberValueDiag.template(self)
-{
-	switch (self)
-	{
-		case INT_LITERAL_TOO_BIG: return DIAG_INT_LITERAL_TOO_BIG;
-		case IMPLICITLY_UNSIGNED_LITERAL: return DIAG_IMPLICITLY_UNSIGNED_LITERAL;
-		case GNU_IMAGINARY_CONSTANT: return DIAG_GNU_IMAGINARY_CONSTANT;
-		case FLOAT_LITERAL_IN_EXPR: return DIAG_FLOAT_LITERAL_IN_EXPR;
-		case HEX_FLOAT_NO_SIGNIFICAND: return DIAG_HEX_FLOAT_NO_SIGNIFICAND;
-	}
+	INT_LITERAL_TOO_BIG { "integer literal is too large to be represented in any integer type", ERROR, {} },
+	IMPLICITLY_UNSIGNED_LITERAL { "integer literal is too large to be represented in a signed integer type, interpreting as unsigned", WARNING, { .has_opt = true, .opt = Option.IMPLICITLY_UNSIGNED_LITERAL, .extension = true } },
+	GNU_IMAGINARY_CONSTANT { "imaginary constants are a GNU extension", OFF, { .has_opt = true, .opt = Option.GNU_IMAGINARY_CONSTANT, .extension = true } },
+	// Zig `Preprocessor.Diagnostic.float_literal_in_expr` (pp `#if` only).
+	FLOAT_LITERAL_IN_EXPR { "floating point literal in preprocessor expression", ERROR, {} },
+	// C3-only (no Zig counterpart): std.fmt.parseFloat rejects a hex float without
+	// significand digits (`0x.p1`) that number_literal accepted; Zig's
+	// `catch unreachable` is a safety panic there. Same text as clang.
+	HEX_FLOAT_NO_SIGNIFICAND { "hexadecimal floating constant requires a significand", ERROR, {} },
 }
 
 <* Up to two diagnostics in Zig emission order (a value diagnostic, then GNU_IMAGINARY_CONSTANT). *>
@@ -245,7 +199,12 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 	bool is_signed = suffix.is_signed_integer();
 	if (is_signed && base == 10)
 	{
-		Value max_intmax = value::max_int(comp.type_store.intmax, comp);
+		// Normal driver setup initializes named types while generating builtin
+		// macros. Raw parser clients can skip that step, so match Zig's intmax
+		// when available and derive the target's equivalent builtin type otherwise.
+		QualType intmax = comp.type_store.intmax;
+		if (intmax.is_invalid()) intmax = type_store::int_kind_qt(comp.target.int_max_type());
+		Value max_intmax = value::max_int(intmax, comp);
 		if (value::compare(val, GT, max_intmax, comp)) res.diags.push(IMPLICITLY_UNSIGNED_LITERAL);
 	}
 
@@ -308,37 +267,31 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 }
 
 <*
- Zig `Parser.bitInt`: strip '\'' separators, big-int setString(base); bits =
- max(1, bitCountTwosComp) + (signed suffix ? 1 : 0) (the wb suffix always
- reserves a sign bit, even for hex/octal); qt = type_store.put(bit_int(bits,
- suffix.signedness())); val = value::intern_big.
- Zig narrows bits with @intCast (bit_int_max_bits = 65535); a longer literal
- is a safety panic there and an assert here.
+ Zig `Parser.bitInt`. Digits are accumulated directly, skipping '\'' separators
+ (bigint::set_string only skips '_', so no stripped copy is needed). bits =
+ max(1, bitCountTwosComp) + 1 for signed suffixes: wb always reserves a sign
+ bit, even for hex/octal. Zig narrows bits with @intCast (bit_int_max_bits =
+ 65535); a longer literal is a safety panic there and an assert here.
  @require base == 2 || base == 8 || base == 10 || base == 16
 *>
 fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix)
 {
-	String digits = strip_separators(comp, bytes);
-	defer free_stripped(comp, bytes, digits);
-
-	Limb[] limbs = value::alloc_limbs(comp, bigint::calc_set_string_limb_count(base, digits.len));
-	defer value::free_limbs(comp, limbs);
-	BigIntMutable m = value::mutable_over(limbs);
-	// Digits were validated by number_literal; base is 2, 8, 10 or 16.
-	m.set_string(base, digits, {})!!;
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_set_string_limb_count(base, bytes.len)));
+	BigIntMutable m = value::mutable_over(limbs); // zeroed, len = 1
+	foreach (ch : bytes)
+	{
+		if (ch == '\'') continue;
+		// Digits were validated by number_literal.
+		m.mul_add_small(base, (Limb)bigint::digit_value(ch, base)!!);
+	}
 	BigIntConst c = m.to_const();
 
-	usz count = c.bit_count_twos_comp();
-	if (count < 1) count = 1; // literal `0` requires at least 1 bit
-	bool is_signed = suffix.is_signed_integer();
-	usz bits_needed = is_signed ? count + 1 : count;
-	assert(bits_needed <= 65535, "_BitInt literal wider than bit_int_max_bits");
+	usz bits = max(c.bit_count_twos_comp(), (usz)1) + (usz)(suffix.is_signed_integer() ? 1 : 0);
+	assert(bits <= 65535, "_BitInt literal wider than bit_int_max_bits");
 
-	Signedness signedness = is_signed ? SIGNED : UNSIGNED;
-	QualType int_qt = comp.type_store.put(type_store::type_bit_int((ushort)bits_needed, signedness));
+	QualType qt = comp.type_store.put(type_store::type_bit_int((ushort)bits, suffix.signedness()));
 	Value val = value::intern_big(comp, c);
-	NumberValue res = { .qt = int_qt, .literal_qt = int_qt, .val = val, .literal_val = val };
-	return res;
+	return { .qt = qt, .literal_qt = qt, .val = val, .literal_val = val };
 }
 
 <*

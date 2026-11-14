@@ -1,0 +1,1 @@
+exports_files(["c3.bzl", "c3_test_launcher.sh.tpl", "c3c_repo.bzl"])

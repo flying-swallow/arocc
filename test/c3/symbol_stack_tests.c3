@@ -86,7 +86,7 @@ fn void scope_shadowing_and_reuse() @test
 		assert(stack.lookup(x, VARS)!!.node == (NodeIndex)31);
 		stack.pop_scope();
 		stack.push_scope(); // Reusing the same nested scope clears its latest entries too.
-		assert(stack.get(x, VARS) == NOT_DEFINED~);
+		assert(@catch(stack.get(x, VARS)) == symbol_stack::NOT_DEFINED);
 		stack.pop_scope();
 		stack.pop_scope();
 		stack.free();
@@ -135,11 +135,11 @@ fn void typedef_and_tag_lookup() @test
 		assert(rec.diags[2] == PREVIOUS_DEFINITION && rec.toks[2] == 11);
 
 		StringId defined_tag = comp.intern_string("DefinedTag");
-		assert(stack.define_tag(&ctx, defined_tag, tokenizer::KEYWORD_STRUCT, 13, &found) == false);
+		assert(stack.define_tag(&ctx, defined_tag, tokenizer::TokenId.KEYWORD_STRUCT, 13, &found)!! == false);
 		stack.define(symbol(defined_tag, STRUCT, type_store::INT, 14, 140));
-		assert(stack.define_tag(&ctx, defined_tag, tokenizer::KEYWORD_STRUCT, 15, &found)!!);
+		assert(stack.define_tag(&ctx, defined_tag, tokenizer::TokenId.KEYWORD_STRUCT, 15, &found)!!);
 		assert(found.node == (NodeIndex)140);
-		assert(stack.define_tag(&ctx, defined_tag, tokenizer::KEYWORD_UNION, 16, &found) == false);
+		assert(stack.define_tag(&ctx, defined_tag, tokenizer::TokenId.KEYWORD_UNION, 16, &found)!! == false);
 		check(rec.diag_len, 5);
 		assert(rec.diags[3] == WRONG_TAG && rec.toks[3] == 16);
 		assert(rec.diags[4] == PREVIOUS_DEFINITION && rec.toks[4] == 14);

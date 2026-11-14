@@ -82,7 +82,7 @@ struct PpExprParser
 <*
  Zig `Value.toUnsigned(p, op_tok, opt_side)`: signed >= 0 -> same value as
  unsigned; negative -> bit-cast to u64 and, when `has_side`, warn
- DIAG_CONVERT_TO_POSITIVE at op_tok with (side, signed value, unsigned value).
+ PpDiag.CONVERT_TO_POSITIVE at op_tok with (side, signed value, unsigned value).
  @return? compilation::FATAL_ERROR
 *>
 fn void? PpValue.to_unsigned(&self, PpExprParser* p, TokenWithExpansionLocs op_tok, bool has_side, String side)
@@ -91,7 +91,7 @@ fn void? PpValue.to_unsigned(&self, PpExprParser* p, TokenWithExpansionLocs op_t
 	long s = self.signed;
 	*self = pp_unsigned((ulong)s);
 	if (s >= 0 || !has_side) return;
-	p.pp.err(op_tok, DIAG_CONVERT_TO_POSITIVE, { diagnostics::arg_str(side), diagnostics::arg_int(s), diagnostics::arg_uint(self.unsigned) })!;
+	p.pp.err(op_tok, PpDiag.CONVERT_TO_POSITIVE, side, (long)s, (ulong)self.unsigned)!;
 }
 
 fn bool is_pp_expr_ws(TokenId id) @local => id == WHITESPACE || id == COMMENT || id == MACRO_WS;
@@ -130,7 +130,7 @@ fn TokenWithExpansionLocs PpExprParser.peek(&self)
  Zig `parse`: assert the 64-bit intmax restriction (the target's intmax_t,
  type_store::int_kind_qt(target.int_max_type()), must be INTMAX_WIDTH bits;
  wider intmax targets are unsupported, as in Zig); `binary_expr(PREC_ANY,
- true)`; a leftover token that is not EOF -> DIAG_INVALID_PREPROC_OPERATOR
+ true)`; a leftover token that is not EOF -> PpDiag.INVALID_PREPROC_OPERATOR
  (the value is still returned). EXPR_FAILED where Zig returns null.
  @return? EXPR_FAILED, compilation::FATAL_ERROR
 *>
@@ -140,7 +140,7 @@ fn PpValue? PpExprParser.parse(&self)
 	assert(type_store::int_kind_qt(comp.target.int_max_type()).bit_sizeof(comp) == INTMAX_WIDTH, "only a 64-bit intmax_t is supported");
 	PpValue val = self.binary_expr(tokens::PREC_ANY, true)!;
 	TokenWithExpansionLocs last = self.peek();
-	if (last.id != EOF) self.pp.err(last, DIAG_INVALID_PREPROC_OPERATOR)!;
+	if (last.id != EOF) self.pp.err(last, PpDiag.INVALID_PREPROC_OPERATOR)!;
 	return val;
 }
 
@@ -159,17 +159,17 @@ fn long wrap_i128(int128 r, bool* overflow) @local
  zero. Usual arithmetic conversion (except ?:, <<, >>, comma, ||, &&): if
  either side is unsigned, with eval both go through to_unsigned("left" /
  "right"), without eval both become unsigned 0. Operators: % and / by zero
- -> DIAG_DIVISION_BY_ZERO ("remainder" / "division") and null when eval
+ -> PpDiag.DIVISION_BY_ZERO ("remainder" / "division") and null when eval
  (else lhs unchanged); signed min % -1 = 0, min / -1 = min with overflow;
  * + - signed with overflow detection, unsigned wrapping; << with amount < 0
  or >= INTMAX_WIDTH -> overflow, lhs 0, else shl with overflow; >> with
  amount < 0 -> overflow, lhs 0, >= width -> overflow and shift by width-1;
  comparisons / bit ops / &&, || give signed 0/1 or same-signedness results;
- ?: requires ':' (else DIAG_EXPECTED_COLON at it + note
- DIAG_TO_MATCH_QUESTION at '?', null), else = binary_expr(op_prec, ..),
+ ?: requires ':' (else PpDiag.EXPECTED_COLON at it + note
+ PpDiag.TO_MATCH_QUESTION at '?', null), else = binary_expr(op_prec, ..),
  result converted to unsigned (no warning) if either branch is unsigned;
- comma: error DIAG_COMMA_OPERATOR and null before C99 or when eval, else rhs.
- Any overflow with eval -> warning DIAG_OVERFLOW at the operator.
+ comma: error PpDiag.COMMA_OPERATOR and null before C99 or when eval, else rhs.
+ Any overflow with eval -> warning PpDiag.OVERFLOW at the operator.
  "null" means EXPR_FAILED.
  @return? EXPR_FAILED, compilation::FATAL_ERROR
 *>
@@ -241,7 +241,7 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
 				}
 				else if (eval)
 				{
-					self.pp.err(operator, DIAG_DIVISION_BY_ZERO, { diagnostics::arg_str("remainder") })!;
+					self.pp.err(operator, PpDiag.DIVISION_BY_ZERO, "remainder")!;
 					return EXPR_FAILED~;
 				}
 			case SLASH:
@@ -263,7 +263,7 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
 				}
 				else if (eval)
 				{
-					self.pp.err(operator, DIAG_DIVISION_BY_ZERO, { diagnostics::arg_str("division") })!;
+					self.pp.err(operator, PpDiag.DIVISION_BY_ZERO, "division")!;
 					return EXPR_FAILED~;
 				}
 			case ASTERISK:
@@ -389,8 +389,8 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
 				TokenWithExpansionLocs colon = self.next();
 				if (colon.id != COLON)
 				{
-					self.pp.err(colon, DIAG_EXPECTED_COLON)!;
-					self.pp.err(operator, DIAG_TO_MATCH_QUESTION)!;
+					self.pp.err(colon, PpDiag.EXPECTED_COLON)!;
+					self.pp.err(operator, PpDiag.TO_MATCH_QUESTION)!;
 					return EXPR_FAILED~;
 				}
 				bool eval_else = eval && lhs.is_zero();
@@ -410,7 +410,7 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
 				// Comma operator allowed in C99 if not being evaluated
 				if (!self.pp.comp.langopts.standard.at_least(C99) || eval)
 				{
-					self.pp.err(operator, DIAG_COMMA_OPERATOR)!;
+					self.pp.err(operator, PpDiag.COMMA_OPERATOR)!;
 					return EXPR_FAILED~;
 				}
 				lhs = rhs;
@@ -418,36 +418,42 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
 				unreachable("not a preprocessor binary operator");
 		}
 
-		if (overflow && eval) self.pp.err(operator, DIAG_OVERFLOW)!;
-	}
-}
-
-<* The pp record for a number_value diagnostic (same texts as number_value's templates). *>
-fn PpDiagnostic number_value_pp_diag(NumberValueDiag d) @local
-{
-	switch (d)
-	{
-		case INT_LITERAL_TOO_BIG: return DIAG_INT_LITERAL_TOO_BIG;
-		case IMPLICITLY_UNSIGNED_LITERAL: return DIAG_IMPLICITLY_UNSIGNED_LITERAL;
-		case FLOAT_LITERAL_IN_EXPR: return DIAG_FLOAT_LITERAL_IN_EXPR;
-		default: return { .tmpl = d.template() };
+		if (overflow && eval) self.pp.err(operator, PpDiag.OVERFLOW)!;
 	}
 }
 
 <*
- Zig `primaryExpr(eval)`. EOF / ')' -> DIAG_EXPECTED_VALUE_IN_EXPR, null.
- '(' expr ')' (missing ')' -> DIAG_CLOSING_PAREN + note DIAG_TO_MATCH_PAREN).
- `defined` [ '(' ] ident [ ')' ]: eof -> DIAG_MACRO_NAME_MISSING, non-identifier
- -> DIAG_MACRO_NAME_MUST_BE_IDENTIFIER, missing ')' -> CLOSING_PAREN + note;
+ Report a number_value diagnostic at `tok`. Zig's Preprocessor.Diagnostic has
+ its own entries for three of them; the other two have no pp entry and are
+ reported with NumberValueDiag directly (same texts).
+ @return? compilation::FATAL_ERROR
+*>
+fn void? Preprocessor.err_number_value(&self, TokenWithExpansionLocs tok, NumberValueDiag d) @local
+{
+	switch (d)
+	{
+		case INT_LITERAL_TOO_BIG: return self.err(tok, PpDiag.INT_LITERAL_TOO_BIG);
+		case IMPLICITLY_UNSIGNED_LITERAL: return self.err(tok, PpDiag.IMPLICITLY_UNSIGNED_LITERAL);
+		case FLOAT_LITERAL_IN_EXPR: return self.err(tok, PpDiag.FLOAT_LITERAL_IN_EXPR);
+		case GNU_IMAGINARY_CONSTANT: return self.err(tok, NumberValueDiag.GNU_IMAGINARY_CONSTANT);
+		case HEX_FLOAT_NO_SIGNIFICAND: return self.err(tok, NumberValueDiag.HEX_FLOAT_NO_SIGNIFICAND);
+	}
+}
+
+<*
+ Zig `primaryExpr(eval)`. EOF / ')' -> PpDiag.EXPECTED_VALUE_IN_EXPR, null.
+ '(' expr ')' (missing ')' -> PpDiag.CLOSING_PAREN + note PpDiag.TO_MATCH_PAREN).
+ `defined` [ '(' ] ident [ ')' ]: eof -> PpDiag.MACRO_NAME_MISSING, non-identifier
+ -> PpDiag.MACRO_NAME_MUST_BE_IDENTIFIER, missing ')' -> CLOSING_PAREN + note;
  value signed 0/1 from pp.defines.contains(expanded_slice). PP_NUM:
  NumberLiteralParser.parse (PARSING_FAILED -> null) then pp_int_value: report
  its diags in order (FLOAT_LITERAL_IN_EXPR -> null). Char literals:
  pp_char_value. '+' is skipped; '-' negates (signed: 0 - v with overflow
- warning DIAG_OVERFLOW when eval; unsigned: wrapping); '~' complements; '!'
+ warning PpDiag.OVERFLOW when eval; unsigned: wrapping); '~' complements; '!'
  gives signed !to_bool; `true`/`false` -> 1/0. Other macro identifiers:
- DIAG_UNDEFINED_MACRO (name), and if followed by '(' also
- DIAG_FN_MACRO_UNDEFINED (name) and null, else signed 0. Anything else:
- DIAG_INVALID_PREPROC_EXPR_START, null.
+ PpDiag.UNDEFINED_MACRO (name), and if followed by '(' also
+ PpDiag.FN_MACRO_UNDEFINED (name) and null, else signed 0. Anything else:
+ PpDiag.INVALID_PREPROC_EXPR_START, null.
  "null" means EXPR_FAILED.
  @return? EXPR_FAILED, compilation::FATAL_ERROR
 *>
@@ -462,7 +468,7 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 		case EOF:
 		case R_PAREN:
 			TokenWithExpansionLocs eof = self.next();
-			pp.err(eof, DIAG_EXPECTED_VALUE_IN_EXPR)!;
+			pp.err(eof, PpDiag.EXPECTED_VALUE_IN_EXPR)!;
 			return EXPR_FAILED~;
 		case L_PAREN:
 			TokenWithExpansionLocs l_paren = self.next();
@@ -470,8 +476,8 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 			TokenWithExpansionLocs r_paren = self.next();
 			if (r_paren.id != R_PAREN)
 			{
-				pp.err(r_paren, DIAG_CLOSING_PAREN)!;
-				pp.err(l_paren, DIAG_TO_MATCH_PAREN)!;
+				pp.err(r_paren, PpDiag.CLOSING_PAREN)!;
+				pp.err(l_paren, PpDiag.TO_MATCH_PAREN)!;
 				return EXPR_FAILED~;
 			}
 			return res;
@@ -483,12 +489,12 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 			TokenWithExpansionLocs identifier = self.next();
 			if (identifier.id == EOF)
 			{
-				pp.err(identifier, DIAG_MACRO_NAME_MISSING)!;
+				pp.err(identifier, PpDiag.MACRO_NAME_MISSING)!;
 				return EXPR_FAILED~;
 			}
 			if (!identifier.id.is_macro_identifier())
 			{
-				pp.err(identifier, DIAG_MACRO_NAME_MUST_BE_IDENTIFIER)!;
+				pp.err(identifier, PpDiag.MACRO_NAME_MUST_BE_IDENTIFIER)!;
 				return EXPR_FAILED~;
 			}
 			if (l_paren.id == L_PAREN)
@@ -496,8 +502,8 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 				TokenWithExpansionLocs r_paren = self.next();
 				if (r_paren.id != R_PAREN)
 				{
-					pp.err(r_paren, DIAG_CLOSING_PAREN)!;
-					pp.err(l_paren, DIAG_TO_MATCH_PAREN)!;
+					pp.err(r_paren, PpDiag.CLOSING_PAREN)!;
+					pp.err(l_paren, PpDiag.TO_MATCH_PAREN)!;
 					return EXPR_FAILED~;
 				}
 			}
@@ -517,7 +523,7 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 				return f~;
 			}
 			PpNumberValue v = number_value::pp_int_value(parsed);
-			foreach (d : v.diags.slice()) pp.err(num, number_value_pp_diag(d))!;
+			foreach (d : v.diags.slice()) pp.err_number_value(num, d)!;
 			if (v.rejected) return EXPR_FAILED~;
 			return v.is_signed ? pp_signed(v.signed) : pp_unsigned(v.unsigned);
 		case CHAR_LITERAL:
@@ -534,7 +540,7 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 			if (val.is_unsigned) return pp_unsigned((ulong)0 - val.unsigned);
 			if (val.signed == long::min)
 			{
-				if (eval) pp.err(minus, DIAG_OVERFLOW)!;
+				if (eval) pp.err(minus, PpDiag.OVERFLOW)!;
 				return pp_signed(long::min);
 			}
 			return pp_signed(-val.signed);
@@ -555,15 +561,15 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 			TokenWithExpansionLocs maybe_ident = self.next();
 			if (maybe_ident.id.is_macro_identifier())
 			{
-				pp.err(maybe_ident, DIAG_UNDEFINED_MACRO, { diagnostics::arg_str(pp.expanded_slice(maybe_ident)) })!;
+				pp.err(maybe_ident, PpDiag.UNDEFINED_MACRO, pp.expanded_slice(maybe_ident))!;
 				if (self.peek().id == L_PAREN)
 				{
-					pp.err(maybe_ident, DIAG_FN_MACRO_UNDEFINED, { diagnostics::arg_str(pp.expanded_slice(maybe_ident)) })!;
+					pp.err(maybe_ident, PpDiag.FN_MACRO_UNDEFINED, pp.expanded_slice(maybe_ident))!;
 					return EXPR_FAILED~;
 				}
 				return pp_signed(0);
 			}
-			pp.err(maybe_ident, DIAG_INVALID_PREPROC_EXPR_START)!;
+			pp.err(maybe_ident, PpDiag.INVALID_PREPROC_EXPR_START)!;
 			return EXPR_FAILED~;
 	}
 }

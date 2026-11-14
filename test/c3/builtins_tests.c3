@@ -19,7 +19,7 @@ module builtins_tests;
 import aro::builtins, aro::builtin_properties, aro::builtin_type_description;
 import aro::builtin_defs::common, aro::builtin_defs::ve, aro::builtin_defs::x86;
 import aro::target, aro::compilation, aro::type_store;
-import std::io, std::core::mem::allocators, std::core::dstring;
+import std::io, std::core::mem::allocators, std::core::dstring, std::collections::list;
 
 macro check(left, right)
 {
@@ -61,7 +61,7 @@ fn String dmp(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.dump(comp, w);
+	qt.dump(comp, &w);
 	return w.str_view();
 }
 
@@ -348,6 +348,107 @@ fn bool may_be_invalid(String param_str)
 		}
 	}
 	return hit;
+}
+
+struct MissingBuiltinFeature
+{
+	FeatureFamily family;
+	String name;
+}
+
+fn Arch builtin_feature_arch(BuiltinGroup group)
+{
+	switch (group)
+	{
+		case AARCH64: return AARCH64;
+		case AARCH64_NEON: return AARCH64;
+		case AMDGCN: return AMDGCN;
+		case ARM: return ARM;
+		case BPF: return BPFEL;
+		case COMMON: return X86_64; // COMMON records have no feature strings.
+		case HEXAGON: return HEXAGON;
+		case LOONGARCH: return LOONGARCH64;
+		case MIPS: return MIPS;
+		case NEON: return AARCH64;
+		case NVPTX: return NVPTX64;
+		case POWERPC: return POWERPC;
+		case RISCV: return RISCV64;
+		case S390X: return S390X;
+		case VE: return VE;
+		case WASM: return WASM32;
+		case X86_64: return X86;
+		case X86: return X86;
+		case XCORE: return XCORE;
+	}
+}
+
+fn void remember_missing_feature(List{MissingBuiltinFeature}* missing, FeatureFamily family, String name)
+{
+	foreach (entry : *missing) if (entry.family == family && entry.name == name) return;
+	missing.push({ .family = family, .name = name });
+}
+
+fn bool is_feature_delimiter(char c) => c == '(' || c == ')' || c == '|' || c == ',';
+
+fn void check_builtin_feature_token(Arch arch, String name, List{MissingBuiltinFeature}* missing)
+{
+	Feature? feature = target::parse_feature_name(arch, name);
+	if (catch feature) remember_missing_feature(missing, arch.family(), name);
+}
+
+<* Builtins.zig `all builtins`: every signature parses and every target feature is tracked. *>
+fn void all_builtins_zig_test() @test
+{
+	List{MissingBuiltinFeature} missing;
+	missing.init(tmem);
+	defer missing.free();
+
+	foreach (group : BuiltinGroup::values)
+	{
+		Arch arch = builtin_feature_arch(group);
+		foreach (record : builtins::group_records(group))
+		{
+			TypeIterator it = builtin_type_description::type_iterator(record.param_str);
+			while (true)
+			{
+				TypeDescription? desc = it.next();
+				if (catch f = desc)
+				{
+					assert(f == builtin_type_description::END, "MALFORMED param_str '%s' in %s", record.param_str, group.def_name);
+					break;
+				}
+			}
+
+			if (record.features.len == 0) continue;
+			usz token_start = 0;
+			foreach (i, c : record.features)
+			{
+				if (!is_feature_delimiter(c)) continue;
+				usz delimiter_index = (usz)i;
+				if (delimiter_index > token_start)
+				{
+					check_builtin_feature_token(arch, record.features[token_start..delimiter_index - 1], &missing);
+				}
+				token_start = delimiter_index + 1;
+			}
+			if (token_start < record.features.len)
+			{
+				check_builtin_feature_token(arch, record.features[token_start..], &missing);
+			}
+		}
+	}
+
+	uint missing_count = 0;
+	foreach (family : FeatureFamily::values)
+	{
+		uint family_count = 0;
+		foreach (entry : missing) if (entry.family == family) family_count++;
+		if (family_count == 0) continue;
+		io::eprintfn("%s builtin feature family: %d distinct missing feature names", family, family_count);
+		foreach (entry : missing) if (entry.family == family) io::eprintfn("  %s", entry.name);
+		missing_count += family_count;
+	}
+	assert(missing_count == 0, "%d distinct builtin feature names are not tracked", missing_count);
 }
 
 struct GroupTarget

@@ -63,7 +63,7 @@ fn String pr(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.print(comp, w);
+	qt.print(comp, &w);
 	return w.str_view();
 }
 
@@ -71,7 +71,7 @@ fn String dmp(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.dump(comp, w);
+	qt.dump(comp, &w);
 	return w.str_view();
 }
 
@@ -79,7 +79,7 @@ fn String named(Compilation* comp, QualType qt, String name)
 {
 	DString w;
 	w.init(tmem);
-	qt.print_named(name, comp, w);
+	qt.print_named(name, comp, &w);
 	return w.str_view();
 }
 
@@ -87,7 +87,7 @@ fn String desugared(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.print_desugared(comp, w);
+	qt.print_desugared(comp, &w);
 	return w.str_view();
 }
 
@@ -99,13 +99,13 @@ fn QualType ptr(Compilation* comp, QualType child) => comp.type_store.put(type_s
 fn QualType arr(Compilation* comp, QualType elem, ulong len) => comp.type_store.put(type_store::type_array(elem, FIXED, len));
 fn QualType tdef(Compilation* comp, String name, QualType base) => comp.type_store.put(type_store::type_typedef(base, comp.intern_string(name), (NodeIndex)0));
 
-fn QualType fn1(Compilation* comp, QualType ret, QualType param, FuncKind kind = NORMAL, CallingConvention cc = DEFAULT)
+fn QualType fn1(Compilation* comp, QualType ret, QualType param, FuncKind kind = NORMAL, type_store::CallingConvention cc = DEFAULT)
 {
 	FuncParam[1] params = { type_store::func_param(param) };
 	return comp.type_store.put(type_store::type_func(ret, kind, &params, cc));
 }
 
-fn QualType fn0(Compilation* comp, QualType ret, FuncKind kind = NORMAL, CallingConvention cc = DEFAULT)
+fn QualType fn0(Compilation* comp, QualType ret, FuncKind kind = NORMAL, type_store::CallingConvention cc = DEFAULT)
 	=> comp.type_store.put(type_store::type_func(ret, kind, {}, cc));
 
 <* A complete struct with natural layout (at most 4 fields). *>
@@ -917,5 +917,20 @@ fn void handle_stability_under_growth() @test
 			assert(chain[n].child_type(comp) == chain[n - 1]);
 		}
 		assert(chain[N - 1].eql(ptr(comp, chain[N - 2]), comp));
+	};
+}
+
+// The spelling is 20 bytes, longer than 16: a by-value DString that grows
+// would lose the growth in the caller, so the full text must come back.
+fn void long_type_name_survives_print_growth() @test
+{
+	@with_target("x86_64-linux-gnu"; Compilation* comp)
+	{
+		QualType qt = comp.type_store.put(type_store::type_complex(type_store::LONG_DOUBLE));
+		test::eq(qt.tprint(comp), "_Complex long double");
+		DString w;
+		w.init(tmem);
+		qt.print(comp, &w);
+		test::eq(w.str_view(), "_Complex long double");
 	};
 }

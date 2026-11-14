@@ -560,29 +560,27 @@ fn void? GccDetector.scan_lib_dir_for_gcc_triple(&self, Env* env, String lib_dir
 		String? dir_name = discovery::join_buf(&dir_buf, { lib_dir, lib_suffix });
 		if (catch dir_name) continue;
 
-		@pool()
+		DirEntryList entries;
+		entries.init(self.a);
+		defer discovery::free_entries(self.a, &entries);
+		if (catch env.list_dir(dir_name, self.a, &entries)) continue;
+		foreach (entry : entries)
 		{
-			DirEntryList entries;
-			entries.init(tmem);
-			if (catch env.list_dir(dir_name, tmem, &entries)) continue;
-			foreach (entry : entries)
-			{
-				if (entry.kind != DIRECTORY) continue;
-				String version_text = entry.name;
-				GccVersion candidate_version = gcc_version::parse(version_text);
-				if (candidate_version.is_less_than(4, 1, 1, "")) continue;
-				if (candidate_version.order(self.version) != GT) continue;
+			if (entry.kind != DIRECTORY) continue;
+			String version_text = entry.name;
+			GccVersion candidate_version = gcc_version::parse(version_text);
+			if (candidate_version.is_less_than(4, 1, 1, "")) continue;
+			if (candidate_version.order(self.version) != GT) continue;
 
-				if (!self.scan_gcc_for_multilibs(env, { dir_name, version_text }, needs_biarch_suffix)!) continue;
+			if (!self.scan_gcc_for_multilibs(env, { dir_name, version_text }, needs_biarch_suffix)!) continue;
 
-				String owned_text = self.own(version_text.copy(self.a));
-				self.version = gcc_version::parse(owned_text);
-				self.gcc_triple = self.own(candidate_triple.copy(self.a));
-				self.install_path = self.own(discovery::join(self.a, { lib_dir, lib_suffix, version_text }));
-				self.parent_lib_path = self.own(discovery::join(self.a, { self.install_path, "..", "..", ".." }));
-				self.is_valid = true;
-			}
-		};
+			String owned_text = self.own(version_text.copy(self.a));
+			self.version = gcc_version::parse(owned_text);
+			self.gcc_triple = self.own(candidate_triple.copy(self.a));
+			self.install_path = self.own(discovery::join(self.a, { lib_dir, lib_suffix, version_text }));
+			self.parent_lib_path = self.own(discovery::join(self.a, { self.install_path, "..", "..", ".." }));
+			self.is_valid = true;
+		}
 	}
 }
 

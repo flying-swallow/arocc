@@ -25,9 +25,9 @@ macro check(left, right)
 
 const Host HOST = { X86_64, LINUX, GNU };
 
-fn Target tgt(String triple)
+fn target::Target tgt(String triple)
 {
-	Target? t = target::parse_triple(triple, HOST);
+	target::Target? t = target::parse_triple(triple, HOST);
 	if (catch f = t)
 	{
 		io::eprintfn("failed to parse target '%s': %s", triple, f);
@@ -37,13 +37,13 @@ fn Target tgt(String triple)
 }
 
 <* Run the body with a compilation (named types initialized) and a MacroWriter for `triple`; checks nothing leaks. *>
-macro @with_comp(String triple; @body(Compilation* comp, MacroWriter* w))
+macro @with_comp(String triple; @body(compilation::Compilation* comp, MacroWriter* w))
 {
 	TrackingAllocator ta;
 	ta.init(mem);
 	defer ta.free();
 	{
-		Compilation comp;
+		compilation::Compilation comp;
 		comp.init(&ta);
 		comp.target = tgt(triple);
 		comp.langopts.set_target_options(&comp.target);
@@ -101,7 +101,7 @@ fn String lines_with_prefix(String text, String prefix)
 
 fn void builtin_macros_default_hosted() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		// [source] writeBuiltinMacros; default standard is gnu17 -> 201710L.
@@ -119,21 +119,21 @@ fn void builtin_macros_default_hosted() @test
 
 fn void builtin_macros_std_versions() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] predefined macros.c (-std=c99): __STDC_VERSION__ == 199901
 		comp.langopts.set_standard("c99")!!;
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		expect_line(w.written(), "#define __STDC_VERSION__ 199901L");
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] c23 defines.c (-std=c23): __STDC_VERSION__ == 202311L
 		comp.langopts.set_standard("c23")!!;
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		expect_line(w.written(), "#define __STDC_VERSION__ 202311L");
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [source] c89 has no __STDC_VERSION__ (StdCVersionMacro returns null).
 		comp.langopts.set_standard("c89")!!;
@@ -144,7 +144,7 @@ fn void builtin_macros_std_versions() @test
 
 fn void builtin_macros_emulation_and_os() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [source] no __STDC__ when emulating MSVC.
 		comp.langopts.set_emulated_compiler(MSVC);
@@ -152,25 +152,25 @@ fn void builtin_macros_emulation_and_os() @test
 		test::eq(w.written().contains("__STDC__ 1"), false);
 		expect_line(w.written(), "#define __STDC_HOSTED__ 1");
 	};
-	@with_comp("x86_64-freestanding-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-freestanding-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		expect_line(w.written(), "#define __STDC_HOSTED__ 0");
 	};
-	@with_comp("x86_64-macos-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		expect_line(w.written(), "#define __STDC_NO_THREADS__ 1");
 		test::eq(w.written().contains("__STDC_NO_COMPLEX__"), false);
 	};
-	@with_comp("x86_64-macos-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// before C11 there are no thread/complex availability macros
 		comp.langopts.set_standard("c99")!!;
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		test::eq(w.written().contains("__STDC_NO_THREADS__"), false);
 	};
-	@with_comp("x86_64-ps4-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-ps4-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
 		String s = lines_with_prefix(w.written(), "#define __STDC_NO_");
@@ -183,7 +183,7 @@ fn void builtin_macros_emulation_and_os() @test
 
 fn void compiler_defines_default() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] gnuc version default gcc.c / default.c (emulate no|gcc): 7.1.0
 		// [source] the rest of the head of generateSystemDefines.
@@ -203,7 +203,7 @@ fn void compiler_defines_default() @test
 
 fn void compiler_defines_emulation() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] gnuc version default clang.c: 4.2.1
 		comp.langopts.set_emulated_compiler(CLANG);
@@ -213,7 +213,7 @@ fn void compiler_defines_emulation() @test
 		expect_line(w.written(), "#define __GNUC_PATCHLEVEL__ 1");
 		expect_line(w.written(), "#define __ARO_EMULATE__ __ARO_EMULATE_CLANG__");
 	};
-	@with_comp("x86_64-windows-msvc"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-windows-msvc"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] gnuc version default msvc.c: no __GNUC__ macros
 		comp.langopts.set_emulated_compiler(MSVC);
@@ -223,7 +223,7 @@ fn void compiler_defines_emulation() @test
 		expect_line(w.written(), "#define _MSC_VER 1933");
 		expect_line(w.written(), "#define _MSC_FULL_VER 193300000");
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] gnuc version override.c (-fgnuc-version=5.3.42)
 		comp.langopts.has_gnuc_version = true;
@@ -233,7 +233,7 @@ fn void compiler_defines_emulation() @test
 		expect_line(w.written(), "#define __GNUC_MINOR__ 3");
 		expect_line(w.written(), "#define __GNUC_PATCHLEVEL__ 42");
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [fixture] gnuc version empty.c (-fgnuc-version= -> 0): no __GNUC__ macros
 		comp.langopts.has_gnuc_version = true;
@@ -241,13 +241,13 @@ fn void compiler_defines_emulation() @test
 		predefined_macros::write_compiler_defines(comp, w);
 		test::eq(w.written().contains("__GNUC"), false);
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		comp.code_gen_options.optimization_level = S;
 		predefined_macros::write_compiler_defines(comp, w);
 		test::eq(w.written().ends_with("#define __building_module(x) 0\n#define __OPTIMIZE__ 1\n#define __OPTIMIZE_SIZE__ 1\n"), true);
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		comp.code_gen_options.optimization_level = FAST;
 		predefined_macros::write_compiler_defines(comp, w);
@@ -347,7 +347,7 @@ fn void float_macros_all_semantics() @test
 
 fn void int_helpers() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [source] generateIntMax/Min/Width/SizeofType/Fmt/IntLiteralMacros
 		predefined_macros::generate_int_max(comp, w, "SCHAR", type_store::SCHAR);
@@ -392,7 +392,7 @@ fn void int_helpers() @test
 
 fn void int128_max() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		// [source] generateIntWidth for a 128-bit type. (generateIntMax on a
 		// 128-bit type reaches intValueSuffix's `else => unreachable` in Zig,
@@ -407,7 +407,7 @@ fn void int128_max() @test
 
 fn void common_defines_x86_64_linux() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
@@ -546,7 +546,7 @@ fn void common_defines_x86_64_linux() @test
 
 fn void common_defines_options() @test
 {
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		comp.code_gen_options.pic_level = TWO;
 		comp.code_gen_options.is_pie = true;
@@ -559,7 +559,7 @@ fn void common_defines_options() @test
 		test::eq(s.ends_with("#define __FLT_EVAL_METHOD__ 2\n#define __FLT_RADIX__ 2\n#define __DECIMAL_DIG__ __LDBL_DECIMAL_DIG__\n"
 			"#define __pic__ 2\n#define __PIC__ 2\n#define __pie__ 2\n#define __PIE__ 2\n#define __BLOCKS__ 1\n"), true);
 	};
-	@with_comp("x86_64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		comp.code_gen_options.pic_level = ONE;
 		predefined_macros::write_common_defines(comp, w);
@@ -569,7 +569,7 @@ fn void common_defines_options() @test
 
 fn void common_defines_other_targets() @test
 {
-	@with_comp("i386-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("i386-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
@@ -580,7 +580,7 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __SIZE_TYPE__ unsigned int");
 		expect_line(s, "#define __SIZEOF_LONG_DOUBLE__ 10");
 	};
-	@with_comp("x86_64-macos-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
@@ -594,7 +594,7 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __UINT_FAST64_TYPE__ unsigned long long");
 		expect_line(s, "#define __INT_LEAST64_MAX__ 9223372036854775807LL");
 	};
-	@with_comp("aarch64-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("aarch64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
@@ -605,14 +605,14 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __LDBL_MANT_DIG__ 113");
 		expect_line(s, "#define __FLT16_MANT_DIG__ 11");
 	};
-	@with_comp("powerpc64le-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("powerpc64le-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
 		expect_line(s, "#define __LDBL_MANT_DIG__ 106");
 		expect_no_line(s, "#define __FLT16_MANT_DIG__ 11");
 	};
-	@with_comp("powerpc-linux-gnu"; Compilation* comp, MacroWriter* w)
+	@with_comp("powerpc-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
@@ -620,7 +620,7 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __BIG_ENDIAN__ 1");
 		expect_no_line(s, "#define __LITTLE_ENDIAN__ 1");
 	};
-	@with_comp("avr-freestanding-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("avr-freestanding-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		String s = w.written();
@@ -637,7 +637,7 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __INT16_TYPE__ int");
 		expect_line(s, "#define __DBL_MANT_DIG__ 24");
 	};
-	@with_comp("msp430-freestanding-none"; Compilation* comp, MacroWriter* w)
+	@with_comp("msp430-freestanding-none"; compilation::Compilation* comp, MacroWriter* w)
 	{
 		predefined_macros::write_common_defines(comp, w);
 		// [fixture] msp430 builtin types.c: sizeof(long double) == 8

@@ -47,12 +47,6 @@ fn void expansion_chain_layout() @test
 	Location[] s = tok.expansion_slice();
 	check(s.len, 1);
 	check(s[0].byte_offset, 10);
-	// Capacity max(1 + 1 + 1, 4) = 4: [item, term, term, term with byte_offset 1].
-	Location* raw = tok.expansion_locs;
-	check(raw[1].id.index, source::UNUSED_INDEX);
-	check(raw[1].byte_offset, 0);
-	check(raw[3].id.index, source::UNUSED_INDEX);
-	check(raw[3].byte_offset, 1);
 
 	// Generated locations are never recorded.
 	Location gen = { .id = source::GENERATED_ID, .byte_offset = 5 };
@@ -61,21 +55,17 @@ fn void expansion_chain_layout() @test
 	check(s.len, 3);
 	check(s[1].id.index, 1);
 	check(s[2].byte_offset, 30);
-	// 3 items + terminator fit in 4: no growth, marker still last.
-	check(tok.expansion_locs[3].byte_offset, 1);
 
 	tok.add_expansion_location(&ta, { loc_at(3, 40) });
 	check(tok.expansion_slice().len, 4);
-	// Grown to ceilPowerOfTwo(4 + 1 + 1) = 8.
-	check(tok.expansion_locs[7].byte_offset, 1);
-	check(tok.expansion_locs[4].id.index, source::UNUSED_INDEX);
+	check(tok.expansion_slice()[3].byte_offset, 40);
 
 	// dupe is independent.
 	TokenWithExpansionLocs copy = tok.dupe(&ta);
-	assert(copy.expansion_locs != tok.expansion_locs);
+	assert(copy.expansion_locs.entries != tok.expansion_locs.entries);
 	check(copy.expansion_slice().len, 4);
 	check(copy.expansion_slice()[3].byte_offset, 40);
-	tokens::free_expansion_locs(&ta, copy.expansion_locs);
+	copy.expansion_locs.free();
 
 	// Bounded at 64.
 	Location[100] many;
@@ -85,12 +75,12 @@ fn void expansion_chain_layout() @test
 	check(tok.expansion_slice()[63].byte_offset, 100 + 59);
 	tok.add_expansion_location(&ta, { loc_at(6, 1) });
 	check(tok.expansion_slice().len, 64);
-	tokens::free_expansion_locs(&ta, tok.expansion_locs);
+	tok.expansion_locs.free();
 
 	// Whitespace-like tokens never get locations.
 	TokenWithExpansionLocs ws = { .id = MACRO_WS, .loc = loc_at(0, 0) };
 	ws.add_expansion_location(&ta, { loc_at(0, 1) });
-	assert(ws.expansion_locs == null);
+	assert(ws.expansion_locs.len() == 0);
 	check(ta.allocation_count(), 0);
 }
 
@@ -117,7 +107,7 @@ fn void raw_conversion() @test
 	check(t.loc.byte_offset, 7);
 	check(t.loc.line, 3);
 	check(t.loc.id.index, 2);
-	assert(t.expansion_locs == null);
+	assert(t.expansion_locs.len() == 0);
 	assert(!t.flags.is_macro_arg);
 }
 
@@ -191,14 +181,14 @@ fn void init_free_and_builtins() @test
 		check(pp.defines.len(), 12 + 2 + 6);
 		pp.free();
 
-		// No source epoch: asks the builtin provider, which is unsupported until plan 14.
+		// The no-source-epoch path propagates an explicitly unsupported provider.
 		opts.has_source_epoch = false;
-		fault f = @catch(pp.init(comp, opts));
+		fault f = @catch(pp.init(comp, opts, preprocessor::UNSUPPORTED_BUILTINS));
 		assert(f == aro::UNSUPPORTED);
 	};
 }
 
-fn void providers_are_unsupported() @test
+fn void default_line_and_unsupported_provider_contracts() @test
 {
 	@with_comp(; Compilation* comp, Diagnostics* d)
 	{
@@ -210,13 +200,18 @@ fn void providers_are_unsupported() @test
 		assert(@catch(fp.has_include(fp.ctx, &pp, "a.h", source::UNUSED_ID, QUOTES, FIRST)) == aro::UNSUPPORTED);
 		assert(@catch(fp.find_embed(fp.ctx, &pp, "a.h", source::UNUSED_ID, QUOTES, preprocessor::EMBED_UNLIMITED)) == aro::UNSUPPORTED);
 		BuiltinProvider bp = pp.builtins;
+		Source src = comp.add_source_from_buffer("line.c", "__LINE__\n")!!;
+		pp.expansion_source_loc = { .id = src.id, .byte_offset = 0, .line = 1 };
 		ExpandBuf buf;
 		buf.init(comp.gpa);
-		assert(@catch(bp.expand_obj(bp.ctx, &pp, LINE, {}, &buf)) == aro::UNSUPPORTED);
-		assert(@catch(bp.expand_func(bp.ctx, &pp, HAS_FEATURE, {}, {}, null, EXPR, &buf)) == aro::UNSUPPORTED);
-		buf.free();
-		assert(@catch(pp.include(null, FIRST)) == aro::UNSUPPORTED);
-		assert(@catch(pp.embed(null)) == aro::UNSUPPORTED);
+		sz line_start = comp.generated_buf.len();
+		bp.expand_obj(bp.ctx, &pp, LINE, { .id = MACRO_BUILTIN_OBJ, .loc = { .id = src.id, .byte_offset = 0, .line = 1 } }, &buf)!!;
+		check(buf.len(), 1);
+		check(buf[0].id.ordinal, TokenId.PP_NUM.ordinal);
+		test::eq((String)comp.generated_buf.array_view()[line_start..], "1\n");
+		BuiltinProvider unsupported = preprocessor::UNSUPPORTED_BUILTINS;
+		assert(@catch(unsupported.expand_func(unsupported.ctx, &pp, HAS_FEATURE, {}, {}, null, EXPR, &buf)) == aro::UNSUPPORTED);
+		preprocessor::free_expand_buf(comp.gpa, &buf);
 		pp.free();
 	};
 }
@@ -246,7 +241,7 @@ fn void err_formats_and_locates() @test
 		check(d.messages.len(), 4);
 		check(d.messages[2].location.line_no, 2);
 		test::eq(d.messages[3].text, "expanded from here");
-		tokens::free_expansion_locs(comp.gpa, use.expansion_locs);
+		use.expansion_locs.free();
 
 		Token raw = { .id = HASH, .source = src.id, .start = 0, .end = 1, .line = 1 };
 		assert(@catch(pp.fatal(raw, "too many #if nestings")) == compilation::FATAL_ERROR);

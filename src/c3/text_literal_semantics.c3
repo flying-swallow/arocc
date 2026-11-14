@@ -33,41 +33,12 @@ import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::typ
 import aro::value, aro::value_interner, aro::text_literal;
 import std::collections::list;
 
-// ---------------------------------------------------------------------------
-// Zig `Parser.Diagnostic` constants used by char/string literals.
-
-const DiagnosticTemplate DIAG_UNSUPPORTED_STR_CAT = {
-	.fmt = "unsupported string literal concatenation",
-	.kind = ERROR,
-};
-
-const DiagnosticTemplate DIAG_EMPTY_CHAR_LITERAL_ERROR = {
-	.fmt = "empty character constant",
-	.kind = ERROR,
-};
-
-const DiagnosticTemplate DIAG_UNTERMINATED_CHAR_LITERAL_ERROR = {
-	.fmt = "missing terminating ' character",
-	.kind = ERROR,
-};
-
-<* A parser-level literal diagnostic, reported by the caller at the given token. None takes arguments. *>
-enum TextSemanticsDiag : char
+<* A parser-level literal diagnostic (Zig `Parser.Diagnostic`), reported by the caller at the given token. None takes arguments. *>
+enum TextSemanticsDiag : char (String fmt, MessageKind kind, DiagMeta meta)
 {
-	UNSUPPORTED_STR_CAT,
-	EMPTY_CHAR_LITERAL_ERROR,
-	UNTERMINATED_CHAR_LITERAL_ERROR,
-}
-
-<* The DiagnosticTemplate of a TextSemanticsDiag (its `fmt` is the final text). *>
-fn DiagnosticTemplate TextSemanticsDiag.template(self)
-{
-	switch (self)
-	{
-		case UNSUPPORTED_STR_CAT: return DIAG_UNSUPPORTED_STR_CAT;
-		case EMPTY_CHAR_LITERAL_ERROR: return DIAG_EMPTY_CHAR_LITERAL_ERROR;
-		case UNTERMINATED_CHAR_LITERAL_ERROR: return DIAG_UNTERMINATED_CHAR_LITERAL_ERROR;
-	}
+	UNSUPPORTED_STR_CAT { "unsupported string literal concatenation", ERROR, {} },
+	EMPTY_CHAR_LITERAL_ERROR { "empty character constant", ERROR, {} },
+	UNTERMINATED_CHAR_LITERAL_ERROR { "missing terminating ' character", ERROR, {} },
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +256,7 @@ fn StringLiteral? string_literal(Compilation* comp, StringPiece[] pieces, TextLi
 	for (uint n = 0; n < width; n++) buf.push(0);
 
 	char[] bytes = buf.array_view();
-	Value val = value::intern(comp, value_interner::key_bytes(bytes));
+	Value val = value::intern(comp, { .tag = BYTES, .bytes = bytes });
 	QualType array_qt = comp.type_store.put(type_store::type_array(kind.element_type(comp), FIXED, (ulong)bytes.len / width));
 	return { .kind = kind, .char_width = char_width, .qt = array_qt, .val = val };
 }
@@ -312,7 +283,7 @@ enum PrintStringStyle : char
  Integrator hookup in value.c3 Value.print, `case BYTES:`
    text_literal_semantics::print_string(key.bytes, qt, comp, w);
 *>
-fn void print_string(char[] bytes, QualType qt, Compilation* comp, DString w, PrintStringStyle style = QUOTED)
+fn void print_string(char[] bytes, QualType qt, Compilation* comp, DString* w, PrintStringStyle style = QUOTED)
 {
 	if (style == QUOTED) w.append_char('"');
 
@@ -478,7 +449,7 @@ fn uint utf8_decode_valid(String s, sz* i) @private
 fn uint load_u16(char[] b, sz i) @private => (uint)b[i] | (uint)b[i + 1] << 8;
 
 <* Zig `{u}`: the codepoint as UTF-8, or U+FFFD for a surrogate / out-of-range value. *>
-fn void print_codepoint(DString w, uint c) @private
+fn void print_codepoint(DString* w, uint c) @private
 {
 	if (c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) c = 0xFFFD;
 	char[4] enc;
@@ -487,7 +458,7 @@ fn void print_codepoint(DString w, uint c) @private
 }
 
 <* Zig std.zig.stringEscape. *>
-fn void string_escape(char[] bytes, DString w) @private
+fn void string_escape(char[] bytes, DString* w) @private
 {
 	foreach (b : bytes)
 	{

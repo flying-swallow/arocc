@@ -422,7 +422,7 @@ fn RyuDecimal ryu_f64_to_decimal(ulong bits)
  (the longest output, the smallest subnormal, needs 2 + 324 + 1 bytes), so the
  "(float)" BufferTooSmall fallback can never happen here.
 *>
-fn void format_f64_decimal(ulong bits, DString w)
+fn void format_f64_decimal(ulong bits, DString* w)
 {
 	RyuDecimal d = ryu_f64_to_decimal(bits);
 	if (d.sign) w.append_char('-');
@@ -542,7 +542,7 @@ fn ulong print_bits(KeyFloat f, bool scale_narrow)
  rounded); Zig @round rounds to an integer, halfway cases away from zero (a
  bit-level helper in this file). Printing goes through format_f64_decimal.
 *>
-fn void print_float(KeyFloat f, DString w)
+fn void print_float(KeyFloat f, DString* w)
 {
 	format_f64_decimal(print_bits(f, true), w);
 }
@@ -552,7 +552,7 @@ fn void print_float(KeyFloat f, DString w)
  imaginary part prints as "1 + -2i"). cf32 parts are rounded like f32 above;
  every other width (cf16 included - no 1000 scaling) is plain (f64)x.
 *>
-fn void print_complex(KeyComplex c, DString w)
+fn void print_complex(KeyComplex c, DString* w)
 {
 	KeyFloat[2] parts = c.parts();
 	bool scale = c.tag == CF32;

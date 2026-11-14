@@ -1,17 +1,18 @@
 // Source-aware expression rendering and typed AST dumps (Tree.zig).
 module aro::tree;
-import aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::attribute, aro::attribute_map, aro::diagnostics;
+import aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::attribute, aro::attribute_map, aro::diagnostics, aro::compilation;
 import std::io, std::core::dstring;
 
-fn void Tree.write(&self, NodeIndex index, DString w)
+<* `w` is a pointer so appends that grow the buffer reach the caller. *>
+fn void Tree.write(&self, NodeIndex index, DString* w)
 {
 	Node n = index.get(self);
 	switch (n.kind)
 	{
 		case CAST:
 			if (!n.cast.implicit) { w.append_char('('); n.cast.qt.print_desugared(self.comp, w); w.append_char(')'); }
-			n.cast.operand.write(self, w);
-		case PAREN_EXPR: w.append_char('('); n.unary.operand.write(self, w); w.append_char(')');
+			self.write(n.cast.operand, w);
+		case PAREN_EXPR: w.append_char('('); self.write(n.unary.operand, w); w.append_char(')');
 		case COMMA_EXPR:
 		case ASSIGN_EXPR:
 		case MUL_ASSIGN_EXPR:
@@ -43,9 +44,9 @@ fn void Tree.write(&self, NodeIndex index, DString w)
 		case DIV_EXPR:
 		case MOD_EXPR:
 			if (n.kind == COMMA_EXPR) {
-				n.binary.lhs.write(self, w); w.append_string(", "); n.binary.rhs.write(self, w);
+				self.write(n.binary.lhs, w); w.append_string(", "); self.write(n.binary.rhs, w);
 			} else {
-				n.binary.lhs.write(self, w); w.append_char(' '); w.append_string(self.tok_slice(n.binary.op_tok)); w.append_char(' '); n.binary.rhs.write(self, w);
+				self.write(n.binary.lhs, w); w.append_char(' '); w.append_string(self.tok_slice(n.binary.op_tok)); w.append_char(' '); self.write(n.binary.rhs, w);
 			}
 		case ADDR_OF_EXPR:
 		case DEREF_EXPR:
@@ -55,13 +56,13 @@ fn void Tree.write(&self, NodeIndex index, DString w)
 		case BOOL_NOT_EXPR:
 		case PRE_INC_EXPR:
 		case PRE_DEC_EXPR:
-			w.append_string(self.tok_slice(n.unary.op_tok)); n.unary.operand.write(self, w);
+			w.append_string(self.tok_slice(n.unary.op_tok)); self.write(n.unary.operand, w);
 		case IMAG_EXPR:
 		case REAL_EXPR:
-			w.append_string(self.tok_slice(n.unary.op_tok)); w.append_char(' '); n.unary.operand.write(self, w);
+			w.append_string(self.tok_slice(n.unary.op_tok)); w.append_char(' '); self.write(n.unary.operand, w);
 		case POST_INC_EXPR:
 		case POST_DEC_EXPR:
-			n.unary.operand.write(self, w); w.append_string(self.tok_slice(n.unary.op_tok));
+			self.write(n.unary.operand, w); w.append_string(self.tok_slice(n.unary.op_tok));
 		case BOOL_LITERAL:
 		case NULLPTR_LITERAL:
 		case INT_LITERAL:
@@ -71,46 +72,46 @@ fn void Tree.write(&self, NodeIndex index, DString w)
 		case STRING_LITERAL_EXPR:
 			if (try string_value = self.value_of(index)) { string_value.print(n.char_literal.qt, self.comp, w); }
 			else { w.append_string(self.tok_slice(n.char_literal.literal_tok)); }
-		case IMAGINARY_LITERAL: n.unary.operand.write(self, w);
+		case IMAGINARY_LITERAL: self.write(n.unary.operand, w);
 		case SIZEOF_EXPR:
 		case ALIGNOF_EXPR:
 		case COUNTOF_EXPR:
 			w.append_string(self.tok_slice(n.type_info.op_tok));
-			if (!n.type_info.expr.is_null()) { w.append_char(' '); n.type_info.expr.unwrap().write(self, w); }
+			if (!n.type_info.expr.is_null()) { w.append_char(' '); self.write(n.type_info.expr.unwrap(), w); }
 			else { w.append_char('('); n.type_info.operand_qt.print_desugared(self.comp, w); w.append_char(')'); }
 		case DECL_REF_EXPR:
 		case ENUMERATION_REF: w.append_string(self.tok_slice(n.decl_ref.name_tok));
 		case BUILTIN_REF: w.append_string(self.tok_slice(n.builtin_ref.name_tok));
 		case ARRAY_ACCESS_EXPR:
-			n.array_access.base.write(self, w); w.append_char('['); n.array_access.index.write(self, w); w.append_char(']');
+			self.write(n.array_access.base, w); w.append_char('['); self.write(n.array_access.index, w); w.append_char(']');
 		case CALL_EXPR:
-			n.call.callee.write(self, w); w.append_char('(');
-			foreach (i, arg : n.call.args) { if (i != 0) w.append_string(", "); arg.write(self, w); }
+			self.write(n.call.callee, w); w.append_char('(');
+			foreach (i, arg : n.call.args) { if (i != 0) w.append_string(", "); self.write(arg, w); }
 			w.append_char(')');
 		case BUILTIN_CALL_EXPR:
 			w.append_string(self.tok_slice(n.builtin_call.builtin_tok)); w.append_char('(');
-			foreach (i, arg : n.builtin_call.args) { if (i != 0) w.append_string(", "); arg.write(self, w); }
+			foreach (i, arg : n.builtin_call.args) { if (i != 0) w.append_string(", "); self.write(arg, w); }
 			w.append_char(')');
 		case BUILTIN_TYPES_COMPATIBLE_P:
 			w.append_string(self.tok_slice(n.types_compatible.builtin_tok)); w.append_char('(');
 			n.types_compatible.lhs.print_desugared(self.comp, w); w.append_string(", "); n.types_compatible.rhs.print_desugared(self.comp, w); w.append_char(')');
 		case GENERIC_EXPR:
-			w.append_string(self.tok_slice(n.generic.generic_tok)); w.append_char('('); n.generic.controlling.write(self, w);
-			foreach (arg : n.generic.rest) { w.append_string(", "); arg.write(self, w); }
-			w.append_string(", "); n.generic.chosen.write(self, w); w.append_char(')');
-		case GENERIC_ASSOCIATION_EXPR: n.generic_association.association_qt.print_desugared(self.comp, w); w.append_string(": "); n.generic_association.expr.write(self, w);
-		case GENERIC_DEFAULT_EXPR: w.append_string(self.tok_slice(n.generic_default.default_tok)); w.append_string(": "); n.generic_default.expr.write(self, w);
+			w.append_string(self.tok_slice(n.generic.generic_tok)); w.append_char('('); self.write(n.generic.controlling, w);
+			foreach (arg : n.generic.rest) { w.append_string(", "); self.write(arg, w); }
+			w.append_string(", "); self.write(n.generic.chosen, w); w.append_char(')');
+		case GENERIC_ASSOCIATION_EXPR: n.generic_association.association_qt.print_desugared(self.comp, w); w.append_string(": "); self.write(n.generic_association.expr, w);
+		case GENERIC_DEFAULT_EXPR: w.append_string(self.tok_slice(n.generic_default.default_tok)); w.append_string(": "); self.write(n.generic_default.expr, w);
 		case BINARY_COND_EXPR:
-			n.conditional.cond.write(self, w); w.append_string(" ?: "); n.conditional.else_expr.write(self, w);
+			self.write(n.conditional.cond, w); w.append_string(" ?: "); self.write(n.conditional.else_expr, w);
 		case COND_EXPR:
-			n.conditional.cond.write(self, w); w.append_string(" ? "); n.conditional.then_expr.write(self, w); w.append_string(" : "); n.conditional.else_expr.write(self, w);
+			self.write(n.conditional.cond, w); w.append_string(" ? "); self.write(n.conditional.then_expr, w); w.append_string(" : "); self.write(n.conditional.else_expr, w);
 		case BUILTIN_CHOOSE_EXPR:
-			w.append_string("__builtin_choose_expr("); n.conditional.cond.write(self, w); w.append_string(", "); n.conditional.then_expr.write(self, w); w.append_string(", "); n.conditional.else_expr.write(self, w); w.append_char(')');
+			w.append_string("__builtin_choose_expr("); self.write(n.conditional.cond, w); w.append_string(", "); self.write(n.conditional.then_expr, w); w.append_string(", "); self.write(n.conditional.else_expr, w); w.append_char(')');
 		case BUILTIN_VA_ARG_PACK:
 		case BUILTIN_VA_ARG_PACK_LEN: w.append_string(self.tok_slice(n.va_arg_pack.builtin_tok)); w.append_string("()");
 		case MEMBER_ACCESS_EXPR:
 		case MEMBER_ACCESS_PTR_EXPR:
-			n.member_access.base.write(self, w);
+			self.write(n.member_access.base, w);
 			QualType bqt = n.member_access.base.qt(self);
 			if (try pointer_type = bqt.get(self.comp, POINTER)) bqt = pointer_type.pointer.child;
 			if (try record_type = bqt.get_record(self.comp)) {
@@ -123,8 +124,8 @@ fn void Tree.write(&self, NodeIndex index, DString w)
 
 fn void? Tree.dump(&self, Terminal term)
 {
-	foreach (i : self.root_decls) { self.dump_node(i, 0, term)!; io::write_byte(term.writer, '\n')!; }
-	io::flush(term.writer)!;
+	foreach (i : self.root_decls) { self.dump_node(i, 0, term)!; term.writer.write_byte('\n')!; }
+	if (&term.writer.flush) term.writer.flush()!;
 }
 
 fn void? Tree.dump_attribute(&self, AttrRef ref, OutStream w)
@@ -137,7 +138,7 @@ fn void? Tree.dump_attribute(&self, AttrRef ref, OutStream w)
 	{
 		case VISIBILITY: io::fprintf(w, ": %s", a.args.visibility.name)!;
 		case ALIGNMENT:
-			if (a.args.alignment.has_alignment) io::fprintf(w, ": %d", a.args.alignment.alignment)!;
+			if (a.args.alignment.has_alignment) { io::fprintf(w, ": %d", a.args.alignment.alignment)!; }
 			else { io::write_all(w, ": null")!; }
 		case WARNING: io::fprintf(w, ": %s", a.args.warning)!;
 		case ERROR: io::fprintf(w, ": %s", a.args.error_msg)!;
@@ -149,10 +150,10 @@ fn void? Tree.dump_attribute(&self, AttrRef ref, OutStream w)
 			if (a.args.deprecated.has_replacement) { if (wrote_field) io::write_all(w, ", ")!; io::fprintf(w, "replacement: %s", a.args.deprecated.replacement)!; }
 			io::write_all(w, " }")!;
 		case UNAVAILABLE:
-			if (a.args.unavailable.has_msg) io::fprintf(w, ": %s", a.args.unavailable.msg)!;
+			if (a.args.unavailable.has_msg) { io::fprintf(w, ": %s", a.args.unavailable.msg)!; }
 			else { io::write_all(w, ": null")!; }
 		case WARN_UNUSED_RESULT:
-			if (a.args.warn_unused_result.has_msg) io::fprintf(w, ": %s", a.args.warn_unused_result.msg)!;
+			if (a.args.warn_unused_result.has_msg) { io::fprintf(w, ": %s", a.args.warn_unused_result.msg)!; }
 			else { io::write_all(w, ": null")!; }
 		case NONNULL:
 			io::write_all(w, ": {")!;
@@ -224,7 +225,7 @@ fn void? Tree.dump_attribute(&self, AttrRef ref, OutStream w)
 				default: io::write_all(w, ": <any>")!;
 			}
 	}
-	io::write_byte(w, '\n')!;
+	w.write_byte('\n')!;
 }
 
 fn String namespaced_name(Namespaced n)
@@ -246,43 +247,44 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 {
 	Node n = index.get(self);
 	OutStream w = term.writer;
-	for (uint j = 0; j < level; j++) io::write_byte(w, ' ')!;
-	if (term.mode == diagnostics::NO_COLOR) { if (n.is_implicit()) io::write_all(w, "implicit ")!; }
-	else { term.set_color(n.is_implicit() ? diagnostics::BRIGHT_MAGENTA : diagnostics::BRIGHT_CYAN)!; }
+	for (uint j = 0; j < level; j++) w.write_byte(' ')!;
+	if (term.mode == diagnostics::ColorMode.NO_COLOR) { if (n.is_implicit()) io::write_all(w, "implicit ")!; }
+	else if (n.is_implicit()) { set_bright_blue(term)!; }
+	else { term.set_color(diagnostics::Color.BRIGHT_CYAN)!; }
 	io::fprintf(w, "%s", n.kind.name)!;
 	if (try qt = index.qt_or_null(self)) {
 		io::write_all(w, ": ")!;
-		if (n.kind == CAST) { term.set_color(diagnostics::WHITE)!; io::fprintf(w, "(%s) ", n.cast.kind.name)!; }
-		term.set_color(diagnostics::BRIGHT_MAGENTA)!;
-		io::write_byte(w, '\'')!; DString type_text; type_text.init(tmem); qt.dump(self.comp, type_text); io::write_all(w, type_text.str_view())!; io::write_byte(w, '\'')!;
+		if (n.kind == CAST) { term.set_color(diagnostics::Color.WHITE)!; io::fprintf(w, "(%s) ", n.cast.kind.name)!; }
+		term.set_color(diagnostics::Color.BRIGHT_MAGENTA)!;
+		w.write_byte('\'')!; DString type_text; type_text.init(tmem); qt.dump(self.comp, &type_text); io::write_all(w, type_text.str_view())!; w.write_byte('\'')!;
 	}
-	if (self.is_lval(index)) { term.set_color(diagnostics::BRIGHT_GREEN)!; io::write_all(w, " lvalue")!; }
-	if (self.is_bitfield(index)) { term.set_color(diagnostics::BRIGHT_GREEN)!; io::write_all(w, " bitfield")!; }
+	if (self.is_lval(index)) { set_bright_yellow(term)!; io::write_all(w, " lvalue")!; }
+	if (self.is_bitfield(index)) { set_bright_yellow(term)!; io::write_all(w, " bitfield")!; }
 	if (n.kind == ASM_STMT) {
-		term.set_color(diagnostics::BRIGHT_GREEN)!;
+		set_bright_yellow(term)!;
 		if (n.asm_stmt.quals.is_inline) io::write_all(w, " inline")!;
 		if (n.asm_stmt.quals.is_volatile) io::write_all(w, " volatile")!;
-		if (n.asm_stmt.quals.goto) io::write_all(w, " goto")!;
+		if (n.asm_stmt.quals.is_goto) io::write_all(w, " goto")!;
 	}
 	if (try value = self.value_of(index)) {
-		term.set_color(diagnostics::BRIGHT_GREEN)!; io::write_all(w, " (value: ")!;
+		term.set_color(diagnostics::Color.BRIGHT_GREEN)!; io::write_all(w, " (value: ")!;
 		DString v; v.init(tmem);
 		NestedPrint nested;
-		if (value.print(index.qt(self), self.comp, v, &nested)) {
-			if (nested.node.tag(self) == COMPOUND_LITERAL_EXPR) {
+		if (value.print(index.qt(self), self.comp, &v, &nested)) {
+			if (((NodeIndex)nested.node).tag(self) == COMPOUND_LITERAL_EXPR) {
 				v.append_string("(compound literal) ");
-				nested.offset.print(self.comp.type_store.ptrdiff, self.comp, v);
+				nested.offset.print(self.comp.type_store.ptrdiff, self.comp, &v);
 			} else {
-				value::print_pointer(nested.offset, self.tok_slice(nested.node.tok(self)), self.comp, v);
+				value::print_pointer(nested.offset, self.tok_slice(((NodeIndex)nested.node).tok(self)), self.comp, &v);
 			}
 		}
-		io::write_all(w, v.str_view())!; io::write_byte(w, ')')!;
+		io::write_all(w, v.str_view())!; w.write_byte(')')!;
 	}
-	if (n.kind == RETURN_STMT && n.return_stmt.operand == IMPLICIT && n.return_stmt.implicit_value) { term.set_color(diagnostics::BRIGHT_MAGENTA)!; io::write_all(w, " (value: 0)")!; }
-	io::write_byte(w, '\n')!;
+	if (n.kind == RETURN_STMT && n.return_stmt.operand == IMPLICIT && n.return_stmt.implicit_value) { set_bright_blue(term)!; io::write_all(w, " (value: 0)")!; }
+	w.write_byte('\n')!;
 	AttrRef[] attrs = self.attr_map.attrs(index.pack());
-	if (attrs.len != 0) { term.set_color(diagnostics::BRIGHT_GREEN)!; foreach (attr : attrs) { for (uint j = 0; j < level + 1; j++) io::write_byte(w, ' ')!; self.dump_attribute(attr, w)!; } }
-	term.set_color(diagnostics::RESET)!;
+	if (attrs.len != 0) { set_bright_yellow(term)!; foreach (attr : attrs) { for (uint j = 0; j < level + 1; j++) w.write_byte(' ')!; self.dump_attribute(attr, w)!; } }
+	term.set_color(diagnostics::Color.RESET)!;
 	self.dump_children(n, level, term)!;
 }
 
@@ -316,7 +318,7 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 			if (!n.function.definition.is_null()) dump_index_line(term, level + 1, "definition: ", (uint)n.function.definition.unwrap())!;
 		case TYPEDEF: dump_named_field(term, level + 1, "name: ", self.tok_slice(n.type_def.name_tok))!;
 		case PARAM:
-			if (n.param.storage_class == ParamStorageClass.REGISTER) dump_prefix_named_field(term, level + 1, "register ", "name: ", self.tok_slice(n.param.name_tok))!;
+			if (n.param.storage_class == ParamStorageClass.REGISTER) { dump_prefix_named_field(term, level + 1, "register ", "name: ", self.tok_slice(n.param.name_tok))!; }
 			else { dump_named_field(term, level + 1, "name: ", self.tok_slice(n.param.name_tok))!; }
 		case VARIABLE:
 			dump_variable_header(term, level + 1, n.variable.storage_class, n.variable.thread_local, self.tok_slice(n.variable.name_tok))!;
@@ -327,32 +329,32 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 			if (!n.enum_field.init.is_null()) self.dump_child(term, level + 1, "init:", n.enum_field.init.unwrap())!;
 		case RECORD_FIELD:
 			tokenizer::TokenId id = self.tokens[n.record_field.name_or_first_tok].id;
-			if (id == tokenizer::IDENTIFIER || id == tokenizer::EXTENDED_IDENTIFIER) dump_named_field(term, level + 1, "name: ", self.tok_slice(n.record_field.name_or_first_tok))!;
+			if (id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER) dump_named_field(term, level + 1, "name: ", self.tok_slice(n.record_field.name_or_first_tok))!;
 			if (!n.record_field.bit_width.is_null()) self.dump_child(term, level + 1, "bits:", n.record_field.bit_width.unwrap())!;
 		case COMPOUND_STMT:
-			foreach (i, child : n.compound_stmt.body) { if (i != 0) io::write_byte(term.writer, '\n')!; self.dump_node(child, level + 2, term)!; }
+			foreach (i, child : n.compound_stmt.body) { if (i != 0) term.writer.write_byte('\n')!; self.dump_node(child, level + 2, term)!; }
 		case STRUCT_DECL:
 		case UNION_DECL:
 		case ENUM_DECL:
-			foreach (i, child : n.container_decl.fields) { if (i != 0) io::write_byte(term.writer, '\n')!; self.dump_node(child, level + 2, term)!; }
+			foreach (i, child : n.container_decl.fields) { if (i != 0) term.writer.write_byte('\n')!; self.dump_node(child, level + 2, term)!; }
 		case ARRAY_INIT_EXPR:
 		case STRUCT_INIT_EXPR:
-			foreach (i, child : n.container_init.items) { if (i != 0) io::write_byte(term.writer, '\n')!; self.dump_node(child, level + 2, term)!; }
+			foreach (i, child : n.container_init.items) { if (i != 0) term.writer.write_byte('\n')!; self.dump_node(child, level + 2, term)!; }
 		case UNION_INIT_EXPR:
 			dump_number_line(term, level + 1, "field index: ", n.union_init.field_index)!;
 			if (!n.union_init.initializer.is_null()) self.dump_node(n.union_init.initializer.unwrap(), level + 2, term)!;
 		case COMPOUND_LITERAL_EXPR:
 			if (n.compound_literal.storage_class != CompoundLiteralStorageClass.AUTO || n.compound_literal.thread_local) {
-				for (uint j = 0; j < level; j++) io::write_byte(term.writer, ' ')!;
-				term.set_color(diagnostics::BRIGHT_GREEN)!;
+				for (uint j = 0; j < level; j++) term.writer.write_byte(' ')!;
+				term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 				if (n.compound_literal.storage_class == CompoundLiteralStorageClass.STATIC) io::write_all(term.writer, " static")!;
 				if (n.compound_literal.storage_class == CompoundLiteralStorageClass.REGISTER) io::write_all(term.writer, " register")!;
 				if (n.compound_literal.thread_local) io::write_all(term.writer, " thread_local")!;
-				io::write_byte(term.writer, '\n')!; term.set_color(diagnostics::RESET)!;
+				term.writer.write_byte('\n')!; term.set_color(diagnostics::Color.RESET)!;
 			}
 			self.dump_node(n.compound_literal.initializer, level + 1, term)!;
 		case LABELED_STMT:
-			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.labeled_stmt.label_tok), diagnostics::BRIGHT_GREEN)!;
+			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.labeled_stmt.label_tok), diagnostics::Color.BRIGHT_GREEN)!;
 			self.dump_child(term, level + 1, "stmt:", n.labeled_stmt.body)!;
 		case CASE_STMT:
 			if (!n.case_stmt.end.is_null()) {
@@ -399,14 +401,14 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 			if (!n.for_stmt.incr.is_null()) self.dump_child(term, level + 1, "incr:", n.for_stmt.incr.unwrap())!;
 			self.dump_child(term, level + 1, "body:", n.for_stmt.body)!;
 		case ADDR_OF_LABEL:
-			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.addr_of_label.label_tok), diagnostics::BRIGHT_GREEN)!;
+			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.addr_of_label.label_tok), diagnostics::Color.BRIGHT_GREEN)!;
 		case GOTO_STMT:
-			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.goto_stmt.label_tok), diagnostics::BRIGHT_GREEN)!;
+			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.goto_stmt.label_tok), diagnostics::Color.BRIGHT_GREEN)!;
 		case COMPUTED_GOTO_STMT: self.dump_child(term, level + 1, "expr:", n.computed_goto_stmt.expr)!;
 		case CONTINUE_STMT:
-			if (n.continue_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.continue_stmt.label), diagnostics::BRIGHT_GREEN)!;
+			if (n.continue_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.continue_stmt.label), diagnostics::Color.BRIGHT_GREEN)!;
 		case BREAK_STMT:
-			if (n.break_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.break_stmt.label), diagnostics::BRIGHT_GREEN)!;
+			if (n.break_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.break_stmt.label), diagnostics::Color.BRIGHT_GREEN)!;
 		case RETURN_STMT:
 			if (n.return_stmt.operand == EXPR) self.dump_child(term, level + 1, "expr:", n.return_stmt.expr)!;
 		case ASM_STMT: self.dump_asm_children(n.asm_stmt, level, term)!;
@@ -475,7 +477,7 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 			if (try pointer_type = base_qt.get(self.comp, POINTER)) base_qt = pointer_type.pointer.child;
 			if (try record_type = base_qt.get_record(self.comp)) {
 				String name = record_type.fields[n.member_access.member_index].name.lookup(self.comp);
-				if (name.len == 0 || name[0] != '(') dump_named_field(term, level + 1, "name: ", name)!;
+				dump_named_field(term, level + 1, "name: ", name)!;
 			}
 		case ARRAY_ACCESS_EXPR:
 			self.dump_child(term, level + 1, "base:", n.array_access.base)!;
@@ -483,7 +485,7 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 		case SIZEOF_EXPR:
 		case ALIGNOF_EXPR:
 		case COUNTOF_EXPR:
-			if (!n.type_info.expr.is_null()) self.dump_child(term, level + 1, "expr:", n.type_info.expr.unwrap())!;
+			if (!n.type_info.expr.is_null()) { self.dump_child(term, level + 1, "expr:", n.type_info.expr.unwrap())!; }
 			else { dump_type_line(term, level + 1, "operand type: ", n.type_info.operand_qt, self.comp)!; }
 		case GENERIC_EXPR:
 			self.dump_child(term, level + 1, "controlling:", n.generic.controlling)!;
@@ -530,12 +532,12 @@ fn void? Tree.dump_value_node(&self, NodeIndex index, uint indent, Terminal term
 {
 	if (try value = self.value_of(index)) {
 		DString rendered; rendered.init(tmem);
-		value.print(index.qt(self), self.comp, rendered);
-		for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
-		term.set_color(diagnostics::BRIGHT_GREEN)!;
+		value.print(index.qt(self), self.comp, &rendered);
+		for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
+		term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 		io::write_all(term.writer, rendered.str_view())!;
-		io::write_byte(term.writer, '\n')!;
-		term.set_color(diagnostics::RESET)!;
+		term.writer.write_byte('\n')!;
+		term.set_color(diagnostics::Color.RESET)!;
 	}
 }
 
@@ -543,19 +545,19 @@ fn void? Tree.dump_value_line(&self, NodeIndex index, uint indent, String label,
 {
 	if (try value = self.value_of(index)) {
 		DString rendered; rendered.init(tmem);
-		value.print(index.qt(self), self.comp, rendered);
-		for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+		value.print(index.qt(self), self.comp, &rendered);
+		for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 		io::write_all(term.writer, label)!;
-		term.set_color(diagnostics::BRIGHT_GREEN)!;
+		term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 		io::write_all(term.writer, rendered.str_view())!;
-		io::write_byte(term.writer, '\n')!;
-		term.set_color(diagnostics::RESET)!;
+		term.writer.write_byte('\n')!;
+		term.set_color(diagnostics::Color.RESET)!;
 	}
 }
 
 fn void? Tree.dump_codegen_diagnostic(&self, NodeCodegenDiagnostic diagnostic, uint indent, Terminal term)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::fprintf(term.writer, "%s: ", diagnostic.kind.label)!;
 	char* message = (char*)diagnostic.text.ptr;
 	usz message_len = diagnostic.text.len * 4;
@@ -566,22 +568,22 @@ fn void? Tree.dump_codegen_diagnostic(&self, NodeCodegenDiagnostic diagnostic, u
 
 fn void? dump_function_header(Terminal term, uint indent, bool is_static, bool is_inline, String name)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
-	term.set_color(diagnostics::BRIGHT_GREEN)!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
+	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 	if (is_static) io::write_all(term.writer, "static ")!;
 	if (is_inline) io::write_all(term.writer, "inline ")!;
-	term.set_color(diagnostics::RESET)!;
+	term.set_color(diagnostics::Color.RESET)!;
 	io::write_all(term.writer, "name: ")!;
-	term.set_color(diagnostics::BRIGHT_RED)!;
+	term.set_color(diagnostics::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_variable_header(Terminal term, uint indent, VariableStorageClass storage_class, bool thread_local, String name)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
-	term.set_color(diagnostics::BRIGHT_GREEN)!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
+	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 	switch (storage_class)
 	{
 		case AUTO: {}
@@ -590,81 +592,91 @@ fn void? dump_variable_header(Terminal term, uint indent, VariableStorageClass s
 		case REGISTER: io::write_all(term.writer, "register ")!;
 	}
 	if (thread_local) io::write_all(term.writer, "thread_local ")!;
-	term.set_color(diagnostics::RESET)!;
+	term.set_color(diagnostics::Color.RESET)!;
 	io::write_all(term.writer, "name: ")!;
-	term.set_color(diagnostics::BRIGHT_RED)!;
+	term.set_color(diagnostics::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_prefix_named_field(Terminal term, uint indent, String prefix, String label, String name)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
-	term.set_color(diagnostics::BRIGHT_GREEN)!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
+	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 	io::write_all(term.writer, prefix)!;
-	term.set_color(diagnostics::RESET)!;
+	term.set_color(diagnostics::Color.RESET)!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::BRIGHT_RED)!;
+	term.set_color(diagnostics::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_named_color_field(Terminal term, uint indent, String label, String name, diagnostics::Color color)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
 	term.set_color(color)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_index_line(Terminal term, uint indent, String label, uint index)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::BRIGHT_RED)!;
+	term.set_color(diagnostics::Color.BRIGHT_RED)!;
 	io::fprintf(term.writer, "0x%X", index)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_number_line(Terminal term, uint indent, String label, ulong value)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::BRIGHT_GREEN)!;
+	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
 	io::fprintf(term.writer, "%d", value)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_type_line(Terminal term, uint indent, String label, QualType qt, Compilation* comp)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::BRIGHT_MAGENTA)!;
-	DString rendered; rendered.init(tmem); qt.dump(comp, rendered);
+	term.set_color(diagnostics::Color.BRIGHT_MAGENTA)!;
+	DString rendered; rendered.init(tmem); qt.dump(comp, &rendered);
 	io::write_all(term.writer, rendered.str_view())!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_text_line(Terminal term, uint indent, String value)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, value)!;
-	io::write_byte(term.writer, '\n')!;
+	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_named_field(Terminal term, uint indent, String label, String name)
 {
-	for (uint j = 0; j < indent; j++) io::write_byte(term.writer, ' ')!;
+	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::BRIGHT_RED)!;
+	term.set_color(diagnostics::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::RESET)!;
-	io::write_byte(term.writer, '\n')!;
+	term.set_color(diagnostics::Color.RESET)!;
+	term.writer.write_byte('\n')!;
+}
+
+fn void? set_bright_yellow(Terminal term)
+{
+	if (term.mode != diagnostics::ColorMode.NO_COLOR) io::write_all(term.writer, "\e[93m")!;
+}
+
+fn void? set_bright_blue(Terminal term)
+{
+	if (term.mode != diagnostics::ColorMode.NO_COLOR) io::write_all(term.writer, "\e[94m")!;
 }

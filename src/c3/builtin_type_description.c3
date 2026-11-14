@@ -15,7 +15,7 @@
 //   memory panics. Unsupported specs (q, Q, E) return type_store::INVALID as in
 //   Zig.
 module aro::builtin_type_description;
-import aro, aro::compilation, aro::type_store, aro::builtin_properties;
+import aro::compilation, aro::type_store, aro::builtin_properties;
 
 <* Iteration finished (Zig `null`). *>
 excuse END;

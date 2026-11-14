@@ -5,12 +5,12 @@ import aro::compilation, aro::preprocessor, aro::source, aro::diagnostics;
 import std::collections::list;
 
 <* Add/replace the ordered -iquote/-I/-isystem/-idirafter search list. *>
-fn void Compilation.set_include_dirs(&self, IncludeDir[] dirs, bool verbose = false) {
+fn void compilation::Compilation.set_include_dirs(&self, IncludeDir[] dirs, bool verbose = false) {
 	if (self.include_dirs.ptr) alloc::free(self.gpa, self.include_dirs.ptr);
 	List{IncludeDir} ordered;
 	ordered.init(self.gpa);
 	defer ordered.free();
-	usz quote_count = 0;
+	sz quote_count = 0;
 	for (uint pass = 0; pass < 4; pass++) {
 		foreach (dir : dirs) {
 			// Zig skips inaccessible paths only for verbose search-list output.
@@ -18,14 +18,14 @@ fn void Compilation.set_include_dirs(&self, IncludeDir[] dirs, bool verbose = fa
 			// installing file services.
 			if (verbose && self.include_files.exists && !self.include_files.exists(self.include_files.ctx, dir.path)) continue;
 			bool selected = false;
-			if (pass == 0) selected = dir.kind == QUOTE;
-			else if (pass == 1) selected = dir.kind == NORMAL || dir.kind == FRAMEWORK;
-			else if (pass == 2) selected = dir.kind == SYSTEM || dir.kind == SYSTEM_FRAMEWORK;
-			else selected = dir.kind == AFTER;
+			if (pass == 0) { selected = dir.kind == QUOTE; }
+			else if (pass == 1) { selected = dir.kind == NORMAL || dir.kind == FRAMEWORK; }
+			else if (pass == 2) { selected = dir.kind == SYSTEM || dir.kind == SYSTEM_FRAMEWORK; }
+			else { selected = dir.kind == AFTER; }
 			if (!selected) continue;
 			if (pass == 0) {
 				bool duplicate = false;
-				for (usz i = 0; i < ordered.len(); i++) {
+				for (sz i = 0; i < ordered.len(); i++) {
 					IncludeDir previous = ordered[i];
 					if (previous.kind == QUOTE && previous.path == dir.path) { duplicate = true; break; }
 				}
@@ -39,12 +39,12 @@ fn void Compilation.set_include_dirs(&self, IncludeDir[] dirs, bool verbose = fa
 	List{IncludeDir} final_dirs;
 	final_dirs.init(self.gpa);
 	defer final_dirs.free();
-	for (usz i = 0; i < quote_count; i++) final_dirs.push(ordered[i]);
-	for (usz i = quote_count; i < ordered.len(); i++) {
+	for (sz i = 0; i < quote_count; i++) final_dirs.push(ordered[i]);
+	for (sz i = quote_count; i < ordered.len(); i++) {
 		IncludeDir current = ordered[i];
 		bool framework = current.kind == FRAMEWORK || current.kind == SYSTEM_FRAMEWORK;
 		sz duplicate_index = -1;
-		for (usz j = quote_count; j < final_dirs.len(); j++) {
+		for (sz j = quote_count; j < final_dirs.len(); j++) {
 			IncludeDir previous = final_dirs[j];
 			bool previous_framework = previous.kind == FRAMEWORK || previous.kind == SYSTEM_FRAMEWORK;
 			if (previous.path == current.path && previous_framework == framework) { duplicate_index = (sz)j; break; }
@@ -54,10 +54,10 @@ fn void Compilation.set_include_dirs(&self, IncludeDir[] dirs, bool verbose = fa
 			continue;
 		}
 		bool current_system = current.kind == SYSTEM || current.kind == SYSTEM_FRAMEWORK || current.kind == AFTER;
-		IncludeDir previous = final_dirs[(usz)duplicate_index];
+		IncludeDir previous = final_dirs[(sz)duplicate_index];
 		bool previous_system = previous.kind == SYSTEM || previous.kind == SYSTEM_FRAMEWORK || previous.kind == AFTER;
 		if (current_system && !previous_system) {
-			for (usz j = (usz)duplicate_index; j + 1 < final_dirs.len(); j++) final_dirs[j] = final_dirs[j + 1];
+			for (sz j = (sz)duplicate_index; j + 1 < final_dirs.len(); j++) final_dirs[j] = final_dirs[j + 1];
 			final_dirs.pop()!!;
 			final_dirs.push(current);
 		}
@@ -105,15 +105,15 @@ fn String normalize_path(Allocator a, String path) {
 		usz start = i;
 		while (i < path.len && path[i] != '/') i++;
 		if (start == i) continue;
-		String part = path[start..i];
+		String part = path[start:i - start];
 		if (part == ".") continue;
 		if (part == ".." && parts.len() > 0 && parts[parts.len() - 1] != "..") { parts.pop()!!; continue; }
 		if (part == ".." && absolute) continue;
 		parts.push(part);
 	}
-	usz len = absolute ? 1 : 0;
+	usz len = absolute ? (usz)1 : (usz)0;
 	foreach (part : parts) len += part.len + 1;
-	if (len > (absolute ? 1 : 0)) len--;
+	if (len > (absolute ? (usz)1 : (usz)0)) len--;
 	if (!absolute && len == 0) len = 1;
 	char* out = alloc::malloc(a, (sz)len + 1);
 	usz at = 0;
@@ -129,7 +129,7 @@ fn String normalize_path(Allocator a, String path) {
 }
 
 <* Replace the ordered embed search directories; path strings remain borrowed. *>
-fn void Compilation.set_embed_dirs(&self, String[] dirs) {
+fn void compilation::Compilation.set_embed_dirs(&self, String[] dirs) {
 	if (self.embed_dirs.ptr) alloc::free(self.gpa, self.embed_dirs.ptr);
 	self.embed_dirs = alloc::clone_slice(self.gpa, dirs);
 }
@@ -153,9 +153,11 @@ fn String framework_path_name(Allocator a, String name) {
 fn bool has_nul(String s) { foreach (c : s) if (c == 0) return true; return false; }
 
 fn Source? try_path(Compilation* comp, String path, SourceKind kind) {
+	// Match Compilation.addSourceFromPathExtra: a previously loaded source is
+	// reused by path even if the backing provider no longer reports it present.
+	if (try src = comp.find_source(path)) return src;
 	if (!comp.include_files.exists || !comp.include_files.read) return preprocessor::FILE_NOT_FOUND~;
 	if (!comp.include_files.exists(comp.include_files.ctx, path)) return preprocessor::FILE_NOT_FOUND~;
-	if (try src = comp.find_source(path)) return src;
 	char[]? loaded = comp.include_files.read(comp.include_files.ctx, comp.gpa, path, (ulong)uint::max + 1);
 	if (catch f = loaded) {
 		if (f == preprocessor::FILE_NOT_FOUND) return preprocessor::FILE_NOT_FOUND~;
@@ -178,7 +180,7 @@ fn Source? search_candidate(Compilation* comp, String base, String filename, Sou
 	return try_path(comp, path, kind);
 }
 
-fn Source? Compilation.search_include(&self, String filename, SourceId includer, IncludeType type, WhichInclude which, RawToken* include_tok) {
+fn Source? compilation::Compilation.search_include(&self, String filename, SourceId includer, IncludeType type, WhichInclude which, RawToken* include_tok) {
 	if (has_nul(filename)) return preprocessor::FILE_NOT_FOUND~;
 	Source current = self.get_source(includer);
 	if (filename.len > 0 && filename[0] == '/') {
@@ -198,19 +200,32 @@ fn Source? Compilation.search_include(&self, String filename, SourceId includer,
 	}
 	bool wait = false;
 	String wait_dir = "";
+	String wait_norm = "";
 	if (which == NEXT) {
-		for (usz i = current.path.len; i > 0; i--) if (current.path[i - 1] == '/') { wait_dir = current.path[:i - 1]; break; }
-		// If the includer did not come from an include directory, include_next
-		// starts at the beginning of the configured search path.
-		foreach (dir : self.include_dirs) {
-			if (dir.path == wait_dir) { wait = true; break; }
-		}
+		// A bare includer name lives in "." and a root-level includer lives in "/".
+		wait_dir = ".";
+		for (usz i = current.path.len; i > 0; i--) if (current.path[i - 1] == '/') { wait_dir = i == 1 ? "/" : current.path[:i - 1]; break; }
+		// Zig compares the normalized candidate dirname with find.wait_for, so the
+		// includer's dirname is normalized too; `//` spellings of -I must match it.
+		wait_norm = normalize_path(self.gpa, wait_dir);
+		// Zig FindInclude.wait_for: skip every candidate until the includer's
+		// directory is reached; an includer outside the search path finds nothing.
+		wait = true;
 	}
+	// normalize_path always allocates, so only the NEXT path owns wait_norm.
+	defer if (wait_norm.len) alloc::free(self.gpa, wait_norm.ptr);
 	foreach (dir : self.include_dirs) {
+		bool framework_dir = dir.kind == FRAMEWORK || dir.kind == SYSTEM_FRAMEWORK;
+		if (wait && !framework_dir) {
+			String dir_norm = normalize_path(self.gpa, dir.path);
+			bool same = dir_norm == wait_norm;
+			alloc::free(self.gpa, dir_norm.ptr);
+			if (same) wait = false;
+			continue;
+		}
 		if (dir.kind == QUOTE && type == ANGLE_BRACKETS) continue;
-		if (wait) { if (dir.path == wait_dir) wait = false; continue; }
 		SourceKind kind = (dir.kind == SYSTEM || dir.kind == SYSTEM_FRAMEWORK || dir.kind == AFTER) ? SYSTEM : USER;
-		if (dir.kind == FRAMEWORK || dir.kind == SYSTEM_FRAMEWORK) {
+		if (framework_dir) {
 			uint slash = filename.len;
 			for (usz i = 0; i < filename.len; i++) if (filename[i] == '/') { slash = (uint)i; break; }
 			if (slash == filename.len) continue;
@@ -220,7 +235,16 @@ fn Source? Compilation.search_include(&self, String filename, SourceId includer,
 			defer alloc::free(self.gpa, root.ptr);
 			String headers = join_path(self.gpa, root, "Headers");
 			defer alloc::free(self.gpa, headers.ptr);
-			if (try src = search_candidate(self, headers, filename[slash + 1..], kind)) {
+			String candidate = include_path(self, headers, filename[slash + 1..]);
+			defer alloc::free(self.gpa, candidate.ptr);
+			if (wait) {
+				uint candidate_dir_end = candidate.len;
+				for (usz i = candidate.len; i > 0; i--) if (candidate[i - 1] == '/') { candidate_dir_end = (uint)i - 1; break; }
+				String candidate_dir = candidate_dir_end == candidate.len ? "." : candidate[:candidate_dir_end];
+				if (candidate_dir == wait_norm) wait = false;
+				continue;
+			}
+			if (try src = try_path(self, candidate, kind)) {
 				// Prefix slice is stable because the source path is compilation-owned.
 				usz pos = find_substring(src.path, fw);
 				if (pos != usz::max) {
@@ -232,6 +256,9 @@ fn Source? Compilation.search_include(&self, String filename, SourceId includer,
 			}
 		} else if (try src = search_candidate(self, dir.path, filename, kind)) { return src; }
 	}
+	// Still waiting for the includer's directory: Zig's check() rejects every
+	// remaining candidate.
+	if (wait) return preprocessor::FILE_NOT_FOUND~;
 	if (self.ms_cwd_source_id != source::UNUSED_ID) {
 		Source ms = self.get_source(self.ms_cwd_source_id);
 		uint slash = ms.path.len;
@@ -241,11 +268,11 @@ fn Source? Compilation.search_include(&self, String filename, SourceId includer,
 			if (include_tok) {
 				RawToken tok = *include_tok;
 				ExpandedLocation loc = self.get_source(tok.source).line_col({ .id = tok.source, .byte_offset = tok.start, .line = tok.line });
-				DString warning;
-				warning.init(self.gpa);
-				defer warning.free();
-				if (catch diagnostics::format_args(&warning, DIAG_MS_SEARCH_RULE.fmt, { diagnostics::arg_str(filename) })) unreachable("formatting into a DString failed");
-				self.diagnostics.add(DIAG_MS_SEARCH_RULE.message_at(warning.str_view(), loc))!;
+				@pool()
+				{
+					String warning = string::tformat(compilation::CompDiag.MS_SEARCH_RULE.fmt, filename);
+					self.diagnostics.add(diagnostics::@message_at(compilation::CompDiag.MS_SEARCH_RULE, warning, loc))!;
+				};
 			}
 			return src;
 		}
@@ -273,6 +300,8 @@ fn Source? Compilation.search_include(&self, String filename, SourceId includer,
 }
 
 fn Source? provider_find_include(void* ctx, Preprocessor* pp, String filename, RawToken include_tok, IncludeType type, WhichInclude which) {
+	// Zig Compilation.findInclude does not touch the dependency file;
+	// Preprocessor.include records it after the before_include hooks.
 	return pp.comp.search_include(filename, include_tok.source, type, which, &include_tok);
 }
 
@@ -282,7 +311,7 @@ fn bool? provider_has_include(void* ctx, Preprocessor* pp, String filename, Sour
 		if (f == preprocessor::FILE_NOT_FOUND) return false;
 		return f~;
 	}
-	if (pp.dependencies) pp.dependencies.add_dependency(found.path);
+	if (pp.dependencies) pp.dependencies.add_dependency_copy(found.path);
 	return true;
 }
 
@@ -292,8 +321,9 @@ fn char[]? read_embed_candidate(Compilation* comp, Preprocessor* pp, String path
 	char[]? loaded = comp.include_files.read(comp.include_files.ctx, comp.gpa, path, limit);
 	if (catch f = loaded) return f~;
 	char[] bytes = loaded;
-	// Zig records the spelling used in the directive. That text may be backed
-	// by a temporary expansion buffer, so the dependency sink owns a copy.
+	// Zig Compilation.findEmbed records the spelling used in the directive.
+	// That text may be backed by a temporary expansion buffer, so the
+	// dependency sink owns a copy.
 	if (pp.dependencies) pp.dependencies.add_dependency_copy(dependency_path);
 	return bytes;
 }
@@ -328,4 +358,4 @@ fn ulong? provider_source_mtime(void* ctx, Preprocessor* pp, SourceId id) {
 	return pp.comp.include_files.mtime(pp.comp.include_files.ctx, src.path) ?? 0;
 }
 
-fn FileProvider Compilation.file_provider(&self) => { .ctx = self, .find_include = &provider_find_include, .has_include = &provider_has_include, .find_embed = &provider_find_embed, .source_mtime = &provider_source_mtime };
+fn FileProvider compilation::Compilation.file_provider(&self) => { .ctx = self, .find_include = &provider_find_include, .has_include = &provider_has_include, .find_embed = &provider_find_embed, .source_mtime = &provider_source_mtime };

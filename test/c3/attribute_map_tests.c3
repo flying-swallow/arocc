@@ -76,7 +76,7 @@ fn void compact_payload_round_trips() @test
 		assert(decoded.args.section == "abcde");
 		// putString stores length followed by ceil(len / sizeof(uint)) words.
 		uint section_data = map.attributes[(uint)section_ref].data;
-		check(map.extra[section_data + 1], 5);
+		check(map.extra[(usz)section_data + 1], 5);
 		check(map.extra.len() - section_data, 4); // token, length, two padded data words
 		map.free();
 	}
@@ -106,10 +106,16 @@ fn void declaration_queries_and_replacement() @test
 		assert(last!!.args.tag == COLD);
 		assert(!@ok(map.get_attribute(opt, PACKED)));
 		check(map.attrs(opt).len, 3);
-		map.set_decl_attrs(node, refs[1..2]);
+		map.set_decl_attrs(node, refs[1:1]);
 		check(map.attrs(opt).len, 1);
 		assert(map.has_attribute(opt, HOT) && !map.has_attribute(opt, COLD));
+		// Applied attribute refs are a borrowed view into the map's extra storage.
+		AttrRef[] applied = map.attrs(opt);
+		uint applied_start = map.decl_attrs.get((uint)node)!!.index;
+		applied[0] = refs[0];
+		check(map.extra[applied_start], (uint)refs[0]);
 		check(map.attrs(type_store::NODE_NULL).len, 0);
+		check(map.attrs(((NodeIndex)5).pack()).len, 0);
 		map.free();
 	}
 	check(ta.allocation_count(), 0);

@@ -367,7 +367,8 @@ fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 		case STRUCT:
 		case UNION:
 		case ENUM: return a_base.qt.index == b_base.qt.index;
-		case BLOCK: return a_type.block.func.eql(b_type.block.func, comp);
+		case BLOCK:
+			return a_type.block.nullability == b_type.block.nullability && a_type.block.func.eql(b_type.block.func, comp);
 		case TYPEOF:
 		case TYPEDEF: unreachable("never returned from base()");
 	}

@@ -153,22 +153,24 @@ fn AttrRef AttributeMap.put(&self, Attribute attribute)
 		case REPRODUCIBLE: repr.tag = REPRODUCIBLE;
 		case UNUSED: repr.tag = UNUSED;
 		case ALIGNMENT:
-			if (args.alignment.has_alignment) { repr.tag = ALIGNMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.extra.push(args.alignment.alignment); }
-			else repr.tag = ALIGNMENT_NULL;
+			if (args.alignment.has_alignment) {
+				repr.tag = ALIGNMENT;
+				repr.data = (uint)self.extra.len();
+				self.extra.push(attribute.tok);
+				self.extra.push(args.alignment.alignment);
+			} else {
+				repr.tag = ALIGNMENT_NULL;
+			}
 		case DEPRECATED:
-			if (args.deprecated.has_replacement) { repr.tag = DEPRECATED_REPLACEMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); self.put_string(args.deprecated.replacement); }
-			else if (args.deprecated.has_msg) { repr.tag = DEPRECATED_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); }
-			else repr.tag = DEPRECATED;
+			if (args.deprecated.has_replacement) { repr.tag = DEPRECATED_REPLACEMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); self.put_string(args.deprecated.replacement); } else if (args.deprecated.has_msg) { repr.tag = DEPRECATED_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); } else { repr.tag = DEPRECATED; }
 		case UNAVAILABLE:
-			if (args.unavailable.has_msg) { repr.tag = UNAVAILABLE_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.unavailable.msg); }
-			else repr.tag = UNAVAILABLE;
+			if (args.unavailable.has_msg) { repr.tag = UNAVAILABLE_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.unavailable.msg); } else { repr.tag = UNAVAILABLE; }
 		case WARNING: repr.tag = WARNING; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warning);
 		case ERROR: repr.tag = ERROR; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.error_msg);
 		case WARN_UNUSED_RESULT:
-			if (args.warn_unused_result.has_msg) { repr.tag = WARN_UNUSED_RESULT_MSG; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warn_unused_result.msg); }
-			else repr.tag = WARN_UNUSED_RESULT;
+			if (args.warn_unused_result.has_msg) { repr.tag = WARN_UNUSED_RESULT_MSG; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warn_unused_result.msg); } else { repr.tag = WARN_UNUSED_RESULT; }
 		case NONNULL:
-			if (!args.nonnull.len) repr.tag = NONNULL_ZERO;
+			if (!args.nonnull.len) { repr.tag = NONNULL_ZERO; }
 			else { repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); if (args.nonnull.len == 1) { repr.tag = NONNULL_ONE; self.extra.push(args.nonnull[0]); } else { repr.tag = NONNULL; self.extra.push((uint)args.nonnull.len); foreach (v : args.nonnull) self.extra.push(v); } }
 		case VISIBILITY:
 			switch (args.visibility) { case DEFAULT: repr.tag = VISIBILITY_DEFAULT; case HIDDEN: repr.tag = VISIBILITY_HIDDEN; case PROTECTED: repr.tag = VISIBILITY_PROTECTED; }
@@ -185,7 +187,7 @@ fn AttrRef AttributeMap.put(&self, Attribute attribute)
 fn Attribute AttributeMap.get(&self, AttrRef ref)
 {
 	AttrRepr r = self.attributes[(uint)ref];
-	Attribute result = { .name = r.name, .syntax = r.syntax, .tok = (TokenIndex)r.data, .args = { .tag = PACKED } };
+	Attribute result = { .name = r.name, .syntax = r.syntax, .tok = (tokens::TokenIndex)r.data, .args = { .tag = PACKED } };
 	uint next;
 	switch (r.tag)
 	{
@@ -206,24 +208,24 @@ fn Attribute AttributeMap.get(&self, AttrRef ref)
 		case REPRODUCIBLE: result.args.tag = REPRODUCIBLE;
 		case UNUSED: result.args.tag = UNUSED;
 		case ALIGNMENT_NULL: result.args.tag = ALIGNMENT; result.args.alignment = { .has_alignment = false };
-		case ALIGNMENT: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = ALIGNMENT; result.args.alignment = { .has_alignment = true, .alignment = self.extra[r.data + 1] };
+		case ALIGNMENT: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = ALIGNMENT; result.args.alignment = { .has_alignment = true, .alignment = self.extra[(usz)r.data + 1] };
 		case DEPRECATED: result.args.tag = DEPRECATED;
-		case DEPRECATED_REASON: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = DEPRECATED; result.args.deprecated = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
-		case DEPRECATED_REPLACEMENT: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = DEPRECATED; result.args.deprecated = { .has_msg = true, .msg = self.get_string(r.data + 1, &next), .has_replacement = true, .replacement = self.get_string(next, &next) };
+		case DEPRECATED_REASON: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = DEPRECATED; result.args.deprecated = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
+		case DEPRECATED_REPLACEMENT: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = DEPRECATED; result.args.deprecated = { .has_msg = true, .msg = self.get_string(r.data + 1, &next), .has_replacement = true, .replacement = self.get_string(next, &next) };
 		case UNAVAILABLE: result.args.tag = UNAVAILABLE; result.args.unavailable = { .has_msg = false };
-		case UNAVAILABLE_REASON: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = UNAVAILABLE; result.args.unavailable = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
-		case WARNING: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = WARNING; result.args.warning = self.get_string(r.data + 1, &next);
-		case ERROR: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = ERROR; result.args.error_msg = self.get_string(r.data + 1, &next);
+		case UNAVAILABLE_REASON: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = UNAVAILABLE; result.args.unavailable = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
+		case WARNING: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = WARNING; result.args.warning = self.get_string(r.data + 1, &next);
+		case ERROR: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = ERROR; result.args.error_msg = self.get_string(r.data + 1, &next);
 		case WARN_UNUSED_RESULT: result.args.tag = WARN_UNUSED_RESULT; result.args.warn_unused_result = { .has_msg = false };
-		case WARN_UNUSED_RESULT_MSG: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = WARN_UNUSED_RESULT; result.args.warn_unused_result = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
-		case NONNULL_ZERO: result.args.tag = NONNULL; result.args.nonnull = self.extra.slice()[0 .. 0];
-		case NONNULL_ONE: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = NONNULL; result.args.nonnull = self.extra.slice()[r.data + 1 .. r.data + 2];
-		case NONNULL: result.tok = (TokenIndex)self.extra[r.data]; uint n = self.extra[r.data + 1]; result.args.tag = NONNULL; result.args.nonnull = self.extra.slice()[r.data + 2 .. r.data + 2 + n];
+		case WARN_UNUSED_RESULT_MSG: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = WARN_UNUSED_RESULT; result.args.warn_unused_result = { .has_msg = true, .msg = self.get_string(r.data + 1, &next) };
+		case NONNULL_ZERO: result.args.tag = NONNULL; result.args.nonnull = ((uint*)self.extra.array_view().ptr)[:0];
+		case NONNULL_ONE: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = NONNULL; result.args.nonnull = self.extra.array_view()[(usz)r.data + 1 : 1];
+		case NONNULL: result.tok = (tokens::TokenIndex)self.extra[r.data]; uint n = self.extra[(usz)r.data + 1]; result.args.tag = NONNULL; result.args.nonnull = self.extra.array_view()[(usz)r.data + 2 : n];
 		case VISIBILITY_DEFAULT: result.args.tag = VISIBILITY; result.args.visibility = DEFAULT;
 		case VISIBILITY_HIDDEN: result.args.tag = VISIBILITY; result.args.visibility = HIDDEN;
 		case VISIBILITY_PROTECTED: result.args.tag = VISIBILITY; result.args.visibility = PROTECTED;
-		case CLEANUP: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = CLEANUP; result.args.cleanup = { .function = (NodeIndex)self.extra[r.data + 1] };
-		case SECTION: result.tok = (TokenIndex)self.extra[r.data]; result.args.tag = SECTION; result.args.section = self.get_string(r.data + 1, &next);
+		case CLEANUP: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = CLEANUP; result.args.cleanup = { .function = (NodeIndex)self.extra[(usz)r.data + 1] };
+		case SECTION: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = SECTION; result.args.section = self.get_string(r.data + 1, &next);
 	}
 	return result;
 }
@@ -249,7 +251,7 @@ fn String AttributeMap.get_string(&self, uint index, uint* next)
 	uint len = self.extra[index];
 	uint words = (len + 3) / 4;
 	*next = index + 1 + words;
-	return ((char*)&self.extra[index + 1])[0 .. len];
+	return (String)((char*)&self.extra[(usz)index + 1])[:len];
 }
 
 <*
@@ -271,12 +273,12 @@ fn void AttributeMap.set_decl_attrs(&self, NodeIndex node, AttrRef[] refs)
 *>
 fn AttrRef[] AttributeMap.attrs(&self, NodeOptIndex node)
 {
-	NodeIndex? idx = node.unpack();
-	if (!idx) return self.extra.slice()[0 .. 0];
-	AttrSpan? maybe_span = self.decl_attrs.get((uint)idx!);
-	if (!maybe_span) return self.extra.slice()[0 .. 0];
-	AttrSpan span = maybe_span!;
-	return ((AttrRef*)self.extra.slice().ptr)[span.index .. span.index + span.len];
+	if (try idx = node.unpack()) {
+		if (try span = self.decl_attrs.get((uint)idx)) {
+			return ((AttrRef*)self.extra.array_view().ptr)[span.index : span.len];
+		}
+	}
+	return ((AttrRef*)self.extra.array_view().ptr)[:0];
 }
 
 <* Zig `getAttribute`: the LAST attribute of `node` whose args tag is `tag`, else NO_ATTRIBUTE. *>
@@ -294,8 +296,10 @@ fn Attribute? AttributeMap.get_attribute(&self, NodeOptIndex node, AttributeTag 
 *>
 fn uint? AttributeMap.requested_alignment(&self, NodeOptIndex node, Compilation* comp)
 {
-	uint? max_value;
-	foreach (ref : self.attrs(node)) { Attribute a = self.get(ref); if (a.args.tag != ALIGNMENT) continue; uint v = a.args.alignment.has_alignment ? a.args.alignment.alignment : comp.target.default_alignment(); if (!max_value || max_value! < v) max_value = v; }
+	bool found = false;
+	uint max_value = 0;
+	foreach (ref : self.attrs(node)) { Attribute a = self.get(ref); if (a.args.tag != ALIGNMENT) continue; uint v = a.args.alignment.has_alignment ? a.args.alignment.alignment : comp.target.default_alignment(); if (!found || max_value < v) { max_value = v; found = true; } }
+	if (!found) return NO_ATTRIBUTE~;
 	return max_value;
 }
 
@@ -312,7 +316,7 @@ fn bool AttributeMap.has_attribute(&self, NodeOptIndex node, AttributeTag tag)
  enum -> `get_attribute(decl_node)`; typeof -> its base; typedef -> its
  decl_node, then its base; anything else NO_ATTRIBUTE.
 *>
-fn Attribute? QualType.get_attribute(self, Tree* tree, AttributeTag tag)
+fn Attribute? type_store::QualType.get_attribute(self, Tree* tree, AttributeTag tag)
 {
 	if (self.is_invalid()) return NO_ATTRIBUTE~;
 	Type t = self.get_type(tree.comp);
@@ -328,7 +332,7 @@ fn Attribute? QualType.get_attribute(self, Tree* tree, AttributeTag tag)
 }
 
 <* TypeStore.zig `QualType.hasAttribute`. *>
-fn bool QualType.has_attribute(self, Tree* tree, AttributeTag tag)
+fn bool type_store::QualType.has_attribute(self, Tree* tree, AttributeTag tag)
 {
 	return @ok(self.get_attribute(tree, tag));
 }

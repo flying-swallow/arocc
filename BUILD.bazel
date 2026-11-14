@@ -1,5 +1,8 @@
 load("//tools:builtins.bzl", "builtin_defs")
-load("//tools:c3.bzl", "c3_binary", "c3_library")
+load("//tools:c3.bzl", "c3_binary", "c3_library", "c3_source_archive")
+load("//tools:system_defaults.bzl", "system_defaults")
+
+system_defaults(name = "system_defaults_module")
 
 # Library sources are listed explicitly; agents append new modules here.
 c3_library(
@@ -7,15 +10,34 @@ c3_library(
     srcs = [
         "src/c3/annex_g.c3",
         "src/c3/aro.c3",
+        "src/c3/api.c3",
         "src/c3/attribute.c3",
+        "src/c3/attribute_diagnostics.c3",
+        "src/c3/attribute_wip.c3",
         "src/c3/attribute_map.c3",
         "src/c3/bigint.c3",
         "src/c3/builtin_properties.c3",
         "src/c3/builtin_type_description.c3",
+        "src/c3/backend/ir.c3",
+        "src/c3/backend/ir_renderer.c3",
+        "src/c3/codegen.c3",
+        "src/c3/codegen_nodes.c3",
+        "src/c3/backend/object.c3",
+        "src/c3/backend/elf.c3",
+        "src/c3/backend/assembly.c3",
+        "src/c3/backend/assembly_x86_64.c3",
         "src/c3/builtins.c3",
+        "src/c3/builtin_eval.c3",
+        "src/c3/builtin_call.c3",
+        "src/c3/parser_builtin.c3",
         ":builtin_defs",
         "src/c3/char_info.c3",
         "src/c3/code_gen_options.c3",
+        "src/c3/driver.c3",
+        "src/c3/driver_exec.c3",
+        "src/c3/driver_options.c3",
+        "src/c3/driver_tempfiles.c3",
+        "src/c3/host_process.c3",
         "src/c3/compilation.c3",
         "src/c3/diagnostics.c3",
         "src/c3/dep_file.c3",
@@ -37,13 +59,36 @@ c3_library(
         "src/c3/pp_expression.c3",
         "src/c3/pp_feature_queries.c3",
         "src/c3/pp_print.c3",
+        "src/c3/parser.c3",
+        "src/c3/parser_declaration.c3",
+        "src/c3/parser_frontend.c3",
+        "src/c3/parser_attribute.c3",
+        "src/c3/parser_diagnostics.c3",
+        "src/c3/parser_declarator.c3",
+        "src/c3/parser_symbols.c3",
+        "src/c3/parser_expression.c3",
+        "src/c3/parser_postfix.c3",
+        "src/c3/parser_primary.c3",
+        "src/c3/init_list.c3",
+        "src/c3/parser_initializer.c3",
+        "src/c3/parser_record.c3",
+        "src/c3/parser_result.c3",
+        "src/c3/parser_statement.c3",
+        "src/c3/parser_asm.c3",
         "src/c3/predefined_macros.c3",
         "src/c3/predefined_macros_other.c3",
         "src/c3/predefined_macros_x86.c3",
         "src/c3/preprocessor.c3",
+        "src/c3/pragma.c3",
+        "src/c3/pragmas/gcc.c3",
+        "src/c3/pragmas/pack.c3",
+        "src/c3/pragmas/message.c3",
+        "src/c3/pragmas/once.c3",
+        "src/c3/record_layout.c3",
         "src/c3/source.c3",
         "src/c3/string_interner.c3",
         "src/c3/symbol_stack.c3",
+        "src/c3/tracy.c3",
         "src/c3/target.c3",
         "src/c3/target_cpu.c3",
         "src/c3/target_data.c3",
@@ -52,22 +97,37 @@ c3_library(
         "src/c3/tokenizer.c3",
         "src/c3/tokens.c3",
         "src/c3/toolchain/discovery.c3",
+        "src/c3/toolchain.c3",
         "src/c3/toolchain/distro.c3",
+        "src/c3/toolchain/darwin.c3",
         "src/c3/toolchain/gcc_detector.c3",
         "src/c3/toolchain/gcc_version.c3",
+        "src/c3/toolchain/linux.c3",
         "src/c3/toolchain/multilib.c3",
+        "src/c3/toolchain_link.c3",
+        ":system_defaults_module",
         "src/c3/tree.c3",
         "src/c3/tree_decl.c3",
         "src/c3/tree_dump.c3",
         "src/c3/tree_expr.c3",
         "src/c3/type_print.c3",
         "src/c3/type_store.c3",
+        "src/c3/type_builder.c3",
         "src/c3/type_store_layout.c3",
         "src/c3/type_store_named.c3",
         "src/c3/type_store_relations.c3",
         "src/c3/value.c3",
         "src/c3/value_interner.c3",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# Stable public module target. This name is the supported dependency for C3
+# consumers; aro_c3_lib remains available for existing in-repository users.
+c3_library(
+    name = "aro",
+    deps = [":aro_c3_lib"],
+    data = [":aro_builtin_headers"],
     visibility = ["//visibility:public"],
 )
 
@@ -102,17 +162,61 @@ builtin_defs(
 
 exports_files(["src/c3/builtin_properties.c3"])
 
+# Runtime resource headers for the installed compiler layout. The toolchain
+# finds these relative to the executable (or accepts an explicit resource dir).
+filegroup(
+    name = "aro_builtin_headers",
+    srcs = glob(["include/*.h"]),
+    visibility = ["//visibility:public"],
+)
+
+# Source package with its own Bazel module/build files. Generated C3 modules
+# arrive through the C3Info closure and are normalized to their source package
+# paths by c3_source_archive.
+c3_source_archive(
+    name = "aro_distribution",
+    deps = [":aro"],
+    srcs = [
+        "VERSION",
+        "LICENSE",
+        "LICENSE-UNICODE",
+        "docs/c3-api.md",
+        "examples/parse_buffer.c3",
+        "distfiles/package.BUILD.bazel",
+        "distfiles/package.MODULE.bazel",
+        "distfiles/tools.BUILD.bazel",
+        "//tools:c3.bzl",
+        "//tools:c3_test_launcher.sh.tpl",
+        "//tools:c3c_repo.bzl",
+    ],
+    src_path_prefixes = {
+        "distfiles/package.BUILD.bazel": "BUILD.bazel",
+        "distfiles/package.MODULE.bazel": "MODULE.bazel",
+        "distfiles/tools.BUILD.bazel": "tools/BUILD.bazel",
+    },
+    visibility = ["//visibility:public"],
+)
+
 c3_binary(
     name = "aro_c3",
     srcs = ["app/aro_c3/main.c3"],
     deps = [":aro_c3_lib"],
+    data = [":aro_builtin_headers"],
+    visibility = ["//visibility:public"],
 )
 
 # Integration fixture corpus (cases, includes, ast/ and expanded/ goldens)
 # as runtime data for //test/migration:* runner targets.
 filegroup(
     name = "test_cases",
-    srcs = glob(["test/cases/**"]),
+    srcs = ["//test:test_cases"],
+    visibility = ["//test/migration:__pkg__"],
+)
+
+# Complete record-layout fixture corpus and any future sibling runtime files.
+filegroup(
+    name = "record_fixtures_tree",
+    srcs = ["//test:record_fixtures"],
     visibility = ["//test/migration:__pkg__"],
 )
 

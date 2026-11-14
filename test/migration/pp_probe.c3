@@ -47,9 +47,10 @@
 // printing (Driver.processSource fast_exit), a fatal error exits 1, and
 // -fsyntax-only exits 1 when errors were emitted.
 module pp_probe;
-import aro::compilation, aro::include_search, aro::diagnostics, aro::preprocessor, aro::pp_builtin_macros, aro::source, aro::tokens, aro::lang_opts, aro::target, aro::predefined_macros;
-import std::io, std::io::os, std::os::env, std::collections::list;
-import aro::dep_file;
+import aro::compilation, aro::include_search, aro::diagnostics, aro::preprocessor, aro::source, aro::tokens, aro::lang_opts, aro::target, aro::predefined_macros;
+import std::io, std::io::os, std::io::path, std::os::env, std::collections::list;
+import aro::toolchain, aro::toolchain::discovery;
+import aro::dep_file, aro::pragma, aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message;
 
 excuse PROBE_FAILED;
 
@@ -341,7 +342,7 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 	}
 	if (o.target_triple.len)
 	{
-		Target? parsed_target = target::parse_triple(o.target_triple, target::native()!!, o.target_cpu);
+		Target? parsed_target = target::parse_triple(o.target_triple, target::host()!!, o.target_cpu);
 		if (catch parsed_target)
 		{
 			probe_error("invalid target '%s' with CPU '%s'", o.target_triple, o.target_cpu);
@@ -394,6 +395,27 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 	}
 }
 
+fn void add_toolchain_includes(String exe, Compilation* comp, List{IncludeDir}* includes)
+{
+	String? cwd = path::cwd(mem);
+	if (catch cwd) return;
+	defer free(cwd.ptr);
+	String aro_name = exe.len && exe[0] == '/' ? exe.copy(mem) : toolchain::discovery::join(mem, { cwd, exe });
+	defer free(aro_name.ptr);
+	Host? host = target::host();
+	if (catch host) return;
+	toolchain::discovery::Env tc_env = {
+		.fs = toolchain::discovery::host_fs(),
+		.target = comp.target,
+		.host_is_darwin = host.os.is_darwin(),
+	};
+	toolchain::Toolchain tc;
+	tc.init(mem, tc_env, { .aro_name = aro_name });
+	defer tc.free();
+	if (catch tc.discover()) return;
+	(void)tc.define_system_includes(includes);
+}
+
 <* Preprocess and print. Returns the process exit status. *>
 fn int run(String[] args, Compilation* comp, Diagnostics* d)
 {
@@ -405,6 +427,10 @@ fn int run(String[] args, Compilation* comp, Diagnostics* d)
 	defer macro_buf.free();
 	if (catch parse_args(args, &o, comp, d, &macro_buf)) return 2;
 	comp.cwd = ".";
+	// Like the Zig driver, append the toolchain's builtin and system include
+	// directories after the user's -I directories. The probe binary sits below
+	// the runfiles root, where //:aro_builtin_headers provides include/stddef.h.
+	add_toolchain_includes(args.len ? args[0] : "", comp, &o.include_dirs);
 	comp.set_include_dirs(o.include_dirs.array_view());
 	comp.include_files = { .exists = &probe_file_exists, .read = &probe_read_file, .mtime = &probe_file_mtime };
 
@@ -424,7 +450,7 @@ fn int run(String[] args, Compilation* comp, Diagnostics* d)
 	}
 	Source? cmd_src = comp.add_source_from_buffer("<command line>", macro_buf.str_view());
 	if (catch cmd_src) return 1;
-	Source? builtin_src = predefined_macros::generate_builtin_macros(&comp, predefined_macros::INCLUDE_SYSTEM_DEFINES);
+	Source? builtin_src = predefined_macros::generate_builtin_macros(comp, predefined_macros::SystemDefinesMode.INCLUDE_SYSTEM_DEFINES);
 	if (catch builtin_src) return 1;
 
 	Preprocessor pp;
@@ -436,7 +462,7 @@ fn int run(String[] args, Compilation* comp, Diagnostics* d)
 		.add_builtin_macros = true,
 		.dependencies = o.dependencies ? &dep : null,
 	};
-	if (catch f = pp.init(comp, init_opts, pp_builtin_macros::BUILTINS, comp.file_provider()))
+	if (catch f = pp.init(comp, init_opts, preprocessor::BUILTINS, comp.file_provider()))
 	{
 		probe_error("preprocessor init failed: %s", f);
 		return 2;
@@ -524,6 +550,9 @@ fn int main(String[] args)
 	d.init_writer(io::stderr(), NO_COLOR);
 	Compilation comp;
 	comp.init(mem, null, &d);
+	comp.pragmas.add("GCC", gcc::make_handler(mem));
+	comp.pragmas.add("once", once::handler(mem));
+	comp.pragmas.add("message", message::handler());
 	if (try epoch = env::get_var(mem, "SOURCE_DATE_EPOCH"))
 	{
 		comp.environment.has_source_date_epoch = true;

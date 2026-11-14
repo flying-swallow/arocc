@@ -3,7 +3,7 @@
 // pp_builtin_macros.c3, pp_feature_queries.c3 and preprocessor.c3; no Zig
 // differential run is claimed.
 module pp_builtin_integration_tests;
-import aro::preprocessor, aro::source, aro::compilation, aro::diagnostics;
+import aro::preprocessor, aro::source, aro::compilation, aro::diagnostics, aro::tokens;
 import std::core::mem::allocators, std::core::dstring;
 
 macro check(left, right)
@@ -48,12 +48,13 @@ fn void default_provider_expands_builtin_macros_and_attribute_features() @test
 		opts.add_builtin_macros = true;
 		Preprocessor pp;
 		pp.init(&comp, opts)!!;
+		pp.preserve_whitespace = true;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!;
+		pp.add_token(eof)!!;
 
 		DString output;
 		output.init(tmem);
-		pp.pretty_print_tokens(&output, preprocessor::RESULT_ONLY)!!;
+		pp.pretty_print_tokens(&output, preprocessor::DumpMode.RESULT_ONLY)!!;
 		// [source-derived] __LINE__ expands to the source line; builtin function
 		// queries use the shared attribute tables, and unknown features are false.
 		test::eq(output.str_view(), "int line = 1;\nint feature = 1;\nint extension = 1;\nint attribute = 1;\nint unknown = 0;\n");

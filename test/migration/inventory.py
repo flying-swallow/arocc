@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Regenerate test/migration/baseline.json from the Zig reference sources.
+"""Regenerate test/migration/baseline.json from the pinned Zig source tree.
 
-The Zig reference (Zig 0.18.0-dev.828+9da287565) could not be obtained in the
-migration environment, so nothing here comes from running a compiler. Every
-number is derived by reading files with the same rules the Zig harnesses use:
+This file records source inventory only. It does not run a compiler or store
+execution results; those are kept separately in reference-results.json. Every
+inventory number is derived by reading files with the same rules the Zig
+harnesses use:
 
   * test/runner.zig        caseFromFile / runCaseExtra   -> test/cases/*.c
   * test/record_runner.zig parseTargetsFromCode / runCase -> test/records/*_test.c
@@ -15,69 +16,24 @@ Usage:
   python3 test/migration/inventory.py --check    # fail if baseline.json is stale
   python3 test/migration/inventory.py --stdout   # print, do not write
 
-Output is deterministic: entries are sorted, no timestamps or host data are
-read at generation time. `recorded_environment` is a fixed record of the
-environment the baseline was taken in; update it by hand when that changes.
+Output is deterministic: entries are sorted, and the source commit and path
+list come from the existing baseline.json. Generation uses a temporary archive
+of that pinned commit rather than scanning the changing working tree.
 """
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(ROOT, "test", "migration", "baseline.json")
-
-# Paths that make up the Zig reference. The reference commit is the last
-# commit touching any of these, so adding migration files does not move it.
-REFERENCE_PATHS = [
-    "build",
-    "build.zig",
-    "build.zig.zon",
-    "include",
-    "src/aro",
-    "src/aro.zig",
-    "src/assembly_backend",
-    "src/assembly_backend.zig",
-    "src/backend",
-    "src/backend.zig",
-    "src/main.zig",
-    "test/cases",
-    "test/fuzz",
-    "test/record_runner.zig",
-    "test/records",
-    "test/runner.zig",
-]
-
-RECORDED_ENVIRONMENT = {
-    "recorded_on": "2026-11-03",
-    "zig_required": "0.18.0-dev.828+9da287565 (build.zig.zon minimum_zig_version)",
-    "zig_available": None,
-    "zig_note": "No Zig executable can build this repo here: the required 0.18.0-dev "
-    "build cannot be downloaded (ziglang.org is blocked). Do not substitute an older "
-    "Zig; its failures are not Aro regressions.",
-    "c3c": "0.8.5 (/home/user/tools/c3/c3c, git 640091d3303a393f9651d644063b837fc19d05f1, LLVM 23.1.2)",
-    "bazel": "9.1.0 (/home/user/tools/bazel, pinned by .bazelversion)",
-    "python": "3.13 (only needed for this inventory script)",
-}
-
-REFERENCE_STATUS = {
-    "status": "reference not executed: compiler unavailable",
-    "commands_not_run": [
-        "zig build",
-        "zig build test-unit",
-        "zig build test-integration",
-        "zig build test-record",
-        "zig build test-fmt",
-    ],
-    "pass_fail_counts": None,
-    "note": "No pass/fail/skip counts exist for the Zig reference. The counts below "
-    "are fixture inventories derived from source, not test results. Never claim a "
-    "green Zig suite or differential parity without logs from a real run.",
-}
 
 # Mirrors Case.Kind in test/runner.zig.
 CASE_KINDS = ["syntax", "syntax_ignore_errors", "expand_error", "expand", "expand_partial", "compare_output"]
@@ -88,27 +44,43 @@ def read_bytes(path):
         return f.read()
 
 
-def rel(path):
-    return os.path.relpath(path, ROOT).replace(os.sep, "/")
+def rel(path, root=ROOT):
+    return os.path.relpath(path, root).replace(os.sep, "/")
 
 
-def reference_commit():
-    try:
-        out = subprocess.run(
-            ["git", "-C", ROOT, "log", "-1", "--format=%H", "--"] + REFERENCE_PATHS,
+def load_frozen_reference():
+    """Read the source revision and path list from the checked-in baseline."""
+    with open(OUT, encoding="utf-8") as f:
+        baseline = json.load(f)
+    reference = baseline.get("reference")
+    if not isinstance(reference, dict) or not reference.get("commit") or not reference.get("reference_paths"):
+        raise ValueError("baseline.json does not contain a pinned reference commit and paths")
+    return reference
+
+
+@contextmanager
+def archived_reference(reference):
+    """Yield a temporary tree containing only the pinned, tracked source inputs."""
+    with tempfile.TemporaryDirectory(prefix="aro-inventory-") as source_root:
+        archive_path = os.path.join(source_root, "reference.tar")
+        subprocess.run(
+            [
+                "git", "-C", ROOT, "archive", "--format=tar", "--output", archive_path,
+                reference["commit"], "--", *reference["reference_paths"],
+            ],
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.strip()
-        return out or None
-    except (OSError, subprocess.CalledProcessError):
-        return None
+        )
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(path=source_root, filter="data")
+        yield source_root
 
 
-def digest(paths):
+def digest(paths, root):
     h = hashlib.sha256()
-    for p in sorted(paths, key=rel):
-        h.update(rel(p).encode())
+    for p in sorted(paths, key=lambda p: rel(p, root)):
+        h.update(rel(p, root).encode())
         h.update(b"\0")
         h.update(read_bytes(p))
         h.update(b"\0")
@@ -196,8 +168,8 @@ def parse_manifest(name, contents):
     return case, None
 
 
-def inventory_cases():
-    cases_dir = os.path.join(ROOT, "test", "cases")
+def inventory_cases(root):
+    cases_dir = os.path.join(root, "test", "cases")
     entries = sorted(os.listdir(cases_dir))
     ast_dir = os.path.join(cases_dir, "ast")
     exp_dir = os.path.join(cases_dir, "expanded")
@@ -294,8 +266,8 @@ RECORD_EXPECTED_FAILURES = {
 }
 
 
-def inventory_records():
-    rec_dir = os.path.join(ROOT, "test", "records")
+def inventory_records(root):
+    rec_dir = os.path.join(root, "test", "records")
     files = sorted(
         e for e in os.listdir(rec_dir) if os.path.isfile(os.path.join(rec_dir, e)) and "_test.c" in e.lower()
     )
@@ -365,21 +337,21 @@ def inventory_records():
 TEST_RE = re.compile(r'^\s*test(?:\s+"((?:[^"\\]|\\.)*)"|\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\{')
 
 
-def inventory_unit_tests():
-    aro_root = os.path.join(ROOT, "src", "aro.zig")
+def inventory_unit_tests(root):
+    aro_root = os.path.join(root, "src", "aro.zig")
     aro_src = read_bytes(aro_root).decode()
     m = re.search(r"^test\s*\{(.*?)^\}", aro_src, re.S | re.M)
     referenced = sorted(set(re.findall(r'@import\("([^"]+)"\)', m.group(1)))) if m else []
 
     zig_files = []
     for base in ("src", "build", "test"):
-        for p in walk_files(os.path.join(ROOT, base)):
+        for p in walk_files(os.path.join(root, base)):
             if p.endswith(".zig"):
                 zig_files.append(p)
     files = []
     total = 0
-    for p in sorted(zig_files, key=rel):
-        r = rel(p)
+    for p in sorted(zig_files, key=lambda p: rel(p, root)):
+        r = rel(p, root)
         names, anon = [], 0
         for line in read_bytes(p).decode("utf-8", "replace").split("\n"):
             mm = TEST_RE.match(line)
@@ -457,9 +429,9 @@ def enum_fields(path, name):
     return [x.strip().rstrip(",") for x in m.group(1).split("\n") if x.strip()]
 
 
-def inventory_exports():
-    aro = os.path.join(ROOT, "src", "aro.zig")
-    backend = os.path.join(ROOT, "src", "backend.zig")
+def inventory_exports(root):
+    aro = os.path.join(root, "src", "aro.zig")
+    backend = os.path.join(root, "src", "backend.zig")
     return {
         "note": "Parity requirement: the C3 library must expose an equivalent for each name.",
         "src/aro.zig": exports_of(aro),
@@ -503,47 +475,40 @@ BACKEND_LIMITATIONS = {
 }
 
 
-def build_baseline():
+def build_baseline(root, frozen_reference):
     ref_files = []
-    for p in REFERENCE_PATHS:
-        ap = os.path.join(ROOT, p)
+    for p in frozen_reference["reference_paths"]:
+        ap = os.path.join(root, p)
         if os.path.isdir(ap):
             ref_files.extend(walk_files(ap))
         elif os.path.isfile(ap):
             ref_files.append(ap)
-    zon = read_bytes(os.path.join(ROOT, "build.zig.zon")).decode()
+    zon = read_bytes(os.path.join(root, "build.zig.zon")).decode()
     min_zig = re.search(r'\.minimum_zig_version\s*=\s*"([^"]+)"', zon).group(1)
     version = re.search(r'\.version\s*=\s*"([^"]+)"', zon).group(1)
     return {
         "schema": 1,
         "generator": "test/migration/inventory.py",
         "reference": {
-            "commit": reference_commit(),
-            "commit_rule": "last git commit touching reference_paths",
-            "reference_paths": REFERENCE_PATHS,
-            "inputs_sha256": digest(ref_files),
+            "commit": frozen_reference["commit"],
+            "commit_rule": frozen_reference.get("commit_rule", "pinned reference commit"),
+            "reference_paths": frozen_reference["reference_paths"],
+            "inputs_sha256": digest(ref_files, root),
             "input_files": len(ref_files),
             "aro_version": version,
             "minimum_zig_version": min_zig,
         },
-        "reference_status": REFERENCE_STATUS,
-        "recorded_environment": RECORDED_ENVIRONMENT,
-        "reference_commands": {
-            "build": "zig build --cache-dir <ref>/cache --prefix <ref>/out",
-            "test-unit": "zig build test-unit --cache-dir <ref>/cache --prefix <ref>/out",
-            "test-integration": "zig build test-integration --cache-dir <ref>/cache --prefix <ref>/out",
-            "test-record": "zig build test-record --cache-dir <ref>/cache --prefix <ref>/out",
-            "executable": "<ref>/out/bin/arocc",
-        },
+        "execution_results_artifact": "test/migration/reference-results.json",
+        "reference_gate_helper": "python3 test/migration/run_reference_gate.py",
         "c3_build": {
             "binary": "//:aro_c3",
             "smoke_test": "//test/c3:build_smoke",
             "command": "C3C=/home/user/tools/c3/c3c /home/user/tools/bazel --output_user_root=/home/user/tools/bazel_root test //test/c3:build_smoke",
         },
-        "integration_cases": inventory_cases(),
-        "record_cases": inventory_records(),
-        "unit_tests": inventory_unit_tests(),
-        "public_exports": inventory_exports(),
+        "integration_cases": inventory_cases(root),
+        "record_cases": inventory_records(root),
+        "unit_tests": inventory_unit_tests(root),
+        "public_exports": inventory_exports(root),
         "backend_limitations": BACKEND_LIMITATIONS,
     }
 
@@ -553,7 +518,14 @@ def main():
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--stdout", action="store_true")
     a = ap.parse_args()
-    text = json.dumps(build_baseline(), indent=2, sort_keys=False, ensure_ascii=False) + "\n"
+    frozen_reference = load_frozen_reference()
+    with archived_reference(frozen_reference) as source_root:
+        text = json.dumps(
+            build_baseline(source_root, frozen_reference),
+            indent=2,
+            sort_keys=False,
+            ensure_ascii=False,
+        ) + "\n"
     if a.stdout:
         sys.stdout.write(text)
         return 0

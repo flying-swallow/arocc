@@ -1,103 +1,96 @@
-  
-# Record test files and test runner.  
-The `.c` files in `test/records` test arocc's memory layout of struts and unions. `record_runner.zig` setups and runs each test for each target.  
-  
-# Overview of `.c` test files  
-  
-All the record tests are in the directory `/test/records/` and have a filename of `00XX_test.c` where `XX` is between 01 and 88.  
-These `.c` files are auto-generated. They come from the GitHub repro at https://github.com/mahkoh/repr-c. The repr-c project keeps the records and expected results in "cooked" format. The code to generate the `.c` files can be found on this fork https://github.com/TwoClocks/repr-c/tree/arocc-test-gen in the `/repr/arocc` directory.  
-  
-### License  
-  
-The repr-c project test data is under GPLv3 license. Since these `_test.c` file are a derivative work, they are under the same license. There is a license SPDX at the top of each file. Because these files are not compiled into arocc, they do not affect arocc's license, and via versa.  
-  
-# `XXXX_test.c` file layout  
-  
-A brief tour of the test file. First there is a record to be tested. The define `MSVC` controls if you want to use the GCC or Microsoft extensions. If not set, GCC is used.  
-```c  
-typedef struct {
-    char c:1;  
-    int:0;  
-    char d;  
-} A;  
-A var1;  
-```  
-Then there will be 4 algorithmic versions of the record being used  
-```c  
-struct A_alignment {  
-#ifdef MSVC
-    char a[_Alignof(A)];  
-    char b;
-#else
-    char a;
-    A b;  
-#endif
-};
-struct A_alignment var2;  
-#pragma pack(1)
-struct A_packed {  
-    A a;  
-};
-#pragma pack()
-struct A_required_alignment {  
-#ifdef MSVC
-    char a[_Alignof(struct A_packed)];  
-    char b;
-#else
-    char a;
-    struct A_packed b;  
-#endif
-};
-struct A_required_alignment var3;  
-struct A_size {  
-    char a[sizeof(A)+1];  
-    char b;
-};
-struct A_size var4;  
-```  
-Next are the asserts that test the layout. They are grouped by a unique layout. Set the define `ONE` to run the asserts for this group. Groups are always the English words between one and eighteen. They are mutually exclusive.  
-```c  
-#ifdef ONE
-_Static_assert(sizeof(X) == 24, "");
-_Static_assert(_Alignof(X) == 8, "");
-_Static_assert(sizeof(struct X_extra_alignment) == 32, "");
-_Static_assert(_Alignof(struct X_extra_alignment) == 8, "");
-_Static_assert(sizeof(struct X_extra_packed) == 24, "");
-_Static_assert(_Alignof(struct X_extra_packed) == 1, "");
-_Static_assert(sizeof(struct X_extra_required_alignment) == 25, "");
-_Static_assert(_Alignof(struct X_extra_required_alignment) == 1, "");
-_Static_assert(sizeof(struct X_extra_size) == 26, "");
-_Static_assert(_Alignof(struct X_extra_size) == 1, "");
-#ifndef SKIP_OFFSETS
-_Static_assert(__builtin_bitoffsetof(X,b) == 64, "");
-_Static_assert(__builtin_bitoffsetof(X,c) == 128, "");
-#endif
-#elif defined(TWO
-...
-```  
-Basic `sizeof`, `alignof` and "extra" checks are done in each group. Starting offsets are checked for records that have more than one member. As `__builtin_bitoffsetof` is not standard, can can be skipped by defining `SKIP_OFFSET`. Use this if compiling with GCC or Clang.
-  
-Before each grouping of asserts, there is a comment describing which targets a group is intended for.  
-```c  
-...  
-#endif  
-// MAPPING|THREE|aarch64-generic-windows-msvc:Msvc|thumb-baseline-windows-msvc:Msvc|END  
-// repr targets Aarch64PcWindowsMsvc|Some("aarch64-generic-windows-msvc") Thumbv7aPcWindowsMsvc|Some("thumb-baseline-windows-msvc")   
-#elif defined(THREE)  
-_Static_assert(sizeof(A) == 8, "");  
-...  
-```  
-The first comment is machine-readable. 'MAPPING' is a marker for a new group starting. It's followed by the English number for the group (same as used for the follow define check). Then there is a list of targets w/ expected compiler. These targets are not in llvm-tripet/zig/rust form. There are always 4 parts separated by `-`. They directly map to the `std.Target` enums in zig. The format is `Arch-CpuModel-Os.Tag-Abi`. The target is followed by `:Compiler` where compiler is one of `Gcc`, `Clang`, or `Msvc`. The line always ends with the `END` sentinel.  
-The second comment is a mapping back to the targets from the repr-c project. This is informational only. The code to map between reprc->Rust->Zig targets is in the repr-c branch in the same directly as the C generation code. It is likely not 100% accurate, so this comment is here to help find errors.  
+# Record layout fixtures
 
-# The test runner    
-`record_runner.zig` gets a list of files in the `records/` directory ending with `_test.c` It then parses out the define groups, and which targets map to which group. It then invokes arocc once for every target listed, setting the appropriate define for each target.  
+The `.c` files in `test/records` exercise arocc's record layout for structs,
+unions, and related types. The files derive from [mahkoh/repr-c](https://github.com/mahkoh/repr-c);
+the generation code lives in the
+[arocc-test-gen fork](https://github.com/TwoClocks/repr-c/tree/arocc-test-gen/repr/arocc).
+They are derivative works under GPLv3; each file includes its SPDX identifier.
+The C3 implementation is `test/migration/record_runner.c3`. The Zig
+`test/record_runner.zig` is retained as a legacy/reference implementation.
 
-There are numerous bugs in arocc and zig that prevent all targets working. You can see a current list of issues here : https://github.com/Vexu/arocc/issues/387.
-There are some issues that cause a test file to fail for all targets. These are marked at the top of the file.
-Other targets only fail on certain tests. At the bottom of the file there is a listing of which targets fail for which tests.
-  
-There is also a static structure `do_single` at the top of the file that will run just one test for a specific target, or all tests for a specific target. Helpful for debugging specific issues. It is `null` by default.
+## Fixture structure
 
-Generally, x86_64 and aarch64 SystemV-like targets (linux, freebsd, macos, etc) will mimic GCC/clang layout, including correct bitfield layout. The major exception when an annotation that affects layout is on a `typedef` (see #332).
+A fixture declares the type under test and then related records that probe its
+alignment, packed layout, required alignment, and size. For example, an
+`X_extra_alignment` record places a `char` before `X`; `X_extra_packed` places
+the type in a packed record; `X_extra_required_alignment` embeds that packed
+record after a `char`; and `X_extra_size` uses a byte array sized from
+`sizeof(X)`. The fixture's `_Static_assert`s check `sizeof`, `_Alignof`, and,
+for records with multiple members, starting bit offsets where available.
 
+Each group of assertions is selected by a preprocessor define such as `ONE`,
+`TWO`, or `THREE`. Groups are mutually exclusive. `MSVC` selects the
+Microsoft-specific source variants; otherwise the fixture uses the GCC-like
+variants. `SKIP_OFFSETS` omits checks that use the non-standard
+`__builtin_bitoffsetof` builtin.
+
+The test file's first mapping comment for each group has this form:
+
+```c
+// MAPPING|THREE|aarch64-generic-windows-msvc:Msvc|thumb-baseline-windows-msvc:Msvc|END
+```
+
+`MAPPING` marks the record mapping, `THREE` names the define, and each
+`target:Compiler` entry identifies a target/compiler-emulation pair. `END`
+terminates the target list. A second `repr` comment records the original
+`repr-c` target mapping for reference; the C3 runner ignores it.
+
+The target field is `Arch-CpuModel-OS-ABI`. The C3 port builds the `-target`
+triple from `Arch-OS-ABI`, passes `CpuModel` to `-mcpu`, and translates the
+compiler tag to arocc's `--emulate` option. It does not launch external GCC,
+Clang, or MSVC compiler executables.
+
+## Running the record suite
+
+The record regression runs every mapping tuple. Set `C3C` to the C3 compiler
+used for Bazel build actions and run from the repository root:
+
+```sh
+C3C=/path/to/c3c
+BAZEL=bazel
+BAZEL_ROOT=/path/to/writable/bazel-root
+
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg \
+  //test/migration:record_runner_tests //test/migration:record_regression
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt \
+  //test/migration:record_runner_tests //test/migration:record_regression
+```
+
+There is no runner option to filter a single target or define. To reproduce a
+tuple, copy its fixture path, group define, and target from the `MAPPING`
+comment, then invoke the compiler with the port's arguments. This mapping in
+`test/records/0001_test.c` is a concrete example:
+
+```sh
+/absolute/path/to/arocc test/records/0001_test.c \
+  -fsyntax-only -fno-color-diagnostics -target x86_64-linux-gnu \
+  -mcpu x86_64 --verbose-ast -D ONE --emulate=gcc
+```
+
+For an MSVC ABI the port adds `-DMSVC`; if the mapping uses Clang emulation it
+also adds `-fms-extensions`. Use `--emulate=clang`, `--emulate=gcc`, or
+`--emulate=msvc` according to the mapping's compiler tag.
+
+## Interpreting the record report
+
+- `selected` is the number of parsed mapping tuples. `executed` counts tuples
+  for which the compiler started; it includes a process that later crashes.
+- `passed` counts tuples with no parse, layout, extra-layout, or bit-offset
+  failure class detected.
+- `expected failures` counts tuples whose observed diagnostic classes exactly
+  match the source-derived expectation. Those tuples are also counted in
+  `skipped`; an expected failure is not a pass.
+- `invalid targets` counts supported target descriptions that the port
+  intentionally does not invoke. Currently it includes x86 and ARM on iOS or
+  macOS. These tuples are neither passes nor failures. A target that cannot be
+  parsed is a runner failure instead.
+- `failures` includes mismatched diagnostic classes, an unexpected pass for a
+  tuple that should fail, and runner errors. `crashes` is reported separately
+  and is also a failure. `unexpected passes` is a subset of failures.
+- `excluded` counts global test exclusions. The current exclusion set is empty.
+
+The current frozen record inventory selects 9,353 tuples: 9,009 execute, 9,007
+pass, 2 match expected failures and are counted as skipped, and 344 are
+invalid targets. A zero `failures` count means the run matched the port's
+expectations; skipped expected failures and unexecuted invalid targets do not
+count as passing coverage.

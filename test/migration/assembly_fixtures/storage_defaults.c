@@ -1,0 +1,4 @@
+/** manifest:
+expand
+*/
+storage-defaults

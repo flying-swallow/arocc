@@ -1,0 +1,4 @@
+/** manifest:
+syntax
+*/
+int value;

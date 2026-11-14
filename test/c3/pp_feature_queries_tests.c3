@@ -648,10 +648,11 @@ fn void has_embed() @test
 		fake.embed_found = false;
 		test::eq(ex(pp, HAS_EMBED, "__has_embed", "#if __has_embed(\"missing.bin\")"), "0\n");
 		check(d.messages.len(), 0);
-		// [source] embed parameters are plan 15's EmbedArgIterator.
 		fake.embed_found = true;
 		fake.embed_contents = "x";
-		assert(@catch(expand_line(pp, HAS_EMBED, "__has_embed", "#if __has_embed(\"data.bin\" limit(1))")) == aro::UNSUPPORTED);
+		test::eq(ex(pp, HAS_EMBED, "__has_embed", "#if __has_embed(\"data.bin\" limit(1))"), "1\n");
+		test::eq(ex(pp, HAS_EMBED, "__has_embed", "#if __has_embed(\"data.bin\" unknown(1))"), "0\n");
+		check(d.messages.len(), 0);
 		// [source] outside #if; empty arguments; bad filename.
 		test::eq(ex(pp, HAS_EMBED, "__has_embed", "int x = __has_embed(\"a\");", NON_EXPR), "1\n");
 		msg(d, 0, "'__has_embed' must be used within a preprocessing directive", 1, 9);
@@ -676,8 +677,8 @@ fn void pragma_operator() @test
 	{
 		// [source] valid with NO_PRAGMA: nothing happens.
 		test::eq(ex(pp, PRAGMA_OPERATOR, "_Pragma", "_Pragma(\"once\")", NO_PRAGMA), "");
-		// [source] valid otherwise: plan 15 pragmaOperator.
-		assert(@catch(expand_line(pp, PRAGMA_OPERATOR, "_Pragma", "_Pragma( \"once\" )", NON_EXPR)) == aro::UNSUPPORTED);
+		// Valid non-NO_PRAGMA dispatch is covered end to end in pragma_tests;
+		// this helper calls the builtin directly and cannot consume directive tokens.
 		check(d.messages.len(), 0);
 		test::eq(ex(pp, PRAGMA_OPERATOR, "_Pragma", "_Pragma(\"a\" \"b\")"), "");
 		msg(d, 0, "_Pragma requires exactly one string literal token", 1, 13);
@@ -705,9 +706,9 @@ fn void ms_identifier_and_pragma() @test
 		test::eq(ex(pp, MS_IDENTIFIER, "__identifier", "__identifier()", NON_EXPR), "");
 		msg(d, 2, "expected identifier argument", 1, 1);
 		check(d.messages.len(), 3);
-		// [source] __pragma(): unknown_pragma is off by default; otherwise plan 15.
+		// [source] __pragma(): unknown_pragma is off by default. Its valid
+		// dispatch path is covered end to end in pragma_tests.
 		test::eq(ex(pp, MS_PRAGMA, "__pragma", "__pragma()", NON_EXPR), "");
 		check(d.messages.len(), 3);
-		assert(@catch(expand_line(pp, MS_PRAGMA, "__pragma", "__pragma(once)", NON_EXPR)) == aro::UNSUPPORTED);
 	};
 }

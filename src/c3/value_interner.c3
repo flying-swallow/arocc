@@ -239,20 +239,6 @@ struct InternerKey
 }
 
 // Key constructors (Zig anonymous literals such as `.{ .int = .{ .u64 = x } }`).
-fn InternerKey key_int_ty(ushort bits) => { .tag = INT_TY, .bits = bits };
-fn InternerKey key_float_ty(ushort bits) => { .tag = FLOAT_TY, .bits = bits };
-fn InternerKey key_complex_ty(ushort bits) => { .tag = COMPLEX_TY, .bits = bits };
-fn InternerKey key_simple(InternerKeyTag tag) => { .tag = tag };
-fn InternerKey key_array_ty(ulong len, InternerRef child) => { .tag = ARRAY_TY, .array_ty = { .len = len, .child = child } };
-fn InternerKey key_vector_ty(uint len, InternerRef child) => { .tag = VECTOR_TY, .vector_ty = { .len = len, .child = child } };
-fn InternerKey key_record_ty(InternerRef[] elems) => { .tag = RECORD_TY, .record_ty = elems };
-fn InternerKey key_u64(ulong v) => { .tag = INT, .int_val = { .tag = U64, .u64 = v } };
-fn InternerKey key_i64(long v) => { .tag = INT, .int_val = { .tag = I64, .i64 = v } };
-fn InternerKey key_big_int(BigIntConst v) => { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = v } };
-fn InternerKey key_float(KeyFloat f) => { .tag = FLOAT, .float_val = f };
-fn InternerKey key_complex(KeyComplex c) => { .tag = COMPLEX, .complex_val = c };
-fn InternerKey key_bytes(char[] bytes) => { .tag = BYTES, .bytes = bytes };
-fn InternerKey key_pointer(uint node, InternerRef offset) => { .tag = POINTER, .pointer = { .node = node, .offset = offset } };
 
 <*
  Interner.Tag.Int.BigIntSpace: big enough for any non-big int key, plus one limb
@@ -993,28 +979,28 @@ fn InternerKey Interner.get(&self, InternerRef ref)
 	{
 		switch (ref)
 		{
-			case REF_PTR: return key_simple(PTR_TY);
-			case REF_FUNC: return key_simple(FUNC_TY);
-			case REF_NORETURN: return key_simple(NORETURN_TY);
-			case REF_VOID: return key_simple(VOID_TY);
-			case REF_I1: return key_int_ty(1);
-			case REF_I8: return key_int_ty(8);
-			case REF_I16: return key_int_ty(16);
-			case REF_I32: return key_int_ty(32);
-			case REF_I64: return key_int_ty(64);
-			case REF_I128: return key_int_ty(128);
-			case REF_F16: return key_float_ty(16);
-			case REF_F32: return key_float_ty(32);
-			case REF_F64: return key_float_ty(64);
-			case REF_F80: return key_float_ty(80);
-			case REF_F128: return key_float_ty(128);
-			case REF_ZERO: return key_u64(0);
-			case REF_ONE: return key_u64(1);
-			case REF_NULL: return key_simple(NULL);
-			case REF_CF16: return key_complex_ty(16);
-			case REF_CF32: return key_complex_ty(32);
-			case REF_CF64: return key_complex_ty(64);
-			case REF_CF80: return key_complex_ty(80);
+			case REF_PTR: return { .tag = PTR_TY };
+			case REF_FUNC: return { .tag = FUNC_TY };
+			case REF_NORETURN: return { .tag = NORETURN_TY };
+			case REF_VOID: return { .tag = VOID_TY };
+			case REF_I1: return { .tag = INT_TY, .bits = 1 };
+			case REF_I8: return { .tag = INT_TY, .bits = 8 };
+			case REF_I16: return { .tag = INT_TY, .bits = 16 };
+			case REF_I32: return { .tag = INT_TY, .bits = 32 };
+			case REF_I64: return { .tag = INT_TY, .bits = 64 };
+			case REF_I128: return { .tag = INT_TY, .bits = 128 };
+			case REF_F16: return { .tag = FLOAT_TY, .bits = 16 };
+			case REF_F32: return { .tag = FLOAT_TY, .bits = 32 };
+			case REF_F64: return { .tag = FLOAT_TY, .bits = 64 };
+			case REF_F80: return { .tag = FLOAT_TY, .bits = 80 };
+			case REF_F128: return { .tag = FLOAT_TY, .bits = 128 };
+			case REF_ZERO: return { .tag = INT, .int_val = { .tag = U64, .u64 = 0 } };
+			case REF_ONE: return { .tag = INT, .int_val = { .tag = U64, .u64 = 1 } };
+			case REF_NULL: return { .tag = NULL };
+			case REF_CF16: return { .tag = COMPLEX_TY, .bits = 16 };
+			case REF_CF32: return { .tag = COMPLEX_TY, .bits = 32 };
+			case REF_CF64: return { .tag = COMPLEX_TY, .bits = 64 };
+			case REF_CF80: return { .tag = COMPLEX_TY, .bits = 80 };
 			default: unreachable("Interner.get: REF_CF128 has no key (Zig quirk)");
 		}
 	}
@@ -1023,40 +1009,40 @@ fn InternerKey Interner.get(&self, InternerRef ref)
 	uint data = item.data;
 	switch (item.tag)
 	{
-		case INT_TY: return key_int_ty((ushort)data);
-		case FLOAT_TY: return key_float_ty((ushort)data);
-		case COMPLEX_TY: return key_complex_ty((ushort)data);
+		case INT_TY: return { .tag = INT_TY, .bits = (ushort)data };
+		case FLOAT_TY: return { .tag = FLOAT_TY, .bits = (ushort)data };
+		case COMPLEX_TY: return { .tag = COMPLEX_TY, .bits = (ushort)data };
 		case ARRAY_TY:
-			return key_array_ty(self.u64_at(data), (InternerRef)self.extra[(sz)data + 2]);
+			return { .tag = ARRAY_TY, .array_ty = { .len = self.u64_at(data), .child = (InternerRef)self.extra[(sz)data + 2] } };
 		case VECTOR_TY:
-			return key_vector_ty(self.extra[(sz)data], (InternerRef)self.extra[(sz)data + 1]);
+			return { .tag = VECTOR_TY, .vector_ty = { .len = self.extra[(sz)data], .child = (InternerRef)self.extra[(sz)data + 1] } };
 		case POINTER:
-			return key_pointer(self.extra[(sz)data], (InternerRef)self.extra[(sz)data + 1]);
-		case U32: return key_u64(data);
-		case I32: return key_i64((int)data);
+			return { .tag = POINTER, .pointer = { .node = self.extra[(sz)data], .offset = (InternerRef)self.extra[(sz)data + 1] } };
+		case U32: return { .tag = INT, .int_val = { .tag = U64, .u64 = data } };
+		case I32: return { .tag = INT, .int_val = { .tag = I64, .i64 = (int)data } };
 		case INT_POSITIVE:
 		case INT_NEGATIVE:
 			Limb[] limbs = self.limbs[(sz)self.extra[(sz)data]];
-			return key_big_int({ .limbs = limbs, .positive = item.tag == INT_POSITIVE });
-		case F16: return key_float({ .tag = F16, .f16 = (ushort)data });
-		case F32: return key_float({ .tag = F32, .f32 = data });
-		case F64: return key_float({ .tag = F64, .f64 = self.u64_at(data) });
-		case F80: return key_float({ .tag = F80, .f80 = self.f80_at(data) });
-		case F128: return key_float({ .tag = F128, .f128 = self.f128_at(data) });
+			return { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = { .limbs = limbs, .positive = item.tag == INT_POSITIVE } } };
+		case F16: return { .tag = FLOAT, .float_val = { .tag = F16, .f16 = (ushort)data } };
+		case F32: return { .tag = FLOAT, .float_val = { .tag = F32, .f32 = data } };
+		case F64: return { .tag = FLOAT, .float_val = { .tag = F64, .f64 = self.u64_at(data) } };
+		case F80: return { .tag = FLOAT, .float_val = { .tag = F80, .f80 = self.f80_at(data) } };
+		case F128: return { .tag = FLOAT, .float_val = { .tag = F128, .f128 = self.f128_at(data) } };
 		case CF16:
 			uint p = self.extra[(sz)data];
-			return key_complex({ .tag = CF16, .cf16 = { (ushort)(p >> 16), (ushort)p } });
+			return { .tag = COMPLEX, .complex_val = { .tag = CF16, .cf16 = { (ushort)(p >> 16), (ushort)p } } };
 		case CF32:
-			return key_complex({ .tag = CF32, .cf32 = { self.extra[(sz)data], self.extra[(sz)data + 1] } });
+			return { .tag = COMPLEX, .complex_val = { .tag = CF32, .cf32 = { self.extra[(sz)data], self.extra[(sz)data + 1] } } };
 		case CF64:
-			return key_complex({ .tag = CF64, .cf64 = { self.u64_at(data), self.u64_at(data + 2) } });
+			return { .tag = COMPLEX, .complex_val = { .tag = CF64, .cf64 = { self.u64_at(data), self.u64_at(data + 2) } } };
 		case CF80:
-			return key_complex({ .tag = CF80, .cf80 = { self.f80_at(data), self.f80_at(data + 3) } });
+			return { .tag = COMPLEX, .complex_val = { .tag = CF80, .cf80 = { self.f80_at(data), self.f80_at(data + 3) } } };
 		case CF128:
-			return key_complex({ .tag = CF128, .cf128 = { self.f128_at(data), self.f128_at(data + 4) } });
+			return { .tag = COMPLEX, .complex_val = { .tag = CF128, .cf128 = { self.f128_at(data), self.f128_at(data + 4) } } };
 		case BYTES:
-			return key_bytes(self.strings[(sz)self.extra[(sz)data]]);
+			return { .tag = BYTES, .bytes = self.strings[(sz)self.extra[(sz)data]] };
 		case RECORD_TY:
-			return key_record_ty(self.records[(sz)self.extra[(sz)data + 1]]);
+			return { .tag = RECORD_TY, .record_ty = self.records[(sz)self.extra[(sz)data + 1]] };
 	}
 }

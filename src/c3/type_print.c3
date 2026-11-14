@@ -5,7 +5,7 @@
 module aro::type_store;
 import aro::compilation, aro::lang_opts, aro::string_interner, std::core::dstring;
 
-fn void QualType.print(self, Compilation* comp, DString w)
+fn void QualType.print(self, Compilation* comp, DString* w)
 {
 	if (self.is_c23_auto())
 	{
@@ -21,7 +21,7 @@ fn void QualType.print(self, Compilation* comp, DString w)
 	self.print_epilogue(comp, false, w);
 }
 
-fn void QualType.print_named(self, String name, Compilation* comp, DString w)
+fn void QualType.print_named(self, String name, Compilation* comp, DString* w)
 {
 	if (self.is_c23_auto())
 	{
@@ -39,7 +39,7 @@ fn void QualType.print_named(self, String name, Compilation* comp, DString w)
 	self.print_epilogue(comp, false, w);
 }
 
-fn void QualType.print_desugared(self, Compilation* comp, DString w)
+fn void QualType.print_desugared(self, Compilation* comp, DString* w)
 {
 	self.print_prologue(comp, true, w);
 	self.print_epilogue(comp, true, w);
@@ -50,7 +50,7 @@ fn String QualType.tprint(self, Compilation* comp)
 {
 	DString w;
 	w.init(tmem);
-	self.print(comp, w);
+	self.print(comp, &w);
 	return w.str_view();
 }
 
@@ -59,11 +59,11 @@ fn String QualType.tdump(self, Compilation* comp)
 {
 	DString w;
 	w.init(tmem);
-	self.dump(comp, w);
+	self.dump(comp, &w);
 	return w.str_view();
 }
 
-fn void write_ptr_quals(QualType qt, DString w) @local
+fn void write_ptr_quals(QualType qt, DString* w) @local
 {
 	if (qt.is_const) w.append_string("const");
 	if (qt.is_volatile)
@@ -78,7 +78,7 @@ fn void write_ptr_quals(QualType qt, DString w) @local
 	}
 }
 
-fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString w)
+fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* w)
 {
 	Type ty = self.get_type(comp);
 	bool done = false;
@@ -244,7 +244,7 @@ fn String float_name(TypeFloat k)
 	}
 }
 
-fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString w)
+fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString* w)
 {
 	Type ty = self.get_type(comp);
 	while (true)
@@ -309,7 +309,7 @@ fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString w
 	}
 }
 
-fn void dump_params(Func func, Compilation* comp, DString w) @local
+fn void dump_params(Func func, Compilation* comp, DString* w) @local
 {
 	foreach (i, param : func.params)
 	{
@@ -328,7 +328,7 @@ fn void dump_params(Func func, Compilation* comp, DString w) @local
 }
 
 <* The AST-dump spelling of a type (Zig QualType.dump). *>
-fn void QualType.dump(self, Compilation* comp, DString w)
+fn void QualType.dump(self, Compilation* comp, DString* w)
 {
 	if (self.is_const) w.append_string("const ");
 	if (self.is_volatile) w.append_string("volatile ");

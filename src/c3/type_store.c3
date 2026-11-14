@@ -621,7 +621,7 @@ fn Type type_vector(QualType elem, uint len, VectorKind kind = GENERIC) => { .ta
 fn Type type_typedef(QualType base, StringId name, NodeIndex decl_node) => { .tag = TYPEDEF, .type_def = { .base = base, .name = name, .decl_node = decl_node } };
 fn Type type_typeof(QualType base) => { .tag = TYPEOF, .type_of = { .base = base } };
 fn Type type_typeof_expr(QualType base, NodeIndex expr) => { .tag = TYPEOF, .type_of = { .base = base, .has_expr = true, .expr = expr } };
-fn Type type_block(QualType func) => { .tag = BLOCK, .block = { .func = func } };
+fn Type type_block(QualType func, Nullability nullability = DEFAULT) => { .tag = BLOCK, .block = { .func = func, .nullability = nullability } };
 <* An incomplete struct (or union, with `is_union`) forward declaration. *>
 fn Type type_record_incomplete(StringId name, bool is_union = false, NodeOptIndex decl_node = NODE_NULL)
 	=> { .tag = is_union ? UNION : STRUCT, .record = { .name = name, .decl_node = decl_node } };
@@ -823,6 +823,7 @@ fn void TypeStore.set(&self, Type ty, uint index)
 		case BLOCK:
 			repr.tag = BLOCK;
 			repr.data[0] = (uint)ty.block.func;
+			repr.data[1] = ty.block.nullability.ordinal;
 		case FUNC:
 			Func func = ty.func;
 			repr.data[0] = (uint)func.return_type;
@@ -1067,7 +1068,7 @@ fn Type QualType.get_type(self, Compilation* comp)
 		case COMPLEX: return type_complex(qt_from(d0));
 		case ATOMIC: return type_atomic(qt_from(d0));
 		case BIT_INT: return type_bit_int((ushort)d0, Signedness::from_ordinal(d1));
-		case BLOCK: return type_block(qt_from(d0));
+		case BLOCK: return type_block(qt_from(d0), Nullability::from_ordinal(d1));
 		case FUNC_ZERO: return type_func(qt_from(d0), NORMAL, {});
 		case FUNC_VARIADIC_ZERO: return type_func(qt_from(d0), VARIADIC, {});
 		case FUNC_OLD_STYLE_ZERO: return type_func(qt_from(d0), OLD_STYLE, {});

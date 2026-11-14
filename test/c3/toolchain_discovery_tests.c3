@@ -615,6 +615,24 @@ fn void detector_basic_and_missing() @test
 	expect_selection(&t, "x86_64-linux-gnu", { true, "x86_64-linux-gnu", "12", "/usr/lib/gcc/x86_64-linux-gnu/12", "" });
 }
 
+// Dev-machine host layout: GCC 11..15 each with crtbegin.o, and no 32/, 64/ or
+// x32/ subdirectories. Only the default "" multilib exists, so
+// TOO_MANY_MULTILIBS must not fire (expect_selection's `!!` panics if it does),
+// and the highest version, 15, is selected.
+fn void detector_host_layout_single_default_multilib() @test
+{
+	MemTree t;
+	t.init(mem);
+	defer t.free();
+	t.add_dir("/usr/lib/x86_64-linux-gnu");
+	t.add_file("/usr/lib/gcc/x86_64-linux-gnu/11/crtbegin.o");
+	t.add_file("/usr/lib/gcc/x86_64-linux-gnu/12/crtbegin.o");
+	t.add_file("/usr/lib/gcc/x86_64-linux-gnu/13/crtbegin.o");
+	t.add_file("/usr/lib/gcc/x86_64-linux-gnu/14/crtbegin.o");
+	t.add_file("/usr/lib/gcc/x86_64-linux-gnu/15/crtbegin.o");
+	expect_selection(&t, "x86_64-linux-gnu", { true, "x86_64-linux-gnu", "15", "/usr/lib/gcc/x86_64-linux-gnu/15", "" });
+}
+
 fn void detector_competing_versions() @test
 {
 	MemTree t;

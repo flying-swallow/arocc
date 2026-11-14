@@ -32,7 +32,7 @@ fn void Fixture.free(&self)
 	self.ta.free();
 }
 
-fn InternerKey big(Limb[] limbs, bool positive) => value_interner::key_big_int({ .limbs = limbs, .positive = positive });
+fn InternerKey big(Limb[] limbs, bool positive) => { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = { .limbs = limbs, .positive = positive } } };
 
 fn KeyFloat fl16(ushort b) => { .tag = F16, .f16 = b };
 fn KeyFloat fl32(uint b) => { .tag = F32, .f32 = b };
@@ -55,27 +55,27 @@ fn void static_refs() @test
 	Fixture f;
 	f.init();
 	Interner* in = &f.in;
-	check(in.put(value_interner::key_int_ty(1)), value_interner::REF_I1);
-	check(in.put(value_interner::key_int_ty(8)), value_interner::REF_I8);
-	check(in.put(value_interner::key_int_ty(16)), value_interner::REF_I16);
-	check(in.put(value_interner::key_int_ty(32)), value_interner::REF_I32);
-	check(in.put(value_interner::key_int_ty(64)), value_interner::REF_I64);
-	check(in.put(value_interner::key_int_ty(128)), value_interner::REF_I128);
-	check(in.put(value_interner::key_float_ty(16)), value_interner::REF_F16);
-	check(in.put(value_interner::key_float_ty(32)), value_interner::REF_F32);
-	check(in.put(value_interner::key_float_ty(64)), value_interner::REF_F64);
-	check(in.put(value_interner::key_float_ty(80)), value_interner::REF_F80);
-	check(in.put(value_interner::key_float_ty(128)), value_interner::REF_F128);
-	check(in.put(value_interner::key_complex_ty(16)), value_interner::REF_CF16);
-	check(in.put(value_interner::key_complex_ty(32)), value_interner::REF_CF32);
-	check(in.put(value_interner::key_complex_ty(64)), value_interner::REF_CF64);
-	check(in.put(value_interner::key_complex_ty(80)), value_interner::REF_CF80);
-	check(in.put(value_interner::key_complex_ty(128)), value_interner::REF_CF128);
-	check(in.put(value_interner::key_simple(PTR_TY)), value_interner::REF_PTR);
-	check(in.put(value_interner::key_simple(NORETURN_TY)), value_interner::REF_NORETURN);
-	check(in.put(value_interner::key_simple(VOID_TY)), value_interner::REF_VOID);
-	check(in.put(value_interner::key_simple(FUNC_TY)), value_interner::REF_FUNC);
-	check(in.put(value_interner::key_simple(NULL)), value_interner::REF_NULL);
+	check(in.put({ .tag = INT_TY, .bits = 1 }), value_interner::REF_I1);
+	check(in.put({ .tag = INT_TY, .bits = 8 }), value_interner::REF_I8);
+	check(in.put({ .tag = INT_TY, .bits = 16 }), value_interner::REF_I16);
+	check(in.put({ .tag = INT_TY, .bits = 32 }), value_interner::REF_I32);
+	check(in.put({ .tag = INT_TY, .bits = 64 }), value_interner::REF_I64);
+	check(in.put({ .tag = INT_TY, .bits = 128 }), value_interner::REF_I128);
+	check(in.put({ .tag = FLOAT_TY, .bits = 16 }), value_interner::REF_F16);
+	check(in.put({ .tag = FLOAT_TY, .bits = 32 }), value_interner::REF_F32);
+	check(in.put({ .tag = FLOAT_TY, .bits = 64 }), value_interner::REF_F64);
+	check(in.put({ .tag = FLOAT_TY, .bits = 80 }), value_interner::REF_F80);
+	check(in.put({ .tag = FLOAT_TY, .bits = 128 }), value_interner::REF_F128);
+	check(in.put({ .tag = COMPLEX_TY, .bits = 16 }), value_interner::REF_CF16);
+	check(in.put({ .tag = COMPLEX_TY, .bits = 32 }), value_interner::REF_CF32);
+	check(in.put({ .tag = COMPLEX_TY, .bits = 64 }), value_interner::REF_CF64);
+	check(in.put({ .tag = COMPLEX_TY, .bits = 80 }), value_interner::REF_CF80);
+	check(in.put({ .tag = COMPLEX_TY, .bits = 128 }), value_interner::REF_CF128);
+	check(in.put({ .tag = PTR_TY }), value_interner::REF_PTR);
+	check(in.put({ .tag = NORETURN_TY }), value_interner::REF_NORETURN);
+	check(in.put({ .tag = VOID_TY }), value_interner::REF_VOID);
+	check(in.put({ .tag = FUNC_TY }), value_interner::REF_FUNC);
+	check(in.put({ .tag = NULL }), value_interner::REF_NULL);
 	check(in.len(), 0);
 
 	// Every static ref except CF128 maps back to its key (Interner.get).
@@ -98,28 +98,28 @@ fn void zero_and_one() @test
 	Interner* in = &f.in;
 	Limb[1] zero = { 0 };
 	Limb[1] one = { 1 };
-	check(in.put(value_interner::key_u64(0)), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_i64(0)), value_interner::REF_ZERO);
+	check(in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0 } }), value_interner::REF_ZERO);
+	check(in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = 0 } }), value_interner::REF_ZERO);
 	check(in.put(big(&zero, true)), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_u64(1)), value_interner::REF_ONE);
-	check(in.put(value_interner::key_i64(1)), value_interner::REF_ONE);
+	check(in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 1 } }), value_interner::REF_ONE);
+	check(in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = 1 } }), value_interner::REF_ONE);
 	check(in.put(big(&one, true)), value_interner::REF_ONE);
 	// -1 is not one.
-	InternerRef m1 = in.put(value_interner::key_i64(-1));
+	InternerRef m1 = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = -1 } });
 	test::eq(m1.is_static(), false);
 	check(in.put(big(&one, false)), m1);
 
 	// Positive zero and 1.0 of every width map to the int static refs.
-	check(in.put(value_interner::key_float(fl16(0))), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_float(fl32(0))), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_float(fl64(0))), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_float(fl80(0, 0))), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_float(fl128(0, 0))), value_interner::REF_ZERO);
-	check(in.put(value_interner::key_float(fl16(0x3C00))), value_interner::REF_ONE);
-	check(in.put(value_interner::key_float(fl32(0x3F80_0000))), value_interner::REF_ONE);
-	check(in.put(value_interner::key_float(fl64(0x3FF0_0000_0000_0000))), value_interner::REF_ONE);
-	check(in.put(value_interner::key_float(fl80(0x8000_0000_0000_0000, 0x3FFF))), value_interner::REF_ONE);
-	check(in.put(value_interner::key_float(fl128(0, 0x3FFF_0000_0000_0000))), value_interner::REF_ONE);
+	check(in.put({ .tag = FLOAT, .float_val = fl16(0) }), value_interner::REF_ZERO);
+	check(in.put({ .tag = FLOAT, .float_val = fl32(0) }), value_interner::REF_ZERO);
+	check(in.put({ .tag = FLOAT, .float_val = fl64(0) }), value_interner::REF_ZERO);
+	check(in.put({ .tag = FLOAT, .float_val = fl80(0, 0) }), value_interner::REF_ZERO);
+	check(in.put({ .tag = FLOAT, .float_val = fl128(0, 0) }), value_interner::REF_ZERO);
+	check(in.put({ .tag = FLOAT, .float_val = fl16(0x3C00) }), value_interner::REF_ONE);
+	check(in.put({ .tag = FLOAT, .float_val = fl32(0x3F80_0000) }), value_interner::REF_ONE);
+	check(in.put({ .tag = FLOAT, .float_val = fl64(0x3FF0_0000_0000_0000) }), value_interner::REF_ONE);
+	check(in.put({ .tag = FLOAT, .float_val = fl80(0x8000_0000_0000_0000, 0x3FFF) }), value_interner::REF_ONE);
+	check(in.put({ .tag = FLOAT, .float_val = fl128(0, 0x3FFF_0000_0000_0000) }), value_interner::REF_ONE);
 	check(in.len(), 1);
 
 	// Zig quirk: get(value_interner::REF_ONE) / get(value_interner::REF_ZERO) are the *ints* (u64 form).
@@ -132,14 +132,14 @@ fn void zero_and_one() @test
 	check(k.int_val.u64, 0);
 
 	// Negative zero floats are not static.
-	InternerRef nz = in.put(value_interner::key_float(fl32(0x8000_0000)));
+	InternerRef nz = in.put({ .tag = FLOAT, .float_val = fl32(0x8000_0000) });
 	test::eq(nz.is_static(), false);
-	InternerRef nz80 = in.put(value_interner::key_float(fl80(0, 0x8000)));
+	InternerRef nz80 = in.put({ .tag = FLOAT, .float_val = fl80(0, 0x8000) });
 	test::eq(nz80.is_static(), false);
 	test::eq(nz != nz80, true);
 	// Complex zero is not static.
 	KeyComplex cz = { .tag = CF32, .cf32 = { 0, 0 } };
-	test::eq(in.put(value_interner::key_complex(cz)).is_static(), false);
+	test::eq(in.put({ .tag = COMPLEX, .complex_val = cz }).is_static(), false);
 	f.free();
 }
 
@@ -148,98 +148,98 @@ fn void deduplication() @test
 	Fixture f;
 	f.init();
 	Interner* in = &f.in;
-	InternerRef a = in.put(value_interner::key_int_ty(7));
-	InternerRef b = in.put(value_interner::key_int_ty(24));
+	InternerRef a = in.put({ .tag = INT_TY, .bits = 7 });
+	InternerRef b = in.put({ .tag = INT_TY, .bits = 24 });
 	check(a, 0);
 	check(b, 1);
-	check(in.put(value_interner::key_int_ty(7)), a);
-	check(in.put(value_interner::key_int_ty(24)), b);
+	check(in.put({ .tag = INT_TY, .bits = 7 }), a);
+	check(in.put({ .tag = INT_TY, .bits = 24 }), b);
 	check(in.len(), 2);
 
 	// Ints dedupe by value across u64 / i64 / big_int forms.
 	Limb[1] five = { 5 };
-	InternerRef r5 = in.put(value_interner::key_u64(5));
+	InternerRef r5 = in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 5 } });
 	check(r5, 2);
-	check(in.put(value_interner::key_i64(5)), r5);
+	check(in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = 5 } }), r5);
 	check(in.put(big(&five, true)), r5);
 	Limb[2] five_padded = { 5, 0 }; // non-normalized input still dedupes
 	check(in.put(big(&five_padded, true)), r5);
 	InternerRef rm5 = in.put(big(&five, false));
-	check(in.put(value_interner::key_i64(-5)), rm5);
+	check(in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = -5 } }), rm5);
 	test::eq(rm5 != r5, true);
 
 	ulong two32 = 0x1_0000_0000;
 	Limb[1] l32 = { two32 };
-	InternerRef r32 = in.put(value_interner::key_u64(two32));
-	check(in.put(value_interner::key_i64((long)two32)), r32);
+	InternerRef r32 = in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = two32 } });
+	check(in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = (long)two32 } }), r32);
 	check(in.put(big(&l32, true)), r32);
 
 	// Bytes, records, aggregates.
 	char[*] s1 = "hello";
 	char[*] s2 = "hello";
-	InternerRef hb = in.put(value_interner::key_bytes(&s1));
-	check(in.put(value_interner::key_bytes(&s2)), hb);
-	test::eq(in.put(value_interner::key_bytes("hellp")) != hb, true);
-	test::eq(in.put(value_interner::key_bytes("hell")) != hb, true);
+	InternerRef hb = in.put({ .tag = BYTES, .bytes = &s1 });
+	check(in.put({ .tag = BYTES, .bytes = &s2 }), hb);
+	test::eq(in.put({ .tag = BYTES, .bytes = "hellp" }) != hb, true);
+	test::eq(in.put({ .tag = BYTES, .bytes = "hell" }) != hb, true);
 	InternerRef[3] e1 = { value_interner::REF_I8, value_interner::REF_I32, a };
 	InternerRef[3] e2 = { value_interner::REF_I8, value_interner::REF_I32, a };
-	InternerRef rt = in.put(value_interner::key_record_ty(&e1));
-	check(in.put(value_interner::key_record_ty(&e2)), rt);
-	test::eq(in.put(value_interner::key_record_ty(e1[:2])) != rt, true);
-	InternerRef at = in.put(value_interner::key_array_ty(10, value_interner::REF_I8));
-	check(in.put(value_interner::key_array_ty(10, value_interner::REF_I8)), at);
-	test::eq(in.put(value_interner::key_array_ty(10, value_interner::REF_I16)) != at, true);
-	test::eq(in.put(value_interner::key_array_ty(11, value_interner::REF_I8)) != at, true);
-	InternerRef vt = in.put(value_interner::key_vector_ty(4, value_interner::REF_F32));
-	check(in.put(value_interner::key_vector_ty(4, value_interner::REF_F32)), vt);
+	InternerRef rt = in.put({ .tag = RECORD_TY, .record_ty = &e1 });
+	check(in.put({ .tag = RECORD_TY, .record_ty = &e2 }), rt);
+	test::eq(in.put({ .tag = RECORD_TY, .record_ty = e1[:2] }) != rt, true);
+	InternerRef at = in.put({ .tag = ARRAY_TY, .array_ty = { .len = 10, .child = value_interner::REF_I8 } });
+	check(in.put({ .tag = ARRAY_TY, .array_ty = { .len = 10, .child = value_interner::REF_I8 } }), at);
+	test::eq(in.put({ .tag = ARRAY_TY, .array_ty = { .len = 10, .child = value_interner::REF_I16 } }) != at, true);
+	test::eq(in.put({ .tag = ARRAY_TY, .array_ty = { .len = 11, .child = value_interner::REF_I8 } }) != at, true);
+	InternerRef vt = in.put({ .tag = VECTOR_TY, .vector_ty = { .len = 4, .child = value_interner::REF_F32 } });
+	check(in.put({ .tag = VECTOR_TY, .vector_ty = { .len = 4, .child = value_interner::REF_F32 } }), vt);
 	// Different key tags with "same" payload do not collide.
-	test::eq(in.put(value_interner::key_vector_ty(10, value_interner::REF_I8)) != at, true);
+	test::eq(in.put({ .tag = VECTOR_TY, .vector_ty = { .len = 10, .child = value_interner::REF_I8 } }) != at, true);
 
 	// Floats dedupe by bits; NaNs never dedupe (Zig compares floats with ==).
-	InternerRef h = in.put(value_interner::key_float(fl64(0x4000_0000_0000_0000)));
-	check(in.put(value_interner::key_float(fl64(0x4000_0000_0000_0000))), h);
-	test::eq(in.put(value_interner::key_float(fl32(0x4000_0000))) != h, true);
+	InternerRef h = in.put({ .tag = FLOAT, .float_val = fl64(0x4000_0000_0000_0000) });
+	check(in.put({ .tag = FLOAT, .float_val = fl64(0x4000_0000_0000_0000) }), h);
+	test::eq(in.put({ .tag = FLOAT, .float_val = fl32(0x4000_0000) }) != h, true);
 	sz before = in.len();
-	InternerRef n1 = in.put(value_interner::key_float(fl32(0x7FC0_0000)));
-	InternerRef n2 = in.put(value_interner::key_float(fl32(0x7FC0_0000)));
+	InternerRef n1 = in.put({ .tag = FLOAT, .float_val = fl32(0x7FC0_0000) });
+	InternerRef n2 = in.put({ .tag = FLOAT, .float_val = fl32(0x7FC0_0000) });
 	test::eq(n1 != n2, true);
 	check(in.len(), before + 2);
 	KeyComplex cn = { .tag = CF64, .cf64 = { 0x3FF0_0000_0000_0000, 0x7FF8_0000_0000_0000 } };
-	test::eq(in.put(value_interner::key_complex(cn)) != in.put(value_interner::key_complex(cn)), true);
+	test::eq(in.put({ .tag = COMPLEX, .complex_val = cn }) != in.put({ .tag = COMPLEX, .complex_val = cn }), true);
 	f.free();
 }
 
 fn void hash_eql_consistency() @test
 {
 	Limb[1] five = { 5 };
-	InternerKey[*] same = { value_interner::key_u64(5), value_interner::key_i64(5), big(&five, true) };
+	InternerKey[*] same = { { .tag = INT, .int_val = { .tag = U64, .u64 = 5 } }, { .tag = INT, .int_val = { .tag = I64, .i64 = 5 } }, big(&five, true) };
 	foreach (k : same)
 	{
 		test::eq(k.eql(same[0]), true);
 		check(k.hash(), same[0].hash());
 	}
 	Limb[1] min_mag = { 0x8000_0000_0000_0000 };
-	InternerKey lmin = value_interner::key_i64(long::min);
+	InternerKey lmin = { .tag = INT, .int_val = { .tag = I64, .i64 = long::min } };
 	InternerKey bmin = big(&min_mag, false);
 	test::eq(lmin.eql(bmin), true);
 	check(lmin.hash(), bmin.hash());
-	test::eq(value_interner::key_u64(0x8000_0000_0000_0000).eql(lmin), false);
-	test::eq(value_interner::key_u64(5).eql(value_interner::key_int_ty(5)), false);
-	test::eq(value_interner::key_bytes("ab").eql(value_interner::key_bytes("ab")), true);
-	check(value_interner::key_bytes("abcdefghij").hash(), value_interner::key_bytes("abcdefghij").hash());
-	test::eq(value_interner::key_pointer(3, value_interner::REF_ZERO).eql(value_interner::key_pointer(3, value_interner::REF_ZERO)), true);
-	test::eq(value_interner::key_pointer(3, value_interner::REF_ZERO).eql(value_interner::key_pointer(4, value_interner::REF_ZERO)), false);
+	test::eq((value_interner::InternerKey){ .tag = INT, .int_val = { .tag = U64, .u64 = 0x8000_0000_0000_0000 } }.eql(lmin), false);
+	test::eq((value_interner::InternerKey){ .tag = INT, .int_val = { .tag = U64, .u64 = 5 } }.eql({ .tag = INT_TY, .bits = 5 }), false);
+	test::eq((value_interner::InternerKey){ .tag = BYTES, .bytes = "ab" }.eql({ .tag = BYTES, .bytes = "ab" }), true);
+	check((value_interner::InternerKey){ .tag = BYTES, .bytes = "abcdefghij" }.hash(), (value_interner::InternerKey){ .tag = BYTES, .bytes = "abcdefghij" }.hash());
+	test::eq((value_interner::InternerKey){ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }.eql({ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }), true);
+	test::eq((value_interner::InternerKey){ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }.eql({ .tag = POINTER, .pointer = { .node = 4, .offset = value_interner::REF_ZERO } }), false);
 
 	// to_big_int forms.
 	BigIntSpace space;
-	BigIntConst c = value_interner::key_i64(long::min).to_big_int(&space);
+	BigIntConst c = (value_interner::InternerKey){ .tag = INT, .int_val = { .tag = I64, .i64 = long::min } }.to_big_int(&space);
 	check(c.limbs.len, 1);
 	test::eq(c.limbs[0] == 0x8000_0000_0000_0000, true);
 	test::eq(c.positive, false);
-	c = value_interner::key_u64(ulong::max).to_big_int(&space);
+	c = (value_interner::InternerKey){ .tag = INT, .int_val = { .tag = U64, .u64 = ulong::max } }.to_big_int(&space);
 	test::eq(c.limbs[0] == ulong::max, true);
 	test::eq(c.positive, true);
-	c = value_interner::key_i64(-3).int_val.to_big_int(&space);
+	c = (value_interner::InternerKey){ .tag = INT, .int_val = { .tag = I64, .i64 = -3 } }.int_val.to_big_int(&space);
 	check(c.limbs[0], 3);
 	test::eq(c.positive, false);
 	c = big(&five, false).to_big_int(&space);
@@ -253,25 +253,25 @@ fn void int_storage_forms() @test
 	Interner* in = &f.in;
 
 	// u64 that fits u32 -> U32, returned as .u64.
-	InternerRef r = in.put(value_interner::key_u64(0xFFFF_FFFF));
+	InternerRef r = in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0xFFFF_FFFF } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.U32);
 	InternerKey k = in.get(r);
 	check(k.int_val.tag, KeyIntTag.U64);
 	test::eq(k.int_val.u64 == 0xFFFF_FFFF, true);
 
 	// i64 that fits i32 -> I32, returned as .i64.
-	r = in.put(value_interner::key_i64(-0x8000_0000));
+	r = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = -0x8000_0000 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.I32);
 	k = in.get(r);
 	check(k.int_val.tag, KeyIntTag.I64);
 	check(k.int_val.i64, -0x8000_0000);
 	// Non-negative i64 that fits i32 is still I32 (Zig checks i32 for .i64).
-	r = in.put(value_interner::key_i64(77));
+	r = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = 77 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.I32);
 	check(in.get(r).int_val.i64, 77);
 
 	// u64 above u32 -> INT_POSITIVE, returned as big_int.
-	r = in.put(value_interner::key_u64(0x1_0000_0000));
+	r = in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0x1_0000_0000 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.INT_POSITIVE);
 	k = in.get(r);
 	check(k.int_val.tag, KeyIntTag.BIG_INT);
@@ -280,16 +280,16 @@ fn void int_storage_forms() @test
 	test::eq(k.int_val.big_int.positive, true);
 
 	// i64 below i32 -> INT_NEGATIVE.
-	r = in.put(value_interner::key_i64(-0x8000_0001));
+	r = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = -0x8000_0001 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.INT_NEGATIVE);
 	k = in.get(r);
 	check(k.int_val.big_int.limbs[0], 0x8000_0001);
 	test::eq(k.int_val.big_int.positive, false);
 	// i64 2^31 does not fit i32 -> INT_POSITIVE even though it fits u32.
-	r = in.put(value_interner::key_i64(0x8000_0000));
+	r = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = 0x8000_0000 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.INT_POSITIVE);
-	check(in.put(value_interner::key_u64(0x8000_0000)), r); // ... and dedupes with the u64 form
-	r = in.put(value_interner::key_i64(long::min));
+	check(in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0x8000_0000 } }), r); // ... and dedupes with the u64 form
+	r = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = long::min } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.INT_NEGATIVE);
 	test::eq(in.get(r).int_val.big_int.limbs[0] == 0x8000_0000_0000_0000, true);
 
@@ -331,60 +331,60 @@ fn void every_key_tag_round_trip() @test
 	f.init();
 	Interner* in = &f.in;
 
-	InternerRef r = round_trip(in, value_interner::key_int_ty(24));
+	InternerRef r = round_trip(in, { .tag = INT_TY, .bits = 24 });
 	check(in.items[(sz)(uint)r].tag, InternerTag.INT_TY);
 	check(in.items[(sz)(uint)r].data, 24);
 	// float_ty / complex_ty only accept the static widths (Zig `toRef` else => unreachable).
 
 	// Array: PackedU64 split of len, low half first.
-	r = round_trip(in, value_interner::key_array_ty(0x1_2345_6789_ABCD, value_interner::REF_I8));
+	r = round_trip(in, { .tag = ARRAY_TY, .array_ty = { .len = 0x1_2345_6789_ABCD, .child = value_interner::REF_I8 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.ARRAY_TY);
 	uint d = in.items[(sz)(uint)r].data;
 	test::eq(in.extra[(sz)d] == 0x6789_ABCD, true);
 	check(in.extra[(sz)d + 1], 0x1_2345);
 	check(in.extra[(sz)d + 2], value_interner::REF_I8);
 	test::eq(in.get(r).array_ty.len == 0x1_2345_6789_ABCD, true);
-	round_trip(in, value_interner::key_array_ty(ulong::max, r));
+	round_trip(in, { .tag = ARRAY_TY, .array_ty = { .len = ulong::max, .child = r } });
 
-	r = round_trip(in, value_interner::key_vector_ty(0xFFFF_FFFF, value_interner::REF_F64));
+	r = round_trip(in, { .tag = VECTOR_TY, .vector_ty = { .len = 0xFFFF_FFFF, .child = value_interner::REF_F64 } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.VECTOR_TY);
 	check(in.get(r).vector_ty.child, value_interner::REF_F64);
 
 	InternerRef[4] elems = { value_interner::REF_I8, value_interner::REF_PTR, r, value_interner::REF_I8 };
-	r = round_trip(in, value_interner::key_record_ty(&elems));
+	r = round_trip(in, { .tag = RECORD_TY, .record_ty = &elems });
 	check(in.items[(sz)(uint)r].tag, InternerTag.RECORD_TY);
 	check(in.get(r).record_ty.len, 4);
 	check(in.get(r).record_ty[2], elems[2]);
-	InternerRef empty_rec = round_trip(in, value_interner::key_record_ty({}));
+	InternerRef empty_rec = round_trip(in, { .tag = RECORD_TY, .record_ty = {} });
 	check(in.get(empty_rec).record_ty.len, 0);
 
-	r = round_trip(in, value_interner::key_bytes("abc\0def"));
+	r = round_trip(in, { .tag = BYTES, .bytes = "abc\0def" });
 	check(in.items[(sz)(uint)r].tag, InternerTag.BYTES);
 	check(in.get(r).bytes.len, 7);
-	InternerRef empty_bytes = round_trip(in, value_interner::key_bytes(""));
+	InternerRef empty_bytes = round_trip(in, { .tag = BYTES, .bytes = "" });
 	test::eq(empty_bytes != empty_rec, true);
 	check(in.get(empty_bytes).bytes.len, 0);
 
-	r = round_trip(in, value_interner::key_pointer(42, value_interner::REF_ONE));
+	r = round_trip(in, { .tag = POINTER, .pointer = { .node = 42, .offset = value_interner::REF_ONE } });
 	check(in.items[(sz)(uint)r].tag, InternerTag.POINTER);
 	check(in.get(r).pointer.node, 42);
 	check(in.get(r).pointer.offset, value_interner::REF_ONE);
 
-	round_trip(in, value_interner::key_i64(-123456));
-	round_trip(in, value_interner::key_u64(ulong::max));
+	round_trip(in, { .tag = INT, .int_val = { .tag = I64, .i64 = -123456 } });
+	round_trip(in, { .tag = INT, .int_val = { .tag = U64, .u64 = ulong::max } });
 
 	// Floats: every width, bit patterns preserved exactly.
-	r = round_trip(in, value_interner::key_float(fl16(0xC000)));
+	r = round_trip(in, { .tag = FLOAT, .float_val = fl16(0xC000) });
 	check(in.items[(sz)(uint)r].tag, InternerTag.F16);
 	check(in.items[(sz)(uint)r].data, 0xC000);
-	r = round_trip(in, value_interner::key_float(fl32(0x4049_0FDB)));
+	r = round_trip(in, { .tag = FLOAT, .float_val = fl32(0x4049_0FDB) });
 	check(in.items[(sz)(uint)r].tag, InternerTag.F32);
-	r = round_trip(in, value_interner::key_float(fl64(0x4009_21FB_5444_2D18)));
+	r = round_trip(in, { .tag = FLOAT, .float_val = fl64(0x4009_21FB_5444_2D18) });
 	check(in.items[(sz)(uint)r].tag, InternerTag.F64);
 	d = in.items[(sz)(uint)r].data;
 	check(in.extra[(sz)d], 0x5444_2D18);
 	check(in.extra[(sz)d + 1], 0x4009_21FB);
-	r = round_trip(in, value_interner::key_float(fl80(0xC90F_DAA2_2168_C235, 0xC000)));
+	r = round_trip(in, { .tag = FLOAT, .float_val = fl80(0xC90F_DAA2_2168_C235, 0xC000) });
 	check(in.items[(sz)(uint)r].tag, InternerTag.F80);
 	d = in.items[(sz)(uint)r].data;
 	check(in.extra[(sz)d + 2], 0xC000);
@@ -392,35 +392,35 @@ fn void every_key_tag_round_trip() @test
 	check(g.tag, KeyFloatTag.F80);
 	test::eq(g.f80.lo == 0xC90F_DAA2_2168_C235, true);
 	check(g.f80.hi, 0xC000);
-	r = round_trip(in, value_interner::key_float(fl128(0x8469_898C_C517_01B8, 0x4000_921F_B544_42D1)));
+	r = round_trip(in, { .tag = FLOAT, .float_val = fl128(0x8469_898C_C517_01B8, 0x4000_921F_B544_42D1) });
 	check(in.items[(sz)(uint)r].tag, InternerTag.F128);
 	g = in.get(r).float_val;
 	test::eq(g.f128.lo == 0x8469_898C_C517_01B8 && g.f128.hi == 0x4000_921F_B544_42D1, true);
 	// Same bits in different widths are different keys.
-	test::eq(in.put(value_interner::key_float(fl16(0x4000))) != in.put(value_interner::key_float(fl32(0x4000))), true);
+	test::eq(in.put({ .tag = FLOAT, .float_val = fl16(0x4000) }) != in.put({ .tag = FLOAT, .float_val = fl32(0x4000) }), true);
 
 	// Complex: every width.
 	KeyComplex c16 = { .tag = CF16, .cf16 = { 0x3C00, 0xC000 } };
-	r = round_trip(in, value_interner::key_complex(c16));
+	r = round_trip(in, { .tag = COMPLEX, .complex_val = c16 });
 	check(in.items[(sz)(uint)r].tag, InternerTag.CF16);
 	check(in.extra[(sz)in.items[(sz)(uint)r].data], 0x3C00_C000); // real in the high half
 	KeyComplex c32 = { .tag = CF32, .cf32 = { 0x3F80_0000, 0x4000_0000 } };
-	r = round_trip(in, value_interner::key_complex(c32));
+	r = round_trip(in, { .tag = COMPLEX, .complex_val = c32 });
 	check(in.get(r).complex_val.cf32[1], 0x4000_0000);
 	KeyComplex c64 = { .tag = CF64, .cf64 = { 0x3FF0_0000_0000_0001, 0xBFF0_0000_0000_0002 } };
-	r = round_trip(in, value_interner::key_complex(c64));
+	r = round_trip(in, { .tag = COMPLEX, .complex_val = c64 });
 	d = in.items[(sz)(uint)r].data;
 	check(in.extra[(sz)d + 2], 2);
 	check(in.extra[(sz)d + 3], 0xBFF0_0000);
 	KeyComplex c80 = { .tag = CF80, .cf80 = { { 0x8000_0000_0000_0001, 0x3FFF }, { 0xC000_0000_0000_0000, 0xBFFE } } };
-	r = round_trip(in, value_interner::key_complex(c80));
+	r = round_trip(in, { .tag = COMPLEX, .complex_val = c80 });
 	d = in.items[(sz)(uint)r].data;
 	check(in.extra[(sz)d + 2], 0x3FFF);
 	check(in.extra[(sz)d + 5], 0xBFFE);
 	KeyComplex g80 = in.get(r).complex_val;
 	test::eq(g80.cf80[1].lo == 0xC000_0000_0000_0000, true);
 	KeyComplex c128 = { .tag = CF128, .cf128 = { { 1, 0x3FFF_0000_0000_0000 }, { 2, 0x8000_0000_0000_0003 } } };
-	r = round_trip(in, value_interner::key_complex(c128));
+	r = round_trip(in, { .tag = COMPLEX, .complex_val = c128 });
 	KeyComplex g128 = in.get(r).complex_val;
 	test::eq(g128.cf128[0].lo == 1 && g128.cf128[1].hi == 0x8000_0000_0000_0003, true);
 	d = in.items[(sz)(uint)r].data;
@@ -434,18 +434,18 @@ fn void distinct_pointer_bases() @test
 	Fixture f;
 	f.init();
 	Interner* in = &f.in;
-	InternerRef p1 = in.put(value_interner::key_pointer(1, value_interner::REF_ZERO));
-	InternerRef p2 = in.put(value_interner::key_pointer(2, value_interner::REF_ZERO));
+	InternerRef p1 = in.put({ .tag = POINTER, .pointer = { .node = 1, .offset = value_interner::REF_ZERO } });
+	InternerRef p2 = in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = value_interner::REF_ZERO } });
 	test::eq(p1 != p2, true);
-	InternerRef off8 = in.put(value_interner::key_u64(8));
-	InternerRef p1_8 = in.put(value_interner::key_pointer(1, off8));
-	InternerRef p2_8 = in.put(value_interner::key_pointer(2, off8));
+	InternerRef off8 = in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 8 } });
+	InternerRef p1_8 = in.put({ .tag = POINTER, .pointer = { .node = 1, .offset = off8 } });
+	InternerRef p2_8 = in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = off8 } });
 	test::eq(p1_8 != p1, true);
 	test::eq(p1_8 != p2_8, true);
-	check(in.put(value_interner::key_pointer(1, value_interner::REF_ZERO)), p1);
-	check(in.put(value_interner::key_pointer(2, in.put(value_interner::key_i64(8)))), p2_8);
+	check(in.put({ .tag = POINTER, .pointer = { .node = 1, .offset = value_interner::REF_ZERO } }), p1);
+	check(in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = in.put({ .tag = INT, .int_val = { .tag = I64, .i64 = 8 } }) } }), p2_8);
 	// Node 0 is an ordinary base, distinct from the null constant and from int zero.
-	InternerRef p0 = in.put(value_interner::key_pointer(0, value_interner::REF_ZERO));
+	InternerRef p0 = in.put({ .tag = POINTER, .pointer = { .node = 0, .offset = value_interner::REF_ZERO } });
 	test::eq(p0 != value_interner::REF_NULL && p0 != value_interner::REF_ZERO, true);
 	check(in.get(p2_8).pointer.node, 2);
 	check(in.get(p2_8).pointer.offset, off8);
@@ -459,11 +459,11 @@ fn void slices_stable_across_growth() @test
 	Interner* in = &f.in;
 
 	char[*] text = "constant string";
-	InternerRef sref = in.put(value_interner::key_bytes(&text));
+	InternerRef sref = in.put({ .tag = BYTES, .bytes = &text });
 	Limb[3] wide = { 7, 8, 9 };
 	InternerRef wref = in.put(big(&wide, false));
 	InternerRef[2] elems = { value_interner::REF_I32, value_interner::REF_I64 };
-	InternerRef rref = in.put(value_interner::key_record_ty(&elems));
+	InternerRef rref = in.put({ .tag = RECORD_TY, .record_ty = &elems });
 
 	// The interner copied the key slices: mutating the caller's buffers changes nothing.
 	text[0] = 'X';
@@ -481,15 +481,15 @@ fn void slices_stable_across_growth() @test
 	char[16] buf;
 	for (uint i = 0; i < 5000; i++)
 	{
-		in.put(value_interner::key_int_ty((ushort)(200 + i % 60000)));
-		in.put(value_interner::key_u64(0x1_0000_0000 + (ulong)i));
+		in.put({ .tag = INT_TY, .bits = (ushort)(200 + i % 60000) });
+		in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0x1_0000_0000 + (ulong)i } });
 		Limb[2] li = { i, 1 };
 		in.put(big(&li, true));
 		for (int j = 0; j < 8; j++) buf[j] = (char)('a' + (i >> (4 * j)) % 16);
-		in.put(value_interner::key_bytes(buf[:8]));
+		in.put({ .tag = BYTES, .bytes = buf[:8] });
 		InternerRef[1] one = { (InternerRef)i };
-		in.put(value_interner::key_record_ty(&one));
-		in.put(value_interner::key_float(fl64(0x4000_0000_0000_0000 + (ulong)i)));
+		in.put({ .tag = RECORD_TY, .record_ty = &one });
+		in.put({ .tag = FLOAT, .float_val = fl64(0x4000_0000_0000_0000 + (ulong)i) });
 	}
 	// Same slices (same addresses) still valid and unchanged.
 	test::eq(s.ptr == in.get(sref).bytes.ptr, true);
@@ -501,14 +501,14 @@ fn void slices_stable_across_growth() @test
 	check(e[1], value_interner::REF_I64);
 
 	// Dedup still works after rehashing, and refs are dense in insertion order.
-	check(in.put(value_interner::key_bytes("constant string")), sref);
-	check(in.put(value_interner::key_int_ty(200)), 3);
+	check(in.put({ .tag = BYTES, .bytes = "constant string" }), sref);
+	check(in.put({ .tag = INT_TY, .bits = 200 }), 3);
 	sz n = in.len();
 	for (uint i = 0; i < 5000; i++)
 	{
 		Limb[2] li = { i, 1 };
 		in.put(big(&li, true));
-		in.put(value_interner::key_u64(0x1_0000_0000 + (ulong)i));
+		in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0x1_0000_0000 + (ulong)i } });
 	}
 	check(in.len(), n);
 	f.free();
@@ -527,14 +527,14 @@ fn void leak_checks() @test
 		for (int i = 0; i < round * 7; i++)
 		{
 			in.put(big(&wide, i % 2 == 0));
-			in.put(value_interner::key_bytes("leak"));
-			in.put(value_interner::key_record_ty(&elems));
-			in.put(value_interner::key_record_ty({}));
-			in.put(value_interner::key_bytes(""));
-			in.put(value_interner::key_u64(0x1_0000_0000 * (ulong)(i + 1)));
-			in.put(value_interner::key_float(fl32(0x7FC0_0000))); // NaN: a new entry each time
+			in.put({ .tag = BYTES, .bytes = "leak" });
+			in.put({ .tag = RECORD_TY, .record_ty = &elems });
+			in.put({ .tag = RECORD_TY, .record_ty = {} });
+			in.put({ .tag = BYTES, .bytes = "" });
+			in.put({ .tag = INT, .int_val = { .tag = U64, .u64 = 0x1_0000_0000 * (ulong)(i + 1) } });
+			in.put({ .tag = FLOAT, .float_val = fl32(0x7FC0_0000) }); // NaN: a new entry each time
 			KeyComplex c = { .tag = CF128, .cf128 = { { (ulong)i, 0 }, { 0, 1 } } };
-			in.put(value_interner::key_complex(c));
+			in.put({ .tag = COMPLEX, .complex_val = c });
 		}
 		in.free();
 		check(ta.allocation_count(), 0);

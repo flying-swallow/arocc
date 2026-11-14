@@ -8,7 +8,7 @@
 // RECORD_FIELD, CODEGEN_DIAGNOSTIC, ALIGNAS_TYPE, IDENTIFIER_ARG.
 // Storage tags and data layouts: docs/c3-tree-tags.md section 2.
 //
-// Stage 0 (contract): signatures only.
+// Declaration/type/record node codec (plan 16 stage 1).
 module aro::tree;
 import aro::tokens, aro::type_store, aro::diagnostics;
 
@@ -89,10 +89,12 @@ fn void Tree.encode_decl(&self, Node node, NodeRepr* repr)
 		case CODEGEN_DIAGNOSTIC:
 			NodeCodegenDiagnostic d = node.codegen_diagnostic;
 			repr.tag = NodeTag.CODEGEN_DIAGNOSTIC; repr.tok = d.tok;
+			if (d.kind != diagnostics::MessageKind.ERROR && d.kind != diagnostics::MessageKind.WARNING) unreachable();
+			if (d.has_opt && d.opt != diagnostics::Option.ATTRIBUTE_WARNING) unreachable();
 			DiagnosticPack pack; pack.is_warning = d.kind == diagnostics::MessageKind.WARNING;
 			pack.attribute_warning = d.has_opt && d.opt == diagnostics::Option.ATTRIBUTE_WARNING;
 			repr.data[0] = (uint)pack;
-			ExtraSpan span = self.add_extra(((NodeIndex*)d.text.ptr)[:d.text.len]); repr.data[1] = span.index; repr.data[2] = span.len;
+			ExtraSpan span = self.add_extra(((NodeIndex*)d.text.ptr)[:(usz)d.text.len]); repr.data[1] = span.index; repr.data[2] = span.len;
 		case ALIGNAS_TYPE:
 			repr.tag = NodeTag.ALIGNAS_TYPE; repr.tok = node.alignas_type.alignas_tok; repr.data[0] = (uint)node.alignas_type.qt;
 		case IDENTIFIER_ARG:
@@ -106,14 +108,15 @@ fn void Tree.encode_decl(&self, Node node, NodeRepr* repr)
  FN_PROTO gives body NODE_NULL; FN_DEF gives definition NODE_NULL;
  VARIABLE gives initializer NODE_NULL; VARIABLE_DEF gives definition
  NODE_NULL; storage class precedence is static, extern, register, auto;
- *_DECL_TWO uses unpack_elems over data[1..3] (slice aliases node storage);
+ *_DECL_TWO uses unpack_elems over data[1:3] (slice aliases node storage);
  *_FORWARD_DECL always decodes definition = NODE_NULL; TYPEDEF implicit is
  data[1] != 0.
  @require index.tag(self).kind.family == DECL
 *>
 fn Node Tree.decode_decl(&self, NodeIndex index)
 {
-	NodeRepr repr = self.nodes[index];
+	NodeRepr repr = self.nodes[(usz)index];
+	NodeRepr* repr_ptr = self.nodes.get_ref((sz)index);
 	uint[3] data = repr.data;
 	switch (repr.tag)
 	{
@@ -133,14 +136,14 @@ fn Node Tree.decode_decl(&self, NodeIndex index)
 		case GLOBAL_ASM: return { .kind = NodeKind.GLOBAL_ASM, .global_asm = { .asm_tok = repr.tok, .asm_str = (NodeIndex)data[0] } };
 		case STRUCT_DECL: case UNION_DECL: case ENUM_DECL: case STRUCT_DECL_TWO: case UNION_DECL_TWO: case ENUM_DECL_TWO:
 			NodeKind kind = repr.tag.kind;
-			NodeIndex[] fields = (repr.tag == NodeTag.STRUCT_DECL || repr.tag == NodeTag.UNION_DECL || repr.tag == NodeTag.ENUM_DECL) ? ((NodeIndex*)self.extra.data)[data[1]..data[1]+data[2]] : unpack_elems(data[1..3]);
+			NodeIndex[] fields = (repr.tag == NodeTag.STRUCT_DECL || repr.tag == NodeTag.UNION_DECL || repr.tag == NodeTag.ENUM_DECL) ? ((NodeIndex*)self.extra.array_view().ptr)[(usz)data[1] : (usz)data[2]] : unpack_node_elems(repr_ptr, 1, 2);
 			return { .kind = kind, .container_decl = { .name_or_kind_tok = repr.tok, .container_qt = (QualType)data[0], .fields = fields } };
 		case STRUCT_FORWARD_DECL: case UNION_FORWARD_DECL: case ENUM_FORWARD_DECL: return { .kind = repr.tag.kind, .container_forward_decl = { .name_or_kind_tok = repr.tok, .container_qt = (QualType)data[0], .definition = type_store::NODE_NULL } };
 		case ENUM_FIELD: return { .kind = NodeKind.ENUM_FIELD, .enum_field = { .name_tok = repr.tok, .qt = (QualType)data[0], .init = unpack_opt_index(data[1]) } };
 		case RECORD_FIELD: return { .kind = NodeKind.RECORD_FIELD, .record_field = { .name_or_first_tok = repr.tok, .qt = (QualType)data[0], .bit_width = unpack_opt_index(data[1]) } };
 		case CODEGEN_DIAGNOSTIC:
 			DiagnosticPack pack = (DiagnosticPack)data[0];
-			return { .kind = NodeKind.CODEGEN_DIAGNOSTIC, .codegen_diagnostic = { .tok = repr.tok, .kind = pack.is_warning ? diagnostics::MessageKind.WARNING : diagnostics::MessageKind.ERROR, .has_opt = pack.attribute_warning, .opt = diagnostics::Option.ATTRIBUTE_WARNING, .text = ((uint*)self.extra.data.ptr)[data[1]..data[1]+data[2]] } };
+			return { .kind = NodeKind.CODEGEN_DIAGNOSTIC, .codegen_diagnostic = { .tok = repr.tok, .kind = pack.is_warning ? diagnostics::MessageKind.WARNING : diagnostics::MessageKind.ERROR, .has_opt = pack.attribute_warning, .opt = diagnostics::Option.ATTRIBUTE_WARNING, .text = self.extra.array_view()[(usz)data[1] : (usz)data[2]] } };
 		case ALIGNAS_TYPE: return { .kind = NodeKind.ALIGNAS_TYPE, .alignas_type = { .alignas_tok = repr.tok, .qt = (QualType)data[0] } };
 		case IDENTIFIER_ARG: return { .kind = NodeKind.IDENTIFIER_ARG, .identifier_arg = { .identifier_tok = repr.tok } };
 		default: unreachable();

@@ -4,17 +4,15 @@
 // shared module so the preprocessor does not depend on the AST.
 //
 // Ownership rules (Zig's, made explicit):
-//  - A `TokenWithExpansionLocs` value OWNS its `expansion_locs` array (or holds
-//    null). Copying the struct copies the pointer, not the array: exactly one
-//    copy may be freed (`free_expansion_locs`) or handed on (to
-//    `Preprocessor.add_token`, which moves it into `expansion_entries`).
-//    Use `dupe` to get an independent copy.
-//  - All arrays come from the allocator passed to `add_expansion_location`
+//  - A `TokenWithExpansionLocs` value OWNS its `expansion_locs` list (or holds
+//    an empty, unallocated one). Copying the struct copies the List header,
+//    not the backing array: exactly one copy may be freed
+//    (`expansion_locs.free()`) or handed on (to `Preprocessor.add_token`, which
+//    moves it into `expansion_entries`). Use `dupe` to get an independent copy.
+//  - Lists are allocated with the allocator passed to `add_expansion_location`
 //    (always `Compilation.gpa` in the preprocessor).
-//  - Array layout (Zig, kept byte for byte): `cap` Locations; items first,
-//    then at least one terminator whose `id.index` is `source::UNUSED_INDEX`
-//    (all fields zero otherwise); the LAST element's `byte_offset` is 1, which
-//    marks the capacity end. `expansion_slice` scans to the first terminator.
+//  - `borrowed_locs` wraps a slice owned elsewhere in a List with no
+//    allocator; `free()` on it is a no-op, so it must never be grown.
 //  - At most `MAX_EXPANSION_LOCS` (64) locations are kept; locations of the
 //    generated source are never recorded; WHITESPACE, MACRO_WS and
 //    PLACEMARKER tokens never get any.
@@ -23,13 +21,14 @@
 //    stays valid when the buffer grows) and has at least one expansion location.
 //
 // Deviations from Zig:
-//  - The array is allocated with exactly the power-of-two size Zig asks for
-//    (`ensureTotalCapacity` may round up further); the capacity-end marker
-//    makes the difference unobservable.
+//  - Zig stores a sentinel-terminated array (terminator entries plus a
+//    capacity-end marker); C3 uses `List{Location}`, which tracks length and
+//    capacity itself.
 //  - `Precedence` is a distinct `ichar` with PREC_* constants (Zig's
 //    non-exhaustive `enum(i8)`); `precedence(id)` replaces the direct enum array.
 module aro::tokens;
 import aro::source, aro::tokenizer, aro::compilation, aro::diagnostics;
+import std::collections::list;
 
 <* Zig `Tree.TokenIndex`. *>
 alias TokenIndex = uint;
@@ -142,11 +141,9 @@ struct TokenWithExpansionLocs
 	 If it is generated then there is guaranteed to be at least one expansion location.
 	*>
 	Location loc;
-	<* Owned, sentinel-terminated array (layout in the module comment), or null. *>
-	Location* expansion_locs;
+	<* Owned list of expansion locations (empty when none); see the module comment. *>
+	List{Location} expansion_locs;
 }
-
-fn bool is_terminator(Location* l) @inline @local => l.id.index == source::UNUSED_INDEX;
 
 <* Zig `tokFromRaw`: convert a tokenizer token (no flags, no expansion locations). *>
 fn TokenWithExpansionLocs from_raw(Token raw)
@@ -158,53 +155,29 @@ fn TokenWithExpansionLocs from_raw(Token raw)
 fn Location raw_location(Token raw) => { .id = raw.source, .byte_offset = raw.start, .line = raw.line };
 
 <* Zig `expansionSlice`: the recorded locations (borrowed from the token; empty if none). *>
-fn Location[] TokenWithExpansionLocs.expansion_slice(self)
-{
-	Location* locs = self.expansion_locs;
-	if (!locs) return {};
-	sz i = 0;
-	while (!is_terminator(&locs[i])) i++;
-	return locs[:i];
-}
+fn Location[] TokenWithExpansionLocs.expansion_slice(self) => self.expansion_locs.array_view();
 
-<* Same as `expansion_slice` for a bare array pointer (Zig: `pp.expansionSlice` on an entry). *>
-fn Location[] expansion_locs_slice(Location* locs)
+<*
+ Wrap `locs` (owned elsewhere, e.g. by `Preprocessor.expansion_entries`) in a
+ List without an allocator so it can sit in a borrowed token. `free()` on the
+ result is a no-op; never push to it.
+*>
+fn List{Location} borrowed_locs(Location[] locs)
 {
-	if (!locs) return {};
-	sz i = 0;
-	while (!is_terminator(&locs[i])) i++;
-	return locs[:i];
-}
-
-<* Smallest power of two >= n (n >= 1). *>
-fn sz ceil_power_of_two(sz n) @local
-{
-	sz p = 1;
-	while (p < n) p <<= 1;
-	return p;
+	return { .entries = locs.ptr, .size = locs.len, .capacity = locs.len };
 }
 
 <*
  Zig `addExpansionLocation`: append the non-generated locations of `new` up
  to the 64-location bound. Does nothing for WHITESPACE / MACRO_WS /
- PLACEMARKER tokens or an empty `new`. Grows the array to
- ceilPowerOfTwo(max(len + added + 1, 4)) when needed.
- @param [&inout] gpa : "Allocator that owns (or will own) the array"
+ PLACEMARKER tokens or an empty `new`.
+ @param [&inout] gpa : "Allocator that owns (or will own) the list"
 *>
 fn void TokenWithExpansionLocs.add_expansion_location(&self, Allocator gpa, Location[] new)
 {
 	if (new.len == 0 || self.id == WHITESPACE || self.id == MACRO_WS || self.id == PLACEMARKER) return;
 
-	Location* locs = self.expansion_locs;
-	sz len = 0;
-	sz cap = 0;
-	if (locs)
-	{
-		while (!is_terminator(&locs[len])) len++;
-		sz i = len;
-		while (locs[i].byte_offset != 1) i++;
-		cap = i + 1;
-	}
+	sz len = self.expansion_locs.len();
 	if (len >= MAX_EXPANSION_LOCS) return;
 
 	sz new_len = 0;
@@ -215,41 +188,21 @@ fn void TokenWithExpansionLocs.add_expansion_location(&self, Allocator gpa, Loca
 	if (new_len > MAX_EXPANSION_LOCS - len) new_len = MAX_EXPANSION_LOCS - len;
 	if (new_len == 0) return;
 
-	sz min_len = len + new_len + 1;
-	if (min_len < 4) min_len = 4;
-	sz wanted = ceil_power_of_two(min_len);
-	if (cap < wanted)
-	{
-		Location* grown = alloc::new_array(gpa, Location, wanted).ptr;
-		if (len) mem::copy(grown, locs, len * Location::size);
-		if (locs) alloc::free(gpa, locs);
-		locs = grown;
-		cap = wanted;
-	}
-
+	if (!self.expansion_locs.is_initialized()) self.expansion_locs.init(gpa, 4);
+	self.expansion_locs.reserve(new_len);
 	foreach (l : new)
 	{
 		if (l.id.index == source::GENERATED_INDEX) continue;
-		if (len >= MAX_EXPANSION_LOCS) break;
-		locs[len++] = l;
+		if (self.expansion_locs.len() >= MAX_EXPANSION_LOCS) break;
+		self.expansion_locs.push(l);
 	}
-	// Terminators (Zig memsets to `.{}`: unused id, offset 0, line 0) and the capacity marker.
-	for (sz i = len; i < cap; i++) locs[i] = { .id = source::UNUSED_ID };
-	locs[cap - 1].byte_offset = 1;
-	self.expansion_locs = locs;
-}
-
-<* Zig `TokenWithExpansionLocs.free`: release an expansion array (null is fine). *>
-fn void free_expansion_locs(Allocator gpa, Location* locs)
-{
-	if (locs) alloc::free(gpa, locs);
 }
 
 <* Zig `dupe`: a copy with its own expansion array. *>
 fn TokenWithExpansionLocs TokenWithExpansionLocs.dupe(self, Allocator gpa)
 {
 	TokenWithExpansionLocs copy = self;
-	copy.expansion_locs = null;
+	copy.expansion_locs = {};
 	copy.add_expansion_location(gpa, self.expansion_slice());
 	return copy;
 }
@@ -266,8 +219,7 @@ fn void? TokenWithExpansionLocs.check_ms_eof(self, Source src, Compilation* comp
 {
 	if (src.buf.len > self.loc.byte_offset && src.buf[self.loc.byte_offset] == 0x1A)
 	{
-		DiagnosticTemplate d = compilation::DIAG_CTRL_Z_EOF;
 		ExpandedLocation loc = src.line_col({ .id = src.id, .byte_offset = self.loc.byte_offset, .line = self.loc.line });
-		comp.diagnostics.add(d.message_at(d.fmt, loc))!;
+		comp.diagnostics.add(diagnostics::@message_at(compilation::CompDiag.CTRL_Z_EOF, compilation::CompDiag.CTRL_Z_EOF.fmt, loc))!;
 	}
 }

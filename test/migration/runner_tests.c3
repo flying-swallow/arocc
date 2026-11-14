@@ -1,23 +1,119 @@
 // Tests for the C3 fixture runner (runner.c3). The child compiler is the
-// shell script testdata/fake_aro.sh, steered through each case's manifest
+// portable fake_aro C3 executable, steered through each case's manifest
 // `env =` line. Case files are written under $TEST_TMPDIR at run time so
 // fixtures can use space-containing paths and the checked-in corpus is never
 // touched.
 module runner_tests;
-import std::io, std::io::path, std::os::env, aro_runner;
+import std::io, std::io::path, std::os::env, std::core::dstring, aro_runner;
 
-const String FAKE_REL = "test/migration/testdata/fake_aro.sh";
+const String FAKE_REL = "test/migration/fake_aro";
+
+fn String decode_manifest_field(String field)
+{
+	DString decoded;
+	decoded.tinit();
+	for (usz i = 0; i < field.len; i++)
+	{
+		if (field[i] == '\\' && i + 1 < field.len)
+		{
+			i++;
+			switch (field[i])
+			{
+				case 's': decoded.append(' ');
+				case 'b': decoded.append('\\');
+				case 'n': decoded.append('\n');
+				default:
+					decoded.append('\\');
+					decoded.append(field[i]);
+			}
+		}
+		else
+		{
+			decoded.append(field[i]);
+		}
+	}
+	return decoded.str_view();
+}
+
+fn String? manifest_runfile(String manifest_path, String workspace, String suffix)
+{
+	char[]? text = file::load(tmem, manifest_path);
+	if (catch text) return NOT_FOUND~;
+	String contents = (String)text;
+	String expected = string::tformat("%s/%s%s", workspace, FAKE_REL, suffix);
+	usz start = 0;
+	while (start < contents.len)
+	{
+		usz end = start;
+		while (end < contents.len && contents[end] != '\n') end++;
+		usz line_end = end;
+		if (line_end > start && contents[line_end - 1] == '\r') line_end--;
+		String line = line_end > start ? contents[start..line_end - 1] : "";
+		if (line.len && line[0] == '\\') line = line[1..];
+		usz separator = 0;
+		while (separator < line.len && line[separator] != ' ') separator++;
+		if (separator < line.len)
+		{
+			String key = decode_manifest_field(line[0..separator - 1]);
+			if (key == expected) return decode_manifest_field(line[separator + 1..]);
+		}
+		start = end + 1;
+	}
+	return NOT_FOUND~;
+}
 
 fn String fake_exe()
 {
-	if (try p = env::get_var(tmem, "FAKE_ARO_EXE")) return p;
-	return aro_runner::absolute_from_cwd(tmem, FAKE_REL);
+	String suffix = env::WIN32 ? ".exe" : "";
+	if (try p = env::get_var(tmem, "FAKE_ARO_EXE")) return aro_runner::absolute_from_cwd(tmem, p);
+	String workspace = env::get_var(tmem, "TEST_WORKSPACE") ?? "";
+	String root = env::get_var(tmem, "TEST_SRCDIR") ?? "";
+	if (workspace.len && root.len)
+	{
+		root = aro_runner::absolute_from_cwd(tmem, root);
+		String relative = string::tformat("%s%s", FAKE_REL, suffix);
+		String candidate = aro_runner::join_path(tmem, aro_runner::join_path(tmem, root, workspace), relative);
+		if (file::is_file(candidate)) return candidate;
+		if (suffix.len)
+		{
+			candidate = aro_runner::join_path(tmem, aro_runner::join_path(tmem, root, workspace), FAKE_REL);
+			if (file::is_file(candidate)) return candidate;
+		}
+	}
+	if (workspace.len)
+	{
+		if (try manifest = env::get_var(tmem, "RUNFILES_MANIFEST_FILE"))
+		{
+			if (try p = manifest_runfile(manifest, workspace, suffix)) return aro_runner::absolute_from_cwd(tmem, p);
+			if (suffix.len)
+			{
+				if (try p = manifest_runfile(manifest, workspace, "")) return aro_runner::absolute_from_cwd(tmem, p);
+			}
+		}
+	}
+	String relative = string::tformat("%s%s", FAKE_REL, suffix);
+	return aro_runner::absolute_from_cwd(tmem, relative);
+}
+
+fn int expected_abort_signal() => env::WIN32 ? -1 : 6;
+
+fn void runfiles_manifest_decodes_escaped_paths() @test
+{
+	String dir = scratch("runfiles manifest");
+	String contents = "\\test\\sworkspace/test/migration/fake_aro.exe /tmp/runner\\sfixtures\\bfake_aro.exe\r\n";
+	String manifest = put(dir, "MANIFEST", contents);
+	String decoded_key = decode_manifest_field("test\\sworkspace/test/migration/fake_aro.exe");
+	assert(decoded_key == "test workspace/test/migration/fake_aro.exe", "key '%s'", decoded_key);
+	String? resolved = manifest_runfile(manifest, "test workspace", ".exe");
+	if (catch resolved) unreachable("manifest entry was not found");
+	assert((String)resolved == "/tmp/runner fixtures\\fake_aro.exe", "path '%s'", (String)resolved);
 }
 
 // A fresh directory (that may contain spaces) under the test temp dir.
 fn String scratch(String name)
 {
-	String root = env::get_var(tmem, "TEST_TMPDIR") ?? "/tmp";
+	String root = env::get_var(tmem, "TEST_TMPDIR") ?? (String)path::temp_directory(tmem)!!;
+	root = aro_runner::absolute_from_cwd(tmem, root);
 	String dir = aro_runner::join_path(tmem, root, name);
 	if (file::is_dir(dir)) (void)path::rmtree(path::tnew(dir)!!);
 	(void)path::mkdir(dir, true)!!;
@@ -359,18 +455,18 @@ fn void compare_output_is_unsupported() @test
 	assert(o.log.str_view() == "hello world: TODO compare output\n");
 }
 
-fn void crash_is_a_failure_with_signal() @test
+fn void abnormal_termination_is_a_failure() @test
 {
 	String dir = scratch("crash");
-	String p = put(dir, "a.c", "/** manifest:\nsyntax_ignore_errors\nenv = FAKE_SIGNAL=SEGV\n*/");
+	String p = put(dir, "a.c", "/** manifest:\nsyntax_ignore_errors\nenv = FAKE_CRASH=1\n*/");
 	CaseOutcome o = run(p);
 	expect_fail(o, aro_runner::CRASHED);
-	assert(o.ran && !o.exited && o.signal == 11, "signal %d", o.signal);
+	assert(o.ran && !o.exited && o.signal == expected_abort_signal(), "signal %d", o.signal);
 	assert(o.log.str_view().contains("arocc command crashed:\n"));
-	p = put(dir, "b.c", "/** manifest:\nsyntax\nenv = FAKE_SIGNAL=ABRT\n*/");
+	p = put(dir, "b.c", "/** manifest:\nsyntax\nenv = FAKE_CRASH=1\n*/");
 	o = run(p);
 	expect_fail(o, aro_runner::CRASHED);
-	assert(o.signal == 6);
+	assert(o.signal == expected_abort_signal());
 }
 
 fn void nonzero_exit_and_fatal_are_recorded() @test
@@ -435,19 +531,20 @@ macro void expect_list_fault(String text, String message)
 
 fn void case_list_parsing() @test
 {
-	CaseEntry[] l = list_ok("// comment\n\n#pragma pack msvc.c\nhello world.c result=unsupported\n  b.c exit=1 fatal  \nc.c result=fail signal=11\n");
+	CaseEntry[] l = list_ok("// comment\n\n#pragma pack msvc.c\nhello world.c result=unsupported\n  b.c exit=1 fatal  \nc.c result=fail signal=-1\n");
 	assert(l.len == 4);
 	assert(l[0].file == "#pragma pack msvc.c");
 	assert(l[0].expect.result == PASS && l[0].expect.exit_code == 0 && !l[0].expect.fatal);
 	assert(l[1].file == "hello world.c" && l[1].expect.result == UNSUPPORTED);
 	assert(l[2].file == "b.c" && l[2].expect.exit_code == 1 && l[2].expect.fatal);
-	assert(l[3].expect.result == FAIL && l[3].expect.signal == 11);
+	assert(l[3].expect.result == FAIL && l[3].expect.signal == -1);
 	expect_list_fault("a.h\n", "must name a .c file");
 	expect_list_fault("a.c\na.c\n", "duplicate case entry 'a.c'");
 	expect_list_fault("a.c bogus=1\n", "unknown expectation key 'bogus'");
 	expect_list_fault("a.c result=maybe\n", "invalid result 'maybe'");
 	expect_list_fault("a.c exit=x\n", "invalid exit status 'x'");
 	expect_list_fault("sub/a.c\n", "file name inside the cases directory");
+	if (env::WIN32) expect_list_fault("sub\\a.c\n", "file name inside the cases directory");
 }
 
 fn String make_corpus(String name)
@@ -490,7 +587,7 @@ fn void corpus_mode_counts() @test
 fn void failure_propagates_to_suite_result() @test
 {
 	String dir = make_corpus("corpusfail");
-	put(dir, "crash.c", "/** manifest:\nsyntax\nenv = FAKE_SIGNAL=SEGV\n*/");
+	put(dir, "crash.c", "/** manifest:\nsyntax\nenv = FAKE_CRASH=1\n*/");
 	put(dir, "wrong.c", "/** manifest:\nsyntax\n\nerror: never printed\n*/");
 	DString out;
 	out.init(tmem);
@@ -525,8 +622,11 @@ fn void list_mode_selects_and_rejects_bad_selections() @test
 	assert(out.str_view().contains("empty case selection"));
 
 	out.clear();
-	r = suite(scratch("emptydir"), CORPUS, "", false, &out);
-	assert(r.config_error);
+	String empty = scratch("emptydir");
+	put(empty, "README.md", "ignored\n");
+	r = suite(empty, CORPUS, "", false, &out);
+	assert(!r.config_error && r.selected == 0 && r.passed == 0);
+	assert(r.passed_gate(false));
 }
 
 fn void full_mode_rejects_unclassified_cases() @test
@@ -552,7 +652,7 @@ fn void gate_compares_complete_outcomes() @test
 	String dir = make_corpus("gate");
 	put(dir, "data/fatal", "a.c:1:1: fatal error: 'x.h' file not found\n");
 	put(dir, "fatal.c", "/** manifest:\nsyntax\nenv = FAKE_ERR=data/fatal FAKE_EXIT=1\n\nfatal error\n*/");
-	put(dir, "crash.c", "/** manifest:\nsyntax_ignore_errors\nenv = FAKE_SIGNAL=SEGV\n*/");
+	put(dir, "crash.c", "/** manifest:\nsyntax_ignore_errors\nenv = FAKE_CRASH=1\n*/");
 	DString out;
 	out.init(tmem);
 
@@ -571,12 +671,13 @@ fn void gate_compares_complete_outcomes() @test
 	r = suite(dir, LIST, "fatal.c exit=1 fatal\n", true, &out);
 	assert(r.gate_mismatches == 0 && r.passed_gate(true));
 
-	// A crash never matches a plain known failure; only the exact signal does.
+	// A crash never matches a plain known failure; the host-specific
+	// abnormal-termination value must be declared explicitly.
 	out.clear();
 	r = suite(dir, LIST, "crash.c result=fail\n", true, &out);
 	assert(r.gate_mismatches == 1);
 	out.clear();
-	r = suite(dir, LIST, "crash.c result=fail signal=11\n", true, &out);
+	r = suite(dir, LIST, string::tformat("crash.c result=fail signal=%d\n", expected_abort_signal()), true, &out);
 	assert(r.gate_mismatches == 0);
 
 	// Unsupported must be declared, and an unexpected pass is a mismatch too.
@@ -610,4 +711,28 @@ fn void outcome_log_is_written_after_collection() @test
 	assert(tsv.starts_with("case\tresult\texit\tsignal\tfatal\tstdout_bytes\tstderr_bytes\texpected\tgate\n"));
 	assert(tsv.contains("errors.c\tpass\t1\t0\tno\t0\t21\t"), "%s", tsv);
 	assert(tsv.contains("hello world.c\tunsupported\tnone\t"));
+}
+
+fn void escaped_log_keeps_text_after_nul() @test
+{
+	DString log;
+	log.init(tmem);
+	char[] raw = { 'a', 0, 'b', 1, 'c', '\n', '\t', '\r', 'd' };
+	aro_runner::append_escaped(&log, (String)raw);
+	assert(log.str_view() == "a\\0b\\x01c\n\t\rd", "log '%s'", log.str_view());
+}
+
+fn void nul_in_child_stderr_does_not_truncate_log() @test
+{
+	String dir = scratch("nul log");
+	char[] stderr = {
+		'a', '.', 'c', ':', '1', ':', '1', ':', ' ', 'e', 'r', 'r', 'o', 'r', ':', ' ', 'f', 'i', 'r', 's', 't', '\n',
+		'a', '.', 'c', ':', '2', ':', '1', ':', ' ', 'e', 'r', 'r', 'o', 'r', ':', ' ', 0, 't', 'a', 'i', 'l', '\n',
+	};
+	put(dir, "data/err", (String)stderr);
+	String p = put(dir, "a.c", "/** manifest:\nsyntax\nenv = FAKE_ERR=data/err FAKE_EXIT=1\n\nerror: first\nerror: second\n*/");
+	CaseOutcome o = run(p);
+	expect_fail(o, aro_runner::MISSING_ERROR);
+	assert(o.log.str_view().contains("error: \\0tail"));
+	assert(o.log.str_view().contains("in case 'a'"));
 }

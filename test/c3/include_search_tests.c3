@@ -25,6 +25,13 @@ fn bool tree_exists(void* ctx, String path)
 	return true;
 }
 
+fn bool recording_tree_exists(void* ctx, String path)
+{
+	MemTree* tree = ctx;
+	tree.log(path);
+	return false;
+}
+
 fn char[]? tree_read(void* ctx, Allocator a, String path, ulong limit)
 {
 	MemTree* tree = ctx;
@@ -82,25 +89,25 @@ fn void ordered_classes_and_path_forms() @test
 		foreach (dir : comp.include_dirs) if (dir.path == "/missing") kept_missing = true;
 		check(kept_missing, false);
 		Source main = add_source(&comp, "/else/main.c");
-		Source found = comp.search_include("h.h", main.id, QUOTES, FIRST)!!;
+		Source found = comp.search_include("h.h", main.id, QUOTES, FIRST, null)!!;
 		check(found.path, "/work/q/h.h");
 		check(found.kind.ordinal, SourceKind.USER.ordinal);
-		found = comp.search_include("h.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+		found = comp.search_include("h.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(found.path, "/work/i/h.h");
-		found = comp.search_include("late.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+		found = comp.search_include("late.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(found.path, "/work/s/late.h");
 		check(found.kind.ordinal, SourceKind.SYSTEM.ordinal);
-		found = comp.search_include("after.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+		found = comp.search_include("after.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(found.path, "/work/a/after.h");
 		check(found.kind.ordinal, SourceKind.SYSTEM.ordinal);
-		found = comp.search_include("h.h", main.id, CLI, FIRST)!!;
+		found = comp.search_include("h.h", main.id, CLI, FIRST, null)!!;
 		check(found.path, "/work/h.h"); // CLI begins at the explicit cwd
-		found = comp.search_include("fallback.h", main.id, CLI, FIRST)!!;
+		found = comp.search_include("fallback.h", main.id, CLI, FIRST, null)!!;
 		check(found.path, "/work/i/fallback.h"); // A cwd miss continues through include dirs
-		found = comp.search_include("/absolute/h.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+		found = comp.search_include("/absolute/h.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(found.path, "/absolute/h.h");
-		check(@catch(comp.search_include("/absolute/h.h", main.id, QUOTES, NEXT)), preprocessor::FILE_NOT_FOUND);
-		check(@catch(comp.search_include("bad\x00name.h", main.id, QUOTES, FIRST)), preprocessor::FILE_NOT_FOUND);
+		check(@catch(comp.search_include("/absolute/h.h", main.id, QUOTES, NEXT, null)), preprocessor::FILE_NOT_FOUND);
+		check(@catch(comp.search_include("bad\x00name.h", main.id, QUOTES, FIRST, null)), preprocessor::FILE_NOT_FOUND);
 		comp.free();
 		tree.free();
 	}
@@ -126,7 +133,7 @@ fn void system_directory_shadows_duplicate_normal_directory() @test
 			{ .kind = SYSTEM, .path = "/inc" },
 		});
 		Source main = add_source(&comp, "/main.c");
-		Source found = comp.search_include("header.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+		Source found = comp.search_include("header.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(found.path, "/first/header.h");
 		comp.free();
 		tree.free();
@@ -158,20 +165,20 @@ fn void quoted_and_include_next() @test
 		});
 		Source main = add_source(&comp, "/w/src/main.c");
 		SourceId alias_id = comp.add_source_alias(main.id, "/alias/main.c", USER);
-		Source alias_relative = comp.search_include("local.h", alias_id, QUOTES, FIRST)!!;
+		Source alias_relative = comp.search_include("local.h", alias_id, QUOTES, FIRST, null)!!;
 		check(alias_relative.path, "/alias/local.h");
-		Source found = comp.search_include("local.h", main.id, QUOTES, FIRST)!!;
+		Source found = comp.search_include("local.h", main.id, QUOTES, FIRST, null)!!;
 		check(found.path, "/w/src/local.h");
 		// A header found in the quote directory starts include_next after it.
 		Source quote = add_source(&comp, "/w/quote/local.h");
-		found = comp.search_include("local.h", quote.id, QUOTES, NEXT)!!;
+		found = comp.search_include("local.h", quote.id, QUOTES, NEXT, null)!!;
 		check(found.path, "/w/inc/local.h");
 		check(found.kind.ordinal, SourceKind.USER.ordinal);
 		Source normal = add_source(&comp, "/w/inc/local.h");
-		found = comp.search_include("local.h", normal.id, ANGLE_BRACKETS, NEXT)!!;
+		found = comp.search_include("local.h", normal.id, ANGLE_BRACKETS, NEXT, null)!!;
 		check(found.path, "/w/sys/local.h");
 		check(found.kind.ordinal, SourceKind.SYSTEM.ordinal);
-		check(@catch(comp.search_include("local.h", main.id, ANGLE_BRACKETS, NEXT)), preprocessor::FILE_NOT_FOUND);
+		check(@catch(comp.search_include("local.h", main.id, ANGLE_BRACKETS, NEXT, null)), preprocessor::FILE_NOT_FOUND);
 		comp.free();
 		tree.free();
 	}
@@ -254,7 +261,7 @@ fn void framework_subframework_and_reuse() @test
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({ { .kind = SYSTEM_FRAMEWORK, .path = "/sdk" } });
 		Source main = add_source(&comp, "/main.c");
-		Source? result = comp.search_include("Foo/Foo.h", main.id, ANGLE_BRACKETS, FIRST);
+		Source? result = comp.search_include("Foo/Foo.h", main.id, ANGLE_BRACKETS, FIRST, null);
 		Source foo = result!!;
 		check(foo.path, "/sdk/Foo.framework/Headers/Foo.h");
 		check(foo.has_umbrella_framework_path(), true);
@@ -263,16 +270,44 @@ fn void framework_subframework_and_reuse() @test
 		check(comp.get_source(foo.id).umbrella_framework_path, foo.umbrella_framework_path);
 		// Add the child framework by explicit search dir; framework nesting is
 		// resolved relative to the umbrella framework recorded on Foo.h.
-		Source bar = comp.search_include("Bar/Bar.h", foo.id, ANGLE_BRACKETS, FIRST)!!;
+		Source bar = comp.search_include("Bar/Bar.h", foo.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(bar.path, "/sdk/Foo.framework/Frameworks/Bar.framework/Headers/Bar.h");
 		check(bar.umbrella_framework_path, foo.umbrella_framework_path);
 		check(bar.kind.ordinal, SourceKind.SYSTEM.ordinal);
 		uint count = (uint)comp.sources.len();
-		Source again = comp.search_include("Foo/Foo.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+		Source again = comp.search_include("Foo/Foo.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 		check(again.id.index, foo.id.index);
 		check((uint)comp.sources.len(), count);
 		SourceId alias_id = comp.add_source_alias(main.id, "/alias/main.c", SYSTEM);
 		check(comp.get_source(alias_id).path, "/alias/main.c");
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void framework_include_next_continues_to_next_root() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/sdk/frameworks/SimpleFramework.framework/Headers/Foo.h", "first");
+		tree.add_file("/sdk/next/SimpleFramework.framework/Headers/Foo.h", "second");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({
+			{ .kind = SYSTEM_FRAMEWORK, .path = "/sdk/frameworks" },
+			{ .kind = SYSTEM_FRAMEWORK, .path = "/sdk/next" },
+		});
+		Source main = add_source(&comp, "/main.c");
+		Source first = comp.search_include("SimpleFramework/Foo.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(first.path, "/sdk/frameworks/SimpleFramework.framework/Headers/Foo.h");
+		Source next = comp.search_include("SimpleFramework/Foo.h", first.id, ANGLE_BRACKETS, NEXT, null)!!;
+		check(next.path, "/sdk/next/SimpleFramework.framework/Headers/Foo.h");
 		comp.free();
 		tree.free();
 	}
@@ -296,9 +331,9 @@ fn void missing_empty_binary_and_repeated_cleanup() @test
 			comp.set_include_dirs({ { .kind = NORMAL, .path = "/inc" } });
 			comp.set_embed_dirs({ "/inc" });
 			Source main = add_source(&comp, "/main.c");
-			Source empty = comp.search_include("empty.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+			Source empty = comp.search_include("empty.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 			check(empty.buf.len, 0);
-			Source binary = comp.search_include("binary.h", main.id, ANGLE_BRACKETS, FIRST)!!;
+			Source binary = comp.search_include("binary.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
 			check(binary.buf.len, 3);
 			check(binary.buf[1], 0);
 			DepFile deps;
@@ -309,13 +344,12 @@ fn void missing_empty_binary_and_repeated_cleanup() @test
 			defer alloc::free(&ta, limited.ptr);
 			check(limited.len, 1);
 			check(limited[0], 'A');
-			alloc::free(&ta, limited.ptr);
 			check(deps.deps.len(), 1);
 			check(deps.deps[0], "binary.h");
 			check(provider.has_include(provider.ctx, &pp, "empty.h", main.id, ANGLE_BRACKETS, FIRST)!!, true);
 			check(deps.deps.len(), 2);
 			check(deps.deps[1], "/inc/empty.h");
-			check(@catch(comp.search_include("missing.h", main.id, ANGLE_BRACKETS, FIRST)), preprocessor::FILE_NOT_FOUND);
+			check(@catch(comp.search_include("missing.h", main.id, ANGLE_BRACKETS, FIRST, null)), preprocessor::FILE_NOT_FOUND);
 			deps.free();
 			comp.free();
 			tree.free();
@@ -323,4 +357,199 @@ fn void missing_empty_binary_and_repeated_cleanup() @test
 		check(ta.allocation_count(), 0);
 		ta.free();
 	}
+}
+
+fn void embed_order_absolute_limits_and_missing() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/work/src/main.c", "");
+		tree.add_file("/work/src/local.bin", "relative-data");
+		tree.add_file("/embed/local.bin", "embed-data");
+		tree.add_file("/embed/empty.bin", "");
+		tree.add_file("/absolute/data.bin", "absolute-data");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_embed_dirs({ "/embed" });
+		Source main = add_source(&comp, "/work/src/main.c");
+		DepFile deps;
+		deps.init(&ta, "out.o", MAKE);
+		Preprocessor pp = { .comp = &comp, .dependencies = &deps };
+		FileProvider provider = comp.file_provider();
+
+		char[] data = provider.find_embed(provider.ctx, &pp, "local.bin", main.id, QUOTES, ulong::max)!!;
+		defer alloc::free(&ta, data.ptr);
+		check((String)data, "relative-data");
+		check(deps.deps.len(), 1);
+		check(deps.deps[0], "local.bin"); // Zig records the embed spelling
+
+		char[] limited = provider.find_embed(provider.ctx, &pp, "local.bin", main.id, ANGLE_BRACKETS, 3)!!;
+		defer alloc::free(&ta, limited.ptr);
+		check((String)limited, "emb");
+		check(deps.deps.len(), 1); // same spelling: DepFile keeps one entry
+		check(deps.deps[0], "local.bin");
+
+		char[] absolute = provider.find_embed(provider.ctx, &pp, "/absolute/data.bin", main.id, QUOTES, 4)!!;
+		defer alloc::free(&ta, absolute.ptr);
+		check((String)absolute, "abso");
+		check(deps.deps.len(), 2);
+		check(deps.deps[1], "/absolute/data.bin");
+
+		char[] empty = provider.find_embed(provider.ctx, &pp, "empty.bin", main.id, ANGLE_BRACKETS, ulong::max)!!;
+		defer alloc::free(&ta, empty.ptr);
+		check(empty.len, 0);
+		check(deps.deps.len(), 3);
+		check(@catch(provider.find_embed(provider.ctx, &pp, "missing.bin", main.id, ANGLE_BRACKETS, ulong::max)), preprocessor::FILE_NOT_FOUND);
+		check(deps.deps.len(), 3);
+		check(@catch(provider.find_embed(provider.ctx, &pp, "bad\x00name", main.id, QUOTES, ulong::max)), preprocessor::FILE_NOT_FOUND);
+		check(deps.deps.len(), 3);
+		deps.free();
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void quote_system_shadowing_and_include_next_exhaustion() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/quote/shared.h", "quote");
+		tree.add_file("/normal/shared.h", "normal");
+		tree.add_file("/system/shared.h", "system");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({
+			{ .kind = SYSTEM, .path = "/system" },
+			{ .kind = NORMAL, .path = "/normal" },
+			{ .kind = QUOTE, .path = "/quote" },
+		});
+		Source main = add_source(&comp, "/main.c");
+		Source quoted = comp.search_include("shared.h", main.id, QUOTES, FIRST, null)!!;
+		check(quoted.path, "/quote/shared.h");
+		Source angled = comp.search_include("shared.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(angled.path, "/normal/shared.h");
+		Source sys = add_source(&comp, "/system/shared.h");
+		check(@catch(comp.search_include("shared.h", sys.id, ANGLE_BRACKETS, NEXT, null)), preprocessor::FILE_NOT_FOUND);
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void include_candidate_path_normalization_edges() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/terminal/header.h", "terminal");
+		tree.add_file("a/b.h", "dot component");
+		tree.add_file("b.h", "parent component");
+		tree.add_file("/rooted.h", "absolute parent");
+		tree.add_file("/trail", "trailing slash");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		Source main = add_source(&comp, "/main.c");
+
+		comp.set_include_dirs({ { .kind = NORMAL, .path = "/terminal" } });
+		Source found = comp.search_include("header.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(found.path, "/terminal/header.h"); // Final path component reaches the end of the string.
+
+		comp.set_include_dirs({ { .kind = NORMAL, .path = "a/." } });
+		found = comp.search_include("b.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(found.path, "a/b.h");
+
+		comp.set_include_dirs({ { .kind = NORMAL, .path = "a/.." } });
+		found = comp.search_include("b.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(found.path, "b.h");
+
+		found = comp.search_include("/../rooted.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(found.path, "/rooted.h"); // An absolute .. component stays at the root.
+
+		found = comp.search_include("/trail/", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(found.path, "/trail");
+
+		comp.set_include_dirs({ { .kind = NORMAL, .path = "" } });
+		tree.record = true;
+		comp.include_files.exists = &recording_tree_exists;
+		check(@catch(comp.search_include("", main.id, ANGLE_BRACKETS, FIRST, null)), preprocessor::FILE_NOT_FOUND);
+		check(tree.accesses.len(), 1);
+		check(tree.accesses[0], ".");
+
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void include_next_normalizes_include_dir_spelling() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/w/include/mixed/other_mixed.h", "mixed");
+		tree.add_file("/w/include/other_mixed.h", "next");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({
+			{ .kind = NORMAL, .path = "/w/include//mixed" },
+			{ .kind = NORMAL, .path = "/w/include" },
+		});
+		Source main = add_source(&comp, "/w/main.c");
+		Source first = comp.search_include("other_mixed.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(first.path, "/w/include/mixed/other_mixed.h");
+		Source next = comp.search_include("other_mixed.h", first.id, ANGLE_BRACKETS, NEXT, null)!!;
+		check(next.path, "/w/include/other_mixed.h");
+		check(next.kind.ordinal, SourceKind.USER.ordinal);
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
+fn void include_next_root_wait_dir_matches_slash_dir() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/a.h", "root");
+		tree.add_file("/x/a.h", "next");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({
+			{ .kind = NORMAL, .path = "/" },
+			{ .kind = NORMAL, .path = "/x" },
+		});
+		Source main = add_source(&comp, "/main.c");
+		Source first = comp.search_include("a.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
+		check(first.path, "/a.h");
+		// The includer "/a.h" waits on "/", so the "/" entry must clear the wait.
+		Source next = comp.search_include("a.h", first.id, ANGLE_BRACKETS, NEXT, null)!!;
+		check(next.path, "/x/a.h");
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
 }

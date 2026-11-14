@@ -61,7 +61,7 @@ fn bool stringify_escapes_backslash(TokenId id) @private
  CHAR_LITERAL_UTF_8), MACRO_WS collapsed to one space between tokens
  (leading/trailing dropped), then "\"\n". If the content ends with '\':
  append "\"\0", re-tokenize char_buf from index 0; if that gives
- UNTERMINATED_STRING_LITERAL warn DIAG_INVALID_PP_STRINGIFY_ESCAPE at the last
+ UNTERMINATED_STRING_LITERAL warn PpDiag.INVALID_PP_STRINGIFY_ESCAPE at the last
  token and replace the trailing `\"\0` with '"'; then append '\n' (so a
  terminated result keeps the NUL, as in Zig). Callers clear char_buf first.
  @return? compilation::FATAL_ERROR
@@ -114,7 +114,7 @@ fn void? Preprocessor.stringify(&self, TokenWithExpansionLocs[] toks)
 	if (item.id == UNTERMINATED_STRING_LITERAL)
 	{
 		TokenWithExpansionLocs tok = toks[^1];
-		self.err(tok, DIAG_INVALID_PP_STRINGIFY_ESCAPE)!;
+		self.err(tok, PpDiag.INVALID_PP_STRINGIFY_ESCAPE)!;
 		self.char_buf.size -= 3; // erase unpaired backslash, appended end quote and NUL
 		self.char_buf.push('"');
 	}
@@ -160,7 +160,7 @@ fn bool Preprocessor.paste_skips(&self, TokenId id)
  next_no_ws_comments twice; the id is PLACEMARKER if both sides are, else the
  first token's; hideset = intersection(hideset(lhs), hideset(rhs)); push
  make_generated_token_extra(start, id, lhs, hs, either is_macro_arg). A second
- token that is not nl/eof -> DIAG_PASTING_FORMED_INVALID (the pasted text) at
+ token that is not nl/eof -> PpDiag.PASTING_FORMED_INVALID (the pasted text) at
  lhs and push that token (tokens::from_raw) too. Then copy the rest of
  rhs_toks after the used token. lhs's array is freed. rhs_toks is borrowed.
  @return? compilation::FATAL_ERROR
@@ -179,7 +179,7 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 			have_lhs = true;
 			break;
 		}
-		tokens::free_expansion_locs(gpa, lhs.expansion_locs);
+		lhs.expansion_locs.free();
 	}
 	if (!have_lhs)
 	{
@@ -199,7 +199,7 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 				lhs_toks.push({ .id = MACRO_WS, .loc = lhs.loc });
 			}
 		}
-		tokens::free_expansion_locs(gpa, lhs.expansion_locs); // Zig leaks this array
+		lhs.expansion_locs.free(); // Zig leaks this array
 		buf_copy_tokens(gpa, lhs_toks, rhs_toks, {});
 		return;
 	}
@@ -222,7 +222,7 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 		lhs_toks.push(lhs);
 		return;
 	}
-	defer tokens::free_expansion_locs(gpa, lhs.expansion_locs);
+	defer lhs.expansion_locs.free();
 
 	List{char}* gen = &self.comp.generated_buf;
 	sz start = gen.len();
@@ -254,7 +254,7 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 	if (next.id != NL && next.id != EOF)
 	{
 		String pasted = (String)self.comp.generated_buf.array_view()[start:end - start];
-		self.err(lhs, DIAG_PASTING_FORMED_INVALID, { diagnostics::arg_str(pasted) })!;
+		self.err(lhs, PpDiag.PASTING_FORMED_INVALID, pasted)!;
 		lhs_toks.push(tokens::from_raw(next));
 	}
 

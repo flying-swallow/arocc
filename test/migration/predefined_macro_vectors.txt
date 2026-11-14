@@ -1,10 +1,16 @@
-Source-derived vector plan (pending executable comparison with the pinned Zig reference):
+Predefined macro vector, verified by the pinned Zig reference executable.
+The supplemental `zig build test-integration` run with Zig
+`0.18.0-dev.828+9da287565` on the current 493-case corpus passed all fixtures
+and reported 30 additive skips. The frozen inventory in
+baseline.json remains 492 cases; this later fixture is an explicitly recorded
+addition and was included in that execution.
 
-predefined macro vector.c selects x86_64-unknown-linux-gnu independent of the
-host, selects the x86_64_v3 CPU, and sets SOURCE_DATE_EPOCH=0. It checks __LINE__, incrementing
-__COUNTER__, __INCLUDE_LEVEL__, __DATE__/__TIME__, source-name expansion,
-__STDC__/__STDC_VERSION__, pointer size, x86_64 and AVX2 target defines. The
-case's expanded golden is the explicit expected output for this vector.
+`predefined macro vector.c` selects x86_64-linux-gnu independent of the host,
+selects the x86_64_v3 CPU, and sets SOURCE_DATE_EPOCH=0. It checks __LINE__,
+incrementing __COUNTER__, __INCLUDE_LEVEL__, __DATE__/__TIME__, source-name
+expansion, __STDC__/__STDC_VERSION__, pointer size, x86_64 and AVX2 target
+defines. The pinned reference runner matched the existing expanded suffix
+golden for this fixture.
 
 The existing invalid epoch.c fixture also runs here. It expects the exact
 SOURCE_DATE_EPOCH diagnostic when the environment contains `abc`.

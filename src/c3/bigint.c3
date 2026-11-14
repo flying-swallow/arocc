@@ -213,7 +213,7 @@ fn Limb div_wide(Limb u1, Limb u0, Limb divisor, Limb* rem)
 		rhat += vn1;
 		if (rhat >= HALF_BASE) break;
 	}
-	*rem = ((un21 << 32) + un0 - q0 * v) >> s;
+	* rem = ((un21 << 32) + un0 - q0 * v) >> s;
 	return (q1 << 32) + q0;
 }
 
@@ -400,7 +400,7 @@ fn sz llshr(Limb[] r, Limb[] a, usz shift)
 
 fn void llnot(Limb[] r)
 {
-	foreach (&l : r) *l = ~*l;
+	foreach (&l : r) * l = ~* l;
 }
 
 <* -1, 0, 1 for |a| <=> |b| (normalized lengths). *>
@@ -411,7 +411,7 @@ fn int llcmp(Limb[] a, Limb[] b)
 	if (a_len != b_len) return a_len < b_len ? -1 : 1;
 	for (sz i = a_len; i > 0; i--)
 	{
-		if (a[i - 1] != b[i - 1]) return a[i - 1] < b[i - 1] ? -1 : 1;
+		if (a[i - 1] != b[i - 1]) return a[i - 1] < b[i - 1]?-1: 1;
 	}
 	return 0;
 }
@@ -431,10 +431,10 @@ fn bool slices_overlap(Limb[] a, Limb[] b)
 // ---------------------------------------------------------------------------
 
 <* calcLimbLen for an unsigned 64-bit scalar: 1 for zero, else limbs needed for the magnitude. *>
-fn sz calc_limb_len_u64(ulong scalar) => 1; // 64-bit limbs: any u64 fits in one limb
+fn sz calc_limb_len_u64(ulong scalar) => 1;  // 64-bit limbs: any u64 fits in one limb
 
 <* calcLimbLen for a signed 64-bit scalar (uses |scalar|). *>
-fn sz calc_limb_len_i64(long scalar) => 1; // 64-bit limbs: |i64| <= 2^63 fits in one limb
+fn sz calc_limb_len_i64(long scalar) => 1;  // 64-bit limbs: |i64| <= 2^63 fits in one limb
 
 <* calcTwosCompLimbCount: max(ceil(bit_count / 64), 1). *>
 fn sz calc_twos_comp_limb_count(usz bit_count)
@@ -453,14 +453,14 @@ fn sz calc_non_zero_twos_comp_limb_count(usz bit_count) => calc_twos_comp_limb_c
 fn sz calc_div_limbs_buffer_len(sz a_len, sz b_len) => a_len + b_len + 4;
 
 <* calcMulLimbsBufferLen: aliases * max(a_len, b_len). `aliases` = how many of a/b alias the result. *>
-fn sz calc_mul_limbs_buffer_len(sz a_len, sz b_len, sz aliases) => aliases * (a_len > b_len ? a_len : b_len);
+fn sz calc_mul_limbs_buffer_len(sz a_len, sz b_len, sz aliases) => aliases * (a_len > b_len ? a_len: b_len);
 
 <* calcMulWrapLimbsBufferLen: aliases * min(calcTwosCompLimbCount(bit_count), max(a_len, b_len)). *>
 fn sz calc_mul_wrap_limbs_buffer_len(usz bit_count, sz a_len, sz b_len, sz aliases)
 {
 	sz req = calc_twos_comp_limb_count(bit_count);
 	sz m = a_len > b_len ? a_len : b_len;
-	return aliases * (req < m ? req : m);
+	return aliases * (req < m ? req: m);
 }
 
 <*
@@ -535,7 +535,10 @@ fn BigIntMutable BigIntConst.to_mutable(self, Limb[] limbs)
 }
 
 <* Mutable.toConst: view of the normalized value `limbs[:len]`. *>
-fn BigIntConst BigIntMutable.to_const(self) => { .limbs = self.limbs[:self.len], .positive = self.positive };
+fn BigIntConst BigIntMutable.to_const(self) =>
+{
+	.limbs = self.limbs[:self.len], .positive = self.positive
+};
 
 <* Mutable.set (u64). Asserts the value fits in `self.limbs`. *>
 fn void BigIntMutable.set_u64(&self, ulong value)
@@ -897,7 +900,7 @@ fn BigIntConst unalias(Limb[] r, BigIntConst a, sz copy_len, Limb[] buf, sz* idx
 {
 	if (!slices_overlap(r, a.limbs)) return a;
 	assert(buf.len >= *idx + copy_len, "limbs_buffer too small for aliased operand");
-	Limb[] dst = buf[*idx:copy_len];
+	Limb[] dst = buf[*idx : copy_len];
 	for (sz i = 0; i < copy_len; i++) dst[i] = a.limbs[i];
 	*idx += copy_len;
 	return { .limbs = dst, .positive = a.positive };
@@ -982,7 +985,11 @@ fn void div_impl(BigIntMutable* q, BigIntMutable* r, Limb[] x, sz xlen, Limb[] y
 	bool q_pos = x_pos == y_pos;
 	if (llcmp(x[:xlen], y) < 0)
 	{
-		r.copy({ .limbs = x[:xlen], .positive = true });
+		r.copy(
+			{
+				.limbs = x[:xlen], .positive = true
+			}
+		);
 		r.positive = x_pos;
 		r.fix_zero_sign();
 		q.set_u64(0);
@@ -1043,7 +1050,7 @@ fn void div_impl(BigIntMutable* q, BigIntMutable* r, Limb[] x, sz xlen, Limb[] y
 			rhat_big = rhat < old;
 		}
 		// D4-D6: multiply and subtract, add back on borrow.
-		Limb[] uj = u[j:n + 1];
+		Limb[] uj = u[j : n + 1];
 		if (llmul_limb_sub(uj, y, qhat))
 		{
 			qhat--;
@@ -1064,14 +1071,14 @@ fn void div_impl(BigIntMutable* q, BigIntMutable* r, Limb[] x, sz xlen, Limb[] y
 }
 
 <* Copies a and b into limbs_buffer as Zig's divTrunc does; returns |b|'s copy through *y_copy. *>
-fn void div_setup(BigIntMutable* q, BigIntMutable* r, BigIntConst a, BigIntConst b, Limb[] limbs_buffer, Limb[]* y_copy)
+fn void div_setup(BigIntMutable* q, BigIntMutable* r, BigIntConst a, BigIntConst b, Limb[] limbs_buffer, Limb[] * y_copy)
 {
 	assert(!b.eql_zero(), "division by zero");
 	assert(q != r);
 	sz sep = a.limbs.len + 2;
 	assert(limbs_buffer.len >= sep + b.limbs.len, "limbs_buffer too small for division");
 	Limb[] x = limbs_buffer[:sep];
-	Limb[] y = limbs_buffer[sep:b.limbs.len];
+	Limb[] y = limbs_buffer[sep : b.limbs.len];
 	for (sz i = 0; i < a.limbs.len; i++) x[i] = a.limbs[i];
 	x[a.limbs.len] = 0;
 	x[a.limbs.len + 1] = 0;
@@ -1510,7 +1517,10 @@ fn void BigIntMutable.saturate(&r, BigIntConst a, Signedness signedness, usz bit
 // ---------------------------------------------------------------------------
 
 <* Const.abs (shares limbs). *>
-fn BigIntConst BigIntConst.abs(self) => { .limbs = self.limbs, .positive = true };
+fn BigIntConst BigIntConst.abs(self) =>
+{
+	.limbs = self.limbs, .positive = true
+};
 
 <* Const.negate (shares limbs; zero stays positive). *>
 fn BigIntConst BigIntConst.negate(self)
@@ -1672,7 +1682,7 @@ fn int? BigIntConst.to_i32(self)
 	if (self.eql_zero()) return 0;
 	if (!self.fits_in_twos_comp(SIGNED, 32)) return TARGET_TOO_SMALL~;
 	ulong m = self.limbs[0];
-	return (int)(self.positive ? (long)m : (long)(0 - m));
+	return (int)(self.positive ? (long)m: (long)(0 - m));
 }
 
 fn usz floor_log2_base(char base) @inline => 63 - (usz)((ulong)base).clz();
@@ -1785,12 +1795,11 @@ fn String BigIntConst.to_string_alloc(self, Allocator gpa, char base, bool upper
 	}
 	char[] s = alloc::alloc_array(gpa, char, self.size_in_base_upper_bound(base));
 	sz scratch_len = calc_to_string_limbs_buffer_len(self.limbs.len, base);
-	Limb[] scratch;
-	if (scratch_len > 0) scratch = alloc::alloc_array(gpa, Limb, scratch_len);
-	defer
+	@pool()
 	{
-		if (scratch_len > 0) alloc::free(gpa, scratch.ptr);
-	}
-	sz n = self.to_string(s, base, upper, scratch);
-	return (String)s[:n];
+		Limb[] scratch;
+		if (scratch_len > 0) scratch = alloc::alloc_array(tmem, Limb, scratch_len);
+		sz n = self.to_string(s, base, upper, scratch);
+		return (String)s[:n];
+	};
 }

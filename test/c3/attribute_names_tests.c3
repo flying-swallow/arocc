@@ -16,20 +16,20 @@ fn void normalize_wrapped_names() @test
 fn void standard_names_and_vendor_aliases() @test
 {
 	Namespaced? standard = attribute::namespaced_from_string(STANDARD, false, "", "__nodiscard__");
-	assert(standard != null && standard!!.ns == STANDARD && standard!!.standard == NODISCARD);
+	assert(@ok(standard) && standard!!.ns == STANDARD && standard!!.standard == NODISCARD);
 	Namespaced? gnu = attribute::namespaced_from_string(STANDARD, true, "__gnu__", "__aligned__");
-	assert(gnu != null && gnu!!.ns == GNU && gnu!!.gnu == ALIGNED);
+	assert(@ok(gnu) && gnu!!.ns == GNU && gnu!!.gnu == ALIGNED);
 	Namespaced? clang = attribute::namespaced_from_string(STANDARD, true, "clang", "availability");
-	assert(clang != null && clang!!.ns == CLANG && clang!!.clang == AVAILABILITY);
+	assert(@ok(clang) && clang!!.ns == CLANG && clang!!.clang == AVAILABILITY);
 	assert(@catch(attribute::namespaced_from_string(STANDARD, true, "aro", "anything")) == attribute::UNKNOWN_ATTRIBUTE);
 }
 
 fn void syntax_names_and_invalid_pairs() @test
 {
 	Namespaced? gnu = attribute::namespaced_from_string(GNU, false, "", "__format__");
-	assert(gnu != null && gnu!!.ns == GNU && gnu!!.gnu == FORMAT);
+	assert(@ok(gnu) && gnu!!.ns == GNU && gnu!!.gnu == FORMAT);
 	Namespaced? declspec = attribute::namespaced_from_string(DECLSPEC, false, "", "__spectre__");
-	assert(declspec != null && declspec!!.ns == DECLSPEC && declspec!!.declspec == SPECTRE);
+	assert(@ok(declspec) && declspec!!.ns == DECLSPEC && declspec!!.declspec == SPECTRE);
 	assert(@catch(attribute::namespaced_from_string(STANDARD, false, "", "not_an_attribute")) == attribute::UNKNOWN_ATTRIBUTE);
 	assert(@catch(attribute::namespaced_from_string(GNU, false, "", "not_an_attribute")) == attribute::UNKNOWN_ATTRIBUTE);
 	assert(@catch(attribute::namespaced_from_string(DECLSPEC, false, "", "aligned")) == attribute::UNKNOWN_ATTRIBUTE);
@@ -45,15 +45,15 @@ fn void identifier_args_and_visibility_alias() @test
 	assert(!ordinary.has_identifier_arg());
 	assert(attribute::visibility_from_string("internal")!! == HIDDEN);
 	assert(attribute::visibility_from_string("protected")!! == PROTECTED);
-	assert(attribute::visibility_from_string("invalid") == null);
+	assert(@catch(attribute::visibility_from_string("invalid")) == attribute::UNKNOWN_VISIBILITY);
 }
 
 fn void namespaced_keyword_name_and_equality() @test
 {
-	Namespaced asm = attribute::namespaced_from_keyword(KEYWORD_ASM1);
+	Namespaced asm_name = attribute::namespaced_from_keyword(KEYWORD_ASM1);
 	Namespaced also_asm = attribute::namespaced_from_keyword(KEYWORD_ASM2);
-	assert(asm.eq(also_asm));
-	assert(asm.name() == "asm_label");
-	assert(!asm.eq(attribute::namespaced_from_keyword(KEYWORD_ALIGNAS)));
+	assert(asm_name.eq(also_asm));
+	assert(asm_name.name() == "asm_label");
+	assert(!asm_name.eq(attribute::namespaced_from_keyword(KEYWORD_ALIGNAS)));
 	assert(attribute::namespaced_from_keyword(KEYWORD_C23_ALIGNAS).name() == "alignas");
 }

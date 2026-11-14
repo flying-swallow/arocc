@@ -8,8 +8,8 @@
 //     `<exe> -fno-color-diagnostics <basename>` + kind flags + manifest args,
 //     manifest env overriding the inherited environment, then checks ordered
 //     diagnostic substrings and the exact AST / expanded output.
-//   * expand_partial checks that stdout ENDS WITH the expected file (the
-//     runner.zig behavior; test/README.MD's "contains" wording is wrong).
+//   * expand_partial checks that stdout ENDS WITH the expected file, matching
+//     runner.zig and the test/README.MD description.
 //   * compare_output is not implemented and is counted as `unsupported`.
 //
 // Additions for migration gates (not in runner.zig): per-case outcome
@@ -21,13 +21,13 @@
 // byte for byte. Environment-dependent paths are avoided by construction
 // (the child runs with the case directory as CWD and gets the case basename).
 //
-// Process handling uses POSIX directly (posix_spawn + addchdir_np + pipes +
-// poll + wait4) because std::os::process in c3c 0.8.5 cannot set a child CWD,
-// does not report terminating signals (join() maps them to EXIT_FAILURE) and
-// offers no way to drain stdout and stderr concurrently without busy waiting.
+// Process handling uses explicit host implementations: POSIX uses
+// posix_spawn + addchdir_np + pipes + poll + waitpid, and Windows uses
+// CreateProcessW + inheritable pipes + PeekNamedPipe. Both preserve argv,
+// child CWD, replacement environments, and concurrent output collection.
 module aro_runner;
 import std::io, std::io::path, std::os::env, std::collections::list, std::sort;
-import libc, std::os::posix, std::net::os;
+import libc, std::os::posix, std::net::os, std::os::win32, std::thread;
 
 // ---------------------------------------------------------------------------
 // Faults (names follow the Zig error set of runner.zig)
@@ -191,11 +191,35 @@ fn String[] tokenize_scalar(Allocator a, String buffer, char delimiter)
 	return out.array_view();
 }
 
-// std.fs.path.basename / stem / dirname for POSIX paths.
+// Host path helpers. Manifest paths are portable slash paths, while paths
+// supplied by the host (test temp dirs, cwd and runfiles) use native syntax.
+fn bool is_path_separator(char c)
+{
+	$if env::WIN32:
+		return c == '/' || c == '\\';
+	$else
+		return c == '/';
+	$endif
+}
+
+fn char native_path_separator()
+{
+	$if env::WIN32:
+		return '\\';
+	$else
+		return '/';
+	$endif
+}
+
 fn String basename(String p)
 {
-	String t = trim_end_set(p, "/");
-	if (try idx = find_last(t, "/")) return t[idx + 1..];
+	sz end = p.len;
+	while (end > 0 && is_path_separator(p[end - 1])) end--;
+	String t = p[:end];
+	for (sz i = t.len; i > 0; i--)
+	{
+		if (is_path_separator(t[i - 1])) return t[i..];
+	}
 	return t;
 }
 
@@ -212,11 +236,28 @@ fn String stem(String p)
 
 fn String dirname(String p)
 {
-	String t = trim_end_set(p, "/");
-	if (try idx = find_last(t, "/"))
+	$if env::WIN32:
+		// Preserve a drive root after trimming any extra trailing separators.
+		if (p.len >= 3 && p[1] == ':' && is_path_separator(p[2]))
+		{
+			sz end = p.len;
+			while (end > 3 && is_path_separator(p[end - 1])) end--;
+			if (end == 3) return p[:3];
+		}
+	$endif
+	sz end = p.len;
+	while (end > 1 && is_path_separator(p[end - 1])) end--;
+	String t = p[:end];
+	for (sz i = t.len; i > 0; i--)
 	{
-		if (idx == 0) return "/";
-		return t[:idx];
+		if (is_path_separator(t[i - 1]))
+		{
+			if (i == 1) return t[:1];
+			$if env::WIN32:
+				if (i == 3 && t[1] == ':') return t[:3];
+			$endif
+			return t[:i - 1];
+		}
 	}
 	return ".";
 }
@@ -224,8 +265,8 @@ fn String dirname(String p)
 fn String join_path(Allocator a, String dir, String name)
 {
 	if (dir.len == 0) return name.copy(a);
-	if (dir[^1] == '/') return string::format(a, "%s%s", dir, name);
-	return string::format(a, "%s/%s", dir, name);
+	if (is_path_separator(dir[^1])) return string::format(a, "%s%s", dir, name);
+	return string::format(a, "%s%c%s", dir, native_path_separator(), name);
 }
 
 <*
@@ -374,43 +415,38 @@ fn Case? case_from_file(Allocator a, String path, DString* log)
 }
 
 // ---------------------------------------------------------------------------
-// Child process execution (POSIX)
+// Child process execution (host implementations)
 // ---------------------------------------------------------------------------
 
-extern fn CInt posix_spawn_file_actions_addchdir_np(Posix_spawn_file_actions_t* actions, ZString path);
-extern fn CInt posix_spawn_file_actions_addopen(Posix_spawn_file_actions_t* actions, CInt fd, ZString path, CInt oflag, CUInt mode);
-extern fn CInt pipe2(CInt[2]* fds, CInt flags);
+extern fn CInt posix_spawn_file_actions_addchdir_np(Posix_spawn_file_actions_t* actions, ZString path) @feat(POSIX);
+extern fn CInt posix_spawn_file_actions_addopen(Posix_spawn_file_actions_t* actions, CInt fd, ZString path, CInt oflag, CUInt mode) @feat(POSIX);
+extern fn Win32_WCHAR* getEnvironmentStringsW() @cname("GetEnvironmentStringsW") @feat(WIN32);
+extern fn Win32_BOOL freeEnvironmentStringsW(Win32_WCHAR* block) @cname("FreeEnvironmentStringsW") @feat(WIN32);
+extern fn Win32_HANDLE createFileW(Win32_LPCWSTR name, Win32_DWORD access, Win32_DWORD share,
+	Win32_LPSECURITY_ATTRIBUTES security, Win32_DWORD disposition, Win32_DWORD flags,
+	Win32_HANDLE template) @cname("CreateFileW") @feat(WIN32);
 
-struct Timeval
-{
-	long tv_sec;
-	long tv_usec;
-}
-
-struct Rusage
-{
-	Timeval ru_utime;
-	Timeval ru_stime;
-	long ru_maxrss; // KiB on Linux
-	long[13] rest;
-}
-extern fn Pid_t wait4(Pid_t pid, CInt* status, CInt options, Rusage* usage);
-
-const CInt O_RDONLY = 0;
-const CInt O_CLOEXEC = 0x80000; // Linux
+const int F_SETFD @feat(POSIX) = 2;
+const int FD_CLOEXEC @feat(POSIX) = 1;
+const int F_GETFL @feat(POSIX) = 3;
+const int F_SETFL @feat(POSIX) = 4;
+const int CHILD_O_NONBLOCK @feat(POSIX) = $feat(DARWIN) ? 0x04 : 0x0800;
+const Win32_DWORD GENERIC_READ @feat(WIN32) = 0x80000000;
+const Win32_DWORD FILE_SHARE_READ @feat(WIN32) = 1;
+const Win32_DWORD FILE_SHARE_WRITE @feat(WIN32) = 2;
 
 struct ChildResult
 {
 	bool spawned;
 	bool exited;     // terminated normally
 	int exit_code;   // valid when exited
-	int signal;      // terminating signal when !exited
+	int signal;      // POSIX signal; -1 when abnormal termination has no signal code
 	String stdout;
 	String stderr;
-	long max_rss_kib;
+	long max_rss_kib; // -1 when unavailable or not portable across hosts.
 }
 
-fn void drain_into(CInt fd, DString* out, bool* open)
+fn void drain_into(CInt fd, DString* out, bool* open) @feat(POSIX)
 {
 	char[16384] buf;
 	sz n = libc::read((Fd)fd, &buf, buf.len);
@@ -425,46 +461,68 @@ fn void drain_into(CInt fd, DString* out, bool* open)
 	*open = false;
 }
 
-<*
- Runs argv[0] (no PATH search) with `cwd`, `environment` ("K=V" strings),
- stdin from /dev/null and stdout/stderr captured through pipes. Both pipes
- are drained concurrently with poll() so neither can block the child.
-*>
-fn ChildResult run_child(Allocator a, String[] argv, String cwd, String[] environment)
+fn void close_fd_pair(CInt read_fd, CInt write_fd) @feat(POSIX)
 {
-	ChildResult r;
+	libc::close(read_fd);
+	libc::close(write_fd);
+}
+
+fn bool set_cloexec(CInt fd) @feat(POSIX)
+{
+	return libc::fcntl((Fd)fd, F_SETFD, FD_CLOEXEC) == 0;
+}
+
+fn bool set_nonblocking(CInt fd) @feat(POSIX)
+{
+	CInt flags = libc::fcntl((Fd)fd, F_GETFL);
+	return flags >= 0 && libc::fcntl((Fd)fd, F_SETFL, flags | CHILD_O_NONBLOCK) == 0;
+}
+
+<* POSIX host implementation for Linux and macOS. waitpid omits rusage:
+ Linux reports KiB while Darwin reports bytes, so RSS is unavailable rather
+ than mislabeled or dependent on a handwritten host ABI struct. *>
+fn ChildResult run_child_posix(Allocator a, String[] argv, String cwd, String[] environment) @feat(POSIX)
+{
+	ChildResult r = { .max_rss_kib = -1 };
 	Posix_spawn_file_actions_t actions;
 	if (posix::spawn_file_actions_init(&actions)) return r;
 	defer posix::spawn_file_actions_destroy(&actions);
-
 	CInt[2] outp;
 	CInt[2] errp;
-	if (pipe2(&outp, O_CLOEXEC)) return r;
-	if (pipe2(&errp, O_CLOEXEC))
+	if (posix::pipe(&outp)) return r;
+	if (!set_cloexec(outp[0]) || !set_cloexec(outp[1]) || !set_nonblocking(outp[0]))
 	{
-		libc::close(outp[0]);
-		libc::close(outp[1]);
+		close_fd_pair(outp[0], outp[1]);
 		return r;
 	}
-
+	if (posix::pipe(&errp))
+	{
+		close_fd_pair(outp[0], outp[1]);
+		return r;
+	}
+	if (!set_cloexec(errp[0]) || !set_cloexec(errp[1]) || !set_nonblocking(errp[0]))
+	{
+		close_fd_pair(outp[0], outp[1]);
+		close_fd_pair(errp[0], errp[1]);
+		return r;
+	}
 	ZString* c_argv = mem::alloc_array(ZString, argv.len + 1);
 	defer mem::free(c_argv);
 	ZString* c_env = mem::alloc_array(ZString, environment.len + 1);
 	defer mem::free(c_env);
 	Pid_t pid;
-	CInt spawn_err;
+	CInt spawn_err = 0;
 	@pool()
 	{
 		foreach (i, s : argv) c_argv[i] = s.zstr_tcopy();
 		c_argv[argv.len] = null;
 		foreach (i, s : environment) c_env[i] = s.zstr_tcopy();
 		c_env[environment.len] = null;
-
-		posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0);
-		posix::spawn_file_actions_adddup2(&actions, outp[1], 1);
-		posix::spawn_file_actions_adddup2(&actions, errp[1], 2);
-		if (cwd.len) posix_spawn_file_actions_addchdir_np(&actions, cwd.zstr_tcopy());
-		spawn_err = posix::spawn(&pid, c_argv[0], &actions, null, c_argv, c_env);
+		spawn_err = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", libc::O_RDONLY, 0);
+		if (!spawn_err) spawn_err = posix::spawn_file_actions_adddup2(&actions, outp[1], 1);
+		if (!spawn_err) spawn_err = posix::spawn_file_actions_adddup2(&actions, errp[1], 2);
+		if (!spawn_err && cwd.len) spawn_err = posix_spawn_file_actions_addchdir_np(&actions, cwd.zstr_tcopy());
+		if (!spawn_err) spawn_err = posix::spawn(&pid, c_argv[0], &actions, null, c_argv, c_env);
 	};
 	libc::close(outp[1]);
 	libc::close(errp[1]);
@@ -475,7 +533,6 @@ fn ChildResult run_child(Allocator a, String[] argv, String cwd, String[] enviro
 		return r;
 	}
 	r.spawned = true;
-
 	DString out;
 	out.init(a);
 	DString err;
@@ -492,62 +549,285 @@ fn ChildResult run_child(Allocator a, String[] argv, String cwd, String[] enviro
 		if (rc < 0)
 		{
 			if (libc::errno() == EINTR) continue;
-			// poll itself failed: fall back to blocking reads in order.
-			while (out_open) drain_into(outp[0], &out, &out_open);
-			while (err_open) drain_into(errp[0], &err, &err_open);
+			// The descriptors are nonblocking, so keep servicing both until EOF.
+			while (out_open || err_open)
+			{
+				if (out_open) { drain_into(outp[0], &out, &out_open); }
+				if (err_open) { drain_into(errp[0], &err, &err_open); }
+				thread::sleep_ms(1);
+			}
 			break;
 		}
 		for (Posix_nfds_t i = 0; i < n; i++)
 		{
 			if (!fds[i].revents) continue;
-			if (fds[i].fd == outp[0])
-			{
-				drain_into(outp[0], &out, &out_open);
-			}
-			else
-			{
-				drain_into(errp[0], &err, &err_open);
-			}
+			if (fds[i].fd == outp[0]) { drain_into(outp[0], &out, &out_open); }
+			else { drain_into(errp[0], &err, &err_open); }
 		}
 	}
-
 	CInt status;
-	Rusage usage;
 	while (true)
 	{
-		Pid_t w = wait4(pid, &status, 0, &usage);
+		Pid_t w = posix::waitpid(pid, &status, 0);
 		if (w == pid) break;
 		if (w < 0 && libc::errno() == EINTR) continue;
-		// Could not reap the child: report it as not exited.
 		r.signal = -1;
 		r.stdout = out.str_view();
 		r.stderr = err.str_view();
 		return r;
 	}
-	r.max_rss_kib = usage.ru_maxrss;
 	if (posix::wIFEXITED(status))
 	{
 		r.exited = true;
 		r.exit_code = posix::wEXITSTATUS(status);
 	}
-	else if (posix::wIFSIGNALED(status))
-	{
-		r.signal = posix::wTERMSIG(status);
-	}
-	else
-	{
-		r.signal = -1;
-	}
+	else if (posix::wIFSIGNALED(status)) { r.signal = posix::wTERMSIG(status); }
+	else { r.signal = -1; }
 	r.stdout = out.str_view();
 	r.stderr = err.str_view();
 	return r;
+}
+
+fn void append_windows_arg(DString* line, String arg) @feat(WIN32)
+{
+	line.append_char('"');
+	sz slashes = 0;
+	foreach (c : arg)
+	{
+		if (c == '\\')
+		{
+			slashes++;
+			continue;
+		}
+		if (c == '"')
+		{
+			line.append_char_repeat('\\', slashes * 2 + 1);
+			line.append_char('"');
+		}
+		else
+		{
+			line.append_char_repeat('\\', slashes);
+			line.append_char(c);
+		}
+		slashes = 0;
+	}
+	line.append_char_repeat('\\', slashes * 2);
+	line.append_char('"');
+}
+
+fn void append_windows_output(Win32_HANDLE handle, DString* out, bool* open) @feat(WIN32)
+{
+	Win32_DWORD available = 0;
+	if (!win32::peekNamedPipe(handle, null, 0, null, &available, null))
+	{
+		win32::closeHandle(handle);
+		*open = false;
+		return;
+	}
+	if (!available) return;
+	char[16384] buffer;
+	Win32_DWORD nread = 0;
+	Win32_DWORD request = available < buffer.len ? available : (Win32_DWORD)buffer.len;
+	if (win32::readFile(handle, &buffer, request, &nread, null) && nread)
+	{
+		out.append_bytes(buffer[:nread]);
+		return;
+	}
+	win32::closeHandle(handle);
+	*open = false;
+}
+
+<* Win32 host implementation. Windows has process exit codes, not POSIX
+ signals; unhandled NTSTATUS exception codes are recorded as abnormal with
+ signal=-1 (unavailable), never as fabricated POSIX signal numbers. *>
+fn ChildResult run_child_windows(Allocator a, String[] argv, String cwd, String[] environment) @feat(WIN32)
+{
+	ChildResult r = { .max_rss_kib = -1 };
+	if (!argv.len) return r;
+	Win32_SECURITY_ATTRIBUTES sa = { .nLength = Win32_SECURITY_ATTRIBUTES::size, .bInheritHandle = 1 };
+	Win32_HANDLE out_read, out_write, err_read, err_write;
+	if (!win32::createPipe(&out_read, &out_write, &sa, 0)) return r;
+	if (!win32::setHandleInformation(out_read, win32::HANDLE_FLAG_INHERIT, 0))
+	{
+		win32::closeHandle(out_read);
+		win32::closeHandle(out_write);
+		return r;
+	}
+	if (!win32::createPipe(&err_read, &err_write, &sa, 0))
+	{
+		win32::closeHandle(out_read);
+		win32::closeHandle(out_write);
+		return r;
+	}
+	if (!win32::setHandleInformation(err_read, win32::HANDLE_FLAG_INHERIT, 0))
+	{
+		win32::closeHandle(out_read);
+		win32::closeHandle(out_write);
+		win32::closeHandle(err_read);
+		win32::closeHandle(err_write);
+		return r;
+	}
+	Win32_HANDLE null_input = createFileW(@wstring("NUL"), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+		&sa, win32::OPEN_EXISTING, win32::FILE_ATTRIBUTE_NORMAL, null);
+	if (null_input == win32::INVALID_HANDLE_VALUE)
+	{
+		win32::closeHandle(out_read);
+		win32::closeHandle(out_write);
+		win32::closeHandle(err_read);
+		win32::closeHandle(err_write);
+		return r;
+	}
+	Win32_STARTUPINFOW startup = {
+		.cb = Win32_STARTUPINFOW::size,
+		.dwFlags = win32::STARTF_USESTDHANDLES,
+		.hStdInput = null_input,
+		.hStdOutput = out_write,
+		.hStdError = err_write,
+	};
+	Win32_PROCESS_INFORMATION info;
+	DString command;
+	command.init(a);
+	foreach (i, arg : argv)
+	{
+		if (i) command.append_char(' ');
+		append_windows_arg(&command, arg);
+	}
+	WString command_line = command.str_view().to_wstring(a)!!;
+	WString application = argv[0].to_wstring(a)!!;
+	WString directory = cwd.len ? cwd.to_wstring(a)!! : null;
+	DString env_block;
+	env_block.init(a);
+	foreach (entry : environment)
+	{
+		env_block.append(entry);
+		env_block.append_char('\0');
+	}
+	if (!environment.len) env_block.append_char('\0');
+	WString win_env = env_block.str_view().to_wstring(a)!!;
+	if (!win32::createProcessW(application, command_line, null, null, 1,
+		win32::CREATE_UNICODE_ENVIRONMENT, win_env, directory, &startup, &info))
+	{
+		win32::closeHandle(null_input);
+		win32::closeHandle(out_read);
+		win32::closeHandle(out_write);
+		win32::closeHandle(err_read);
+		win32::closeHandle(err_write);
+		return r;
+	}
+	r.spawned = true;
+	win32::closeHandle(info.hThread);
+	win32::closeHandle(null_input);
+	win32::closeHandle(out_write);
+	win32::closeHandle(err_write);
+	DString out;
+	out.init(a);
+	DString err;
+	err.init(a);
+	bool out_open = true;
+	bool err_open = true;
+	while (out_open || err_open)
+	{
+		if (out_open) append_windows_output(out_read, &out, &out_open);
+		if (err_open) append_windows_output(err_read, &err, &err_open);
+		win32::sleep(1);
+	}
+	Win32_DWORD wait_result = win32::waitForSingleObject(info.hProcess, win32::INFINITE);
+	Win32_DWORD exit_code;
+	if (wait_result == win32::WAIT_OBJECT_0 && win32::getExitCodeProcess(info.hProcess, &exit_code))
+	{
+		if (exit_code >= 0xC0000000) { r.signal = -1; }
+		else
+		{
+			r.exited = true;
+			r.exit_code = (int)exit_code;
+		}
+	}
+	else { r.signal = -1; }
+	win32::closeHandle(info.hProcess);
+	r.stdout = out.str_view();
+	r.stderr = err.str_view();
+	return r;
+}
+
+fn ChildResult run_child(Allocator a, String[] argv, String cwd, String[] environment)
+{
+	$switch:
+	$case env::WIN32:
+		return run_child_windows(a, argv, cwd, environment);
+	$case env::POSIX:
+		return run_child_posix(a, argv, cwd, environment);
+	$default:
+		return { .max_rss_kib = -1 };
+	$endswitch
 }
 
 <*
  The runner's inherited environment as "K=V" strings, with the case's
  `env` entries replacing (or adding) keys, like Environ.Map.put in runner.zig.
 *>
-fn String[] child_environment(Allocator a, EnvPair[] overrides)
+fn bool env_name_equal(String a, String b, bool windows)
+{
+	if (a.len != b.len) return false;
+	for (sz i = 0; i < a.len; i++)
+	{
+		char x = a[i];
+		char y = b[i];
+		if (windows)
+		{
+			if (x >= 'A' && x <= 'Z') x += 32;
+			if (y >= 'A' && y <= 'Z') y += 32;
+		}
+		if (x != y) return false;
+	}
+	return true;
+}
+
+fn String environment_key(String entry)
+{
+	if (try eq = find_first(entry, "=")) return entry[:eq];
+	return entry;
+}
+
+fn int compare_windows_environment(String a, String b)
+{
+	String x = environment_key(a);
+	String y = environment_key(b);
+	sz n = min(x.len, y.len);
+	for (sz i = 0; i < n; i++)
+	{
+		char cx = x[i];
+		char cy = y[i];
+		if (cx >= 'A' && cx <= 'Z') cx += 32;
+		if (cy >= 'A' && cy <= 'Z') cy += 32;
+		if (cx < cy) return -1;
+		if (cx > cy) return 1;
+	}
+	if (x.len < y.len) return -1;
+	if (x.len > y.len) return 1;
+	return 0;
+}
+
+fn bool override_has_key(EnvPair[] overrides, String key, bool windows)
+{
+	foreach (kv : overrides) if (env_name_equal(kv.key, key, windows)) return true;
+	return false;
+}
+
+fn String[] append_overrides(Allocator a, List{String}* out, EnvPair[] overrides, bool windows)
+{
+	foreach (i, kv : overrides)
+	{
+		bool later = false;
+		for (sz j = i + 1; j < overrides.len; j++)
+		{
+			if (env_name_equal(overrides[j].key, kv.key, windows)) later = true;
+		}
+		if (!later) out.push(string::format(a, "%s=%s", kv.key, kv.value));
+	}
+	return out.array_view();
+}
+
+fn String[] child_environment_posix(Allocator a, EnvPair[] overrides) @feat(POSIX)
 {
 	List{String} out;
 	out.init(a);
@@ -557,28 +837,49 @@ fn String[] child_environment(Allocator a, EnvPair[] overrides)
 		String entry = e[i].str_view();
 		String key = entry;
 		if (try eq = find_first(entry, "=")) key = entry[:eq];
-		bool overridden = false;
-		foreach (kv : overrides)
-		{
-			if (kv.key == key)
-			{
-				overridden = true;
-				break;
-			}
-		}
-		if (!overridden) out.push(entry);
+		if (!override_has_key(overrides, key, false)) out.push(entry);
 	}
-	foreach (i, kv : overrides)
+	return append_overrides(a, &out, overrides, false);
+}
+
+fn String[] child_environment_windows(Allocator a, EnvPair[] overrides) @feat(WIN32)
+{
+	List{String} out;
+	out.init(a);
+	Win32_WCHAR* block = getEnvironmentStringsW();
+	if (block)
 	{
-		// Later duplicates win, as with repeated map puts.
-		bool later = false;
-		for (sz j = i + 1; j < overrides.len; j++)
+		sz i = 0;
+		while (block[i])
 		{
-			if (overrides[j].key == kv.key) later = true;
+			WString entry_ptr = (WString)&block[i];
+			sz entry_len16 = (sz)win32::wcslen(entry_ptr);
+			String entry = string::from_wstring(a, entry_ptr)!!;
+			String key = entry;
+			if (try eq = find_first(entry, "=")) key = entry[:eq];
+			// Windows pseudo variables such as =C:=C:\\ are inherited intact.
+			if (!override_has_key(overrides, key, true)) out.push(entry);
+			i += entry_len16 + 1;
 		}
-		if (!later) out.push(string::format(a, "%s=%s", kv.key, kv.value));
+		(void)freeEnvironmentStringsW(block);
 	}
-	return out.array_view();
+	String[] result = append_overrides(a, &out, overrides, true);
+	quicksort(result, &compare_windows_environment);
+	return result;
+}
+
+fn String[] child_environment(Allocator a, EnvPair[] overrides)
+{
+	$switch:
+	$case env::WIN32:
+		return child_environment_windows(a, overrides);
+	$case env::POSIX:
+		return child_environment_posix(a, overrides);
+	$default:
+		List{String} out;
+		out.init(a);
+		return append_overrides(a, &out, overrides, false);
+	$endswitch
 }
 
 // ---------------------------------------------------------------------------
@@ -624,9 +925,34 @@ fn bool has_fatal(String stderr)
 	return false;
 }
 
+// Appends s to log with NUL and other C0 control bytes escaped, so captured
+// child output cannot truncate the log. Logging only; comparisons use raw bytes.
+fn void append_escaped(DString* log, String s)
+{
+	const String HEX = "0123456789abcdef";
+	for (usz i = 0; i < s.len; i++)
+	{
+		char c = s[i];
+		if (c == 0) { log.append_char('\\'); log.append_char('0'); }
+		else if (c < 0x20 && c != '\n' && c != '\t' && c != '\r')
+		{
+			log.append_char('\\'); log.append_char('x');
+			log.append_char(HEX[(usz)c >> 4]); log.append_char(HEX[(usz)c & 15]);
+		}
+		else
+		{
+			log.append_char(c);
+		}
+	}
+}
+
 fn void report_strings_mismatch(DString* log, String expected, String actual)
 {
-	log.appendf("\n====== expected this output: =========\n%s␃\n\n======== instead found this: =========\n%s␃\n\n======================================\n", expected, actual);
+	log.appendf("\n====== expected this output: =========\n");
+	append_escaped(log, expected);
+	log.appendf("␃\n\n======== instead found this: =========\n");
+	append_escaped(log, actual);
+	log.appendf("␃\n\n======================================\n");
 	sz i = 0;
 	while (i < expected.len && i < actual.len && expected[i] == actual[i]) i++;
 	log.appendf("First difference occurs at byte %d\n", i);
@@ -639,7 +965,7 @@ fn void report_strings_mismatch(DString* log, String expected, String actual)
 *>
 fn CaseOutcome run_case(Allocator a, String case_path, String exe)
 {
-	CaseOutcome o = { .path = case_path, .name = stem(case_path) };
+	CaseOutcome o = { .path = case_path, .name = stem(case_path), .max_rss_kib = -1 };
 	o.log.init(a);
 	if (catch f = run_case_extra(a, case_path, exe, &o))
 	{
@@ -651,7 +977,12 @@ fn CaseOutcome run_case(Allocator a, String case_path, String exe)
 
 fn String absolute_from_cwd(Allocator a, String p)
 {
-	if (p.len && p[0] == '/') return p.copy(a);
+	bool absolute = p.len > 0 && is_path_separator(p[0]);
+	$if env::WIN32:
+		absolute = absolute || (p.len >= 3 && p[1] == ':' && is_path_separator(p[2]));
+		absolute = absolute || (p.len >= 2 && is_path_separator(p[0]) && is_path_separator(p[1]));
+	$endif
+	if (absolute) return p.copy(a);
 	Path? cwd = path::cwd(a);
 	if (catch cwd) return p.copy(a);
 	return join_path(a, (String)cwd, p);
@@ -737,7 +1068,9 @@ fn void? run_case_extra(Allocator a, String path, String exe, CaseOutcome* o)
 			{
 				if (!contains(actual_errors[i], expected_errors[i]))
 				{
-					log.appendf("\n======= expected to find error =======\n%s\n\n=== but output does not contain it ===\n%s\n\nin case '%s'\n", expected_errors[i], stderr, c.name);
+					log.appendf("\n======= expected to find error =======\n%s\n\n=== but output does not contain it ===\n", expected_errors[i]);
+					append_escaped(log, stderr);
+					log.appendf("\n\nin case '%s'\n", c.name);
 					return MISSING_ERROR~;
 				}
 			}
@@ -745,11 +1078,14 @@ fn void? run_case_extra(Allocator a, String path, String exe, CaseOutcome* o)
 			{
 				foreach (expected : expected_errors[len..])
 				{
-					log.appendf("\n======= expected to find error =======\n%s\n\n=== but output does not contain it ===\n%s", expected, stderr);
+					log.appendf("\n======= expected to find error =======\n%s\n\n=== but output does not contain it ===\n", expected);
+					append_escaped(log, stderr);
 				}
 				foreach (actual : actual_errors.array_view()[len..])
 				{
-					log.appendf("\n========= new error ==========\n%s\n\n=== not in expected errors ===\n", actual);
+					log.appendf("\n========= new error ==========\n");
+					append_escaped(log, actual);
+					log.appendf("\n\n=== not in expected errors ===\n");
 				}
 				log.appendf("in case '%s'\n", c.name);
 				return MISMATCHED_ERRORS~;
@@ -808,7 +1144,11 @@ fn void? run_case_extra(Allocator a, String path, String exe, CaseOutcome* o)
 			}
 			else if (!stdout.ends_with((String)expected))
 			{
-				log.appendf("\n====== expected to end with: =========\n%s\n========= but found: ==============\n%s\n", (String)expected, stdout);
+				log.appendf("\n====== expected to end with: =========\n");
+				append_escaped(log, (String)expected);
+				log.appendf("\n========= but found: ==============\n");
+				append_escaped(log, stdout);
+				log.appendf("\n");
 				log.appendf("in case '%s'\n", c.name);
 				return OUTPUT_MISMATCH~;
 			}
@@ -884,7 +1224,12 @@ fn CaseEntry[]? parse_case_list(Allocator a, String text, String source, DString
 			return CASE_LIST_INVALID~;
 		}
 		CaseEntry e = { .file = line[:name_end], .line = lineno };
-		if (contains(e.file, "/"))
+		bool has_path_separator = false;
+		foreach (c : e.file)
+		{
+			if (is_path_separator(c)) has_path_separator = true;
+		}
+		if (has_path_separator)
 		{
 			log.appendf("%s:%d: case entry must be a file name inside the cases directory: %s\n", source, lineno, e.file);
 			return CASE_LIST_INVALID~;
@@ -1034,7 +1379,10 @@ fn CaseEntry[]? select_cases(Allocator a, String cases_dir, SelectMode mode, Cas
 			}
 			out.push_all(list);
 	}
-	if (!out.len())
+	// The original runner accepts an empty corpus (for example, a directory
+	// containing only README.md) and reports zero tests. Explicit lists and
+	// full-corpus gates still need a non-empty selection to be meaningful.
+	if (!out.len() && mode != CORPUS)
 	{
 		log.appendf("empty case selection in '%s'\n", cases_dir);
 		return CASE_LIST_EMPTY~;
@@ -1095,6 +1443,7 @@ struct SuiteReport
 	uint fatal;
 	uint gate_mismatches;
 	long max_rss_kib;
+	bool has_max_rss;
 }
 
 <*
@@ -1137,7 +1486,11 @@ fn SuiteReport run_suite(SuiteOptions opts, OutStream out)
 				if (o.ran && o.exited && o.exit_code != 0) rep.nonzero_exit++;
 				if (o.ran && !o.exited) rep.signaled++;
 				if (o.fatal) rep.fatal++;
-				if (o.max_rss_kib > rep.max_rss_kib) rep.max_rss_kib = o.max_rss_kib;
+				if (o.max_rss_kib >= 0 && (!rep.has_max_rss || o.max_rss_kib > rep.max_rss_kib))
+				{
+					rep.max_rss_kib = o.max_rss_kib;
+					rep.has_max_rss = true;
+				}
 				bool match = outcome_matches(&o, e.expect);
 				if (opts.gate && !match)
 				{
@@ -1175,7 +1528,14 @@ fn bool SuiteReport.passed_gate(&self, bool gate)
 
 fn void SuiteReport.print(&self, OutStream out, bool gate)
 {
-	(void)io::fprintfn(out, "max mem used = %d KiB", self.max_rss_kib);
+	if (self.has_max_rss)
+	{
+		(void)io::fprintfn(out, "max mem used = %d KiB", self.max_rss_kib);
+	}
+	else
+	{
+		(void)io::fprintfn(out, "max mem used = unavailable");
+	}
 	(void)io::fprintfn(out, "selected: %d", self.selected);
 	(void)io::fprintfn(out, "executed: %d", self.executed);
 	(void)io::fprintfn(out, "passed: %d", self.passed);

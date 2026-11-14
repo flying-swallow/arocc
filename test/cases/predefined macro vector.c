@@ -1,6 +1,6 @@
 /** manifest:
 expand_partial
-args = --target=x86_64-unknown-linux-gnu -mcpu=x86_64_v3
+args = --target=x86_64-linux-gnu -mcpu=x86_64_v3
 env = SOURCE_DATE_EPOCH=0
 
 */

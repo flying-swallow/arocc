@@ -5,39 +5,328 @@ on:
     branches:
       - master
       - tmp
+    paths:
+      - '**/*.zig'
+      - '**/*.c'
+      - '**/*.h'
+      - '**/*.c3'
+      - '**/*.bzl'
+      - 'BUILD'
+      - 'BUILD.bazel'
+      - '**/BUILD'
+      - '**/BUILD.bazel'
+      - 'build.zig'
+      - 'build.zig.zon'
+      - 'build/**'
+      - 'MODULE.bazel'
+      - 'MODULE.bazel.lock'
+      - '.bazelrc'
+      - '.bazelversion'
+      - '.bazelignore'
+      - 'include/**'
+      - 'src/**'
+      - 'test/**'
+      - 'tools/**'
+      - 'app/**'
+      - 'distfiles/**'
+      - 'examples/**'
+      - 'VERSION'
+      - 'LICENSE*'
+      - 'docs/**'
+      - '.github/workflows/**'
   pull_request:
     paths:
-    - '**.zig'
-    - '**.c'
-    - '**.h'
+      - '**/*.zig'
+      - '**/*.c'
+      - '**/*.h'
+      - '**/*.c3'
+      - '**/*.bzl'
+      - 'BUILD'
+      - 'BUILD.bazel'
+      - '**/BUILD'
+      - '**/BUILD.bazel'
+      - 'build.zig'
+      - 'build.zig.zon'
+      - 'build/**'
+      - 'MODULE.bazel'
+      - 'MODULE.bazel.lock'
+      - '.bazelrc'
+      - '.bazelversion'
+      - '.bazelignore'
+      - 'include/**'
+      - 'src/**'
+      - 'test/**'
+      - 'tools/**'
+      - 'app/**'
+      - 'distfiles/**'
+      - 'examples/**'
+      - 'VERSION'
+      - 'LICENSE*'
+      - 'docs/**'
+      - '.github/workflows/**'
 
 jobs:
-  build:
+  zig-reference:
+    name: Pinned Zig reference (build and full suites)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.18.0-dev.828+9da287565
+
+      - name: Verify pinned Zig identity
+        shell: bash
+        run: |
+          expected='0.18.0-dev.828+9da287565'
+          actual="$(zig version)"
+          printf 'Zig version: %s\n' "$actual"
+          test "$actual" = "$expected"
+
+      - name: Prepare frozen Zig reference source and result directories
+        shell: bash
+        run: |
+          reference_commit="$(python3 -c 'import json; print(json.load(open("test/migration/baseline.json"))["reference"]["commit"])')"
+          echo "Frozen Zig reference source commit: $reference_commit"
+          git cat-file -e "$reference_commit^{commit}"
+          mkdir -p "$RUNNER_TEMP/zig-reference-results"
+          git worktree add --detach "$RUNNER_TEMP/zig-reference-source" "$reference_commit"
+
+      - name: Zig build, unit, integration, record, and format checks
+        shell: bash
+        run: |
+          python3 test/migration/run_reference_gate.py \
+            --source-tree "$RUNNER_TEMP/zig-reference-source" \
+            --results "$RUNNER_TEMP/zig-reference-results/reference-results.json" \
+            --run-dir "$RUNNER_TEMP/zig-reference-results/command-logs"
+
+      - name: Zig host cross-build for arm-linux
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/zig-reference-source"
+          zig build -Dtarget=arm-linux -p "$RUNNER_TEMP/zig-out-arm-linux"
+
+      - name: Upload actual Zig reference results and command logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zig-reference-results-ubuntu
+          path: ${{ runner.temp }}/zig-reference-results
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stage reference executable and frozen corpus
+        shell: bash
+        run: |
+          reference_commit="$(python3 -c 'import json; print(json.load(open("test/migration/baseline.json"))["reference"]["commit"])')"
+          echo "Frozen Zig reference corpus commit: $reference_commit"
+          git cat-file -e "$reference_commit^{commit}"
+          mkdir -p "$RUNNER_TEMP/zig-reference/corpus"
+          cp "$RUNNER_TEMP/zig-reference-results/command-logs/commands/build/out/bin/arocc" \
+            "$RUNNER_TEMP/zig-reference/arocc"
+          git archive "$reference_commit" test/cases | tar -x -C "$RUNNER_TEMP/zig-reference/corpus"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zig-reference-ubuntu
+          path: ${{ runner.temp }}/zig-reference
+          if-no-files-found: error
+          retention-days: 1
+
+  c3:
+    name: C3 ${{ matrix.compilation_mode }} / ${{ matrix.os }}
+    needs: zig-reference
+    if: ${{ always() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        compilation_mode: [dbg, opt]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          submodules: true
-      - uses: mlugg/setup-zig@v2
+          bazelisk-cache: false
+          disk-cache: false
+          external-cache: false
+          repository-cache: false
+
+      - name: Verify pinned Bazel version
+        shell: bash
+        run: |
+          expected='9.1.0'
+          declared="$(cat .bazelversion)"
+          actual="$(bazel --version | awk '{print $2}')"
+          printf 'Bazel version: %s (expected %s; .bazelversion %s)\n' "$actual" "$expected" "$declared"
+          test "$declared" = "$expected"
+          test "$actual" = "$expected"
+
+      - name: Install C3 compiler build dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install --yes cmake clang libcurl4-openssl-dev
+
+      - name: Install C3 compiler build dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install cmake
+
+      - name: Install C3 compiler build dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: choco install llvm --yes
+
+      - name: Provide cc driver for stub-backed tests (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          wrapper_dir="$RUNNER_TEMP/c3-tools"
+          mkdir -p "$wrapper_dir"
+          clang_path="$(cygpath -w "$(command -v clang)")"
+          printf '@echo off\r\n"%s" %%*\r\n' "$clang_path" > "$wrapper_dir/cc.cmd"
+          echo "$wrapper_dir" >> "$GITHUB_PATH"
+
+      - name: Report host tool versions
+        shell: bash
+        run: |
+          cmake --version
+          clang --version
+          bazel --version
+
+      - uses: actions/checkout@v4
         with:
-          version: master
+          repository: c3lang/c3c
+          ref: 61d33ae1dce61f80dd81660db2f9910208c74284
+          path: c3c-src
 
-      - name: Build
-        run: zig build
+      - name: Build and checksum pinned C3 compiler
+        working-directory: c3c-src
+        shell: bash
+        run: |
+          expected_revision='61d33ae1dce61f80dd81660db2f9910208c74284'
+          revision="$(git rev-parse HEAD)"
+          echo "C3C source revision: $revision"
+          test "$revision" = "$expected_revision"
+          cmake -B build -S . -DC3_FETCH_LLVM=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel 2 --config Release
+          compiler=build/c3c
+          if [ "$RUNNER_OS" = Windows ]; then compiler=build/Release/c3c.exe; fi
+          version_output="$("$compiler" --version 2>&1)"
+          printf '%s\n' "$version_output"
+          printf '%s\n' "$version_output" | grep -Eq 'Version:[[:space:]]+0\.8\.6'
+          printf '%s\n' "$version_output" | grep -Eq 'Git Hash:[[:space:]]+61d33ae1dce61f80dd81660db2f9910208c74284'
+          install_dir="$RUNNER_TEMP/c3c-install"
+          mkdir -p "$install_dir"
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then suffix='.exe'; fi
+          cp "$compiler" "$install_dir/c3c$suffix"
+          cp -R lib "$install_dir/lib"
+          python_cmd=python3
+          if [ "$RUNNER_OS" = Windows ]; then python_cmd=python; fi
+          "$python_cmd" - "$install_dir/c3c$suffix" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
 
-      - name: Build 32-bit
-        run: zig build -Dtarget=arm-linux
-        if: matrix.os == 'ubuntu-latest'
+          compiler = pathlib.Path(sys.argv[1])
+          digest = hashlib.sha256(compiler.read_bytes()).hexdigest()
+          print(f"C3C executable SHA-256: {digest}  {compiler}")
+          PY
+          c3c_path="$install_dir/c3c$suffix"
+          if [ "$RUNNER_OS" = Windows ]; then c3c_path="$(cygpath -m "$c3c_path")"; fi
+          echo "C3C=$c3c_path" >> "$GITHUB_ENV"
 
-      - name: Build release
-        run: zig build -Doptimize=ReleaseSafe
+      - name: Download pinned Zig reference executable and corpus (Linux)
+        if: matrix.os == 'ubuntu-latest' && needs.zig-reference.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: zig-reference-ubuntu
+          path: ${{ runner.temp }}/zig-reference
 
-      - name: Run Tests
-        run: zig build test
+      - name: Clean fetch C3 dependencies (${{ matrix.compilation_mode }})
+        shell: bash
+        run: |
+          bazel_root="$RUNNER_TEMP/bazel-output-${{ matrix.compilation_mode }}"
+          bazel --batch --output_user_root="$bazel_root" fetch \
+            --experimental_collect_system_network_usage=false \
+            --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
+            //:aro_c3 //:aro_distribution //tools:generate_def \
+            //test/c3/... //test/migration/... //test/fuzz:replay_test
 
-      # - name: Run Tests in release mode
-      #   run: zig build test -Doptimize=ReleaseFast
+      - name: Build all C3 targets (${{ matrix.compilation_mode }})
+        shell: bash
+        run: |
+          bazel_root="$RUNNER_TEMP/bazel-output-${{ matrix.compilation_mode }}"
+          bazel --batch --output_user_root="$bazel_root" build \
+            --experimental_collect_system_network_usage=false \
+            --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
+            //:aro_c3 //:aro_distribution //tools:generate_def \
+            //test/c3/... //test/migration/... //test/fuzz:replay_test
+
+      - name: Run C3 suites, cross-target frontend/layout, CLI/distribution, and fuzz replay (${{ matrix.compilation_mode }})
+        shell: bash
+        run: |
+          # These are native-host C3 executables; frontend and layout fixtures
+          # exercise cross-target C inputs without cross-building the compiler.
+          bazel_root="$RUNNER_TEMP/bazel-output-${{ matrix.compilation_mode }}"
+          bazel --batch --output_user_root="$bazel_root" test \
+            --experimental_collect_system_network_usage=false \
+            --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
+            --test_output=errors \
+            //test:unit //test:integration //test:records //test:regression \
+            //test/migration:cli_tests \
+            //test/migration:backend_cli_regression \
+            //test/migration:library_consumer \
+            //test/migration:native_backend_cli_integration \
+            //test/fuzz:replay_test \
+            //test/c3:float_print_manual_tests \
+            //test/c3:text_literal_semantics_manual_tests \
+            //test/c3:number_value_manual_tests \
+            //test/c3:macro_expand_manual_tests \
+            //test/c3:profiling_disabled_tests \
+            //test/c3:profiling_enabled_tests
+
+      - name: Run manual pinned reference regression (${{ matrix.compilation_mode }}, Linux)
+        if: matrix.os == 'ubuntu-latest' && needs.zig-reference.result == 'success'
+        shell: bash
+        run: |
+          reference_exe="$RUNNER_TEMP/zig-reference/arocc"
+          reference_cases="$RUNNER_TEMP/zig-reference/corpus/test/cases"
+          chmod +x "$reference_exe"
+          test -x "$reference_exe"
+          test -d "$reference_cases"
+          bazel_root="$RUNNER_TEMP/bazel-output-${{ matrix.compilation_mode }}"
+          bazel --batch --output_user_root="$bazel_root" test \
+            --experimental_collect_system_network_usage=false \
+            --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
+            --test_output=errors \
+            --test_env="ARO_REFERENCE_EXE=$reference_exe" \
+            --test_env="ARO_REFERENCE_CASES_DIR=$reference_cases" \
+            //test/migration:reference_regression
+
+      # The required profiling suite exercises both feature states with the
+      # checked-in ABI stub. A real Tracy client needs an external Tracy source
+      # tree and is intentionally an optional developer integration.
+      # AFL++ is also optional; the deterministic replay target above is the
+      # required cross-platform fuzz gate.
+
+      - name: Optional AFL++ smoke campaign (opt-in)
+        if: runner.os == 'Linux' && vars.CI_ENABLE_AFL_SMOKE == 'true'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes afl++
+          export AFL_CC="$(command -v afl-clang-fast)"
+          bazel_root="$RUNNER_TEMP/bazel-output-${{ matrix.compilation_mode }}"
+          bazel --batch --output_user_root="$bazel_root" build \
+            --experimental_collect_system_network_usage=false \
+            --repo_env="C3C=$C3C" --action_env="AFL_CC=$AFL_CC" \
+            -c ${{ matrix.compilation_mode }} //test/fuzz:afl_fuzz
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 afl-fuzz \
+            -i test/fuzz/corpus -o "$RUNNER_TEMP/afl-smoke" -V 10 -- \
+            bazel-bin/test/fuzz/afl_fuzz

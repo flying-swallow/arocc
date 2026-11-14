@@ -37,10 +37,10 @@ macro @with_comp(; @body(Compilation* comp))
 	check(ta.allocation_count(), 0);
 }
 
-fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, value_interner::key_float(f));
+fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, { .tag = FLOAT, .float_val = f });
 fn Value f32v(Compilation* comp, uint bits) => fv(comp, float_value::f32_value(bits));
 fn Value f64v(Compilation* comp, ulong bits) => fv(comp, float_value::f64_value(bits));
-fn Value c64v(Compilation* comp, ulong re, ulong im) => value::intern(comp, value_interner::key_complex(float_value::make_complex(float_value::f64_value(re), float_value::f64_value(im))));
+fn Value c64v(Compilation* comp, ulong re, ulong im) => value::intern(comp, { .tag = COMPLEX, .complex_val = float_value::make_complex(float_value::f64_value(re), float_value::f64_value(im)) });
 fn QualType complex_of(Compilation* comp, QualType qt) => comp.type_store.put(type_store::type_complex(qt));
 
 fn void check_value(Value got, Value want)
@@ -65,7 +65,7 @@ fn void check_float_bits(Compilation* comp, Value v, KeyFloatTag tag, uint128 bi
 fn void check_print(Compilation* comp, Value v, QualType qt, String want)
 {
 	DString w = dstring::temp();
-	bool nested = v.print(qt, comp, w);
+	bool nested = v.print(qt, comp, &w);
 	assert(!nested);
 	if (w.str_view() != want)
 	{
@@ -221,12 +221,12 @@ fn void value_print() @test
 		Value p = value::pointer({ .node = 7, .offset = value::int_i64(8, comp).ref() }, comp);
 		DString w = dstring::temp();
 		NestedPrint nested;
-		assert(p.print(type_store::INT_POINTER, comp, w, &nested));
+		assert(p.print(type_store::INT_POINTER, comp, &w, &nested));
 		check(nested.node, 7);
-		value::print_pointer(nested.offset, "x", comp, w);
+		value::print_pointer(nested.offset, "x", comp, &w);
 		assert(w.str_view() == "&x8");
 		w = dstring::temp();
-		value::print_pointer(value::ZERO, "y", comp, w);
+		value::print_pointer(value::ZERO, "y", comp, &w);
 		assert(w.str_view() == "&y");
 	};
 }

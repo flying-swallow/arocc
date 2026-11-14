@@ -48,7 +48,7 @@
 //                               riscv32/riscv32be/riscv64/riscv64be -> write_riscv_defines
 //   write_common_defines        _LP64/_ILP32 ... __BLOCKS__ (the rest of generateSystemDefines)
 module aro::predefined_macros;
-import aro, aro::compilation, aro::source, aro::target, aro::type_store, aro::lang_opts, aro::code_gen_options;
+import aro::compilation, aro::source, aro::target, aro::type_store, aro::lang_opts, aro::code_gen_options;
 import std::core::string;
 
 // ---------------------------------------------------------------------------
@@ -619,7 +619,7 @@ fn void generate_float_macros(MacroWriter* w, String prefix, FPSemantics semanti
 fn void generate_type_macro(Compilation* comp, MacroWriter* w, String name, QualType qt)
 {
 	w.printf("#define %s ", name);
-	qt.print(comp, w.out);
+	qt.print(comp, &w.out);
 	w.write_byte('\n');
 }
 

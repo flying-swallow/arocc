@@ -93,6 +93,30 @@ fn void expect_complex_of(Compilation* comp, QualType qt, QualType elem)
 // ---------------------------------------------------------------------------
 // Integer literal types
 
+fn void decimal_literal_works_before_named_types_are_initialized() @test
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		Diagnostics d;
+		d.init_list(&ta);
+		Compilation comp;
+		comp.init(&ta, null, &d);
+		assert(comp.type_store.intmax.is_invalid(), "raw parser setup leaves named intmax unset");
+
+		NumberValue v = int_lit(&comp, DECIMAL, "1", NONE);
+		assert(v.qt == type_store::INT);
+		check(u64_of(&comp, v.val), 1);
+		expect_diags(v, {});
+		assert(comp.type_store.intmax.is_invalid(), "literal parsing should not initialize named types");
+
+		comp.free();
+		d.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
 fn void implicitly_unsigned_promotion() @test
 {
 	// [fixture integer literal promotion warning clang.c]

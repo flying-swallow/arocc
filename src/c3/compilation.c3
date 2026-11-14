@@ -1,10 +1,8 @@
-// Port of the source-storage part of src/aro/Compilation.zig: init/free,
-// get_source, add_source_from_owned_buffer / add_source_from_buffer, source
-// aliases and the string interner. Later tickets extend `Compilation` with
-// targets, language options, include search, pragmas, etc.
+// Port of src/aro/Compilation.zig: source storage, interners, target and
+// language options, include services, and Compilation-owned pragma handlers.
 module aro::compilation;
 import aro::source, aro::string_interner, aro::diagnostics, aro::lang_opts, aro::target, aro::type_store, std::collections::list;
-import aro::value_interner;
+import aro::value_interner, aro::pragma;
 import aro::builtins;
 import aro::code_gen_options, std::time;
 
@@ -13,29 +11,17 @@ excuse FILE_TOO_BIG;
 <* Zig `error.FatalError` (Compilation.Error): a fatal error has occurred and compilation has stopped. *>
 excuse FATAL_ERROR;
 
-// Zig `Compilation.Diagnostic` constants.
-const DiagnosticTemplate DIAG_BACKSLASH_NEWLINE_ESCAPE = {
-	.fmt = "backslash and newline separated by space",
-	.kind = WARNING,
-	.has_opt = true,
-	.opt = Option.BACKSLASH_NEWLINE_ESCAPE,
-};
+<*
+ Zig `Compilation.Diagnostic`. `fmt` is C3 printf syntax.
+*>
+enum CompDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
+{
+		BACKSLASH_NEWLINE_ESCAPE { "backslash and newline separated by space", WARNING, { .has_opt = true, .opt = Option.BACKSLASH_NEWLINE_ESCAPE } },
+	MS_SEARCH_RULE { "#include resolved using non-portable Microsoft search rules as: %s", WARNING, { .has_opt = true, .opt = Option.MICROSOFT_INCLUDE, .extension = true } },
+	CTRL_Z_EOF { "treating Ctrl-Z as end-of-file is a Microsoft extension", OFF, { .has_opt = true, .opt = Option.MICROSOFT_END_OF_FILE, .extension = true } },
+}
 
-const DiagnosticTemplate DIAG_MS_SEARCH_RULE = {
-	.fmt = "#include resolved using non-portable Microsoft search rules as: {s}",
-	.kind = WARNING,
-	.has_opt = true,
-	.opt = Option.MICROSOFT_INCLUDE,
-	.extension = true,
-};
 
-const DiagnosticTemplate DIAG_CTRL_Z_EOF = {
-	.fmt = "treating Ctrl-Z as end-of-file is a Microsoft extension",
-	.kind = OFF,
-	.has_opt = true,
-	.opt = Option.MICROSOFT_END_OF_FILE,
-	.extension = true,
-};
 
 struct Compilation
 {
@@ -75,6 +61,8 @@ struct Compilation
 	Interner interner;
 	<* Created builtin function types, keyed by name (Zig `builtins`). *>
 	Builtins builtins;
+	<* Compilation-owned pragma callbacks and handler state. *>
+	pragma::Registry pragmas;
 
 	<* Zig `environment` (values borrowed; empty by default, Zig `.{}`). *>
 	Environment environment;
@@ -113,6 +101,14 @@ struct IncludeFileServices {
 *>
 struct Environment
 {
+	<* PATH value, borrowed for the life of the Compilation. *>
+	bool has_path;
+	String path;
+	<* Bazel RUNFILES_DIR, borrowed for the life of the Compilation. *>
+	bool has_runfiles_dir;
+	String runfiles_dir;
+	<* Optional injected subprocess runner; ctx and callback are borrowed. *>
+	ProcessService process;
 	<*
 	 SOURCE_DATE_EPOCH: UNIX timestamp to be used instead of the current date
 	 and time in the __DATE__ and __TIME__ macros, and instead of the file
@@ -183,6 +179,7 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 	self.type_store.init(gpa);
 	self.interner.init(gpa);
 	self.builtins.init(gpa);
+	self.pragmas.init(gpa);
 }
 
 fn void Compilation.free(&self)
@@ -190,7 +187,8 @@ fn void Compilation.free(&self)
 	Allocator gpa = self.gpa;
 	foreach (&src : self.sources)
 	{
-		if (src.has_umbrella_framework_path()) assert(src.umbrella_framework_path.ptr == src.path.ptr);
+		// umbrella_framework_path borrows a prefix of this or another source's
+		// path (subframeworks share their umbrella's), so it is never freed here.
 		alloc::free(gpa, src.path.ptr);
 		alloc::free(gpa, src.buf.ptr);
 		if (src.splice_locs.len) alloc::free(gpa, src.splice_locs.ptr);
@@ -206,6 +204,7 @@ fn void Compilation.free(&self)
 	self.type_store.free();
 	self.interner.free();
 	self.builtins.free();
+	self.pragmas.free(self);
 	if (self.owns_diagnostics)
 	{
 		self.diagnostics.free();
@@ -232,6 +231,10 @@ fn Source Compilation.get_source(&self, SourceId id)
 	if (id.is_alias) return self.source_aliases[id.index];
 	if (id.index == source::GENERATED_INDEX)
 	{
+		// Tokenizers need a NUL after the text; keep it in spare capacity even
+		// when a writer appended without one.
+		self.generated_buf.reserve(1);
+		self.generated_buf.entries[self.generated_buf.len()] = 0;
 		return {
 			.path = "<scratch space>",
 			.buf = (String)self.generated_buf.array_view(),
@@ -444,7 +447,7 @@ fn void? Compilation.add_newline_escape_error(&self, String path, char[] buf, ui
 	if (loc.line.len) loc.line = loc.line[:loc.line.len - 1];
 	loc.width += 1;
 	loc.col += 1;
-	self.diagnostics.add(DIAG_BACKSLASH_NEWLINE_ESCAPE.message_at(DIAG_BACKSLASH_NEWLINE_ESCAPE.fmt, loc))!;
+	self.diagnostics.add(diagnostics::@message_at(CompDiag.BACKSLASH_NEWLINE_ESCAPE, CompDiag.BACKSLASH_NEWLINE_ESCAPE.fmt, loc))!;
 }
 
 <*

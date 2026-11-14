@@ -46,21 +46,21 @@ macro @with_comp(; @body(Compilation* comp))
 fn String fmt_f64(ulong bits)
 {
 	DString w = dstring::temp();
-	float_value::format_f64_decimal(bits, w);
+	float_value::format_f64_decimal(bits, &w);
 	return w.str_view();
 }
 
 fn String fmt_float(KeyFloat f)
 {
 	DString w = dstring::temp();
-	float_value::print_float(f, w);
+	float_value::print_float(f, &w);
 	return w.str_view();
 }
 
 fn String fmt_complex(KeyComplex c)
 {
 	DString w = dstring::temp();
-	float_value::print_complex(c, w);
+	float_value::print_complex(c, &w);
 	return w.str_view();
 }
 
@@ -476,7 +476,7 @@ fn void format_appends() @test
 	@pool()
 	{
 		DString w = dstring::temp("x=");
-		float_value::format_f64_decimal(0x3FF8_0000_0000_0000, w);
+		float_value::format_f64_decimal(0x3FF8_0000_0000_0000, &w);
 		test::eq(w.str_view(), "x=1.5");
 	};
 }
@@ -623,8 +623,8 @@ fn void compare_wide_mantissa_bits() @test
 // Value-level predicates (source-derived from Value.zig isInf/isNan/isInfSign)
 // -----------------------------------------------------------------------------
 
-fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, value_interner::key_float(f));
-fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, value_interner::key_complex(float_value::make_complex(re, im)));
+fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, { .tag = FLOAT, .float_val = f });
+fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, { .tag = COMPLEX, .complex_val = float_value::make_complex(re, im) });
 
 fn void value_predicates() @test
 {

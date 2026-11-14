@@ -9,9 +9,8 @@
 //
 // Deviations from Zig:
 //  - KEYWORD_PRAGMA: Zig asks `comp.getPragma(name).shouldPreserveTokens`
-//    and drops the pragma line when the handler says so. Pragma handlers are
-//    plan 15 and there is no registry yet, so every pragma is printed (what
-//    Zig does for a pragma without a handler).
+//    and drops the pragma line when the registered handler says so. Unknown
+//    pragmas remain printable.
 //  - A pragma line that reaches EOF without NL (impossible in Zig's token
 //    stream: preprocessing always emits the NL) stops at the EOF instead of
 //    reading past the end.
@@ -181,7 +180,7 @@ fn void? Preprocessor.pretty_print_macros_only(&self, OutStream w)
  preserve whitespace. NL runs: with linemarkers NONE, 2+ newlines before the
  next token collapse to one blank line; with linemarkers, 8+ (COLLAPSE_NEWLINES)
  become a linemarker. KEYWORD_PRAGMA prints "#pragma" and the space-separated
- rest of the line (pragma preservation queries belong to plan 15).
+ rest of the line unless its registered handler declines token preservation.
  WHITESPACE prints spaces (newlines inside only with linemarkers).
  INCLUDE_START / INCLUDE_RESUME / LINEMARKER print line markers.
  KEYWORD_DEFINE / KEYWORD_UNDEF print the macro for the two dump modes. Other
@@ -248,7 +247,22 @@ fn void? Preprocessor.pretty_print_tokens(&self, OutStream w, DumpMode macro_dum
 				last_nl = true;
 				w.write_byte('\n')!;
 			case KEYWORD_PRAGMA:
-				// Zig: comp.getPragma(name).shouldPreserveTokens (plan 15) may drop the line here.
+				// A registered handler may drop this pragma from -E output.
+				if (i + 1 < toks.len && toks[i + 1].id != NL && toks[i + 1].id != EOF)
+				{
+					String name = self.tree_token_slice(toks[i + 1]);
+					if (try handler = self.comp.pragmas.get(name))
+					{
+						if (handler.preserve_tokens && !handler.preserve_tokens(handler.ctx, self, (TokenIndex)(i + 1)))
+						{
+							w.write_byte('\n')!;
+							last_nl = true;
+							while (i + 1 < toks.len && toks[i + 1].id != NL && toks[i + 1].id != EOF) i++;
+							if (i + 1 < toks.len && toks[i + 1].id == NL) i++;
+							continue OUTER;
+						}
+					}
+				}
 				io::fprint(w, "#pragma")!;
 				i++;
 				while (true)

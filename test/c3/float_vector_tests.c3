@@ -209,8 +209,8 @@ fn String show_class(KeyFloat f)
 	return string::tformat("%s %s", class, f.signbit() ? "neg" : "pos");
 }
 
-fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, value_interner::key_float(f));
-fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, value_interner::key_complex(float_value::make_complex(re, im)));
+fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, { .tag = FLOAT, .float_val = f });
+fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, { .tag = COMPLEX, .complex_val = float_value::make_complex(re, im) });
 
 fn String show_complex_value(Compilation* comp, Value v, KeyFloatTag t)
 {
@@ -220,7 +220,7 @@ fn String show_complex_value(Compilation* comp, Value v, KeyFloatTag t)
 fn String print_value(Compilation* comp, Value v, QualType qt)
 {
 	DString w = dstring::temp();
-	bool nested = v.print(qt, comp, w);
+	bool nested = v.print(qt, comp, &w);
 	assert(!nested);
 	return string::tformat("\"%s\"", w.str_view());
 }
@@ -341,7 +341,7 @@ fn String? VectorRun.compute(&self, String[] f)
 		case "format_f64":
 			if (f.len != 2) return BAD_VECTOR~;
 			DString w = dstring::temp();
-			float_value::format_f64_decimal((ulong)parse_hex128(f[1])!, w);
+			float_value::format_f64_decimal((ulong)parse_hex128(f[1])!, &w);
 			return string::tformat("\"%s\"", w.str_view());
 		case "print":
 			if (f.len != 3) return BAD_VECTOR~;

@@ -18,7 +18,7 @@
 // - Cache keys are the static names from NAMES, so cached entries never borrow
 //   caller memory.
 module aro::builtins;
-import aro, aro::compilation, aro::target, aro::type_store, aro::lang_opts;
+import aro::compilation, aro::target, aro::type_store, aro::lang_opts;
 import aro::builtin_properties, aro::builtin_type_description, aro::string_interner;
 import std::collections::list;
 import aro::builtin_defs::aarch64, aro::builtin_defs::aarch64_neon, aro::builtin_defs::amdgcn;

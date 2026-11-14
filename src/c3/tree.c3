@@ -37,8 +37,8 @@
 //    them. `qt_or_null` reads data[0] for every non-listed tag (including
 //    IDENTIFIER_ARG and CODEGEN_DIAGNOSTIC), as Zig does.
 //
-// Stage 0 (contract): types and signatures only; bodies that are not trivial
-// are `unreachable("stage 0 stub")`.
+// Storage and node dispatch live here; declaration and expression codecs,
+// source-aware writing, and dumping are split into the companion files.
 module aro::tree;
 import aro::compilation, aro::tokens, aro::tokenizer, aro::source, aro::type_store, aro::value;
 import aro::attribute, aro::attribute_map, aro::diagnostics;
@@ -1113,6 +1113,17 @@ struct NodeRepr
 }
 
 <*
+ Return the packed node-index prefix from a node's backing representation.
+ Unlike unpack_elems, this slice aliases Tree.nodes and remains valid until
+ that list grows.
+*>
+fn NodeIndex[] unpack_node_elems(NodeRepr* repr, usz start, usz length)
+{
+	uint[] data = ((uint*)&repr.data[start])[:length];
+	return unpack_elems(data);
+}
+
+<*
  Zig `Tree`. Create with `init`, release with `free`.
 *>
 struct Tree
@@ -1156,9 +1167,9 @@ fn NodeIndex Tree.add_node(&self, Node node)
 {
 	NodeRepr repr = {};
 	self.nodes.push(repr);
-	usz index = self.nodes.len() - 1;
+	sz index = self.nodes.len() - 1;
 	self.set_node(node, index);
-	return (NodeIndex)(uint)index;
+	return (NodeIndex)index;
 }
 
 <*
@@ -1166,9 +1177,9 @@ fn NodeIndex Tree.add_node(&self, Node node)
  storage tag and appending to `extra` as needed. Dispatches on
  `node.kind.family`: DECL -> `encode_decl` (tree_decl.c3), STMT/EXPR ->
  `encode_expr_stmt` (tree_expr.c3).
- @require (sz)index < self.nodes.len()
+ @require index < self.nodes.len()
 *>
-fn void Tree.set_node(&self, Node node, usz index)
+fn void Tree.set_node(&self, Node node, sz index)
 {
 	assert(index < self.nodes.len());
 	NodeRepr repr = {};
@@ -1252,7 +1263,7 @@ fn NodeTag NodeIndex.tag(self, Tree* tree)
 fn ExtraSpan Tree.add_extra(&self, NodeIndex[] data)
 {
 	uint start = (uint)self.extra.len();
-	foreach (item : data) self.extra.push(item);
+	foreach (item : data) self.extra.push((uint)item);
 	return { .index = start, .len = (uint)data.len };
 }
 
@@ -1260,14 +1271,13 @@ fn ExtraSpan Tree.add_extra(&self, NodeIndex[] data)
 fn String Tree.tok_slice(&self, tokens::TokenIndex tok_i)
 {
 	TreeToken tok = self.tokens[(usz)tok_i];
-	String? fixed = tok.id.lexeme();
-	if (fixed != null) return fixed!;
+	if (try fixed = tok.id.lexeme()) return fixed;
 	Source src = self.comp.get_source(tok.loc.id);
 	Tokenizer scanner;
 	scanner.init(src.buf, source::GENERATED_ID, self.comp.langopts, src.splice_locs);
 	scanner.index = tok.loc.byte_offset;
 	Token span = scanner.next();
-	return src.buf[(usz)span.start..(usz)span.end];
+	return src.buf[(usz)span.start:(usz)(span.end - span.start)];
 }
 
 <* Zig `tree.value_map.get(node)`: the constant value recorded for a node (fault NOT_FOUND). *>

@@ -1,0 +1,59 @@
+# Public test groups used by migration CI. Fixture corpora live in this package
+# so their recursive globs include cases, goldens, headers, embeds, and
+# framework support files without crossing Bazel package boundaries.
+filegroup(
+    name = "test_cases",
+    srcs = glob(["cases/**"]),
+    visibility = ["//:__pkg__", "//test/migration:__pkg__"],
+)
+
+filegroup(
+    name = "record_fixtures",
+    srcs = glob(["records/**"]),
+    visibility = ["//:__pkg__", "//test/migration:__pkg__"],
+)
+
+test_suite(
+    name = "unit",
+    tests = [
+        "//test/c3:unit_tests",
+        "//test/migration:runner_tests",
+    ],
+)
+
+test_suite(
+    name = "integration",
+    tests = [
+        "//test/migration:runfiles_portability_integration",
+        "//test/migration:library_consumer",
+        "//test/migration:cli_tests",
+        "//test/migration:frontend_regression",
+        "//test/migration:backend_cli_regression",
+        "//test/migration:native_backend_cli_integration",
+        "//test/migration:native_assembly_integration",
+        "//test/migration:preprocessor_integration",
+    ],
+)
+
+test_suite(
+    name = "records",
+    tests = [
+        "//test/migration:record_runner_tests",
+        "//test/migration:record_regression",
+    ],
+)
+
+test_suite(
+    name = "regression",
+    tests = [
+        ":unit",
+        ":integration",
+        ":records",
+        "//test/migration:assembly_regression",
+        "//test/migration:declaration_regression",
+        "//test/migration:initializer_regression",
+        "//test/migration:macro_regression",
+        "//test/migration:preprocessor_regression",
+        "//test/migration:predefined_macro_regression",
+    ],
+)

@@ -60,10 +60,10 @@ macro @with_comp(; @body(Compilation* comp))
 	check(ta.allocation_count(), 0);
 }
 
-fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, value_interner::key_float(f));
+fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, { .tag = FLOAT, .float_val = f });
 fn Value f32v(Compilation* comp, uint bits) => fv(comp, float_value::f32_value(bits));
 fn Value f64v(Compilation* comp, ulong bits) => fv(comp, float_value::f64_value(bits));
-fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, value_interner::key_complex(float_value::make_complex(re, im)));
+fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, { .tag = COMPLEX, .complex_val = float_value::make_complex(re, im) });
 fn Value c64v(Compilation* comp, ulong re, ulong im) => cv(comp, float_value::f64_value(re), float_value::f64_value(im));
 
 fn void check_value(Value got, Value want)
@@ -558,7 +558,7 @@ fn void float_to_int_source_derived() @test
 		check_value(v, value::int_i64(-2, comp));
 		// 1e30 -> __int128 fits; -> long does not and the untruncated value is kept.
 		Limb[2] e30 = { 0x4675_0000_0000_0000, 0xC_9F2C_9CD0 };
-		Value want = value::intern(comp, value_interner::key_big_int({ .limbs = e30[..], .positive = true }));
+		Value want = value::intern(comp, { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = { .limbs = e30[..], .positive = true } } });
 		v = f64v(comp, 0x4629_3E59_39A0_8CEA);
 		assert(float_value::float_to_int(&v, type_store::INT128, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, want);
@@ -595,7 +595,7 @@ fn void int_to_float_values() @test
 		check_value(v, fv(comp, raw(F80, u128(0xC034, 0x8000_0000_0000_0C00))));
 		// observed: big int through f128 then f64 (double rounding kept).
 		Limb[2] limbs = { 1, 0x8000_0000_0000_0400 };
-		v = value::intern(comp, value_interner::key_big_int({ .limbs = limbs[..], .positive = true }));
+		v = value::intern(comp, { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = { .limbs = limbs[..], .positive = true } } });
 		float_value::int_to_float(&v, type_store::DOUBLE, comp);
 		check_value(v, f64v(comp, 0x47E0_0000_0000_0000));
 		// source-derived: complex destination -> { value, +0.0 }.

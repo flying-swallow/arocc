@@ -60,10 +60,16 @@ fn void include_embed_filesystem_integration() @test
 	assert(result.stdout.contains("int query_result = 1;"), "__has_include result was incorrect");
 	assert(result.stdout.contains("int missing_query_result = 0;"), "missing __has_include result was incorrect");
 	assert(result.stdout.contains("int embed_query_result = 1;"), "__has_embed result was incorrect");
+	assert(result.stdout.contains("int empty_embed_query_result = 2;"), "empty __has_embed result was incorrect");
+	assert(result.stdout.contains("int missing_embed_query_result = 0;"), "missing __has_embed result was incorrect");
 	assert(result.stdout.contains("int next_value = 53;"), "include_next did not select the second directory");
 	assert(result.stdout.contains("int framework_value = 81;"), "framework include search failed");
+	assert(result.stdout.contains("0,255,65"), "unlimited #embed did not emit the complete binary payload");
 	assert(result.stdout.contains("9,0,255,8"), "binary #embed bytes or prefix/suffix were incorrect");
-	assert(result.stdout.contains("int empty_payload[] = { 77 };"), "empty #embed if_empty result was incorrect");
+	// Zig emits prefix, if_empty and suffix for an empty payload: "1," + ",2".
+	assert(result.stdout.contains("1,,2"), "zero-limit #embed did not preserve prefix/suffix");
+	// if_empty(77) sits on the #embed line, so -P output keeps it on its own line.
+	assert(result.stdout.contains("int empty_payload[] = {\n77\n};"), "empty #embed if_empty result was incorrect");
 	assert(result.stdout.contains("const char* timestamp_value = \"") && !result.stdout.contains("__TIMESTAMP__"), "__TIMESTAMP__ was not expanded through the file service");
 }
 
@@ -75,14 +81,14 @@ fn void include_failure_and_depth_integration() @test
 	assert(missing.stderr.contains("'absent.h' not found"), "missing include diagnostic was absent");
 
 	ChildResult cycle = run_fixture("test/migration/preprocessor_fixtures/errors/cycle.c", "-E");
-	assert(cycle.exit_code == 1, "unguarded include cycle did not exit 1");
+	// The depth limit is an ordinary error that stops only the deepest include
+	// (Zig StopPreprocessing); a release -E run still prints and exits 0.
+	assert(cycle.exit_code == 0, "unguarded include cycle did not finish -E");
 	assert(cycle.stderr.contains("#include nested too deeply"), "unguarded include cycle did not report maximum include depth");
-	assert(cycle.stdout.len == 0, "unguarded include cycle unexpectedly emitted preprocessed output");
 
 	ChildResult depth = run_fixture("test/migration/preprocessor_fixtures/depth/main.c", "-E");
-	assert(depth.exit_code == 1, "maximum-depth include chain did not exit 1");
+	assert(depth.exit_code == 0, "maximum-depth include chain did not finish -E");
 	assert(depth.stderr.contains("#include nested too deeply"), "maximum-depth include chain diagnostic was absent");
-	assert(depth.stdout.len == 0, "maximum-depth include chain unexpectedly emitted preprocessed output");
 }
 
 fn void dependency_and_pragma_eof_integration() @test
@@ -95,7 +101,7 @@ fn void dependency_and_pragma_eof_integration() @test
 	assert(deps.stdout.contains("include/query_only.h"), "dependency output omitted __has_include target");
 	assert(deps.stdout.contains("search/first/next.h") && deps.stdout.contains("search/second/next.h"), "dependency output omitted include_next headers");
 	assert(deps.stdout.contains("Frameworks/Sample.framework/Headers/Value.h"), "dependency output omitted framework header");
-	assert(deps.stdout.contains("payload.bin"), "#embed dependency is currently unsupported: -M omitted payload.bin");
+	assert(deps.stdout.contains("payload.bin"), "dependency output omitted the embedded payload");
 
 	ChildResult pragma = run_fixture("test/migration/preprocessor_fixtures/pragma_eof.c", "-E");
 	assert(pragma.exit_code == 0, "pragma-at-EOF preprocessing failed");

@@ -41,14 +41,14 @@ fn KeyFloat raw(KeyFloatTag tag, ulong hi, ulong lo) => float_value::from_raw(ta
 fn String fmt_float(KeyFloat f)
 {
 	DString w = dstring::temp();
-	float_value::print_float(f, w);
+	float_value::print_float(f, &w);
 	return w.str_view();
 }
 
 fn String fmt_complex(KeyComplex c)
 {
 	DString w = dstring::temp();
-	float_value::print_complex(c, w);
+	float_value::print_complex(c, &w);
 	return w.str_view();
 }
 
@@ -235,8 +235,8 @@ macro @with_comp(; @body(Compilation* comp))
 	test::eq((long)ta.allocation_count(), 0);
 }
 
-fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, value_interner::key_float(f));
-fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, value_interner::key_complex(float_value::make_complex(re, im)));
+fn Value fv(Compilation* comp, KeyFloat f) => value::intern(comp, { .tag = FLOAT, .float_val = f });
+fn Value cv(Compilation* comp, KeyFloat re, KeyFloat im) => value::intern(comp, { .tag = COMPLEX, .complex_val = float_value::make_complex(re, im) });
 
 fn void value_compare() @test
 {

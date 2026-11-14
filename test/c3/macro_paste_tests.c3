@@ -238,9 +238,9 @@ fn void generated_token_offsets_and_locations() @test
 		check(g2.expansion_slice()[0].id.index, src.id.index);
 		check(pp.hideset.get(g2.loc), hideset::NONE);
 
-		tokens::free_expansion_locs(comp.gpa, a.expansion_locs);
-		tokens::free_expansion_locs(comp.gpa, g.expansion_locs);
-		tokens::free_expansion_locs(comp.gpa, g2.expansion_locs);
+		a.expansion_locs.free();
+		g.expansion_locs.free();
+		g2.expansion_locs.free();
 	};
 }
 
@@ -374,7 +374,7 @@ fn void paste_placemarkers() @test
 		assert(lhs[0].loc.id.is_generated());
 		// [source] the pasted text is just "\n" (first token NL; the id is forced to PLACEMARKER).
 		test::eq((String)comp.generated_buf.array_view(), "\n");
-		assert(lhs[0].expansion_locs == null);
+		assert(lhs[0].expansion_locs.len() == 0);
 		preprocessor::free_expand_buf(comp.gpa, &lhs);
 
 		ExpandBuf rhs;
@@ -425,7 +425,7 @@ fn void paste_invalid() @test
 		assert(lhs[1].loc.id.is_generated());
 		check(lhs[1].loc.byte_offset, 1);
 		check(lhs[1].loc.line, 1);
-		assert(lhs[1].expansion_locs == null);
+		assert(lhs[1].expansion_locs.len() == 0);
 		test::eq(spell(pp, &lhs), "+-");
 		preprocessor::free_expand_buf(comp.gpa, &lhs);
 

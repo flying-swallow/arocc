@@ -378,7 +378,7 @@ fn String show_value(Compilation* comp, Value v)
 fn String printed(Compilation* comp, Value v, QualType qt)
 {
 	DString w = dstring::temp();
-	bool nested = v.print(qt, comp, w);
+	bool nested = v.print(qt, comp, &w);
 	assert(!nested);
 	return w.str_view();
 }

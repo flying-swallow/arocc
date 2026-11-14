@@ -53,10 +53,10 @@ fn bool Macro.eql(&self, Macro* b, Preprocessor* pp)
 
 <*
  Zig `defineMacro`: insert or replace `name_tok`'s macro. If a different
- definition exists: builtin -> DIAG_BUILTIN_MACRO_REDEFINED at name_tok.loc,
- else DIAG_MACRO_REDEFINED (name); then, for a non-builtin and only if that
+ definition exists: builtin -> PpDiag.BUILTIN_MACRO_REDEFINED at name_tok.loc,
+ else PpDiag.MACRO_REDEFINED (name); then, for a non-builtin and only if that
  diagnostic was actually emitted (diagnostics.total changed), note
- DIAG_PREVIOUS_DEFINITION at the old macro's loc. verbose: "macro <name>
+ PpDiag.PREVIOUS_DEFINITION at the old macro's loc. verbose: "macro <name>
  defined". store_macro_tokens: add the `define_tok` (KEYWORD_DEFINE) token.
  @return? compilation::FATAL_ERROR
 *>
@@ -73,15 +73,15 @@ fn void? Preprocessor.define_macro(&self, RawToken define_tok, TokenWithExpansio
 		Location old_loc = gop.loc;
 		if (was_builtin)
 		{
-			self.err_loc(loc, DIAG_BUILTIN_MACRO_REDEFINED)!;
+			self.err_loc(loc, PpDiag.BUILTIN_MACRO_REDEFINED)!;
 		}
 		else
 		{
-			self.err_loc(loc, DIAG_MACRO_REDEFINED, { diagnostics::arg_str(name_str) })!;
+			self.err_loc(loc, PpDiag.MACRO_REDEFINED, name_str)!;
 		}
 		if (!was_builtin && self.diagnostics.total != prev_total)
 		{
-			self.err_loc(old_loc, DIAG_PREVIOUS_DEFINITION)!;
+			self.err_loc(old_loc, PpDiag.PREVIOUS_DEFINITION)!;
 		}
 	}
 	if (self.verbose)
@@ -125,14 +125,14 @@ const RawToken GENERATED_MACRO_WS @private = { .id = MACRO_WS, .source = source:
 
 <*
  Zig `define`: handle `#define` after the directive token. Name: `defined`
- -> DIAG_DEFINED_AS_MACRO_NAME + skip_to_nl; not a macro identifier ->
- DIAG_MACRO_NAME_MUST_BE_IDENTIFIER + skip_to_nl; unescape_ucn the name (its
+ -> PpDiag.DEFINED_AS_MACRO_NAME + skip_to_nl; not a macro identifier ->
+ PpDiag.MACRO_NAME_MUST_BE_IDENTIFIER + skip_to_nl; unescape_ucn the name (its
  expansion array is freed at the end); a keyword (after simplify) outside
- "<builtin>" -> DIAG_KEYWORD_MACRO. First body token: nl/eof -> empty object
+ "<builtin>" -> PpDiag.KEYWORD_MACRO. First body token: nl/eof -> empty object
  macro; '(' directly -> define_fn; whitespace -> skip; anything else ->
- DIAG_WHITESPACE_AFTER_MACRO_NAME. Leading '##' -> DIAG_HASH_HASH_AT_START.
+ PpDiag.WHITESPACE_AFTER_MACRO_NAME. Leading '##' -> PpDiag.HASH_HASH_AT_START.
  Body: simplify macro keywords; '##' takes next_no_ws_comments and errors
- DIAG_HASH_HASH_AT_END on nl/eof/'##' (returns without defining); comments kept
+ PpDiag.HASH_HASH_AT_END on nl/eof/'##' (returns without defining); comments kept
  only with preserve_comments_in_macros; whitespace runs become one generated
  MACRO_WS before the next kept token; invalid literal tokens warn
  (invalid_token_diagnostic) and are kept; unterminated comment errors;
@@ -146,19 +146,19 @@ fn void? Preprocessor.define(&self, Tokenizer* tokenizer, RawToken define_tok)
 	RawToken escaped_macro_name = tokenizer.next_no_ws();
 	if (escaped_macro_name.id == KEYWORD_DEFINED)
 	{
-		self.err_raw(escaped_macro_name, DIAG_DEFINED_AS_MACRO_NAME)!;
+		self.err_raw(escaped_macro_name, PpDiag.DEFINED_AS_MACRO_NAME)!;
 		skip_to_nl(tokenizer);
 		return;
 	}
 	if (!escaped_macro_name.id.is_macro_identifier())
 	{
-		self.err_raw(escaped_macro_name, DIAG_MACRO_NAME_MUST_BE_IDENTIFIER)!;
+		self.err_raw(escaped_macro_name, PpDiag.MACRO_NAME_MUST_BE_IDENTIFIER)!;
 		skip_to_nl(tokenizer);
 		return;
 	}
 	Allocator gpa = self.comp.gpa;
 	TokenWithExpansionLocs macro_name = self.unescape_ucn(tokens::from_raw(escaped_macro_name))!;
-	defer tokens::free_expansion_locs(gpa, macro_name.expansion_locs);
+	defer macro_name.expansion_locs.free();
 
 	TokenId macro_name_token_id = macro_name.id;
 	macro_name_token_id.simplify_macro_keyword();
@@ -171,7 +171,7 @@ fn void? Preprocessor.define(&self, Tokenizer* tokenizer, RawToken define_tok)
 			// TODO (Zig) allow #define <keyword> <keyword> and #define extern|inline|static|const
 			if (macro_name_token_id.is_macro_identifier() && self.comp.get_source(tokenizer.source).path != "<builtin>")
 			{
-				self.err(macro_name, DIAG_KEYWORD_MACRO)!;
+				self.err(macro_name, PpDiag.KEYWORD_MACRO)!;
 			}
 	}
 
@@ -193,11 +193,11 @@ fn void? Preprocessor.define(&self, Tokenizer* tokenizer, RawToken define_tok)
 		case L_PAREN:
 			return self.define_fn(tokenizer, define_tok, macro_name, first);
 		default:
-			self.err_raw(first, DIAG_WHITESPACE_AFTER_MACRO_NAME)!;
+			self.err_raw(first, PpDiag.WHITESPACE_AFTER_MACRO_NAME)!;
 	}
 	if (first.id == HASH_HASH)
 	{
-		self.err_raw(first, DIAG_HASH_HASH_AT_START)!;
+		self.err_raw(first, PpDiag.HASH_HASH_AT_START)!;
 		skip_to_nl(tokenizer);
 		return;
 	}
@@ -219,10 +219,10 @@ fn void? Preprocessor.define(&self, Tokenizer* tokenizer, RawToken define_tok)
 				{
 					case NL:
 					case EOF:
-						self.err_raw(tok, DIAG_HASH_HASH_AT_END)!;
+						self.err_raw(tok, PpDiag.HASH_HASH_AT_END)!;
 						return;
 					case HASH_HASH:
-						self.err_raw(next, DIAG_HASH_HASH_AT_END)!;
+						self.err_raw(next, PpDiag.HASH_HASH_AT_END)!;
 						return;
 					default:
 						break;
@@ -247,13 +247,13 @@ fn void? Preprocessor.define(&self, Tokenizer* tokenizer, RawToken define_tok)
 			case UNTERMINATED_STRING_LITERAL:
 			case UNTERMINATED_CHAR_LITERAL:
 			case EMPTY_CHAR_LITERAL:
-				self.err_raw(tok, invalid_token_diagnostic(tok.id))!;
+				self.err_invalid_token(tok)!;
 				self.token_buf.push(tok);
 			case UNTERMINATED_COMMENT:
-				self.err_raw(tok, DIAG_UNTERMINATED_COMMENT)!;
+				self.err_raw(tok, PpDiag.UNTERMINATED_COMMENT)!;
 			default:
-				if (self.is_poisoned(tok)) self.err_raw(tok, DIAG_POISONED_IDENTIFIER)!;
-				if (tok.id == INCOMPLETE_UCN) self.err_raw(tok, DIAG_INCOMPLETE_UCN)!;
+				if (self.is_poisoned(tok)) self.err_raw(tok, PpDiag.POISONED_IDENTIFIER)!;
+				if (tok.id == INCOMPLETE_UCN) self.err_raw(tok, PpDiag.INCOMPLETE_UCN)!;
 				if (tok.id != WHITESPACE && need_ws)
 				{
 					need_ws = false;
@@ -276,15 +276,15 @@ fn void? Preprocessor.define(&self, Tokenizer* tokenizer, RawToken define_tok)
 
 <*
  Zig `defineFn`: parameter list (`...` -> var_args; `name...` -> GNU named
- variadic with DIAG_GNU_VA_MACRO; DIAG_UNTERMINATED_MACRO_PARAM_LIST at eof;
- DIAG_MISSING_PAREN_PARAM_LIST + note DIAG_TO_MATCH_PAREN at `l_paren`;
- DIAG_INVALID_TOKEN_PARAM_LIST; DIAG_EXPECTED_COMMA_PARAM_LIST) and body:
+ variadic with PpDiag.GNU_VA_MACRO; PpDiag.UNTERMINATED_MACRO_PARAM_LIST at eof;
+ PpDiag.MISSING_PAREN_PARAM_LIST + note PpDiag.TO_MATCH_PAREN at `l_paren`;
+ PpDiag.INVALID_TOKEN_PARAM_LIST; PpDiag.EXPECTED_COMMA_PARAM_LIST) and body:
  '#' must be followed by a parameter / __VA_ARGS__ / the GNU variadic name
  (STRINGIFY_PARAM with end = index, STRINGIFY_VA_ARGS) else
- DIAG_HASH_NOT_FOLLOWED_PARAM; '##' at start/end errors, a MACRO_PARAM right
+ PpDiag.HASH_NOT_FOLLOWED_PARAM; '##' at start/end errors, a MACRO_PARAM right
  before '##' becomes MACRO_PARAM_NO_EXPAND; __VA_OPT__ needs '(' (else
- DIAG_VA_OPT_LPAREN) and its token's start..end span the contents up to the
- matching ')' (nl/eof -> DIAG_VA_OPT_RPAREN + note TO_MATCH_PAREN);
+ PpDiag.VA_OPT_LPAREN) and its token's start..end span the contents up to the
+ matching ')' (nl/eof -> PpDiag.VA_OPT_RPAREN + note TO_MATCH_PAREN);
  parameter names become MACRO_PARAM (end = index), the GNU variadic name
  KEYWORD_VA_ARGS. Whitespace handling as in `define` (need_ws only after the
  first body token). Params and tokens are copied into the arena.
@@ -305,15 +305,15 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 	{
 		RawToken tok = tokenizer.next_no_ws();
 		if (tok.id == R_PAREN) break;
-		if (tok.id == EOF) return self.err_raw(tok, DIAG_UNTERMINATED_MACRO_PARAM_LIST);
+		if (tok.id == EOF) return self.err_raw(tok, PpDiag.UNTERMINATED_MACRO_PARAM_LIST);
 		if (tok.id == ELLIPSIS)
 		{
 			var_args = true;
 			RawToken r_paren = tokenizer.next_no_ws();
 			if (r_paren.id != R_PAREN)
 			{
-				self.err_raw(r_paren, DIAG_MISSING_PAREN_PARAM_LIST)!;
-				self.err_raw(l_paren, DIAG_TO_MATCH_PAREN)!;
+				self.err_raw(r_paren, PpDiag.MISSING_PAREN_PARAM_LIST)!;
+				self.err_raw(l_paren, PpDiag.TO_MATCH_PAREN)!;
 				skip_to_nl(tokenizer);
 				return;
 			}
@@ -321,7 +321,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 		}
 		if (!tok.id.is_macro_identifier())
 		{
-			self.err_raw(tok, DIAG_INVALID_TOKEN_PARAM_LIST)!;
+			self.err_raw(tok, PpDiag.INVALID_TOKEN_PARAM_LIST)!;
 			skip_to_nl(tokenizer);
 			return;
 		}
@@ -331,13 +331,13 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 		tok = tokenizer.next_no_ws();
 		if (tok.id == ELLIPSIS)
 		{
-			self.err_raw(tok, DIAG_GNU_VA_MACRO)!;
+			self.err_raw(tok, PpDiag.GNU_VA_MACRO)!;
 			gnu_var_args = params.pop()!!;
 			RawToken r_paren = tokenizer.next_no_ws();
 			if (r_paren.id != R_PAREN)
 			{
-				self.err_raw(r_paren, DIAG_MISSING_PAREN_PARAM_LIST)!;
-				self.err_raw(l_paren, DIAG_TO_MATCH_PAREN)!;
+				self.err_raw(r_paren, PpDiag.MISSING_PAREN_PARAM_LIST)!;
+				self.err_raw(l_paren, PpDiag.TO_MATCH_PAREN)!;
 				skip_to_nl(tokenizer);
 				return;
 			}
@@ -349,7 +349,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 		}
 		else if (tok.id != COMMA)
 		{
-			self.err_raw(tok, DIAG_EXPECTED_COMMA_PARAM_LIST)!;
+			self.err_raw(tok, PpDiag.EXPECTED_COMMA_PARAM_LIST)!;
 			skip_to_nl(tokenizer);
 			return;
 		}
@@ -409,7 +409,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 						}
 					}
 				}
-				self.err_raw(param, DIAG_HASH_NOT_FOLLOWED_PARAM)!;
+				self.err_raw(param, PpDiag.HASH_NOT_FOLLOWED_PARAM)!;
 				skip_to_nl(tokenizer);
 				return;
 			case HASH_HASH:
@@ -418,7 +418,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 				// in this case, error out
 				if (self.token_buf.len() == 0)
 				{
-					self.err_raw(tok, DIAG_HASH_HASH_AT_START)!;
+					self.err_raw(tok, PpDiag.HASH_HASH_AT_START)!;
 					skip_to_nl(tokenizer);
 					return;
 				}
@@ -426,7 +426,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 				RawToken next = tokenizer.next_no_ws_comments();
 				if (next.id == NL || next.id == EOF)
 				{
-					self.err_raw(tok, DIAG_HASH_HASH_AT_END)!;
+					self.err_raw(tok, PpDiag.HASH_HASH_AT_END)!;
 					return;
 				}
 				*tokenizer = saved_tokenizer;
@@ -437,12 +437,12 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 			case UNTERMINATED_STRING_LITERAL:
 			case UNTERMINATED_CHAR_LITERAL:
 			case EMPTY_CHAR_LITERAL:
-				self.err_raw(tok, invalid_token_diagnostic(tok.id))!;
+				self.err_invalid_token(tok)!;
 				self.token_buf.push(tok);
 			case UNTERMINATED_COMMENT:
-				self.err_raw(tok, DIAG_UNTERMINATED_COMMENT)!;
+				self.err_raw(tok, PpDiag.UNTERMINATED_COMMENT)!;
 			default:
-				if (self.is_poisoned(tok)) self.err_raw(tok, DIAG_POISONED_IDENTIFIER)!;
+				if (self.is_poisoned(tok)) self.err_raw(tok, PpDiag.POISONED_IDENTIFIER)!;
 				if (tok.id != WHITESPACE && need_ws)
 				{
 					need_ws = false;
@@ -457,7 +457,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 					RawToken opt_l_paren = tokenizer.next();
 					if (opt_l_paren.id != L_PAREN)
 					{
-						self.err_raw(opt_l_paren, DIAG_VA_OPT_LPAREN)!;
+						self.err_raw(opt_l_paren, PpDiag.VA_OPT_LPAREN)!;
 						skip_to_nl(tokenizer);
 						return;
 					}
@@ -476,8 +476,8 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
 								parens--;
 							case NL:
 							case EOF:
-								self.err_raw(opt_tok, DIAG_VA_OPT_RPAREN)!;
-								self.err_raw(opt_l_paren, DIAG_TO_MATCH_PAREN)!;
+								self.err_raw(opt_tok, PpDiag.VA_OPT_RPAREN)!;
+								self.err_raw(opt_l_paren, PpDiag.TO_MATCH_PAREN)!;
 								skip_to_nl(tokenizer);
 								return;
 							case WHITESPACE:
@@ -594,7 +594,7 @@ fn ExpandBuf? Preprocessor.expand_obj_macro(&self, Macro* simple_macro)
  Variadic part: args from params.len on joined by generated commas (raw and
  expanded copies). '##' loops over following tokens (skipping MACRO_WS, '##',
  comments without -CC) pasting get_paste_args(arg) for parameters, the raw
- variadic tokens (or a PLACEMARKER plus DIAG_NO_ARGUMENT_VARIADIC_MACRO when
+ variadic tokens (or a PLACEMARKER plus PpDiag.NO_ARGUMENT_VARIADIC_MACRO when
  empty) for __VA_ARGS__, expand_va_opt output for __VA_OPT__ (stop if empty).
  MACRO_PARAM_NO_EXPAND copies get_paste_args(raw arg), MACRO_PARAM the
  expanded arg, KEYWORD_VA_ARGS the expanded variadic part (buf_copy_tokens
@@ -602,7 +602,7 @@ fn ExpandBuf? Preprocessor.expand_obj_macro(&self, Macro* simple_macro)
  STRINGIFY_* -> stringify into char_buf, copy to generated_buf, one
  make_generated_token STRING_LITERAL; MACRO_PARAM_BUILTIN_FUNC ->
  builtins.expand_func; ', ## __VA_ARGS__' implements GNU comma deletion with
- DIAG_COMMA_DELETION_VA_ARGS exactly as Zig (incl. the GNU-standard
+ PpDiag.COMMA_DELETION_VA_ARGS exactly as Zig (incl. the GNU-standard
  ambiguity rule). Then remove_placemarkers and, for each result token, add
  macro_tok.loc and macro_tok's expansion locations, and for tokens with
  should_track_hideset(FUNC) set hideset(tok.loc) = union(hideset(tok.loc), hs).
@@ -675,7 +675,7 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 						case KEYWORD_VA_ARGS:
 							if (variable_arguments.len() == 0)
 							{
-								self.err_raw(raw_next, DIAG_NO_ARGUMENT_VARIADIC_MACRO)!;
+								self.err_raw(raw_next, PpDiag.NO_ARGUMENT_VARIADIC_MACRO)!;
 								one[0] = { .id = PLACEMARKER, .loc = { .id = source::GENERATED_ID } };
 								next = one[..];
 							}
@@ -735,7 +735,7 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 						if (func_macro.params.len == expanded_args.len())
 						{
 							// Empty __VA_ARGS__, drop the comma
-							self.err_raw(hash_hash, DIAG_COMMA_DELETION_VA_ARGS)!;
+							self.err_raw(hash_hash, PpDiag.COMMA_DELETION_VA_ARGS)!;
 						}
 						else if (func_macro.params.len == 0 && expanded_args.len() == 1 && expanded_args.entries[0].len == 0)
 						{
@@ -743,7 +743,7 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 							if (self.comp.langopts.standard.is_gnu())
 							{
 								// GNU standard, drop the comma
-								self.err_raw(hash_hash, DIAG_COMMA_DELETION_VA_ARGS)!;
+								self.err_raw(hash_hash, PpDiag.COMMA_DELETION_VA_ARGS)!;
 							}
 							else
 							{
@@ -756,7 +756,7 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 							buf.push(tokens::from_raw(raw));
 							if (expanded_variable_arguments.len() > 0 || variable_arguments.len() == func_macro.params.len)
 							{
-								self.err_raw(hash_hash, DIAG_COMMA_DELETION_VA_ARGS)!;
+								self.err_raw(hash_hash, PpDiag.COMMA_DELETION_VA_ARGS)!;
 							}
 							buf_copy_tokens(gpa, &buf, expanded_variable_arguments.array_view(), { tokens::raw_location(maybe_va_args) });
 						}
@@ -833,11 +833,11 @@ fn TokenWithExpansionLocs? Preprocessor.next_buf_token(&self, Tokenizer* tokeniz
 			case UNTERMINATED_STRING_LITERAL:
 			case UNTERMINATED_CHAR_LITERAL:
 			case EMPTY_CHAR_LITERAL:
-				self.err_raw(raw_tok, invalid_token_diagnostic(raw_tok.id))!;
+				self.err_invalid_token(raw_tok)!;
 			case UNTERMINATED_COMMENT:
-				self.err_raw(raw_tok, DIAG_UNTERMINATED_COMMENT)!;
+				self.err_raw(raw_tok, PpDiag.UNTERMINATED_COMMENT)!;
 			default:
-				if (self.is_poisoned(raw_tok)) self.err_raw(raw_tok, DIAG_POISONED_IDENTIFIER)!;
+				if (self.is_poisoned(raw_tok)) self.err_raw(raw_tok, PpDiag.POISONED_IDENTIFIER)!;
 		}
 		TokenWithExpansionLocs new_tok = tokens::from_raw(raw_tok);
 		*end_idx += 1;
@@ -860,12 +860,12 @@ fn TokenWithExpansionLocs[] to_owned_tokens(Allocator gpa, ExpandBuf* list) @pri
 
 <*
  Zig `collectMacroFuncArguments`: skip nl/whitespace/MACRO_WS after the name
- at buf[*start_idx]; anything but '(' -> (DIAG_MISSING_LPAREN_AFTER_BUILTIN
+ at buf[*start_idx]; anything but '(' -> (PpDiag.MISSING_LPAREN_AFTER_BUILTIN
  for builtins), restore the tokenizer and *end_idx, MISSING_L_PAREN. Then
  collect comma-separated arguments respecting nested parens; every token
  gets flags.is_macro_arg and is dupe'd; nl/whitespace become MACRO_WS at its
  loc; ')' at depth 0 ends (stored in *r_paren); eof -> push the partial
- argument, restore the tokenizer, DIAG_UNTERMINATED_MACRO_ARG_LIST at the
+ argument, restore the tokenizer, PpDiag.UNTERMINATED_MACRO_ARG_LIST at the
  name, UNTERMINATED (the partial arguments are freed). The result is owned
  by the caller (deinit_macro_arguments). g() yields one empty argument.
  @return? MISSING_L_PAREN, UNTERMINATED, compilation::FATAL_ERROR
@@ -892,7 +892,7 @@ fn MacroArguments? Preprocessor.collect_macro_func_arguments(&self, Tokenizer* t
 			default:
 				if (is_builtin)
 				{
-					self.err(name_tok, DIAG_MISSING_LPAREN_AFTER_BUILTIN, { diagnostics::arg_str(self.expanded_slice(name_tok)) })!;
+					self.err(name_tok, PpDiag.MISSING_LPAREN_AFTER_BUILTIN, self.expanded_slice(name_tok))!;
 				}
 				// Not a macro function call, go over normal identifier, rewind
 				if (tokenizer) *tokenizer = saved_tokenizer;
@@ -944,7 +944,7 @@ fn MacroArguments? Preprocessor.collect_macro_func_arguments(&self, Tokenizer* t
 			case EOF:
 				args.push(to_owned_tokens(gpa, &cur_argument));
 				if (tokenizer) *tokenizer = saved_tokenizer;
-				self.err(name_tok, DIAG_UNTERMINATED_MACRO_ARG_LIST)!;
+				self.err(name_tok, PpDiag.UNTERMINATED_MACRO_ARG_LIST)!;
 				return UNTERMINATED~;
 			case NL:
 			case WHITESPACE:
@@ -1015,13 +1015,13 @@ fn bool TokenIterator.next_no_ws(&self, TokenWithExpansionLocs* out)
  the name, remove the consumed tokens), hs = (is_macro_arg ? NONE :
  intersection(hideset(name), hideset(r_paren))) with the name prepended;
  g() with zero params counts as zero arguments when whitespace only;
- DIAG_EXPECTED_AT_LEAST_ARGUMENTS / DIAG_EXPECTED_ARGUMENTS remove the call;
+ PpDiag.EXPECTED_AT_LEAST_ARGUMENTS / PpDiag.EXPECTED_ARGUMENTS remove the call;
  arguments are dupe'd and expanded (with `tokenizer` = null) when
  should_expand_args; expand_func_macro replaces the call. Object macros:
  expand_obj_macro, hs = prepend(name, hideset(name)), each result token gets
  is_macro_arg from the name, the name's location chain, union'd hideset for
  should_track_hideset(OBJ); `defined` produced in EXPR context warns
- DIAG_EXPANSION_TO_DEFINED_FUNC/OBJ; the index only advances past result
+ PpDiag.EXPANSION_TO_DEFINED_FUNC/OBJ; the index only advances past result
  tokens before the first `defined` or defined macro name. Finally free and
  drop everything past the moving end index.
  @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, aro::UNSUPPORTED
@@ -1129,14 +1129,14 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 					// Validate argument count.
 					if (m.var_args && args_count < m.params.len)
 					{
-						self.err(buf.entries[idx], DIAG_EXPECTED_AT_LEAST_ARGUMENTS, { diagnostics::arg_uint(m.params.len), diagnostics::arg_uint(args_count) })!;
+						self.err(buf.entries[idx], PpDiag.EXPECTED_AT_LEAST_ARGUMENTS, (ulong)m.params.len, (ulong)args_count)!;
 						idx++;
 						self.remove_expanded_tokens(buf, idx, macro_scan_idx - idx + 1, &moving_end_idx);
 						continue EXPANSION;
 					}
 					if (!m.var_args && args_count != m.params.len)
 					{
-						self.err(buf.entries[idx], DIAG_EXPECTED_ARGUMENTS, { diagnostics::arg_uint(m.params.len), diagnostics::arg_uint(args_count) })!;
+						self.err(buf.entries[idx], PpDiag.EXPECTED_ARGUMENTS, (ulong)m.params.len, (ulong)args_count)!;
 						idx++;
 						self.remove_expanded_tokens(buf, idx, macro_scan_idx - idx + 1, &moving_end_idx);
 						continue EXPANSION;
@@ -1209,11 +1209,11 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 					{
 						if (is_func)
 						{
-							self.err(*tok, DIAG_EXPANSION_TO_DEFINED_FUNC)!;
+							self.err(*tok, PpDiag.EXPANSION_TO_DEFINED_FUNC)!;
 						}
 						else
 						{
-							self.err(*tok, DIAG_EXPANSION_TO_DEFINED_OBJ)!;
+							self.err(*tok, PpDiag.EXPANSION_TO_DEFINED_OBJ)!;
 						}
 					}
 
@@ -1223,7 +1223,7 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 					}
 				}
 
-				tokens::free_expansion_locs(gpa, buf.entries[idx].expansion_locs);
+				buf.entries[idx].expansion_locs.free();
 				replace_range(buf, idx, 1, res.array_view());
 				idx += increment_idx_by;
 				moving_end_idx = moving_end_idx + res.len() - 1;
@@ -1307,17 +1307,17 @@ fn void? Preprocessor.add_tokens_from_expand_buf(&self, TokenWithExpansionLocs[]
 		TokenWithExpansionLocs tok = const_tok;
 		if (tok.id == MACRO_WS && !self.preserve_whitespace)
 		{
-			tokens::free_expansion_locs(gpa, tok.expansion_locs);
+			tok.expansion_locs.free();
 			continue;
 		}
 		if (tok.id == COMMENT && !self.comp.langopts.preserve_comments_in_macros)
 		{
-			tokens::free_expansion_locs(gpa, tok.expansion_locs);
+			tok.expansion_locs.free();
 			continue;
 		}
 		if (tok.id == PLACEMARKER)
 		{
-			tokens::free_expansion_locs(gpa, tok.expansion_locs);
+			tok.expansion_locs.free();
 			continue;
 		}
 		if (tok.flags.pragma_directive)

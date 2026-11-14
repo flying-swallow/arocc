@@ -6,6 +6,7 @@
 // was run.
 module pp_print_tests;
 import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
+import aro::pragma;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)
@@ -62,6 +63,8 @@ fn String print(Preprocessor* pp, DumpMode mode = RESULT_ONLY)
 	pp.pretty_print_tokens(&out, mode)!!;
 	return out.str_view();
 }
+
+fn bool drop_pragma(void* ctx, Preprocessor* pp, tokens::TokenIndex start_idx) => false;
 
 fn void escapes() @test
 {
@@ -201,6 +204,27 @@ fn void pragma_line() @test
 		}
 		pp.tokens.push({ .id = EOF, .loc = tokens::raw_location(t) });
 		test::eq(print(pp), "#pragma foo bar ( 1 )\nx\n");
+	};
+}
+
+fn void registered_pragma_can_be_dropped() @test
+{
+	@with_pp(; Compilation* comp, Preprocessor* pp)
+	{
+		pragma::Handler h = { .preserve_tokens = &drop_pragma };
+		assert(comp.pragmas.add("foo", h));
+		Source s = add_src(comp, "p.c", "#pragma foo\nx\n");
+		Tokenizer tz;
+		tz.init(s.buf, s.id, comp.langopts);
+		tz.next(); // '#', absent from preprocessor token lists
+		Token t;
+		while ((t = tz.next()).id != EOF)
+		{
+			if (t.id == WHITESPACE) continue;
+			pp.tokens.push({ .id = t.id, .loc = tokens::raw_location(t) });
+		}
+		pp.tokens.push({ .id = EOF, .loc = tokens::raw_location(t) });
+		test::eq(print(pp), "\nx\n");
 	};
 }
 

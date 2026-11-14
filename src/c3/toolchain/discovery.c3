@@ -20,6 +20,7 @@
 module aro::toolchain::discovery;
 import aro::target;
 import std::collections::list, std::io;
+import std::os::posix, libc;
 
 excuse NOT_FOUND;
 excuse NOT_A_DIRECTORY;
@@ -46,6 +47,8 @@ alias DirEntryList = List{DirEntry};
 
 <* Zig `cwd.access(path)` succeeding (file or directory). *>
 alias ExistsFn = fn bool(void* ctx, String path);
+<* Zig Toolchain.canExecute; the host adapter checks X_OK where supported (Windows assumes true), MemTree marks fake tools explicitly. *>
+alias ExecuteFn = fn bool(void* ctx, String path);
 <*
  Zig `cwd.readFile(path, buf)`: reads at most buf.len bytes (partial contents
  when the file is larger) and returns the filled prefix of `buf`.
@@ -62,11 +65,13 @@ struct FileSystem
 {
 	void* ctx;
 	ExistsFn exists_fn;
+	ExecuteFn execute_fn;
 	ReadFileFn read_file_fn;
 	ListDirFn list_dir_fn;
 }
 
 fn bool FileSystem.exists(&self, String path) => self.exists_fn(self.ctx, path);
+fn bool FileSystem.can_execute(&self, String path) => self.execute_fn(self.ctx, path);
 
 fn char[]? FileSystem.read_file(&self, String path, char[] buf) => self.read_file_fn(self.ctx, path, buf);
 
@@ -97,6 +102,14 @@ fn void free_entries(Allocator a, DirEntryList* list)
 struct Env
 {
 	FileSystem fs;
+	<* Borrowed PATH for executable lookup. Empty means no PATH directories. *>
+	String path;
+	<* Borrowed Bazel runfiles root used to locate packaged builtin headers. *>
+	String runfiles_dir;
+	<* Optional borrowed subprocess service, used by Darwin's xcrun SDK query. *>
+	ProcessService process;
+	<* Host OS predicate; Darwin calls xcrun only when compiling on a Darwin host. *>
+	bool host_is_darwin;
 	<* Toolchain.getTarget(): the target, never the host. *>
 	Target target;
 	<* Toolchain.getSysroot(): `--sysroot`, else system_defaults.sysroot; "" = none. *>
@@ -106,6 +119,7 @@ struct Env
 }
 
 fn bool Env.exists(&self, String path) => self.fs.exists(path);
+fn bool Env.can_execute(&self, String path) => self.fs.can_execute(path);
 fn bool Env.joined_exists(&self, String[] parts) => self.fs.joined_exists(parts);
 <* Toolchain.readFile: NOT_FOUND (Zig null) on any error. *>
 fn char[]? Env.read_file(&self, String path, char[] buf) => self.fs.read_file(path, buf);
@@ -181,6 +195,7 @@ struct MemNode
 	String name;
 	uint parent;
 	EntryKind kind;
+	bool executable;
 	String contents;
 }
 
@@ -277,7 +292,7 @@ fn uint? MemTree.resolve(&self, String path)
 	return cur;
 }
 
-fn uint MemTree.make(&self, String path, EntryKind leaf_kind, String contents)
+fn uint MemTree.make(&self, String path, EntryKind leaf_kind, String contents, bool executable = false)
 {
 	uint cur = 0;
 	usz i = 0;
@@ -304,6 +319,7 @@ fn uint MemTree.make(&self, String path, EntryKind leaf_kind, String contents)
 				assert(n.kind != DIRECTORY, "path already exists as a directory");
 				if (n.contents.len) alloc::free(self.a, n.contents.ptr);
 				n.kind = leaf_kind;
+				n.executable = executable;
 				n.contents = contents.len ? contents.copy(self.a) : "";
 			}
 			else
@@ -316,6 +332,7 @@ fn uint MemTree.make(&self, String path, EntryKind leaf_kind, String contents)
 			.name = comp.copy(self.a),
 			.parent = cur,
 			.kind = last ? leaf_kind : DIRECTORY,
+			.executable = last && executable,
 			.contents = (last && contents.len) ? contents.copy(self.a) : "",
 		});
 		cur = (uint)self.nodes.len() - 1;
@@ -329,6 +346,9 @@ fn void MemTree.add_dir(&self, String path) => (void)self.make(path, DIRECTORY, 
 <* Creates a regular file (and its parent directories). *>
 fn void MemTree.add_file(&self, String path, String contents = "") => (void)self.make(path, FILE, contents);
 
+<* Creates a synthetic executable regular file. *>
+fn void MemTree.add_executable(&self, String path, String contents = "") => (void)self.make(path, FILE, contents, true);
+
 <* Creates a non-directory, non-regular entry (e.g. a symlink stand-in). *>
 fn void MemTree.add_other(&self, String path) => (void)self.make(path, OTHER, "");
 
@@ -337,6 +357,16 @@ fn bool mem_exists(void* ctx, String path)
 	MemTree* t = ctx;
 	t.log(path);
 	return @ok(t.resolve(path));
+}
+
+fn bool mem_can_execute(void* ctx, String path)
+{
+	MemTree* t = ctx;
+	t.log(path);
+	uint? idx = t.resolve(path);
+	if (catch idx) return false;
+	MemNode* n = &t.nodes[idx];
+	return n.kind != DIRECTORY && n.executable;
 }
 
 fn char[]? mem_read_file(void* ctx, String path, char[] buf)
@@ -365,7 +395,7 @@ fn void? mem_list_dir(void* ctx, String path, Allocator a, DirEntryList* out)
 
 fn FileSystem MemTree.fs(&self)
 {
-	return { .ctx = self, .exists_fn = &mem_exists, .read_file_fn = &mem_read_file, .list_dir_fn = &mem_list_dir };
+	return { .ctx = self, .exists_fn = &mem_exists, .execute_fn = &mem_can_execute, .read_file_fn = &mem_read_file, .list_dir_fn = &mem_list_dir };
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +403,15 @@ fn FileSystem MemTree.fs(&self)
 // ---------------------------------------------------------------------------
 
 fn bool host_exists(void* ctx, String path) => file::exists(path);
+
+fn bool host_can_execute(void* ctx, String path)
+{
+	$if env::POSIX:
+		return posix::access(path.zstr_tcopy(), 1 /* X_OK */) == 0;
+	$else
+		return true;
+	$endif
+}
 
 fn char[]? host_read_file(void* ctx, String path, char[] buf)
 {
@@ -390,8 +429,46 @@ fn char[]? host_read_file(void* ctx, String path, char[] buf)
 	return buf[:n];
 }
 
+tlocal posix::DIRPtr active_host_directory @feat(POSIX);
+
+<* Close a directory left open if a fuzz OOM longjmps past host_list_dir's defer. No-op off POSIX (no directory is held open there). *>
+fn void close_open_host_directory()
+{
+	$if env::POSIX:
+	if (!active_host_directory) return;
+	(void)posix::closedir(active_host_directory);
+	active_host_directory = (posix::DIRPtr)null;
+	$endif
+}
+
 fn void? host_list_dir(void* ctx, String path, Allocator a, DirEntryList* out)
 {
+	$if env::POSIX:
+	posix::DIRPtr directory = posix::opendir(path.zstr_tcopy());
+	if (!directory) return file::exists(path) ? NOT_A_DIRECTORY~ : NOT_FOUND~;
+	active_host_directory = directory;
+	defer close_open_host_directory();
+	Posix_dirent* entry;
+	while ((entry = posix::readdir(directory)))
+	{
+		String name = ((ZString)&entry.name).str_view();
+		if (!name || name == "." || name == "..") continue;
+		char[MAX_PATH_BYTES] buf;
+		String? full = join_buf(&buf, { path, name });
+		EntryKind kind = OTHER;
+		if (try full)
+		{
+			libc::Stat stat;
+			if (libc::stat(full.zstr_tcopy(), &stat) == 0)
+			{
+				kind = libc_S_ISTYPE(stat.st_mode, libc::S_IFDIR) ? DIRECTORY
+					: libc_S_ISTYPE(stat.st_mode, libc::S_IFREG) ? FILE : OTHER;
+			}
+		}
+		out.push({ .name = name.copy(a), .kind = kind });
+	}
+	$else
+	// Windows: std::io::path::ls uses native directory enumeration.
 	if (!file::is_dir(path)) return file::exists(path) ? NOT_A_DIRECTORY~ : NOT_FOUND~;
 	@pool()
 	{
@@ -410,10 +487,11 @@ fn void? host_list_dir(void* ctx, String path, Allocator a, DirEntryList* out)
 			out.push({ .name = name.copy(a), .kind = kind });
 		}
 	};
+	$endif
 }
 
 <* The real filesystem of the machine running the compiler. *>
 fn FileSystem host_fs()
 {
-	return { .ctx = null, .exists_fn = &host_exists, .read_file_fn = &host_read_file, .list_dir_fn = &host_list_dir };
+	return { .ctx = null, .exists_fn = &host_exists, .execute_fn = &host_can_execute, .read_file_fn = &host_read_file, .list_dir_fn = &host_list_dir };
 }

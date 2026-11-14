@@ -51,7 +51,7 @@ fn Value i(Compilation* comp, long x) => value::int_i64(x, comp);
 <* Intern a big int from explicit little-endian limbs (must be normalized). *>
 fn Value big(Compilation* comp, bool positive, Limb[] limbs)
 {
-	return value::intern(comp, value_interner::key_big_int({ .limbs = limbs, .positive = positive }));
+	return value::intern(comp, { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = { .limbs = limbs, .positive = positive } } });
 }
 
 <* (+/-) 2^e for e < 512. *>
@@ -222,7 +222,7 @@ fn void bytes_values() @test
 {
 	@with_comp(; Compilation* comp)
 	{
-		Value s = value::intern(comp, value_interner::key_bytes("ab\0"));
+		Value s = value::intern(comp, { .tag = BYTES, .bytes = "ab\0" });
 		assert(s.is(BYTES, comp));
 		assert(!s.is_zero(comp));
 		assert(!s.is_arithmetic(comp));

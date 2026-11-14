@@ -6,9 +6,10 @@
 //
 // The reference executable is supplied with
 //   --test_env=ARO_REFERENCE_EXE=/absolute/path/to/arocc
-// No Zig executable exists in this environment, so without that variable the
-// test prints "reference executable unavailable" and FAILS on purpose: a
-// reference run that did not happen must never look green.
+// Optionally select a frozen source corpus with
+//   --test_env=ARO_REFERENCE_CASES_DIR=/absolute/path/to/test/cases
+// Without ARO_REFERENCE_EXE the test prints "reference executable unavailable"
+// and fails, so a reference run that did not happen cannot look green.
 module reference_regression;
 import std::io, std::os::env, std::encoding::json, std::collections::object, aro_runner;
 
@@ -23,10 +24,11 @@ fn void reference_regression() @test
 	uint expected_files = summary.get_uint("top_level_files")!!;
 	uint expected_unsupported = summary.get_uint("unimplemented_compare_output")!!;
 	uint expected_zig_skips = summary.get_uint("runner_skip_stat_if_all_pass")!!;
+	String cases_dir = env::get_var(tmem, "ARO_REFERENCE_CASES_DIR") ?? CASES_DIR;
 
 	DString log;
 	log.init(tmem);
-	String[] corpus = aro_runner::list_corpus(tmem, CASES_DIR, &log)!!;
+	String[] corpus = aro_runner::list_corpus(tmem, cases_dir, &log)!!;
 	io::printfn("corpus files: %d (baseline.json top_level_files: %d)", corpus.len, expected_files);
 	assert(corpus.len == expected_files, "corpus does not match baseline.json inventory");
 
@@ -43,7 +45,7 @@ fn void reference_regression() @test
 		unreachable("reference executable unavailable");
 	}
 
-	SuiteOptions opts = { .exe = exe, .cases_dir = CASES_DIR, .mode = CORPUS };
+	SuiteOptions opts = { .exe = exe, .cases_dir = cases_dir, .mode = CORPUS };
 	String out_dir = env::get_var(tmem, "TEST_UNDECLARED_OUTPUTS_DIR") ?? "";
 	if (out_dir.len) opts.log_path = aro_runner::join_path(tmem, out_dir, "reference_outcomes.tsv");
 	SuiteReport rep = aro_runner::run_suite(opts, io::stdout());

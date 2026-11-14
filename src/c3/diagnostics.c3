@@ -5,9 +5,9 @@
 // Zig's comptime formatting and reflection are replaced by:
 //  - `Option` carrying its flag spelling as an associated value,
 //  - explicit group tables (`option_group`),
-//  - `format_args` over a `DiagArg[]` with the same "{s}" / "{d}" templates.
+//  - C3 printf formatting, checked at compile time by `@format`.
 // Phase-specific message tables (Parser, Preprocessor, ...) are ported with
-// their callers as `DiagnosticTemplate` constants.
+// their callers as enums with associated values (see `DiagMeta`).
 module aro::diagnostics;
 import aro::source, aro::compilation, std::io, std::collections::list;
 
@@ -302,36 +302,45 @@ struct Message
 }
 
 <*
- A static message description (Zig's per-module `Diagnostic` constants: fmt,
- kind, opt, extension). Phase-specific tables are declared next to their callers.
+ Optional metadata of a diagnostic enum entry. Zero means: no -W option, not an
+ extension, hidden in system headers when those are suppressed.
+
+ Every diagnostic family is an enum with associated values
+ `(String fmt, MessageKind kind, <meta> meta)`, where `fmt` uses C3 printf
+ syntax and `<meta>` is DiagMeta or a struct with the same field names plus
+ family-specific ones. `@message` reads those fields, so it works for any family
+ and for compile-time or runtime enum values. Family emit macros format with
+ `string::tformat($diag.fmt, ...)`, whose `@format` checks call-site arguments.
 *>
-struct DiagnosticTemplate
+struct DiagMeta
 {
-	String fmt;
-	MessageKind kind;
 	bool has_opt;
 	Option opt;
 	bool extension;
-	<*
-	 Zig Preprocessor.Diagnostic `show_in_system_headers`: report even when
-	 warnings in system headers are suppressed. Defaults to false (zero).
-	*>
+	<* Zig Preprocessor.Diagnostic `show_in_system_headers`. *>
 	bool show_in_system_headers;
 }
 
-<* Build a message from a template with already formatted `text` and no location. *>
-fn Message DiagnosticTemplate.message(self, String text)
+<* Build a message from diagnostic enum value `diag` and its formatted `text`, with no location. *>
+macro Message @message(diag, String text)
 {
-	return { .kind = self.kind, .text = text, .has_opt = self.has_opt, .opt = self.opt, .extension = self.extension };
+	return { .kind = diag.kind, .text = text, .has_opt = diag.meta.has_opt, .opt = diag.meta.opt, .extension = diag.meta.extension };
 }
 
-<* Same as `message`, with a location. *>
-fn Message DiagnosticTemplate.message_at(self, String text, ExpandedLocation loc)
+<* Same as `@message`, with a location. *>
+macro Message @message_at(diag, String text, ExpandedLocation loc)
 {
-	Message m = self.message(text);
+	Message m = @message(diag, text);
 	m.has_location = true;
 	m.location = loc;
 	return m;
+}
+
+<* False when `diag` would be reported as OFF, so callers can skip formatting it. *>
+macro bool Diagnostics.@enabled(&self, diag)
+{
+	Message probe = @message(diag, "");
+	return self.effective_kind(&probe) != OFF;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +357,8 @@ enum Color : char (String code)
 {
 	WHITE { "\e[37m" },
 	BRIGHT_RED { "\e[91m" },
+	BRIGHT_YELLOW { "\e[93m" },
+	BRIGHT_BLUE { "\e[94m" },
 	BRIGHT_GREEN { "\e[92m" },
 	BRIGHT_MAGENTA { "\e[95m" },
 	BRIGHT_CYAN { "\e[96m" },
@@ -757,83 +768,4 @@ fn void? Diagnostics.add_message(&self, Message msg)
 			}
 			self.messages.push(owned);
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Message templates: Zig `formatArgs` / `templateIndex` / `formatString` / `formatInt`.
-
-enum DiagArgKind : char
-{
-	STRING,
-	SIGNED,
-	UNSIGNED,
-}
-
-<* One argument of `format_args`. Build with `arg_str`, `arg_int` or `arg_uint`. *>
-struct DiagArg
-{
-	DiagArgKind kind;
-	String str;
-	long signed;
-	ulong unsigned;
-}
-
-fn DiagArg arg_str(String s) => { .kind = STRING, .str = s };
-fn DiagArg arg_int(long v) => { .kind = SIGNED, .signed = v };
-fn DiagArg arg_uint(ulong v) => { .kind = UNSIGNED, .unsigned = v };
-
-<*
- Write `fmt` with each argument substituted for the next "{s}" (strings) or
- "{d}" (integers) template, in order. Callers with phase-specific argument
- types (token ids, types, ...) use `template_index` the same way.
-*>
-fn void? format_args(OutStream w, String fmt, DiagArg[] args)
-{
-	sz i = 0;
-	foreach (arg : args)
-	{
-		switch (arg.kind)
-		{
-			case STRING: i += format_string(w, fmt[i..], arg.str)!;
-			case SIGNED: i += format_int(w, fmt[i..], arg.signed)!;
-			case UNSIGNED: i += format_uint(w, fmt[i..], arg.unsigned)!;
-		}
-	}
-	if (fmt.len > i) io::write_all(w, fmt[i..])!;
-}
-
-<*
- Write `fmt` up to `template` and return the index just past it. A missing
- template writes a bug notice and returns 0 (Zig panics in debug builds instead).
-*>
-fn sz? template_index(OutStream w, String fmt, String template)
-{
-	if (try i = fmt.index_of(template))
-	{
-		if (i) io::write_all(w, fmt[:i])!;
-		return i + template.len;
-	}
-	io::fprintf(w, "template `%s` not found in format string `%s` (this is a bug in arocc)", template, fmt)!;
-	return 0;
-}
-
-fn sz? format_string(OutStream w, String fmt, String str)
-{
-	sz i = template_index(w, fmt, "{s}")!;
-	if (str.len) io::write_all(w, str)!;
-	return i;
-}
-
-fn sz? format_int(OutStream w, String fmt, long value)
-{
-	sz i = template_index(w, fmt, "{d}")!;
-	io::fprintf(w, "%d", value)!;
-	return i;
-}
-
-fn sz? format_uint(OutStream w, String fmt, ulong value)
-{
-	sz i = template_index(w, fmt, "{d}")!;
-	io::fprintf(w, "%d", value)!;
-	return i;
 }

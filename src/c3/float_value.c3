@@ -210,11 +210,11 @@ enum RoundingMode : char
 *>
 bitstruct FloatStatus : char
 {
-	bool invalid : 0;
-	bool div_by_zero : 1;
-	bool overflow : 2;
-	bool underflow : 3;
-	bool inexact : 4;
+	bool invalid: 0;
+	bool div_by_zero: 1;
+	bool overflow: 2;
+	bool underflow: 3;
+	bool inexact: 4;
 }
 
 <* Zig Value.FloatToIntChangeKind *>
@@ -294,30 +294,75 @@ fn KeyFloat from_raw(KeyFloatTag tag, uint128 bits)
 {
 	switch (tag)
 	{
-		case F16: return { .tag = F16, .f16 = (ushort)bits };
-		case F32: return { .tag = F32, .f32 = (uint)bits };
-		case F64: return { .tag = F64, .f64 = (ulong)bits };
-		case F80: return { .tag = F80, .f80 = { .lo = (ulong)bits, .hi = (ushort)(bits >> 64) } };
-		case F128: return { .tag = F128, .f128 = { .lo = (ulong)bits, .hi = (ulong)(bits >> 64) } };
+		case F16: return
+		{
+			.tag = F16, .f16 = (ushort)bits
+		};
+		case F32: return
+		{
+			.tag = F32, .f32 = (uint)bits
+		};
+		case F64: return
+		{
+			.tag = F64, .f64 = (ulong)bits
+		};
+		case F80: return
+		{
+			.tag = F80, .f80 = { .lo = (ulong)bits, .hi = (ushort)(bits >> 64) }
+		};
+		case F128: return
+		{
+			.tag = F128, .f128 = { .lo = (ulong)bits, .hi = (ulong)(bits >> 64) }
+		};
 	}
 }
 
-fn KeyFloat f16_value(ushort bits) => { .tag = F16, .f16 = bits };
-fn KeyFloat f32_value(uint bits) => { .tag = F32, .f32 = bits };
-fn KeyFloat f64_value(ulong bits) => { .tag = F64, .f64 = bits };
-fn KeyFloat f80_value(F80Bits bits) => { .tag = F80, .f80 = bits };
-fn KeyFloat f128_value(F128Bits bits) => { .tag = F128, .f128 = bits };
+fn KeyFloat f16_value(ushort bits) =>
+{
+	.tag = F16, .f16 = bits
+};
+fn KeyFloat f32_value(uint bits) =>
+{
+	.tag = F32, .f32 = bits
+};
+fn KeyFloat f64_value(ulong bits) =>
+{
+	.tag = F64, .f64 = bits
+};
+fn KeyFloat f80_value(F80Bits bits) =>
+{
+	.tag = F80, .f80 = bits
+};
+fn KeyFloat f128_value(F128Bits bits) =>
+{
+	.tag = F128, .f128 = bits
+};
 
 <* Components of a complex constant: [0] real, [1] imaginary. *>
 fn KeyFloat[2] KeyComplex.parts(self)
 {
 	switch (self.tag)
 	{
-		case CF16: return { f16_value(self.cf16[0]), f16_value(self.cf16[1]) };
-		case CF32: return { f32_value(self.cf32[0]), f32_value(self.cf32[1]) };
-		case CF64: return { f64_value(self.cf64[0]), f64_value(self.cf64[1]) };
-		case CF80: return { f80_value(self.cf80[0]), f80_value(self.cf80[1]) };
-		case CF128: return { f128_value(self.cf128[0]), f128_value(self.cf128[1]) };
+		case CF16: return
+		{
+			f16_value(self.cf16[0]), f16_value(self.cf16[1])
+		};
+		case CF32: return
+		{
+			f32_value(self.cf32[0]), f32_value(self.cf32[1])
+		};
+		case CF64: return
+		{
+			f64_value(self.cf64[0]), f64_value(self.cf64[1])
+		};
+		case CF80: return
+		{
+			f80_value(self.cf80[0]), f80_value(self.cf80[1])
+		};
+		case CF128: return
+		{
+			f128_value(self.cf128[0]), f128_value(self.cf128[1])
+		};
 	}
 }
 
@@ -329,11 +374,26 @@ fn KeyComplex make_complex(KeyFloat re, KeyFloat im)
 {
 	switch (re.tag)
 	{
-		case F16: return { .tag = CF16, .cf16 = { re.f16, im.f16 } };
-		case F32: return { .tag = CF32, .cf32 = { re.f32, im.f32 } };
-		case F64: return { .tag = CF64, .cf64 = { re.f64, im.f64 } };
-		case F80: return { .tag = CF80, .cf80 = { re.f80, im.f80 } };
-		case F128: return { .tag = CF128, .cf128 = { re.f128, im.f128 } };
+		case F16: return
+		{
+			.tag = CF16, .cf16 = { re.f16, im.f16 }
+		};
+		case F32: return
+		{
+			.tag = CF32, .cf32 = { re.f32, im.f32 }
+		};
+		case F64: return
+		{
+			.tag = CF64, .cf64 = { re.f64, im.f64 }
+		};
+		case F80: return
+		{
+			.tag = CF80, .cf80 = { re.f80, im.f80 }
+		};
+		case F128: return
+		{
+			.tag = CF128, .cf128 = { re.f128, im.f128 }
+		};
 	}
 }
 
@@ -367,7 +427,7 @@ fn FloatClass KeyFloat.classify(self)
 	{
 		bool int_bit = ((self.raw() >> 63) & 1) != 0;
 		if (e == 0) return (frac == 0 && !int_bit) ? FloatClass.ZERO : FloatClass.SUBNORMAL;
-		if (!int_bit) return NAN; // unnormal, pseudo-infinity, pseudo-NaN
+		if (!int_bit) return NAN;  // unnormal, pseudo-infinity, pseudo-NaN
 		if (e == e_max) return frac == 0 ? FloatClass.INFINITE : FloatClass.NAN;
 		return NORMAL;
 	}
@@ -619,8 +679,8 @@ fn uint f128_exp_field(F128Bits f) @inline => (uint)(f.hi >> 48) & 0x7FFF;
 fn F128Bits mul_add_limb(F128Bits r, ulong limb)
 {
 	uint e_field = f128_exp_field(r);
-	if (e_field == 0x7FFF) return r; // +inf * 2^64 + finite = +inf
-	if (e_field == 0) return round_pack(F128, false, 0, (uint128)limb, false).f128; // r == +0
+	if (e_field == 0x7FFF) return r;  // +inf * 2^64 + finite = +inf
+	if (e_field == 0) return round_pack(F128, false, 0, (uint128)limb, false).f128;  // r == +0
 	uint128 sig = ((uint128)1 << 112) | ((uint128)(r.hi & F128_HI_FRAC_MASK) << 64) | (uint128)r.lo;
 	// r = sig * 2^e with e = e_field - bias - 112 >= -112; r * 2^64 = sig * 2^s.
 	int s = (int)e_field - 16383 - 112 + 64;
@@ -628,7 +688,7 @@ fn F128Bits mul_add_limb(F128Bits r, ulong limb)
 	{
 		// r is an integer, so sig has at least -e trailing zero bits and the
 		// right shift below is exact; sig << 14 < 2^127.
-		uint128 m = s >= 0 ? sig << s : sig >> -s;
+		uint128 m = s >= 0 ? sig << s : sig >> - s;
 		return round_pack(F128, false, 0, m + (uint128)limb, false).f128;
 	}
 	int d = s - 14;
@@ -689,7 +749,7 @@ fn sz calc_float_limb_len(F128Bits f)
 	if (e_field == 0) return 1;
 	if (e_field == 0x7FFF) return 0;
 	int unbiased = (int)e_field - 16383;
-	return bigint::calc_non_zero_twos_comp_limb_count((usz)2 + (usz)(unbiased > 0 ? unbiased : 0));
+	return bigint::calc_non_zero_twos_comp_limb_count((usz)2 + (usz)(unbiased > 0 ? unbiased: 0));
 }
 
 <*
@@ -872,7 +932,7 @@ struct ParsedNumber
 fn void try_parse_digits(FloatStream* stream, uint128* x, int base)
 {
 	char digit;
-	while (stream.scan_digit(base, &digit)) *x = *x * (uint128)base + (uint128)digit;
+	while (stream.scan_digit(base, &digit)) * x = *x * (uint128)base + (uint128)digit;
 }
 
 <* parse.zig min_n_digit_int: 10^(n-1). *>
@@ -914,7 +974,7 @@ fn bool parse_scientific(FloatStream* stream, long* out)
 			// no overflows here, saturate well before overflow
 			if (exponent < 0x1000_0000) exponent = 10 * exponent + digit;
 		}
-		*out = negative ? -exponent : exponent;
+		* out = negative ? -exponent : exponent;
 		return true;
 	}
 	return false;
@@ -973,7 +1033,7 @@ fn bool parse_partial_number_base(FloatStream* stream, bool negative, sz* n, int
 		exponent += exp_number;
 	}
 
-	*n += stream.offset; // length must be complete parsed length
+	* n += stream.offset;  // length must be complete parsed length
 
 	if (stream.underscore_count > 0 && !valid_underscores(stream.slice, base)) return false;
 
@@ -986,14 +1046,14 @@ fn bool parse_partial_number_base(FloatStream* stream, bool negative, sz* n, int
 
 	n_digits -= max_mantissa_digits;
 	bool many_digits = false;
-	stream.reset(); // re-parse from beginning
+	stream.reset();  // re-parse from beginning
 	while (stream.first_is("0._"))
 	{
 		// '0' = '.' + 2
 		char next = stream.slice[stream.offset];
 		if (next != '_')
 		{
-			n_digits -= next > '/' ? (sz)(next - '/') : 0; // next -| ('0' - 1)
+			n_digits -= next > '/' ? (sz)(next - '/') : 0;  // next -| ('0' - 1)
 		}
 		else
 		{
@@ -1027,7 +1087,7 @@ fn bool parse_partial_number_base(FloatStream* stream, bool negative, sz* n, int
 		exponent += exp_number;
 	}
 
-	*out = { .exponent = exponent, .mantissa = mantissa, .negative = negative, .many_digits = many_digits, .hex = base == 16 };
+	* out = { .exponent = exponent, .mantissa = mantissa, .negative = negative, .many_digits = many_digits, .hex = base == 16 };
 	return true;
 }
 
@@ -1130,7 +1190,7 @@ fn F128Bits convert_hex(ParsedNumber n)
 	// Round using two bottom bits.
 	uint128 round = m & 3;
 	m >>= 2;
-	round |= m & 1; // round to even (round up if mantissa is odd)
+	round |= m & 1;  // round to even (round up if mantissa is odd)
 	e += 2;
 	if (round == 3)
 	{
@@ -1175,7 +1235,7 @@ fn bool convert_fast(ParsedNumber n, F128Bits* out)
 	const uint128 MAX_MANTISSA_FAST_PATH = (uint128)2 << 112;
 
 	if (!(MIN_EXPONENT_FAST_PATH <= n.exponent && n.exponent <= MAX_EXPONENT_FAST_PATH_DISGUISED
-		&& n.mantissa <= MAX_MANTISSA_FAST_PATH && !n.many_digits)) return false;
+			&& n.mantissa <= MAX_MANTISSA_FAST_PATH && !n.many_digits)) return false;
 
 	F128Bits value;
 	if (n.exponent <= MAX_EXPONENT_FAST_PATH)
@@ -1529,7 +1589,7 @@ fn BiasedFp convert_slow(String s)
 	const BiasedFp INF_FP = { 0, 0x7FFF };
 
 	Decimal d;
-	d.parse(s); // no need to recheck underscores
+	d.parse(s);  // no need to recheck underscores
 	if (d.num_digits == 0 || d.decimal_point < DECIMAL_MIN_EXPONENT) return ZERO_FP;
 	if (d.decimal_point >= DECIMAL_MAX_EXPONENT) return INF_FP;
 
@@ -1633,8 +1693,8 @@ fn KeyFloatTag width_of(QualType qt, Compilation* comp) => tag_for_bits(qt.bit_s
 <* Width of a complex type's element (`qt.childType(comp).bitSizeof(comp)`). *>
 fn KeyFloatTag element_width_of(QualType qt, Compilation* comp) => width_of(qt.child_type(comp), comp);
 
-fn Value intern_float(KeyFloat f, Compilation* comp) => value::intern(comp, value_interner::key_float(f));
-fn Value intern_complex(KeyComplex c, Compilation* comp) => value::intern(comp, value_interner::key_complex(c));
+fn Value intern_float(KeyFloat f, Compilation* comp) => value::intern(comp, { .tag = FLOAT, .float_val = f });
+fn Value intern_complex(KeyComplex c, Compilation* comp) => value::intern(comp, { .tag = COMPLEX, .complex_val = c });
 
 <*
  Value.toFloat(T): the real part of `v` as a `dest`-width float.
@@ -1716,8 +1776,7 @@ fn FloatToIntChangeKind float_to_int(Value* v, QualType dest_ty, Compilation* co
 	usz bits = (usz)dest_ty.bit_sizeof(comp);
 	sz limb_len = calc_float_limb_len(float_val.f128);
 	sz twos_len = bigint::calc_twos_comp_limb_count(bits);
-	Limb[] limbs = value::alloc_limbs(comp, limb_len > twos_len ? limb_len : twos_len);
-	defer value::free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(limb_len > twos_len ? limb_len: twos_len));
 	BigIntMutable big = value::mutable_over(limbs);
 	bool had_fraction = f128_to_big_int_trunc(float_val.f128, &big);
 
@@ -1763,7 +1822,7 @@ fn void float_cast(Value* v, QualType dest_ty, Compilation* comp)
 		*v = intern_complex(make_complex(to_float(*v, w, comp), imag(*v, w, comp)), comp);
 		return;
 	}
-	*v = intern_float(to_float(*v, width_of(dest_ty, comp), comp), comp);
+	* v = intern_float(to_float(*v, width_of(dest_ty, comp), comp), comp);
 }
 
 <* Value.realPart: none -> none; int/float -> v; complex -> its real part as a float value. *>
@@ -1844,12 +1903,12 @@ fn void float_arith(Value* res, Value lhs, Value rhs, QualType qt, Compilation* 
 		KeyComplex result;
 		switch (op)
 		{
-			case ADD: result = make_complex(a.add(c), b.add(d)); // complexAddSub
+			case ADD: result = make_complex(a.add(c), b.add(d));  // complexAddSub
 			case SUB: result = make_complex(a.sub(c), b.sub(d));
 			case MUL: result = annex_g::complex_float_mul(a, b, c, d);
 			case DIV: result = annex_g::complex_float_div(a, b, c, d);
 		}
-		*res = intern_complex(result, comp);
+		* res = intern_complex(result, comp);
 		return;
 	}
 	KeyFloatTag w = width_of(qt, comp);

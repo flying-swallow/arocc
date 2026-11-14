@@ -182,7 +182,7 @@ fn void check_bytes(Compilation* comp, StringLiteral s, char[] expected)
 fn String printed(Compilation* comp, DString* out, StringLiteral s)
 {
 	out.clear();
-	text_literal_semantics::print_string(s.val.to_bytes(comp), s.qt, comp, *out, BARE);
+	text_literal_semantics::print_string(s.val.to_bytes(comp), s.qt, comp, out, BARE);
 	return out.str_view();
 }
 

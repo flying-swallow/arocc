@@ -1,0 +1,6 @@
+// Initializer fixtures are run in the adapter's supported preprocessing mode.
+// Their syntax grammar remains pending; these cases ensure the source tokens
+// reach the parser boundary through normal preprocessing without diagnostics.
+sparse_array_initializer.c
+nested_designated_initializer.c
+union_initializer.c

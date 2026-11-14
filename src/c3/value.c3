@@ -64,27 +64,11 @@ fn InternerRef Value.ref(self) => self.opt_ref.unwrap();
 <* Value.fromRef *>
 fn Value from_ref(InternerRef r) => { .opt_ref = r.to_opt() };
 
-// ---------------------------------------------------------------------------
-// Scratch limbs (Zig `comp.gpa.alloc(Limb, n)` + `defer comp.gpa.free`).
-// ---------------------------------------------------------------------------
-
-<* Allocate `n` (>= 1) zeroed scratch limbs from comp.gpa. Free with free_limbs. *>
-fn Limb[] alloc_limbs(Compilation* comp, sz n)
-{
-	assert(n >= 1);
-	return alloc::new_array(comp.gpa, Limb, (usz)n);
-}
-
-fn void free_limbs(Compilation* comp, Limb[] limbs)
-{
-	alloc::free(comp.gpa, limbs.ptr);
-}
-
 <* A BigIntMutable over `limbs` (Zig `.{ .limbs = limbs, .positive = undefined, .len = undefined }`). *>
 fn BigIntMutable mutable_over(Limb[] limbs) => { .limbs = limbs, .len = 1, .positive = true };
 
 <* Intern a big int result. *>
-fn Value intern_big(Compilation* comp, BigIntConst big) => intern(comp, value_interner::key_big_int(big));
+fn Value intern_big(Compilation* comp, BigIntConst big) => intern(comp, { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = big } });
 
 macro usz @bits_of(QualType qt, Compilation* comp) => (usz)qt.bit_sizeof(comp);
 
@@ -100,13 +84,13 @@ fn Value intern(Compilation* comp, InternerKey k)
 }
 
 <* Value.int for unsigned / comptime_int arguments (`.u64` key). *>
-fn Value int_u64(ulong i, Compilation* comp) => intern(comp, value_interner::key_u64(i));
+fn Value int_u64(ulong i, Compilation* comp) => intern(comp, { .tag = INT, .int_val = { .tag = U64, .u64 = i } });
 
 <* Value.int for signed arguments (`.i64` key). *>
-fn Value int_i64(long i, Compilation* comp) => intern(comp, value_interner::key_i64(i));
+fn Value int_i64(long i, Compilation* comp) => intern(comp, { .tag = INT, .int_val = { .tag = I64, .i64 = i } });
 
 <* Value.pointer *>
-fn Value pointer(KeyPointer r, Compilation* comp) => intern(comp, value_interner::key_pointer(r.node, r.offset));
+fn Value pointer(KeyPointer r, Compilation* comp) => intern(comp, { .tag = POINTER, .pointer = { .node = r.node, .offset = r.offset } });
 
 <* Value.is: false for none, else whether the key has `tag`. *>
 fn bool Value.is(self, InternerKeyTag tag, Compilation* comp)
@@ -201,8 +185,7 @@ fn IntCastChangeKind Value.int_cast(&self, QualType dest_ty, Compilation* comp)
 	bool src_signed = !big.positive;
 	bool sign_change = src_signed != dest_signed;
 
-	Limb[] limbs = alloc_limbs(comp, bigint::calc_twos_comp_limb_count(value_bits > dest_bits ? value_bits : dest_bits));
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(value_bits > dest_bits ? value_bits : dest_bits)));
 
 	BigIntMutable result = mutable_over(limbs);
 	result.truncate(big, dest_signedness, dest_bits);
@@ -399,8 +382,7 @@ fn bool Value.add(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 	BigIntConst rhs_bigint = rhs_key.to_big_int(&rhs_space);
 
 	usz bits = @bits_of(qt, comp);
-	Limb[] limbs = alloc_limbs(comp, bigint::calc_twos_comp_limb_count(bits));
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
 	BigIntMutable result = mutable_over(limbs);
 
 	bool overflowed = result.add_wrap(lhs_bigint, rhs_bigint, qt.signedness(comp), bits);
@@ -469,8 +451,7 @@ fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ul
 	BigIntConst rhs_bigint = rhs_key.to_big_int(&rhs_space);
 
 	usz bits = @bits_of(qt, comp);
-	Limb[] limbs = alloc_limbs(comp, bigint::calc_twos_comp_limb_count(bits));
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
 	BigIntMutable result = mutable_over(limbs);
 
 	bool overflowed = result.sub_wrap(lhs_bigint, rhs_bigint, qt.signedness(comp), bits);
@@ -489,12 +470,10 @@ fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
 	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
 
-	Limb[] limbs = alloc_limbs(comp, lhs_bigint.limbs.len + rhs_bigint.limbs.len);
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(lhs_bigint.limbs.len + rhs_bigint.limbs.len));
 	BigIntMutable result = mutable_over(limbs);
 
-	Limb[] limbs_buffer = alloc_limbs(comp, bigint::calc_mul_limbs_buffer_len(lhs_bigint.limbs.len, rhs_bigint.limbs.len, 1));
-	defer free_limbs(comp, limbs_buffer);
+	Limb[] limbs_buffer = alloc::new_array(tmem, Limb, (usz)(bigint::calc_mul_limbs_buffer_len(lhs_bigint.limbs.len, rhs_bigint.limbs.len, 1)));
 
 	result.mul(lhs_bigint, rhs_bigint, limbs_buffer);
 
@@ -520,16 +499,13 @@ fn bool Value.div(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
 	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
 
-	Limb[] limbs_q = alloc_limbs(comp, lhs_bigint.limbs.len);
-	defer free_limbs(comp, limbs_q);
+	Limb[] limbs_q = alloc::new_array(tmem, Limb, (usz)lhs_bigint.limbs.len);
 	BigIntMutable result_q = mutable_over(limbs_q);
 
-	Limb[] limbs_r = alloc_limbs(comp, rhs_bigint.limbs.len);
-	defer free_limbs(comp, limbs_r);
+	Limb[] limbs_r = alloc::new_array(tmem, Limb, (usz)rhs_bigint.limbs.len);
 	BigIntMutable result_r = mutable_over(limbs_r);
 
-	Limb[] limbs_buffer = alloc_limbs(comp, bigint::calc_div_limbs_buffer_len(lhs_bigint.limbs.len, rhs_bigint.limbs.len));
-	defer free_limbs(comp, limbs_buffer);
+	Limb[] limbs_buffer = alloc::new_array(tmem, Limb, (usz)(bigint::calc_div_limbs_buffer_len(lhs_bigint.limbs.len, rhs_bigint.limbs.len)));
 
 	bigint::div_trunc(&result_q, &result_r, lhs_bigint, rhs_bigint, limbs_buffer);
 
@@ -570,16 +546,13 @@ fn Value rem(Value lhs, Value rhs, QualType qt, Compilation* comp)
 		}
 	}
 
-	Limb[] limbs_q = alloc_limbs(comp, lhs_bigint.limbs.len);
-	defer free_limbs(comp, limbs_q);
+	Limb[] limbs_q = alloc::new_array(tmem, Limb, (usz)lhs_bigint.limbs.len);
 	BigIntMutable result_q = mutable_over(limbs_q);
 
-	Limb[] limbs_r = alloc_limbs(comp, rhs_bigint.limbs.len);
-	defer free_limbs(comp, limbs_r);
+	Limb[] limbs_r = alloc::new_array(tmem, Limb, (usz)rhs_bigint.limbs.len);
 	BigIntMutable result_r = mutable_over(limbs_r);
 
-	Limb[] limbs_buffer = alloc_limbs(comp, bigint::calc_div_limbs_buffer_len(lhs_bigint.limbs.len, rhs_bigint.limbs.len));
-	defer free_limbs(comp, limbs_buffer);
+	Limb[] limbs_buffer = alloc::new_array(tmem, Limb, (usz)(bigint::calc_div_limbs_buffer_len(lhs_bigint.limbs.len, rhs_bigint.limbs.len)));
 
 	bigint::div_trunc(&result_q, &result_r, lhs_bigint, rhs_bigint, limbs_buffer);
 	return intern_big(comp, result_r.to_const());
@@ -594,8 +567,7 @@ fn Value bit_or(Value lhs, Value rhs, Compilation* comp)
 	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
 
 	sz n = lhs_bigint.limbs.len > rhs_bigint.limbs.len ? lhs_bigint.limbs.len : rhs_bigint.limbs.len;
-	Limb[] limbs = alloc_limbs(comp, n);
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)n);
 	BigIntMutable result = mutable_over(limbs);
 
 	result.bit_or(lhs_bigint, rhs_bigint);
@@ -612,8 +584,7 @@ fn Value bit_xor(Value lhs, Value rhs, Compilation* comp)
 
 	sz extra = lhs_bigint.positive != rhs_bigint.positive ? 1 : 0;
 	sz n = lhs_bigint.limbs.len > rhs_bigint.limbs.len ? lhs_bigint.limbs.len : rhs_bigint.limbs.len;
-	Limb[] limbs = alloc_limbs(comp, n + extra);
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(n + extra));
 	BigIntMutable result = mutable_over(limbs);
 
 	result.bit_xor(lhs_bigint, rhs_bigint);
@@ -648,8 +619,7 @@ fn Value bit_and(Value lhs, Value rhs, Compilation* comp)
 		limb_count = (a_len > b_len ? a_len : b_len) + 1;
 	}
 
-	Limb[] limbs = alloc_limbs(comp, limb_count);
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)limb_count);
 	BigIntMutable result = mutable_over(limbs);
 
 	result.bit_and(lhs_bigint, rhs_bigint);
@@ -663,8 +633,7 @@ fn Value bit_not(Value val, QualType qt, Compilation* comp)
 	BigIntSpace val_space;
 	BigIntConst val_bigint = val.to_big_int(&val_space, comp);
 
-	Limb[] limbs = alloc_limbs(comp, bigint::calc_twos_comp_limb_count(bits));
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
 	BigIntMutable result = mutable_over(limbs);
 
 	result.bit_not_wrap(val_bigint, qt.signedness(comp), bits);
@@ -689,8 +658,7 @@ fn bool Value.shl(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 		return true;
 	}
 
-	Limb[] limbs = alloc_limbs(comp, lhs_bigint.limbs.len + (sz)(shift / bigint::LIMB_BITS) + 1);
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(lhs_bigint.limbs.len + (sz)(shift / bigint::LIMB_BITS) + 1));
 	BigIntMutable result = mutable_over(limbs);
 
 	result.shift_left(lhs_bigint, shift);
@@ -725,8 +693,7 @@ fn Value shr(Value lhs, Value rhs, QualType qt, Compilation* comp)
 	}
 
 	usz bits = @bits_of(qt, comp);
-	Limb[] limbs = alloc_limbs(comp, bigint::calc_twos_comp_limb_count(bits));
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
 	BigIntMutable result = mutable_over(limbs);
 
 	result.shift_right(lhs_bigint, shift);
@@ -825,8 +792,7 @@ fn Value twos_comp_int_limit(TwosCompIntLimit limit, QualType qt, Compilation* c
 	usz sign_bits = signedness == SIGNED ? 1 : 0;
 	usz total_bits = mag_bits + sign_bits;
 
-	Limb[] limbs = alloc_limbs(comp, bigint::calc_twos_comp_limb_count(total_bits));
-	defer free_limbs(comp, limbs);
+	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(total_bits)));
 
 	BigIntMutable result = mutable_over(limbs);
 	result.set_twos_comp_int_limit(limit, signedness, mag_bits);
@@ -912,7 +878,7 @@ struct NestedPrint
  (text_literal_semantics::print_string, quoted).
  @require !self.is_none()
 *>
-fn bool Value.print(self, QualType qt, Compilation* comp, DString w, NestedPrint* nested = null)
+fn bool Value.print(self, QualType qt, Compilation* comp, DString* w, NestedPrint* nested = null)
 {
 	if (qt.is(comp, BOOL))
 	{
@@ -950,7 +916,7 @@ fn bool Value.print(self, QualType qt, Compilation* comp, DString w, NestedPrint
 }
 
 <* Value.printPointer: "&" ++ base, then the offset (in ptrdiff_t) unless it is zero. *>
-fn void print_pointer(Value offset, String base, Compilation* comp, DString w)
+fn void print_pointer(Value offset, String base, Compilation* comp, DString* w)
 {
 	w.append_char('&');
 	w.append_string(base);

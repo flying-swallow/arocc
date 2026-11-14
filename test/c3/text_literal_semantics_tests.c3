@@ -44,7 +44,7 @@ fn String print(Compilation* comp, DString* out, QualType elem, char[] bytes, Pr
 	out.clear();
 	ulong elem_size = elem.sizeof(comp);
 	QualType arr = comp.type_store.put(type_store::type_array(elem, FIXED, (ulong)bytes.len / elem_size));
-	text_literal_semantics::print_string(bytes, arr, comp, *out, style);
+	text_literal_semantics::print_string(bytes, arr, comp, out, style);
 	return out.str_view();
 }
 

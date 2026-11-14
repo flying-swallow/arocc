@@ -13,7 +13,7 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Functions and methods are snake_case ports of the Zig names (`addSourceFromBuffer` becomes `add_source_from_buffer`). Methods take `&self`, or `self` for small values.
 - Enum values and constants are SCREAMING_CASE (`SourceKind.USER`, `source::UNUSED_ID`).
 - `alias` is a C3 keyword. Use `is_alias` / `al` instead.
-- Sizes and indices from the stdlib are `sz` (signed) in c3c 0.8.5 (`List.len()`, slice `.len`). Stored IDs and offsets keep Zig's widths (`uint` for u32).
+- Stored IDs and offsets keep Zig's widths (`uint` for u32); size and index types follow the selected C3 stdlib API.
 
 ## IDs and handles
 - Handles are value types that never hold pointers. Plain indices use `typedef X = uint;`, a distinct type (`StringId`). Indices that carry flag bits use a `bitstruct` with the Zig field layout (`SourceId`: `index : 0..30`, `is_alias : 31`).
@@ -45,7 +45,25 @@ Shared rules for every module under `src/c3/`. Established by plan 04 (source, s
 - Zig optional fields (`?Option`, `?ExpandedLocation`) become a `has_x` flag next to the value (`Message.has_opt` / `opt`).
 - Zig `Diagnostic` constants (`fmt`, `kind`, `opt`, `extension`) become `diagnostics::DiagnosticTemplate` constants in the caller's module, named `DIAG_<ZIG_NAME>` so they do not clash with `Option` values. Format them with `diagnostics::format_args` / `template_index`; build messages with `.message(text)` / `.message_at(text, loc)`.
 
-## Known c3c 0.8.5 issues
+## Compiler setup and validation status
+
+- `.bazelversion` pins Bazel 9.1.0. `tools/c3c_repo.bzl` records the observed C3 0.8.6 pre-release candidate and resolves the host compiler from `C3C` or `PATH`; set `C3C=/absolute/path/to/c3/install/c3c` explicitly for reproducible local invocations. The repository rule is local and non-hermetic: both `c3c` and its adjacent `lib/std` come from that installation.
+- The inspected host compiler reports C3 0.8.6 pre-release, Git `61d33ae1dce61f80dd81660db2f9910208c74284`, LLVM 22.1.8. SHA-256 of that local `c3c` executable: `d8d3274a371d16162d27a02a1fe16f190cb713fea573f9efa3e7efb91a59be09`. This is not a checksum for a complete distribution or standard library and does not identify a portable install artifact.
+- This compiler is an observed candidate, not yet a validated supported version. The retained Bazel attempts executed no tests: server startup failed in Netty (`channel not registered to an event loop`), and batch startup with writable isolated output roots failed in `NetworkMetricsCollector` because `loopbackInterfaceNames` was null. Disabling `--experimental_collect_system_network_usage` for Bazel 9.1.0 batch invocations passed those startup failures but registry mapping then failed with `Operation not permitted` at `https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/modules/rules_python/1.7.0/MODULE.bazel` (clean-cache fetch), `https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/modules/rules_java/9.1.0/MODULE.bazel` (dbg), and `https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/modules/rules_license/1.0.0/MODULE.bazel` (opt). Earlier reports separately name `platforms` 1.0.0, but do not retain its complete leaf URL. A separate later compilation attempt reported parser syntax errors before any tests. Treat these as distinct startup, dependency-fetch, and source-compilation failures. Direct compiler runs do not count as Bazel tests.
+- For revalidation, put Bazel startup options before the Bazel command and keep the compiler override explicit, for example:
+
+  ```sh
+  C3C=/absolute/path/to/c3/install/c3c bazel --batch --output_user_root=/path/to/writable/bazel-root fetch --experimental_collect_system_network_usage=false //:aro_c3 //test/c3/...
+  C3C=/absolute/path/to/c3/install/c3c bazel --batch --output_user_root=/path/to/writable/bazel-root build --experimental_collect_system_network_usage=false -c dbg //:aro_c3
+  C3C=/absolute/path/to/c3/install/c3c bazel --batch --output_user_root=/path/to/writable/bazel-root test --experimental_collect_system_network_usage=false -c dbg //test/c3:build_smoke
+  ```
+
+  Repeat the build and test commands with `-c opt`, then run the complete registered C3 unit target list in both modes. A clean-cache fetch must succeed before reporting green validation. The configured BCR base is `https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/main/`. The Linux CI route builds C3 from pinned commit `61d33ae1dce61f80dd81660db2f9910208c74284` with CMake/`C3_FETCH_LLVM=ON`, asserts the compiler-reported Git hash, and places its `lib/` beside `c3c`; CI logs a checksum for the resulting binary. This makes source provisioning repeatable, while support remains unselected until clean-cache debug/optimized builds and tests succeed. No clean-cache resolution has passed in the inspected environment.
+
+## Historical notes: known c3c 0.8.5 issues
+
+The following issues were observed against the earlier c3c 0.8.5 compiler. Recheck any issue that affects new code against the selected compiler; these observations do not establish that 0.8.5 is currently supported or that the 0.8.6 pre-release is compatible.
+- Earlier conventions recorded `List.len()` and slice `.len` as `sz` (signed) under c3c 0.8.5. Keep this as baseline metadata until the selected compiler's behavior is verified by the debug and optimized Bazel runs.
 - Comparing a bitstruct field of a module-level constant struct (`source::UNUSED_LOCATION.id == x`) crashes the compiler. Copy the constant to a local first.
 - `test::eq(uint_value, 3)` is rejected (int vs uint). Tests use a local `check` macro that compares integers as `long`.
 - `@private` on methods is ignored and produces a warning, so don't use it.

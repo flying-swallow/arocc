@@ -25,8 +25,10 @@
 module aro::attribute;
 import aro::tokens, aro::tokenizer, aro::value, aro::target, aro::type_store;
 
-<* Zig `null` from `Namespaced.fromString` / an opts string map lookup. *>
+<* Zig `Namespaced.fromString` could not resolve an attribute name. *>
 excuse UNKNOWN_ATTRIBUTE;
+<* Zig `Visibility.opts.map` could not resolve a visibility name. *>
+excuse UNKNOWN_VISIBILITY;
 
 <* Zig `Attribute.Tag` (= std.meta.Tag(Args)), in Zig order; `name` is the Zig tag name. *>
 enum AttributeTag : char (String name)
@@ -868,10 +870,11 @@ fn Namespaced? namespaced_from_string(AttributeSyntax syntax, bool has_vendor, S
 			return UNKNOWN_ATTRIBUTE~;
 		}
 		String ven = normalize(vendor);
-		StandardVendor? sv = null;
-		foreach (v : StandardVendor::values) if (v.name == ven) { sv = v; break; }
-		if (sv == null || sv!! == ARO) return UNKNOWN_ATTRIBUTE~;
-		switch (sv!!)
+		StandardVendor sv = ARO;
+		bool found_vendor = false;
+		foreach (v : StandardVendor::values) if (v.name == ven) { sv = v; found_vendor = true; break; }
+		if (!found_vendor || sv == ARO) return UNKNOWN_ATTRIBUTE~;
+		switch (sv)
 		{
 			case GNU:
 				foreach (v : AttrGnu::values) if (v.name == name) return { .ns = GNU, .gnu = v };
@@ -972,7 +975,7 @@ fn Visibility? visibility_from_string(String s)
 	if (s == "default") return DEFAULT;
 	if (s == "hidden" || s == "internal") return HIDDEN;
 	if (s == "protected") return PROTECTED;
-	return null;
+	return UNKNOWN_VISIBILITY~;
 }
 
 // ---------------------------------------------------------------------------
