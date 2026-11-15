@@ -1,0 +1,7 @@
+// #kind: expand
+// #opt: -Wpedantic
+#define a(foo, args...) #args, foo __VA_ARGS__ args // #warning@20: named variadic macros are a GNU extension [-Wvariadic-macros]
+a(1,2,3,4)
+
+// #expect: stdout
+"2,3,4", 1 __VA_ARGS__ 2,3,4

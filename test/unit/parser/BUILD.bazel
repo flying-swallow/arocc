@@ -1,0 +1,50 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: parser. One target per line so parallel additions merge cleanly.
+
+c3_test(name = "attribute_names_tests", srcs = ["attribute_names_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "attribute_wip_tests", srcs = ["attribute_wip_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_attribute_tests", srcs = ["parser_attribute_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "attribute_map_tests", srcs = ["attribute_map_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "symbol_stack_tests", srcs = ["symbol_stack_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_context_tests", srcs = ["parser_context_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_declaration_tests", srcs = ["parser_declaration_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_reference_tests", srcs = ["parser_reference_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_grammar_tests", srcs = ["parser_grammar_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_expression_tests", srcs = ["parser_expression_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_postfix_tests", srcs = ["parser_postfix_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_operator_tests", srcs = ["parser_operator_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_const_folding_tests", srcs = ["parser_const_folding_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_result_tests", srcs = ["parser_result_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_initializer_context_tests", srcs = ["parser_initializer_context_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "init_list_tests", srcs = ["init_list_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "initializer_tree_tests", srcs = ["initializer_tree_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_initializer_tests", srcs = ["parser_initializer_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "parser_statement_tests", srcs = ["parser_statement_tests.c3"], deps = ["//:aro_c3_lib"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":attribute_names_tests",
+        ":attribute_wip_tests",
+        ":parser_attribute_tests",
+        ":attribute_map_tests",
+        ":symbol_stack_tests",
+        ":parser_context_tests",
+        ":parser_declaration_tests",
+        ":parser_reference_tests",
+        ":parser_grammar_tests",
+        ":parser_expression_tests",
+        ":parser_postfix_tests",
+        ":parser_operator_tests",
+        ":parser_const_folding_tests",
+        ":parser_result_tests",
+        ":parser_initializer_context_tests",
+        ":init_list_tests",
+        ":initializer_tree_tests",
+        ":parser_initializer_tests",
+        ":parser_statement_tests",
+    ],
+    visibility = ["//test:__pkg__"],
+)

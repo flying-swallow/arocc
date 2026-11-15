@@ -1,0 +1,6 @@
+// #kind: expand
+#define F(X) (X##Y)
+F(A)
+
+// #expect: stdout
+(AY)

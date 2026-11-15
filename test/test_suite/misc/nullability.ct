@@ -1,0 +1,66 @@
+// #skip: diagnostics differ (aro_c3 gap)
+// #opt: --target=x86_64-linux-gnu
+int *_Nonnull _Nonnull a; // #warning@15: duplicate nullability specifier '_Nonnull' [-Wnullability]
+int _Nonnull *b; // #error@5: nullability specifier cannot be applied to non-pointer type 'int'
+int _Nonnull _Nullable c; // #error@14: nullability specifier '_Nullable' conflicts with existing specifier '_Nonnull' // #error@5: nullability specifier cannot be applied to non-pointer type 'int'
+int _Nullable d(void); // #error@5: nullability specifier cannot be applied to non-pointer type 'int'
+
+#pragma GCC diagnostic warning "-Wnullability-extension"
+int *_Null_unspecified e(void); // #warning@6: type nullability specifier '_Null_unspecified' is a Clang extension [-Wnullability-extension]
+#pragma GCC diagnostic pop
+
+typedef	struct __sFILE {
+	int	(* _Nullable _close)(void *);
+} FILE;
+
+void f(int [_Nullable 2]);
+
+void arg(void (*_Nullable)(int));
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+variable: '_Nonnull *int'
+ name: a
+
+variable: '*int'
+ name: b
+
+variable: 'int'
+ name: c
+
+function: 'fn () int'
+ name: d
+
+function: 'fn () _Null_unspecified *int'
+ name: e
+
+struct_decl: 'struct __sFILE'
+  record_field: '_Nullable *fn (*void) int'
+   name: _close
+
+typedef: 'struct __sFILE'
+ name: FILE
+
+function: 'fn (_Nullable decayed *[2]int) void'
+ name: f
+
+function: 'fn (_Nullable *fn (int) void) void'
+ name: arg
+

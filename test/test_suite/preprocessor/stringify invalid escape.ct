@@ -1,0 +1,6 @@
+// #kind: expand
+#define str(s) # s
+x[str(\) // #warning@7: invalid string literal, ignoring final '\'
+
+// #expect: stdout
+x[""

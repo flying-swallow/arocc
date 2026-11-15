@@ -1,0 +1,32 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: backend. One target per line so parallel additions merge cleanly.
+
+c3_test(name = "ir_tests", srcs = ["ir_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "codegen_tests", srcs = ["codegen_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "ir_opt_tests", srcs = ["ir_opt_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "elf_tests", srcs = ["elf_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "elf_link_tests", srcs = ["elf_link_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "link_reader_tests", srcs = ["link_reader_tests.c3", "data/link_test_builders.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "link_archive_tests", srcs = ["link_archive_tests.c3", "data/link_test_builders.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "link_args_tests", srcs = ["link_args_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "assembly_tests", srcs = ["assembly_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "x86_64_tests", srcs = ["x86_64_tests.c3"], deps = ["//:aro_c3_lib"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":ir_tests",
+        ":codegen_tests",
+        ":ir_opt_tests",
+        ":elf_tests",
+        ":elf_link_tests",
+        ":link_reader_tests",
+        ":link_archive_tests",
+        ":link_args_tests",
+        ":assembly_tests",
+        ":x86_64_tests",
+    ],
+    visibility = ["//test:__pkg__"],
+)
