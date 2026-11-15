@@ -10,7 +10,7 @@
 // not available in this environment, so every table here is
 // "from Zig std.Target knowledge, not verified by execution".
 //
-// Cross-checks that WERE done (see src/tests/target_tests.c3):
+// Cross-checks that WERE done (see test/unit/types/target_tests.c3):
 // - sizeof/_Alignof of char..double and void* for every target string of
 //   test/records/0013_test.c (mahkoh/repr-c expectations, 109 targets) except
 //   the x86/arm Darwin ones the record runner skips;

@@ -140,8 +140,9 @@ fn String? select_linker_path(Toolchain* tc, char[] buf)
 	return tc.get_program_path("ld", buf);
 }
 
-<* The Linux linker policy preserves the order of CRT files, user objects,
-runtime libraries and closing CRT files. Unsupported platform backends return
+<* The Linux linker policy preserves the order of CRT files, user library
+search paths, user objects, runtime libraries and closing CRT files. User
+search paths precede toolchain paths. Unsupported platform backends return
 without inventing linker arguments. *>
 fn void? Toolchain.build_linker_args(&self, String output_name, String[] link_objects, List{String}* argv)
 {
@@ -196,6 +197,7 @@ fn void? append_linux_linker_policy(Toolchain* tc, String output_name, String[] 
 			argv.push(tc.get_file_path(crtbegin)!!);
 		}
 	}
+	foreach (p : tc.opts.user_lib_dirs) argv.push("-L".concat(tc.a, p));
 	foreach (p : tc.file_paths) argv.push("-L".concat(tc.a, p));
 	argv.push_all(link_objects);
 	if (!tc.opts.nostdlib && !tc.opts.nodefaultlibs && !tc.opts.relocatable)

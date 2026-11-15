@@ -12,7 +12,7 @@
 //   number_value.c3    (11.2 `number-values`)
 //       NumberLiteralResult -> NumberValue { qt, val, ... }: Parser.zig
 //       parseNumberToken/parseInt/fixedSizeInt/bitInt/parseFloat without the
-//       parser. Floats go through float_value::parse_f128 and KeyFloat.cast;
+//       parser. Floats go through float_value::parse_f128 and InternerKey.cast;
 //       integers through value (u64) / bigint (_BitInt). Parser-level
 //       diagnostics (int_literal_too_big, ...) are *returned* as
 //       NumberValueDiag ids, because the C parser filters them

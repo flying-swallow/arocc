@@ -674,18 +674,8 @@ fn parser_result::Result? dispatch(void* context, parser::Parser* p,
 		if (args.len > 1) check_va_start_arg(p, builtin_tok, args, 1)!;
 		if (args.len > 2) check_va_start_arg(p, builtin_tok, args, 2)!;
 	}
-	else if (!custom)
-	{
-		for (uint i = 0; i < expected; i++)
-		{
-			parser_result::Result arg = { .node = args[(usz)i],
-				.qt = args[(usz)i].qt(&p.tree), .val = value::NONE };
-			if (try val = p.tree.value_of(args[(usz)i])) arg.val = val;
-			if (!arg.coerce_scalar(p, fn_ty.params[(usz)i].qt, args[(usz)i].tok(&p.tree), parser_result::CoercionContext.ARGUMENT)!) { return builtin_argument_type_error(p, args[(usz)i], fn_ty.params[(usz)i].qt); }
-			args[(usz)i] = arg.node;
-			arg.save_value(p);
-		}
-	}
+	// Non-custom builtins: the postfix call parser already coerced each typed
+	// argument (and reported INCOMPATIBLE_ARG), as upstream callExpr does.
 
 	type_store::QualType result_qt = return_type(p, expanded, args, fn_ty);
 	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,

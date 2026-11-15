@@ -66,16 +66,18 @@ fn void AttributeBuffer.truncate(&self, uint attributes_len, uint arguments_len)
 *>
 fn void AttributeBuffer.add_keyword(&self, tokenizer::TokenId id, tokens::TokenIndex tok, uint args_offset = 0, uint args_len = 0)
 {
-	self.attributes.push({
-		.syntax = attribute::AttributeSyntax.KEYWORD,
-		.has_name = true,
-		.name = attribute::namespaced_from_keyword(id),
+	self.attributes.push(
+		{
+			.syntax = attribute::AttributeSyntax.KEYWORD,
+			.has_name = true,
+			.name = attribute::namespaced_from_keyword(id),
 		.spelling = id.symbol(),
 		.tok = tok,
 		.has_arg_list = args_len > 0,
 		.args_offset = args_offset,
 		.args_len = args_len,
-	});
+	}
+	);
 }
 
 fn String parser::Parser.attribute_token_text(self, tokens::TokenIndex index)
@@ -125,7 +127,10 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 	uint saved_attributes = (uint)out.attributes.len();
 	uint saved_arguments = (uint)out.arguments.len();
 	bool committed = false;
-	defer { if (!committed) out.truncate(saved_attributes, saved_arguments); }
+	defer
+	{
+		if (!committed) out.truncate(saved_attributes, saved_arguments);
+	}
 	tokens::TokenIndex first_tok = self.tok_i;
 	tokens::TokenIndex name_tok = self.parse_attribute_identifier()!;
 	String spelling = self.attribute_token_text(name_tok);
@@ -173,12 +178,20 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 				tokenizer::TokenId id = self.tree.tokens[(usz)self.tok_i].id;
 				if (id == tokenizer::TokenId.R_PAREN && parens == 0 && brackets == 0 && braces == 0)
 				{
-					out.arguments.push({ .start = arg_start, .end = self.tok_i });
+					out.arguments.push(
+					{
+						.start = arg_start, .end = self.tok_i
+					}
+					);
 					break;
 				}
 				if (id == tokenizer::TokenId.COMMA && parens == 0 && brackets == 0 && braces == 0)
 				{
-					out.arguments.push({ .start = arg_start, .end = self.tok_i });
+					out.arguments.push(
+					{
+						.start = arg_start, .end = self.tok_i
+					}
+					);
 					self.advance();
 					arg_start = self.tok_i;
 					continue;
@@ -213,7 +226,10 @@ fn void? parser::Parser.parse_attribute_list(&self, attribute::AttributeSyntax s
 	uint saved_attributes = (uint)out.attributes.len();
 	uint saved_arguments = (uint)out.arguments.len();
 	bool committed = false;
-	defer { if (!committed) out.truncate(saved_attributes, saved_arguments); }
+	defer
+	{
+		if (!committed) out.truncate(saved_attributes, saved_arguments);
+	}
 	while (!self.is_at(closing))
 	{
 		if (self.at_eof()) return self.expect_closing(closing, opener);
@@ -231,7 +247,10 @@ fn bool? parser::Parser.parse_gnu_attribute_specifier(&self, AttributeBuffer* ou
 	uint saved_attributes = (uint)out.attributes.len();
 	uint saved_arguments = (uint)out.arguments.len();
 	bool committed = false;
-	defer { if (!committed) out.truncate(saved_attributes, saved_arguments); }
+	defer
+	{
+		if (!committed) out.truncate(saved_attributes, saved_arguments);
+	}
 	self.advance();
 	tokens::TokenIndex outer = self.tok_i;
 	self.expect(tokenizer::TokenId.L_PAREN)!;
@@ -250,7 +269,10 @@ fn bool? parser::Parser.parse_c23_attribute_specifier(&self, AttributeBuffer* ou
 	uint saved_attributes = (uint)out.attributes.len();
 	uint saved_arguments = (uint)out.arguments.len();
 	bool committed = false;
-	defer { if (!committed) out.truncate(saved_attributes, saved_arguments); }
+	defer
+	{
+		if (!committed) out.truncate(saved_attributes, saved_arguments);
+	}
 	tokens::TokenIndex outer = self.tok_i;
 	self.advance();
 	tokens::TokenIndex inner = self.tok_i;
@@ -269,7 +291,10 @@ fn bool? parser::Parser.parse_declspec_attribute_specifier(&self, AttributeBuffe
 	uint saved_attributes = (uint)out.attributes.len();
 	uint saved_arguments = (uint)out.arguments.len();
 	bool committed = false;
-	defer { if (!committed) out.truncate(saved_attributes, saved_arguments); }
+	defer
+	{
+		if (!committed) out.truncate(saved_attributes, saved_arguments);
+	}
 	self.advance();
 	tokens::TokenIndex opener = self.tok_i;
 	self.expect(tokenizer::TokenId.L_PAREN)!;
@@ -289,7 +314,10 @@ fn uint? parser::Parser.parse_attribute_specifiers(&self, AttributeBuffer* out)
 	uint saved_attributes = (uint)out.attributes.len();
 	uint saved_arguments = (uint)out.arguments.len();
 	bool committed = false;
-	defer { if (!committed) out.truncate(saved_attributes, saved_arguments); }
+	defer
+	{
+		if (!committed) out.truncate(saved_attributes, saved_arguments);
+	}
 	uint count = 0;
 	while (true)
 	{
@@ -306,9 +334,18 @@ fn uint? parser::Parser.parse_attribute_specifiers(&self, AttributeBuffer* out)
 			count++;
 			continue;
 		}
-		if (self.parse_gnu_attribute_specifier(out)!) { count++; continue; }
-		if (self.parse_c23_attribute_specifier(out)!) { count++; continue; }
-		if (self.parse_declspec_attribute_specifier(out)!) { count++; continue; }
+		if (self.parse_gnu_attribute_specifier(out)!)
+		{
+			count++; continue;
+		}
+		if (self.parse_c23_attribute_specifier(out)!)
+		{
+			count++; continue;
+		}
+		if (self.parse_declspec_attribute_specifier(out)!)
+		{
+			count++; continue;
+		}
 		break;
 	}
 	committed = true;

@@ -302,13 +302,13 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 			if (!base.ty.enum_ty.has_tag) unreachable("enum without a tag in CodeGen.gen_type");
 			return self.gen_type(base.ty.enum_ty.tag);
 		case INT:
-			return self.builder.interner.put({ .tag = INT_TY, .bits = base.ty.int_ty.bits(self.comp) });
+			return self.builder.interner.put({ .tag = INT_TY, .ty_bits = base.ty.int_ty.bits(self.comp) });
 		case BIT_INT:
-			return self.builder.interner.put({ .tag = INT_TY, .bits = base.ty.bit_int.bits });
+			return self.builder.interner.put({ .tag = INT_TY, .ty_bits = base.ty.bit_int.bits });
 		case FLOAT:
-			return self.builder.interner.put({ .tag = FLOAT_TY, .bits = base.ty.float_ty.bits(self.comp) });
+			return self.builder.interner.put({ .tag = FLOAT_TY, .ty_bits = base.ty.float_ty.bits(self.comp) });
 		case STORAGE_FLOAT:
-			return self.builder.interner.put({ .tag = INT_TY, .bits = base.ty.storage_float.bits });
+			return self.builder.interner.put({ .tag = INT_TY, .ty_bits = base.ty.storage_float.bits });
 		case ARRAY:
 			value_interner::InternerRef elem = self.gen_type(base.ty.array.elem)!;
 			switch (base.ty.array.len.kind)

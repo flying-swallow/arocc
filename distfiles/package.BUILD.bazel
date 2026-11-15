@@ -4,7 +4,7 @@ load("//tools:c3.bzl", "c3_library")
 # modules under src, so the source glob is its complete compiler input set.
 c3_library(
     name = "aro",
-    srcs = glob(["src/**/*.c3"], exclude = ["src/tests/**"]),
+    srcs = glob(["src/**/*.c3"]),
     data = glob(["include/*.h"]),
     visibility = ["//visibility:public"],
 )

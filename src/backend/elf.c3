@@ -13,12 +13,12 @@ struct Relocation
 
 struct SectionData
 {
-	String name; List{char} bytes; List{Relocation} relocs; ulong flags; ulong alignment; ushort index;
+	String name; List{char} bytes; List{Relocation} relocs; ulong flags; ulong alignment; ulong nobits_size; ulong file_offset; uint sh_type; ushort index;
 }
 
 struct Symbol
 {
-	SectionData* section; bool defined; ulong offset; ulong size; char info; ushort index; String name;
+	SectionData* section; bool defined; bool common; ulong offset; ulong size; char info; ushort index; String name;
 }
 
 struct Elf
@@ -34,6 +34,8 @@ struct Elf
 }
 
 const String DEFAULT_STRTAB = "\0.strtab\0.symtab\0";
+const uint SHT_PROGBITS = 1;
+const uint SHT_NOBITS = 8;
 
 fn Elf* create(Allocator a, target::Target t)
 {
@@ -61,6 +63,7 @@ fn String section_name(object::Section s)
 	switch (s.kind)
 	{
 		case object::SectionKind.DATA: return "data";
+		case object::SectionKind.BSS: return "bss";
 		case object::SectionKind.READ_ONLY_DATA: return "rodata";
 		case object::SectionKind.FUNC: return "text";
 		case object::SectionKind.STRINGS: return "rodata.str";
@@ -81,7 +84,7 @@ fn List{char} * get_section(Elf* e, object::Section section)
 	SectionData* s = find_section(e, name);
 	if (s) return &s.bytes;
 	SectionData section_value; s = alloc::malloc(e.allocator, @sizeof(section_value));
-	*s = { .name = name };
+	*s = { .name = name, .sh_type = SHT_PROGBITS };
 	s.bytes.init(e.allocator); s.relocs.init(e.allocator);
 	switch (section.kind)
 	{
@@ -90,6 +93,7 @@ fn List{char} * get_section(Elf* e, object::Section section)
 		case object::SectionKind.STRINGS: s.flags = 0x32;
 		case object::SectionKind.READ_ONLY_DATA: s.flags = 2;
 		case object::SectionKind.DATA: s.flags = 3;
+		case object::SectionKind.BSS: s.flags = 3; s.sh_type = SHT_NOBITS;
 		case object::SectionKind.UNDEFINED: unreachable("undefined section");
 	}
 	e.sections.push(s);
@@ -108,6 +112,18 @@ fn void set_section_align(Elf* e, object::Section section, ulong alignment)
 	if (alignment > s.alignment) s.alignment = alignment;
 }
 
+fn ulong reserve_zero(Elf* e, object::Section section, ulong size, ulong alignment)
+{
+	assert(section.kind == object::SectionKind.BSS, "zero reservations belong to BSS");
+	assert(alignment > 0 && (alignment & (alignment - 1)) == 0, "zero reservation alignment must be a power of two");
+	(void)get_section(e, section);
+	set_section_align(e, section, alignment);
+	SectionData* s = find_section(e, section_name(section));
+	ulong offset = align_forward(s.nobits_size, alignment);
+	s.nobits_size = offset + size;
+	return offset;
+}
+
 fn String copy_name(Elf* e, String name)
 {
 	String copy = name.copy(e.allocator);
@@ -117,11 +133,24 @@ fn String copy_name(Elf* e, String name)
 
 fn String declare_symbol(Elf* e, object::Section section, String name, bool has_name, object::Linkage linkage, object::SymbolType sym_type, ulong offset, ulong size)
 {
+	return declare_symbol_impl(e, section, name, has_name, linkage, sym_type, offset, size, false);
+}
+
+fn String declare_common_symbol(Elf* e, String name, ulong size, ulong alignment)
+{
+	assert(alignment > 0 && (alignment & (alignment - 1)) == 0, "common symbol alignment must be a power of two");
+	return declare_symbol_impl(e, object::SECTION_UNDEFINED, name, true, object::Linkage.STRONG,
+		object::SymbolType.VARIABLE, alignment, size, true);
+}
+
+fn String declare_symbol_impl(Elf* e, object::Section section, String name, bool has_name, object::Linkage linkage,
+	object::SymbolType sym_type, ulong offset, ulong size, bool common)
+{
 	SectionData* sec = null;
 	if (section.kind != object::SectionKind.UNDEFINED) sec = find_section(e, section_name(section));
 	// Zig stores this lookup as an optional pointer. A declaration for a
 	// section that has not been created yet therefore remains SHN_UNDEF.
-	bool defined = sec != null;
+	bool defined = sec != null || common;
 	if (!has_name)
 	{
 		DString d; d.init(e.allocator); d.appendf(".L.%d", e.unnamed++); name = d.copy_str(e.allocator); d.free(); e.owned_names.push(name);
@@ -135,11 +164,11 @@ fn String declare_symbol(Elf* e, object::Section section, String name, bool has_
 		Symbol* old = dest.get(i);
 		if (old.name == name)
 		{
-			old.section = sec; old.defined = defined; old.offset = offset; old.size = size; old.info = (bind << 4) | ty; return name;
+			old.section = sec; old.defined = defined; old.common = common; old.offset = offset; old.size = size; old.info = (bind << 4) | ty; return name;
 		}
 	}
 	Symbol symbol_value; Symbol* sym = alloc::malloc(e.allocator, @sizeof(symbol_value));
-	*sym = { .section = sec, .defined = defined, .offset = offset, .size = size, .info = (bind << 4) | ty, .name = name };
+	*sym = { .section = sec, .defined = defined, .common = common, .offset = offset, .size = size, .info = (bind << 4) | ty, .name = name };
 	dest.push(sym); e.strtab_len += name.len + 1;
 	return name;
 }
@@ -180,6 +209,37 @@ fn void? put(OutStream w, ulong v, uint n, bool big)
 fn void? pad(OutStream w, ulong n)
 {
 	for (ulong i = 0; i < n; i++) w.write_byte(0)!;
+}
+
+fn ulong align_forward(ulong value, ulong alignment)
+{
+	if (alignment <= 1) return value;
+	ulong remainder = value % alignment;
+	return remainder == 0 ? value : value + alignment - remainder;
+}
+
+fn ulong effective_alignment(SectionData* section)
+{
+	ulong default_alignment = (section.flags & 4) ? 16 : 1;
+	return section.alignment > default_alignment ? section.alignment : default_alignment;
+}
+
+fn ulong section_size(SectionData* section)
+{
+	return section.sh_type == SHT_NOBITS ? section.nobits_size : (ulong)section.bytes.len();
+}
+
+fn void ensure_gnu_stack(Elf* e)
+{
+	SectionData* section = find_section(e, "note.GNU-stack");
+	if (!section)
+	{
+		(void)get_section(e, { .kind = object::SectionKind.CUSTOM, .custom_name = "note.GNU-stack" });
+		section = find_section(e, "note.GNU-stack");
+	}
+	section.flags = 0;
+	section.sh_type = SHT_PROGBITS;
+	section.alignment = 1;
 }
 
 // Explicit subset of std.Target.toElfMachine used by the reference writer;
@@ -246,25 +306,42 @@ fn uint machine(target::Arch a)
 // RELA entries, string table, and section headers in their prescribed order.
 fn void? finish(Elf* e, OutStream w)
 {
+	ensure_gnu_stack(e);
 	bool big = e.target.cpu.arch.endian() == target::Endian.BIG;
-	ushort count = 3; ulong payload = 0; ulong rela_len = 0;
+	ushort count = 3; ulong payload_end = 64; ulong rela_len = 0;
 	foreach (s : e.sections)
 	{
-		payload += (ulong)s.bytes.len(); rela_len += (ulong)s.relocs.len() * 24;
+		payload_end = align_forward(payload_end, effective_alignment(s));
+		s.file_offset = payload_end;
+		if (s.sh_type != SHT_NOBITS) payload_end += section_size(s);
+		rela_len += (ulong)s.relocs.len() * 24;
 		s.index = count; count++;
 		if (s.relocs.len()) count++;
 	}
 	ulong symcount = 1 + (ulong)e.locals.len() + (ulong)e.globals.len();
 	ulong sym_len = symcount * 24;
-	ulong sym_off = 64 + payload; ulong sym_aligned = (sym_off + 7) & ~(ulong)7;
+	ulong sym_off = payload_end; ulong sym_aligned = align_forward(sym_off, 8);
 	ulong rela_off = sym_aligned + sym_len; ulong str_off = rela_off + rela_len;
-	ulong sh_off = (str_off + e.strtab_len + 15) & ~(ulong)15;
+	ulong sh_off = align_forward(str_off + e.strtab_len, 16);
 	// ELF header (64 bytes)
 	io::write_all(w, "\x7FELF")!; w.write_byte(2)!; w.write_byte(big ? 2 : 1)!; w.write_byte(1)!; w.write_byte(0)!; w.write_byte(0)!; pad(w, 7)!;
 	put(w, 1, 2, big)!; put(w, machine(e.target.cpu.arch), 2, big)!; put(w, 1, 4, big)!;
 	put(w, 0, 8, big)!; put(w, 0, 8, big)!; put(w, sh_off, 8, big)!; put(w, 0, 4, big)!;
 	put(w, 64, 2, big)!; put(w, 0, 2, big)!; put(w, 0, 2, big)!; put(w, 64, 2, big)!; put(w, count, 2, big)!; put(w, 1, 2, big)!;
-	foreach (s : e.sections) foreach (b : s.bytes) w.write_byte(b)!;
+	ulong payload_cursor = 64;
+	foreach (s : e.sections)
+	{
+		pad(w, s.file_offset - payload_cursor)!;
+		if (s.sh_type != SHT_NOBITS)
+		{
+			foreach (b : s.bytes) w.write_byte(b)!;
+			payload_cursor = s.file_offset + section_size(s);
+		}
+		else
+		{
+			payload_cursor = s.file_offset;
+		}
+	}
 	pad(w, sym_aligned - sym_off)!;
 	// Null symbol.
 	pad(w, 24)!;
@@ -298,18 +375,17 @@ fn void? finish(Elf* e, OutStream w)
 	pad(w, sh_off - (str_off + e.strtab_len))!; pad(w, 64)!;
 	write_shdr(w, 1, 3, 0, str_off, e.strtab_len, 0, 0, 1, 0, big)!;
 	write_shdr(w, 9, 2, 0, sym_aligned, sym_len, 1, (ulong)e.locals.len() + 1, 8, 24, big)!;
-	ulong sec_off = 64; ulong roff = rela_off; noff = section_name_off;
+	ulong roff = rela_off; noff = section_name_off;
 	foreach (s : e.sections)
 	{
 		uint rela_prefix = s.relocs.len() ? 5 : 0;
-		ulong default_alignment = (s.flags & 4) ? 16 : 1;
-		ulong alignment = s.alignment > default_alignment ? s.alignment : default_alignment;
-		write_shdr(w, (ulong)noff + rela_prefix, 1, s.flags, sec_off, (ulong)s.bytes.len(), 0, 0, alignment, 0, big)!;
+		ulong alignment = effective_alignment(s);
+		write_shdr(w, (ulong)noff + rela_prefix, s.sh_type, s.flags, s.file_offset, section_size(s), 0, 0, alignment, 0, big)!;
 		if (s.relocs.len())
 		{
 			write_shdr(w, noff, 4, 0, roff, (ulong)s.relocs.len() * 24, 2, s.index, 8, 24, big)!; roff += (ulong)s.relocs.len() * 24;
 		}
-		sec_off += (ulong)s.bytes.len(); noff += (uint)s.name.len + 2 + rela_prefix;
+		noff += (uint)s.name.len + 2 + rela_prefix;
 	}
 	if (&w.flush) w.flush()!;
 }
@@ -317,7 +393,16 @@ fn void? finish(Elf* e, OutStream w)
 fn void? write_symbol(OutStream w, Symbol* s, uint name, bool big)
 {
 	put(w, name, 4, big)!; w.write_byte(s.info)!; w.write_byte(0)!;
-	put(w, s.section ? s.section.index: 0, 2, big)!; put(w, s.offset, 8, big)!; put(w, s.size, 8, big)!;
+	ushort section_index = 0;
+	if (s.common)
+	{
+		section_index = object::SHN_COMMON;
+	}
+	else if (s.section)
+	{
+		section_index = s.section.index;
+	}
+	put(w, section_index, 2, big)!; put(w, s.offset, 8, big)!; put(w, s.size, 8, big)!;
 }
 
 fn void? write_shdr(OutStream w, ulong name, ulong ty, ulong flags, ulong offset, ulong size, ulong link, ulong info, ulong align, ulong entsize, bool big)

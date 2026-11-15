@@ -1,3 +1,0 @@
-// Parser-context smoke cases supported by the C3 frontend adapter.
-empty_translation_unit.c
-object_declaration.c

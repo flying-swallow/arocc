@@ -10,7 +10,7 @@
 //   `next()` is called again.
 // - Malformed param strings (Zig `unreachable`) yield MALFORMED instead of
 //   crashing; every param_str in the generated tables must iterate to END
-//   without MALFORMED (checked by //src/tests:builtins_tests).
+//   without MALFORMED (checked by //test/unit/builtins:builtins_tests).
 // - create_type / create_builtin only allocate through comp.type_store; out of
 //   memory panics. Unsupported specs (q, Q, E) return type_store::INVALID as in
 //   Zig.

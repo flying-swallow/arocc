@@ -445,6 +445,9 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 	field_nodes.init(p.comp.gpa);
 	defer { fields.free(); field_nodes.free(); }
 
+	// Zig `p.record.flexible_field`: the first flexible array member seen so far.
+	bool has_flexible_field = false;
+	tokens::TokenIndex flexible_field_tok;
 	uint previous_record_member_depth = self.record_member_depth;
 	self.record_member_depth = previous_record_member_depth + 1;
 	defer self.record_member_depth = previous_record_member_depth;
@@ -580,11 +583,59 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 				p.err(parser_diagnostics::ParserDiag.EXPECTED_RECORD_DECL, p.tok_i)!;
 				return PARSING_FAILED~;
 			}
+			// Attributes may also follow the bit-field width (`int i : 1 __attribute__((aligned(8)));`);
+			// like Zig's second `attributeSpecifier`, they reach the field through `apply_decl_attrs` below.
+			self.append_attributes(p, &field_wip)!;
 
-			if (field_qt.has_incomplete_size(p.comp))
+			// Zig recordDeclarator field-type checks: function fields, VLA fields and
+			// flexible array members (an incomplete array is allowed as a field).
+			if (!field_qt.is_invalid())
 			{
-				p.err(parser_diagnostics::ParserDiag.FIELD_INCOMPLETE_TY, field_decl.has_name ? field_decl.name_tok : member_start, p.fmt_qt(field_qt))!;
-				return PARSING_FAILED~;
+				tokens::TokenIndex first_tok = field_decl.has_name ? field_decl.name_tok : member_start;
+				type_store::Type field_ty = field_qt.base(p.comp).ty;
+				switch (field_ty.tag)
+				{
+					case FUNC:
+						p.err(parser_diagnostics::ParserDiag.FUNC_FIELD, first_tok)!;
+						field_qt = type_store::INVALID;
+					case ARRAY:
+						switch (field_ty.array.len.kind)
+						{
+							case VARIABLE:
+								p.err(parser_diagnostics::ParserDiag.VLA_FIELD, first_tok)!;
+								field_qt = type_store::INVALID;
+							case INCOMPLETE:
+								if (seed.is_union)
+								{
+									if (p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
+									{
+										p.err(parser_diagnostics::ParserDiag.FLEXIBLE_IN_UNION_MSVC, first_tok)!;
+									}
+									else
+									{
+										p.err(parser_diagnostics::ParserDiag.FLEXIBLE_IN_UNION, first_tok)!;
+										field_qt = type_store::INVALID;
+									}
+								}
+								if (has_flexible_field && !seed.is_union)
+								{
+									p.err(parser_diagnostics::ParserDiag.FLEXIBLE_NON_FINAL, flexible_field_tok)!;
+								}
+								has_flexible_field = true;
+								flexible_field_tok = first_tok;
+							default: break;
+						}
+					default:
+						if (field_qt.has_incomplete_size(p.comp))
+						{
+							p.err(parser_diagnostics::ParserDiag.FIELD_INCOMPLETE_TY, first_tok, p.fmt_qt(field_qt))!;
+							return PARSING_FAILED~;
+						}
+						if (has_flexible_field && !seed.is_union)
+						{
+							p.err(parser_diagnostics::ParserDiag.FLEXIBLE_NON_FINAL, flexible_field_tok)!;
+						}
+				}
 			}
 			string_interner::StringId field_name = field_decl.has_name ?
 				p.comp.intern_string(p.tree.tok_slice(field_decl.name_tok)) : string_interner::EMPTY;
@@ -639,8 +690,7 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 }
 fn value::Value increment_enum_value(value::Value current, compilation::Compilation* comp)
 {
-	value_interner::BigIntSpace current_space;
-	bigint::BigIntConst current_big = current.to_big_int(&current_space, comp);
+	bigint::BigIntConst current_big = current.to_big_int(comp);
 	bigint::Limb[1] one_limbs;
 	bigint::BigIntConst one = bigint::init_u64(one_limbs[..], 1).to_const();
 	bigint::Limb[] result_limbs = alloc::new_array(tmem, bigint::Limb, (usz)(current_big.limbs.len + 1));
@@ -651,8 +701,7 @@ fn value::Value increment_enum_value(value::Value current, compilation::Compilat
 
 fn bool enum_value_fits(value::Value val, type_store::QualType qt, compilation::Compilation* comp)
 {
-	value_interner::BigIntSpace space;
-	bigint::BigIntConst big = val.to_big_int(&space, comp);
+	bigint::BigIntConst big = val.to_big_int(comp);
 	return big.fits_in_twos_comp(qt.signedness(comp), qt.bit_sizeof(comp));
 }
 
@@ -728,8 +777,7 @@ fn void? Enumerator.incr(&self, parser::Parser* p, tokens::TokenIndex tok)
 	else
 	{
 		value::Value unbounded_next = increment_enum_value(old_val, p.comp);
-		value_interner::BigIntSpace value_space;
-		bigint::BigIntConst value_bigint = unbounded_next.to_big_int(&value_space, p.comp);
+		bigint::BigIntConst value_bigint = unbounded_next.to_big_int(p.comp);
 		String value_text = value_bigint.to_string_alloc(tmem, 10, false);
 		p.err(parser_diagnostics::ParserDiag.ENUM_NOT_REPRESENTABLE, tok, value_text)!;
 		// Keep the unbounded value in the diagnostic, but wrap the stored value at ULL width.
@@ -792,6 +840,7 @@ fn bool enum_value_fits_type(value::Value val, type_store::QualType src_qt,
 
 fn type_store::QualType? Enumerator.get_type_specifier(&self, parser::Parser* p, bool is_packed, tokens::TokenIndex tok)
 {
+	if (p.comp.fixed_enum_tag_is_int()) return type_store::INT;
 	usz char_width = (usz)type_store::SCHAR.bit_sizeof(p.comp);
 	usz short_width = (usz)type_store::SHORT.bit_sizeof(p.comp);
 	usz int_width = (usz)type_store::INT.bit_sizeof(p.comp);

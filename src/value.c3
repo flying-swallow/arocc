@@ -68,7 +68,7 @@ fn Value from_ref(InternerRef r) => { .opt_ref = r.to_opt() };
 fn BigIntMutable mutable_over(Limb[] limbs) => { .limbs = limbs, .len = 1, .positive = true };
 
 <* Intern a big int result. *>
-fn Value intern_big(Compilation* comp, BigIntConst big) => intern(comp, { .tag = INT, .int_val = { .tag = BIG_INT, .big_int = big } });
+fn Value intern_big(Compilation* comp, BigIntConst big) => intern(comp, value_interner::big_int_key(big));
 
 macro usz @bits_of(QualType qt, Compilation* comp) => (usz)qt.bit_sizeof(comp);
 
@@ -84,10 +84,10 @@ fn Value intern(Compilation* comp, InternerKey k)
 }
 
 <* Value.int for unsigned / comptime_int arguments (`.u64` key). *>
-fn Value int_u64(ulong i, Compilation* comp) => intern(comp, { .tag = INT, .int_val = { .tag = U64, .u64 = i } });
+fn Value int_u64(ulong i, Compilation* comp) => intern(comp, value_interner::int_key(i));
 
 <* Value.int for signed arguments (`.i64` key). *>
-fn Value int_i64(long i, Compilation* comp) => intern(comp, { .tag = INT, .int_val = { .tag = I64, .i64 = i } });
+fn Value int_i64(long i, Compilation* comp) => intern(comp, value_interner::int_key(i));
 
 <* Value.pointer *>
 fn Value pointer(KeyPointer r, Compilation* comp) => intern(comp, { .tag = POINTER, .pointer = { .node = r.node, .offset = r.offset } });
@@ -99,19 +99,25 @@ fn bool Value.is(self, InternerKeyTag tag, Compilation* comp)
 	return comp.interner.get(self.ref()).tag == tag;
 }
 
+<* False for none, else whether the key is a float. *>
+fn bool Value.is_float(self, Compilation* comp)
+{
+	if (self.is_none()) return false;
+	return comp.interner.get(self.ref()).tag.is_float();
+}
+
+<* False for none, else whether the key is an integer. *>
+fn bool Value.is_int(self, Compilation* comp)
+{
+	if (self.is_none()) return false;
+	return comp.interner.get(self.ref()).tag.is_int();
+}
+
 <* Value.isArithmetic: int, float or complex. *>
 fn bool Value.is_arithmetic(self, Compilation* comp)
 {
 	if (self.is_none()) return false;
-	switch (comp.interner.get(self.ref()).tag)
-	{
-		case INT:
-		case FLOAT:
-		case COMPLEX:
-			return true;
-		default:
-			return false;
-	}
+	return comp.interner.get(self.ref()).tag.kind != NOT_NUMBER;
 }
 
 <* Value.isPointer *>
@@ -127,8 +133,7 @@ fn bool Value.is_pointer(self, Compilation* comp)
 *>
 fn usz Value.min_unsigned_bits(self, Compilation* comp)
 {
-	BigIntSpace space;
-	BigIntConst big = self.to_big_int(&space, comp);
+	BigIntConst big = self.to_big_int(comp);
 	assert(big.positive, "min_unsigned_bits of a negative value");
 	return big.bit_count_abs();
 }
@@ -139,17 +144,16 @@ fn usz Value.min_unsigned_bits(self, Compilation* comp)
 *>
 fn usz Value.min_signed_bits(self, Compilation* comp)
 {
-	BigIntSpace space;
-	BigIntConst big = self.to_big_int(&space, comp);
+	BigIntConst big = self.to_big_int(comp);
 	assert(!big.positive, "min_signed_bits of a non-negative value");
 	return big.bit_count_twos_comp();
 }
 
 <* Value.toBigInt: the int value as a BigIntConst (small values live in `space`). *>
-fn BigIntConst Value.to_big_int(self, BigIntSpace* space, Compilation* comp)
+fn BigIntConst Value.to_big_int(self, Compilation* comp)
 {
 	InternerKey key = comp.interner.get(self.ref());
-	return key.to_big_int(space);
+	return key.to_big_int();
 }
 
 <* Value.IntCastChangeKind *>
@@ -177,8 +181,7 @@ fn IntCastChangeKind Value.int_cast(&self, QualType dest_ty, Compilation* comp)
 	Signedness dest_signedness = dest_ty.signedness(comp);
 	bool dest_signed = dest_signedness == SIGNED;
 
-	BigIntSpace space;
-	BigIntConst big = key.to_big_int(&space);
+	BigIntConst big = key.to_big_int();
 	usz value_bits = big.bit_count_twos_comp();
 
 	// if big is negative, then is signed.
@@ -206,23 +209,16 @@ fn bool Value.is_zero(self, Compilation* comp)
 	if (r == value_interner::REF_ONE) return false;
 	if (r == value_interner::REF_NULL) return comp.target.null_repr() == 0;
 	InternerKey key = comp.interner.get(r);
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
 		case FLOAT:
-			return float_bits_zero(key.float_val);
+			return float_bits_zero(key);
 		case INT:
-			switch (key.int_val.tag)
-			{
-				case U64: return key.int_val.u64 == 0;
-				case I64: return key.int_val.i64 == 0;
-				case BIG_INT: return key.int_val.big_int.eql_zero();
-			}
+			return key.int_is_zero();
 		case COMPLEX:
-			return complex_bits_zero(key.complex_val);
-		case BYTES:
-		case POINTER:
-			return false;
-		default:
+			return complex_bits_zero(key);
+		case NOT_NUMBER:
+			if (key.tag == BYTES || key.tag == POINTER) return false;
 			unreachable("is_zero of a non-value key");
 	}
 }
@@ -231,28 +227,22 @@ fn bool Value.is_zero(self, Compilation* comp)
 fn bool f80_bits_zero(F80Bits b) => b.lo == 0 && (b.hi & 0x7FFF) == 0;
 fn bool f128_bits_zero(F128Bits b) => b.lo == 0 && (b.hi & 0x7FFF_FFFF_FFFF_FFFF) == 0;
 
-fn bool float_bits_zero(KeyFloat f)
+fn bool float_bits_zero(InternerKey f)
 {
 	switch (f.tag)
 	{
-		case F16: return (f.f16 & 0x7FFF) == 0;
-		case F32: return (f.f32 & 0x7FFF_FFFF) == 0;
-		case F64: return (f.f64 & 0x7FFF_FFFF_FFFF_FFFF) == 0;
-		case F80: return f80_bits_zero(f.f80);
-		case F128: return f128_bits_zero(f.f128);
+		case F16: return (f.f16() & 0x7FFF) == 0;
+		case F32: return (f.f32() & 0x7FFF_FFFF) == 0;
+		case F64: return (f.f64() & 0x7FFF_FFFF_FFFF_FFFF) == 0;
+		case F80: return f80_bits_zero(f.f80());
+		case F128: return f128_bits_zero(f.f128());
+		default: unreachable("not a float key");
 	}
 }
 
-fn bool complex_bits_zero(KeyComplex c)
+fn bool complex_bits_zero(InternerKey c)
 {
-	switch (c.tag)
-	{
-		case CF16: return (c.cf16[0] & 0x7FFF) == 0 && (c.cf16[1] & 0x7FFF) == 0;
-		case CF32: return (c.cf32[0] & 0x7FFF_FFFF) == 0 && (c.cf32[1] & 0x7FFF_FFFF) == 0;
-		case CF64: return (c.cf64[0] & 0x7FFF_FFFF_FFFF_FFFF) == 0 && (c.cf64[1] & 0x7FFF_FFFF_FFFF_FFFF) == 0;
-		case CF80: return f80_bits_zero(c.cf80[0]) && f80_bits_zero(c.cf80[1]);
-		case CF128: return f128_bits_zero(c.cf128[0]) && f128_bits_zero(c.cf128[1]);
-	}
+	return float_bits_zero(c.re()) && float_bits_zero(c.im());
 }
 
 <* Value.boolCast: becomes ZERO or ONE; none stays none. *>
@@ -273,12 +263,12 @@ fn bool Value.to_bool(self, Compilation* comp) => !self.is_zero(comp);
  NO_INT when none or not an int (first half of Zig toInt).
  @return? NO_INT
 *>
-fn BigIntConst? Value.int_big(self, BigIntSpace* space, Compilation* comp)
+fn BigIntConst? Value.int_big(self, Compilation* comp)
 {
 	if (self.is_none()) return NO_INT~;
 	InternerKey key = comp.interner.get(self.ref());
-	if (key.tag != INT) return NO_INT~;
-	return key.to_big_int(space);
+	if (!key.tag.is_int()) return NO_INT~;
+	return key.to_big_int();
 }
 
 <*
@@ -287,8 +277,7 @@ fn BigIntConst? Value.int_big(self, BigIntSpace* space, Compilation* comp)
 *>
 fn ulong? Value.to_u64(self, Compilation* comp)
 {
-	BigIntSpace space;
-	BigIntConst big = self.int_big(&space, comp)!;
+	BigIntConst big = self.int_big(comp)!;
 	if (try v = big.to_u64()) return v;
 	return NO_INT~;
 }
@@ -299,8 +288,7 @@ fn ulong? Value.to_u64(self, Compilation* comp)
 *>
 fn long? Value.to_i64(self, Compilation* comp)
 {
-	BigIntSpace space;
-	BigIntConst big = self.int_big(&space, comp)!;
+	BigIntConst big = self.int_big(comp)!;
 	if (try v = big.to_i64()) return v;
 	return NO_INT~;
 }
@@ -311,8 +299,7 @@ fn long? Value.to_i64(self, Compilation* comp)
 *>
 fn uint? Value.to_u32(self, Compilation* comp)
 {
-	BigIntSpace space;
-	BigIntConst big = self.int_big(&space, comp)!;
+	BigIntConst big = self.int_big(comp)!;
 	if (try v = big.to_u32()) return v;
 	return NO_INT~;
 }
@@ -376,10 +363,8 @@ fn bool Value.add(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 		return mul_overflow || add_overflow;
 	}
 
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs_key.to_big_int(&lhs_space);
-	BigIntConst rhs_bigint = rhs_key.to_big_int(&rhs_space);
+	BigIntConst lhs_bigint = lhs_key.to_big_int();
+	BigIntConst rhs_bigint = rhs_key.to_big_int();
 
 	usz bits = @bits_of(qt, comp);
 	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
@@ -445,10 +430,8 @@ fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ul
 		return mul_overflow || add_overflow;
 	}
 
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs_key.to_big_int(&lhs_space);
-	BigIntConst rhs_bigint = rhs_key.to_big_int(&rhs_space);
+	BigIntConst lhs_bigint = lhs_key.to_big_int();
+	BigIntConst rhs_bigint = rhs_key.to_big_int();
 
 	usz bits = @bits_of(qt, comp);
 	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
@@ -465,10 +448,8 @@ fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
 	if (scalar_kind.is_float) return float_value::mul(res, lhs, rhs, qt, comp);
 
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
-	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
+	BigIntConst rhs_bigint = rhs.to_big_int(comp);
 
 	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(lhs_bigint.limbs.len + rhs_bigint.limbs.len));
 	BigIntMutable result = mutable_over(limbs);
@@ -494,10 +475,8 @@ fn bool Value.div(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
 	if (scalar_kind.is_float) return float_value::div(res, lhs, rhs, qt, comp);
 
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
-	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
+	BigIntConst rhs_bigint = rhs.to_big_int(comp);
 
 	Limb[] limbs_q = alloc::new_array(tmem, Limb, (usz)lhs_bigint.limbs.len);
 	BigIntMutable result_q = mutable_over(limbs_q);
@@ -520,10 +499,8 @@ fn bool Value.div(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 *>
 fn Value rem(Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
-	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
+	BigIntConst rhs_bigint = rhs.to_big_int(comp);
 
 	if (qt.signedness(comp) == SIGNED)
 	{
@@ -561,10 +538,8 @@ fn Value rem(Value lhs, Value rhs, QualType qt, Compilation* comp)
 <* Value.bitOr (infinite two's complement). *>
 fn Value bit_or(Value lhs, Value rhs, Compilation* comp)
 {
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
-	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
+	BigIntConst rhs_bigint = rhs.to_big_int(comp);
 
 	sz n = lhs_bigint.limbs.len > rhs_bigint.limbs.len ? lhs_bigint.limbs.len : rhs_bigint.limbs.len;
 	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)n);
@@ -577,10 +552,8 @@ fn Value bit_or(Value lhs, Value rhs, Compilation* comp)
 <* Value.bitXor *>
 fn Value bit_xor(Value lhs, Value rhs, Compilation* comp)
 {
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
-	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
+	BigIntConst rhs_bigint = rhs.to_big_int(comp);
 
 	sz extra = lhs_bigint.positive != rhs_bigint.positive ? 1 : 0;
 	sz n = lhs_bigint.limbs.len > rhs_bigint.limbs.len ? lhs_bigint.limbs.len : rhs_bigint.limbs.len;
@@ -594,10 +567,8 @@ fn Value bit_xor(Value lhs, Value rhs, Compilation* comp)
 <* Value.bitAnd *>
 fn Value bit_and(Value lhs, Value rhs, Compilation* comp)
 {
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
-	BigIntConst rhs_bigint = rhs.to_big_int(&rhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
+	BigIntConst rhs_bigint = rhs.to_big_int(comp);
 
 	sz a_len = lhs_bigint.limbs.len;
 	sz b_len = rhs_bigint.limbs.len;
@@ -630,8 +601,7 @@ fn Value bit_and(Value lhs, Value rhs, Compilation* comp)
 fn Value bit_not(Value val, QualType qt, Compilation* comp)
 {
 	usz bits = @bits_of(qt, comp);
-	BigIntSpace val_space;
-	BigIntConst val_bigint = val.to_big_int(&val_space, comp);
+	BigIntConst val_bigint = val.to_big_int(comp);
 
 	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(bigint::calc_twos_comp_limb_count(bits)));
 	BigIntMutable result = mutable_over(limbs);
@@ -647,8 +617,7 @@ fn Value bit_not(Value val, QualType qt, Compilation* comp)
 *>
 fn bool Value.shl(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
-	BigIntSpace lhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
 	usz shift = rhs.to_usz(comp) ?? usz::max;
 
 	usz bits = @bits_of(qt, comp);
@@ -675,8 +644,7 @@ fn bool Value.shl(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 *>
 fn Value shr(Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
-	BigIntSpace lhs_space;
-	BigIntConst lhs_bigint = lhs.to_big_int(&lhs_space, comp);
+	BigIntConst lhs_bigint = lhs.to_big_int(comp);
 	usz? shift_opt = rhs.to_usz(comp);
 	if (catch shift_opt) return ZERO;
 	usz shift = shift_opt;
@@ -723,15 +691,13 @@ fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 
 	InternerKey lhs_key = comp.interner.get(lhs.ref());
 	InternerKey rhs_key = comp.interner.get(rhs.ref());
-	if (lhs_key.tag == FLOAT || rhs_key.tag == FLOAT || lhs_key.tag == COMPLEX || rhs_key.tag == COMPLEX)
+	if (lhs_key.tag.is_float() || rhs_key.tag.is_float() || lhs_key.tag.is_complex() || rhs_key.tag.is_complex())
 	{
 		return float_value::compare(lhs, op, rhs, comp);
 	}
 
-	BigIntSpace lhs_space;
-	BigIntSpace rhs_space;
-	BigIntConst lhs_bigint = lhs_key.to_big_int(&lhs_space);
-	BigIntConst rhs_bigint = rhs_key.to_big_int(&rhs_space);
+	BigIntConst lhs_bigint = lhs_key.to_big_int();
+	BigIntConst rhs_bigint = rhs_key.to_big_int();
 	return lhs_bigint.order(rhs_bigint).compare(op);
 }
 
@@ -837,10 +803,10 @@ fn void Value.int_to_float(&v, QualType dest_ty, Compilation* comp) => float_val
 fn void Value.float_cast(&v, QualType dest_ty, Compilation* comp) => float_value::float_cast(v, dest_ty, comp);
 
 <* Value.toFloat(T) with T given as a width tag. *>
-fn KeyFloat Value.to_float(self, KeyFloatTag dest, Compilation* comp) => float_value::to_float(self, dest, comp);
+fn InternerKey Value.to_float(self, InternerKeyTag dest, Compilation* comp) => float_value::to_float(self, dest, comp);
 
 <* Value.imag(T) with T given as a width tag. *>
-fn KeyFloat Value.imag(self, KeyFloatTag dest, Compilation* comp) => float_value::imag(self, dest, comp);
+fn InternerKey Value.imag(self, InternerKeyTag dest, Compilation* comp) => float_value::imag(self, dest, comp);
 
 <* Value.realPart *>
 fn Value Value.real_part(self, Compilation* comp) => float_value::real_part(self, comp);
@@ -886,24 +852,24 @@ fn bool Value.print(self, QualType qt, Compilation* comp, DString* w, NestedPrin
 		return false;
 	}
 	InternerKey key = comp.interner.get(self.ref());
+	switch (key.tag.kind)
+	{
+		case INT:
+			w.appendf("%s", key);
+			return false;
+		case FLOAT:
+			float_value::print_float(key, w);
+			return false;
+		case COMPLEX:
+			float_value::print_complex(key, w);
+			return false;
+		case NOT_NUMBER:
+			break;
+	}
 	switch (key.tag)
 	{
 		case NULL:
 			w.append_string("nullptr_t");
-		case INT:
-			switch (key.int_val.tag)
-			{
-				case U64: w.appendf("%d", key.int_val.u64);
-				case I64: w.appendf("%d", key.int_val.i64);
-				case BIG_INT:
-					String text = key.int_val.big_int.to_string_alloc(comp.gpa, 10, false);
-					defer alloc::free(comp.gpa, text.ptr);
-					w.append_string(text);
-			}
-		case FLOAT:
-			float_value::print_float(key.float_val, w);
-		case COMPLEX:
-			float_value::print_complex(key.complex_val, w);
 		case POINTER:
 			if (nested) *nested = { .node = key.pointer.node, .offset = from_ref(key.pointer.offset) };
 			return true;

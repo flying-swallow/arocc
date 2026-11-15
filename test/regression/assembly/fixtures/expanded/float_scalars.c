@@ -22,7 +22,7 @@
   .globl "extended_value"
   .data
   .type "extended_value", @object
-  .size "extended_value", 16
+  .size "extended_value", 10
   .align 16
 "extended_value":
   .quad  0x8000000000000000

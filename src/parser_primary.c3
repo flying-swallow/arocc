@@ -346,7 +346,7 @@ fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenInd
 	if (symbol.kind == symbol_stack::SymbolKind.ENUMERATION)
 	{
 		val = p.referenced_integer_constant(symbol.val,
-			symbol.val.is(value_interner::InternerKeyTag.INT, p.comp), true, tok);
+			symbol.val.is_int(p.comp), true, tok);
 	}
 	else if (symbol.kind == symbol_stack::SymbolKind.CONSTEXPR)
 	{
@@ -356,7 +356,7 @@ fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenInd
 		!symbol.val.is_none())
 	{
 		val = p.referenced_integer_constant(symbol.val,
-			symbol.val.is(value_interner::InternerKeyTag.INT, p.comp), false, tok);
+			symbol.val.is_int(p.comp), false, tok);
 	}
 	if (!val.is_none()) p.tree.set_value(node, val);
 	return { .node = node, .qt = symbol.qt, .val = val };

@@ -53,36 +53,25 @@ fn void serialize_int(DString* output, ulong value, StorageUnit unit)
 	output.appendf("  .%s  0x%x\n", directive(unit), truncate(value, unit));
 }
 
-fn void serialize_float(DString* output, value_interner::KeyFloat value)
+fn void serialize_float(DString* output, value_interner::InternerKey value)
 {
 	switch (value.tag)
 	{
-		case value_interner::KeyFloatTag.F16:
-			serialize_int(output, value.f16, SHORT);
-		case value_interner::KeyFloatTag.F32:
-			serialize_int(output, value.f32, LONG);
-		case value_interner::KeyFloatTag.F64:
-			serialize_int(output, value.f64, QUAD);
-		case value_interner::KeyFloatTag.F80:
-			serialize_int(output, value.f80.lo, QUAD);
-			serialize_int(output, value.f80.hi, SHORT);
+		case value_interner::InternerKeyTag.F16:
+			serialize_int(output, value.f16(), SHORT);
+		case value_interner::InternerKeyTag.F32:
+			serialize_int(output, value.f32(), LONG);
+		case value_interner::InternerKeyTag.F64:
+			serialize_int(output, value.f64(), QUAD);
+		case value_interner::InternerKeyTag.F80:
+			serialize_int(output, value.f80().lo, QUAD);
+			serialize_int(output, value.f80().hi, SHORT);
 			output.append_string("  .zero 6\n");
-		case value_interner::KeyFloatTag.F128:
-			serialize_int(output, value.f128.lo, QUAD);
-			serialize_int(output, value.f128.hi, QUAD);
-	}
-}
-
-fn void append_integer(DString* output, value_interner::KeyInt value, Compilation* comp)
-{
-	switch (value.tag)
-	{
-		case value_interner::KeyIntTag.U64: output.appendf("%d", value.u64);
-		case value_interner::KeyIntTag.I64: output.appendf("%d", value.i64);
-		case value_interner::KeyIntTag.BIG_INT:
-			String text = value.big_int.to_string_alloc(comp.gpa, 10, false);
-			defer alloc::free(comp.gpa, text.ptr);
-			output.append_string(text);
+		case value_interner::InternerKeyTag.F128:
+			serialize_int(output, value.f128().lo, QUAD);
+			serialize_int(output, value.f128().hi, QUAD);
+		default:
+			unreachable("serialize_float of a non-float key");
 	}
 }
 
@@ -132,8 +121,8 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 				else
 				{
 					value_interner::InternerKey key = comp.interner.get(value.ref());
-					assert(key.tag == value_interner::InternerKeyTag.INT, "integer initializer did not have an integer key");
-					append_integer(data, key.int_val, comp);
+					assert(key.tag.is_int(), "integer initializer did not have an integer key");
+					data.appendf("%s", key);
 				}
 				data.append_char('\n');
 				return;
@@ -142,14 +131,14 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 		}
 		if (scalar_kind.is_float)
 		{
-			value_interner::KeyFloatTag tag;
+			value_interner::InternerKeyTag tag;
 			switch (bit_size)
 			{
-				case 16: tag = value_interner::KeyFloatTag.F16;
-				case 32: tag = value_interner::KeyFloatTag.F32;
-				case 64: tag = value_interner::KeyFloatTag.F64;
-				case 80: tag = value_interner::KeyFloatTag.F80;
-				case 128: tag = value_interner::KeyFloatTag.F128;
+				case 16: tag = value_interner::InternerKeyTag.F16;
+				case 32: tag = value_interner::InternerKeyTag.F32;
+				case 64: tag = value_interner::InternerKeyTag.F64;
+				case 80: tag = value_interner::InternerKeyTag.F80;
+				case 128: tag = value_interner::InternerKeyTag.F128;
 				default: unreachable("unsupported floating storage width");
 			}
 			// to_float handles canonical 0.0/1.0 refs, which the interner
@@ -213,7 +202,7 @@ fn void? gen_variable(tree::Tree* tree, tree::NodeVariable variable, DString* da
 	if (variable.storage_class == tree::VariableStorageClass.STATIC) { data.appendf("  .local \"%s\"\n", name); }
 	else { data.appendf("  .globl \"%s\"\n", name); }
 
-	if (is_tentative && comp.code_gen_options.common)
+	if (is_tentative && comp.code_gen_options.common && !variable.thread_local) // TLS is never common
 	{
 		data.appendf("  .comm \"%s\", %d, %d\n", name, size, alignment);
 		return;

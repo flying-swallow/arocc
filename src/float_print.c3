@@ -3,18 +3,18 @@
 // the .float / .complex arms of Value.print.
 //
 // OWNER: plan 10 stage 1 agent 10.4 `compare-print`. Stage 0 fixed the signatures.
-// (The bit-level predicates KeyFloat.is_nan/is_inf/... are stage-0 code in
+// (The bit-level predicates InternerKey.is_nan/is_inf/... are stage-0 code in
 // float_value.c3 so every agent can use them; this file owns everything that
 // reads a Value or produces text.)
 //
 // Contract:
-//   - No native floats (only float_soft_narrow.c3 may use them): work on KeyFloat
-//     bits and the dispatching KeyFloat.mul/div/cast.
+//   - No native floats (only float_soft_narrow.c3 may use them): work on InternerKey
+//     bits and the dispatching InternerKey.mul/div/cast.
 //   - Output is appended to a DString, like type_print.c3.
 //
 // Dependencies on other plan 10 agents: `compare` (Value level) needs to_float /
-// imag (10.3); print_float / print_complex need KeyFloat.cast (10.3) for every
-// width except f64, and KeyFloat.mul / KeyFloat.div at F64 (10.1) for the f16 /
+// imag (10.3); print_float / print_complex need InternerKey.cast (10.3) for every
+// width except f64, and InternerKey.mul / InternerKey.div at F64 (10.1) for the f16 /
 // f32 / cf32 scaling. Everything else here is self-contained bit code.
 module aro::float_value;
 import aro::value_interner, aro::value, aro::compilation, aro::bigint, std::core::dstring;
@@ -38,7 +38,7 @@ enum IsInfKind : int (int value)
  (exponent 0, integer bit 1) has the value of biased exponent 1 with the same
  significand, so it is moved there.
 *>
-fn int128 compare_key(KeyFloat f)
+fn int128 compare_key(InternerKey f)
 {
 	uint128 mag = f.raw() & ~sign_mask(f.tag);
 	if (f.tag == F80 && f.biased_exponent() == 0 && ((mag >> 63) & 1) != 0) mag += (uint128)1 << 64;
@@ -50,7 +50,7 @@ fn int128 compare_key(KeyFloat f)
  -0 == +0, any comparison with a NaN is false except NEQ, which is true.
  @require self.tag == rhs.tag : "operands must have the same width"
 *>
-fn bool KeyFloat.compare(self, CompareOperator op, KeyFloat rhs)
+fn bool InternerKey.compare(self, CompareOperator op, InternerKey rhs)
 {
 	if (self.is_nan() || rhs.is_nan()) return op == NEQ;
 	int128 a = compare_key(self);
@@ -78,11 +78,11 @@ fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 {
 	InternerKeyTag lhs_tag = comp.interner.get(lhs.ref()).tag;
 	InternerKeyTag rhs_tag = comp.interner.get(rhs.ref()).tag;
-	if (lhs_tag == FLOAT || rhs_tag == FLOAT)
+	if (lhs_tag.is_float() || rhs_tag.is_float())
 	{
 		return to_float(lhs, F128, comp).compare(op, to_float(rhs, F128, comp));
 	}
-	assert(lhs_tag == COMPLEX || rhs_tag == COMPLEX, "float_value::compare needs a float or complex operand");
+	assert(lhs_tag.is_complex() || rhs_tag.is_complex(), "float_value::compare needs a float or complex operand");
 	assert(op == NEQ, "complex values only compare with !=");
 	bool real_equal = to_float(lhs, F128, comp).compare(EQ, to_float(rhs, F128, comp));
 	bool imag_equal = imag(lhs, F128, comp).compare(EQ, imag(rhs, F128, comp));
@@ -94,12 +94,12 @@ fn bool is_inf(Value v, Compilation* comp)
 {
 	if (v.is_none()) return false;
 	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
 		case FLOAT:
-			return key.float_val.is_inf();
+			return key.is_inf();
 		case COMPLEX:
-			KeyFloat[2] parts = key.complex_val.parts();
+			InternerKey[2] parts = key.parts();
 			return parts[0].is_inf() || parts[1].is_inf();
 		default:
 			return false;
@@ -111,12 +111,12 @@ fn bool is_nan(Value v, Compilation* comp)
 {
 	if (v.is_none()) return false;
 	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
 		case FLOAT:
-			return key.float_val.is_nan();
+			return key.is_nan();
 		case COMPLEX:
-			KeyFloat[2] parts = key.complex_val.parts();
+			InternerKey[2] parts = key.parts();
 			return parts[0].is_nan() || parts[1].is_nan();
 		default:
 			return false;
@@ -132,9 +132,9 @@ fn IsInfKind is_inf_sign(Value v, Compilation* comp)
 {
 	if (v.is_none()) return UNKNOWN;
 	InternerKey key = comp.interner.get(v.ref());
-	if (key.tag != FLOAT) return UNKNOWN;
-	if (key.float_val.is_positive_inf()) return POSITIVE;
-	if (key.float_val.is_negative_inf()) return NEGATIVE;
+	if (!key.tag.is_float()) return UNKNOWN;
+	if (key.is_positive_inf()) return POSITIVE;
+	if (key.is_negative_inf()) return NEGATIVE;
 	return FINITE;
 }
 
@@ -501,25 +501,25 @@ fn ulong f64_round_half_away(ulong bits)
 	return sign | (mag & ~mask);
 }
 
-<* Zig @as(f64, @floatCast(x)); f64 itself is passed through (KeyFloat.cast of the same tag is the identity). *>
-fn KeyFloat print_to_f64(KeyFloat f)
+<* Zig @as(f64, @floatCast(x)); f64 itself is passed through (InternerKey.cast of the same tag is the identity). *>
+fn InternerKey print_to_f64(InternerKey f)
 {
-	// if, not `?:`: c3c 0.8.5 miscompiles ternaries on KeyFloat at -O0.
+	// if, not `?:`: see CONVENTIONS.md (c3c by-value aggregate ternary).
 	if (f.tag == F64) return f;
 	return f.cast(F64);
 }
 
 <* Zig @round(@as(f64, @floatCast(x)) * scale) / scale, every step an f64 operation. *>
-fn ulong print_scaled(KeyFloat f, ulong scale_bits)
+fn ulong print_scaled(InternerKey f, ulong scale_bits)
 {
-	KeyFloat scale = f64_value(scale_bits);
-	KeyFloat scaled = print_to_f64(f).mul(scale);
-	KeyFloat rounded = f64_value(f64_round_half_away(scaled.f64));
-	return rounded.div(scale).f64;
+	InternerKey scale = f64_value(scale_bits);
+	InternerKey scaled = print_to_f64(f).mul(scale);
+	InternerKey rounded = f64_value(f64_round_half_away(scaled.f64()));
+	return rounded.div(scale).f64();
 }
 
 <* The bits Value.print formats for one float of a `.float` key or a complex component. *>
-fn ulong print_bits(KeyFloat f, bool scale_narrow)
+fn ulong print_bits(InternerKey f, bool scale_narrow)
 {
 	if (scale_narrow)
 	{
@@ -530,7 +530,7 @@ fn ulong print_bits(KeyFloat f, bool scale_narrow)
 			default: break;
 		}
 	}
-	return print_to_f64(f).f64;
+	return print_to_f64(f).f64();
 }
 
 <*
@@ -538,11 +538,11 @@ fn ulong print_bits(KeyFloat f, bool scale_narrow)
    f16: x = (f64)h; print @round(x * 1000) / 1000;
    f32: x = (f64)f; print @round(x * 1000000) / 1000000;
    f64/f80/f128: print (f64)x (@floatCast: may overflow to inf).
- The scaling is f64 arithmetic (KeyFloat.mul / KeyFloat.div at F64, each
+ The scaling is f64 arithmetic (InternerKey.mul / InternerKey.div at F64, each
  rounded); Zig @round rounds to an integer, halfway cases away from zero (a
  bit-level helper in this file). Printing goes through format_f64_decimal.
 *>
-fn void print_float(KeyFloat f, DString* w)
+fn void print_float(InternerKey f, DString* w)
 {
 	format_f64_decimal(print_bits(f, true), w);
 }
@@ -552,9 +552,9 @@ fn void print_float(KeyFloat f, DString* w)
  imaginary part prints as "1 + -2i"). cf32 parts are rounded like f32 above;
  every other width (cf16 included - no 1000 scaling) is plain (f64)x.
 *>
-fn void print_complex(KeyComplex c, DString* w)
+fn void print_complex(InternerKey c, DString* w)
 {
-	KeyFloat[2] parts = c.parts();
+	InternerKey[2] parts = c.parts();
 	bool scale = c.tag == CF32;
 	format_f64_decimal(print_bits(parts[0], scale), w);
 	w.append_string(" + ");

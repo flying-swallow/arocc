@@ -8,6 +8,8 @@ struct OptOptions
 {
 	code_gen_options::OptimizationLevel level;
 	bool whole_program;
+	<* When true, root all external declarations even if main exists; defaults to false. *>
+	bool keep_external_definitions;
 	bool verify;
 }
 
@@ -589,8 +591,8 @@ fn void mark_decl_symbol(HashMap{String, uint}* decl_indices, bool[] reachable,
 	}
 }
 
-<* Remove declarations that are not reachable from roots. *>
-fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program)
+<* Remove declarations not reachable from roots; retain all external declarations when they may be used outside this IR. *>
+fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program, bool keep_external_definitions)
 {
 	usz decl_count = (usz)graph.decls.len();
 	if (decl_count == 0) return;
@@ -613,7 +615,7 @@ fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program)
 	{
 		if (decl.kind == ir::DeclKind.FUNCTION && decl.name == "main") has_main = true;
 	}
-	if (whole_program && has_main)
+	if (whole_program && has_main && !keep_external_definitions)
 	{
 		mark_decl_symbol(&decl_indices, reachable, &pending, "main");
 	}
@@ -657,8 +659,8 @@ fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program)
 	}
 }
 
-fn void dead_function_elim(ir::Ir* graph, bool whole_program)
-	=> eliminate_dead_declarations(graph, whole_program);
+fn void dead_function_elim(ir::Ir* graph, bool whole_program, bool keep_external_definitions)
+	=> eliminate_dead_declarations(graph, whole_program, keep_external_definitions);
 
 struct BodyRemovalContext { bool[] remove; }
 
@@ -1020,8 +1022,8 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	switch (access_key.tag)
 	{
 		case value_interner::InternerKeyTag.INT_TY: case value_interner::InternerKeyTag.FLOAT_TY:
-			if (access_key.bits == 0) return false;
-			expected_size = ((uint)access_key.bits + 7) / 8;
+			if (access_key.ty_bits == 0) return false;
+			expected_size = ((uint)access_key.ty_bits + 7) / 8;
 		case value_interner::InternerKeyTag.PTR_TY:
 			expected_size = 8;
 		default:
@@ -1199,8 +1201,8 @@ fn long const_prop_signed(ulong bits, ushort width)
 fn bool const_prop_int_width(ir::Ir* graph, value_interner::InternerRef ty, ushort* width)
 {
 	value_interner::InternerKey key = graph.interner.get(ty);
-	if (key.tag != value_interner::InternerKeyTag.INT_TY || key.bits == 0 || key.bits > 64) return false;
-	*width = key.bits;
+	if (key.tag != value_interner::InternerKeyTag.INT_TY || key.ty_bits == 0 || key.ty_bits > 64) return false;
+	*width = key.ty_bits;
 	return true;
 }
 
@@ -1230,15 +1232,8 @@ fn ConstPropValue const_prop_constant_inst(ir::Ir* graph, ir::Inst* inst)
 	ushort width;
 	if (!const_prop_int_width(graph, inst.ty, &width)) return const_prop_bottom();
 	value_interner::InternerKey key = graph.interner.get(inst.data.constant);
-	if (key.tag != value_interner::InternerKeyTag.INT) return const_prop_bottom();
-	ulong bits;
-	switch (key.int_val.tag)
-	{
-		case value_interner::KeyIntTag.U64: bits = key.int_val.u64;
-		case value_interner::KeyIntTag.I64: bits = (ulong)key.int_val.i64;
-		case value_interner::KeyIntTag.BIG_INT: return const_prop_bottom();
-	}
-	return const_prop_constant(width, bits);
+	if (!key.tag.is_int() || !key.int_fits_64()) return const_prop_bottom();
+	return const_prop_constant(width, key.int_low_u64());
 }
 
 fn ConstPropValue const_prop_binary(ir::Ir* graph, ir::Decl* decl, ir::Inst* inst, ConstPropValue[] values)
@@ -1444,17 +1439,8 @@ fn bool const_prop_mark_edge(Cfg* cfg, bool[] executable_edges, bool[] executabl
 fn bool const_prop_switch_value(ir::Ir* graph, value_interner::InternerRef ref, ushort width, ulong* bits)
 {
 	value_interner::InternerKey key = graph.interner.get(ref);
-	if (key.tag != value_interner::InternerKeyTag.INT) return false;
-	switch (key.int_val.tag)
-	{
-		case value_interner::KeyIntTag.U64: *bits = key.int_val.u64 & const_prop_mask(width);
-		case value_interner::KeyIntTag.I64: *bits = (ulong)key.int_val.i64 & const_prop_mask(width);
-		case value_interner::KeyIntTag.BIG_INT:
-			ulong low_bits = 0;
-			if (key.int_val.big_int.limbs.len > 0) low_bits = key.int_val.big_int.limbs[0];
-			if (!key.int_val.big_int.positive) low_bits = 0 - low_bits;
-			*bits = low_bits & const_prop_mask(width);
-	}
+	if (!key.tag.is_int()) return false;
+	*bits = key.int_low_u64() & const_prop_mask(width);
 	return true;
 }
 
@@ -1630,7 +1616,7 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 			if (kept != (usz)inst.data.phi.len)
 			{
 				ir::PhiInput[] filtered = alloc::new_array(&decl.arena, ir::PhiInput, (sz)kept);
-				if (kept) filtered[..] = inst.data.phi[..(sz)kept];
+				if (kept) filtered[..] = inst.data.phi[:(sz)kept];
 				inst.data.phi = filtered;
 				changed = true;
 			}
@@ -1642,8 +1628,7 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 		if (!const_prop_int_width(graph, inst.ty, &width)) continue;
 		value_interner::InternerRef constant_ref;
 		if (width == 1) { constant_ref = value.bits == 0 ? value_interner::REF_ZERO : value_interner::REF_ONE; }
-		else { constant_ref = graph.interner.put({ .tag = value_interner::InternerKeyTag.INT,
-			.int_val = { .tag = value_interner::KeyIntTag.I64, .i64 = const_prop_signed(value.bits, width) } }); }
+		else { constant_ref = graph.interner.put(value_interner::int_key(const_prop_signed(value.bits, width))); }
 		ir::Ref constant_inst = editor.add_constant(constant_ref, inst.ty);
 		editor_replace_all_uses(&editor, ref, constant_inst);
 		changed = true;
@@ -2053,6 +2038,7 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 	// exception covers emitted internal-linkage definitions.
 	String continuation_name = string::format(allocator, "inl.%s.%d.cont", caller.name, call_ref);
 	ir::Ref continuation_label = editor.new_label(continuation_name);
+	alloc::free(allocator, continuation_name.ptr); // new_label copied it into the decl arena
 	ir::Ref[] mapping = alloc::new_array(allocator, ir::Ref, (sz)callee.instructions.len);
 	defer alloc::free(allocator, mapping.ptr);
 	for (usz i = 0; i < (usz)mapping.len; i++) mapping[i] = ir::NONE;
@@ -2070,7 +2056,11 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		ir::Inst cloned = source_inst;
 		if (cloned.tag == ir::InstTag.LABEL)
 		{
-			cloned.data.label = string::format(allocator, "inl.%s.%d.%d", caller.name, call_ref, (uint)i);
+			String label_name = string::format(allocator, "inl.%s.%d.%d", caller.name, call_ref, (uint)i);
+			cloned.data.label = label_name;
+			mapping[i] = editor.append(cloned); // copies the label into the decl arena
+			alloc::free(allocator, label_name.ptr);
+			continue;
 		}
 		mapping[i] = editor.append(cloned);
 	}
@@ -2431,7 +2421,7 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 		case code_gen_options::OptimizationLevel.FAST:
 		case code_gen_options::OptimizationLevel.G:
 		case code_gen_options::OptimizationLevel.Z:
-			eliminate_dead_declarations(graph, opts.whole_program);
+			eliminate_dead_declarations(graph, opts.whole_program, opts.keep_external_definitions);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) remove_unreachable_blocks(decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
@@ -2459,7 +2449,7 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
-				dead_function_elim(graph, opts.whole_program);
+				dead_function_elim(graph, opts.whole_program, opts.keep_external_definitions);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			}
 	}

@@ -299,7 +299,7 @@ fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix
  separators; float_value::parse_f128; on failure (only `0x.p1`-style hex
  floats without significand digits, where Zig's `catch unreachable` panics)
  push the C3-only HEX_FLOAT_NO_SIGNIFICAND error and use +0.0;
- cast to the KeyFloatTag of qt.bit_sizeof (16 -> F16 — also for __bf16, as in
+ cast to the InternerKeyTag of qt.bit_sizeof (16 -> F16 — also for __bf16, as in
  Zig —, 32, 64, 80, 128; decimal floats use the binary width too); intern.
  Imaginary: push GNU_IMAGINARY_CONSTANT, qt = to_complex, val = complex
  {+0.0, x} at the same width, is_imaginary = true, literal_val = NONE (see
@@ -323,8 +323,8 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 		res.diags.push(HEX_FLOAT_NO_SIGNIFICAND);
 	}
 
-	KeyFloatTag tag = float_value::width_of(qt, comp);
-	KeyFloat f = float_value::f128_value(bits).cast(tag);
+	InternerKeyTag tag = float_value::width_of(qt, comp);
+	InternerKey f = float_value::f128_value(bits).cast(tag);
 	Value val = float_value::intern_float(f, comp);
 
 	res.qt = qt;
@@ -335,7 +335,7 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 	{
 		res.diags.push(GNU_IMAGINARY_CONSTANT);
 		res.qt = qt.to_complex(comp);
-		KeyFloat re = float_value::zero(tag);
+		InternerKey re = float_value::zero(tag);
 		res.val = float_value::intern_complex(float_value::make_complex(re, f), comp);
 		res.literal_val = value::NONE;
 		res.is_imaginary = true;

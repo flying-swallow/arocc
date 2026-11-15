@@ -44,6 +44,7 @@ struct Options
 	String aro_name;
 	bool has_raw_target_triple; String raw_target_triple;
 	String path_env;
+	String[] user_lib_dirs;
 }
 
 const Options DEFAULT_OPTIONS = {};

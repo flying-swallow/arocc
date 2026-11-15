@@ -109,6 +109,11 @@ fn uint section_group(elf::SectionData* section)
 
 fn ulong? symbol_address(List{SectionLayout}* layouts, elf::Symbol* symbol, String* failed_name)
 {
+	if (symbol.common)
+	{
+		if (failed_name) *failed_name = symbol.name;
+		return UNSUPPORTED_RELOCATION~;
+	}
 	if (!symbol.defined)
 	{
 		uint binding = (uint)symbol.info >> 4;
@@ -284,8 +289,10 @@ fn void? write_executable(object::Object* obj, OutStream w, LinkOptions opts = D
 		layout.placed = false;
 		layout.bytes.init(obj.allocator, source.bytes.len());
 		layout.bytes.push_all(source.bytes.array_view());
+		// This small linker's load segments use filesz == memsz, so materialize NOBITS.
+		for (ulong i = 0; i < source.nobits_size; i++) layout.bytes.push(0);
 		layouts.push(layout);
-		if (source.bytes.len()) has_group[section_group(source)] = true;
+		if (source.bytes.len() || source.nobits_size) has_group[section_group(source)] = true;
 	}
 
 	ushort phnum = 1; // PT_GNU_STACK is always emitted.

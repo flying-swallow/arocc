@@ -13,6 +13,7 @@ enum SectionKind : char
 {
 	UNDEFINED,
 	DATA,
+	BSS,
 	READ_ONLY_DATA,
 	FUNC,
 	STRINGS,
@@ -27,9 +28,13 @@ struct Section
 
 const Section SECTION_UNDEFINED = { .kind = UNDEFINED };
 const Section SECTION_DATA = { .kind = DATA };
+const Section SECTION_BSS = { .kind = BSS };
 const Section SECTION_READ_ONLY_DATA = { .kind = READ_ONLY_DATA };
 const Section SECTION_FUNC = { .kind = FUNC };
 const Section SECTION_STRINGS = { .kind = STRINGS };
+
+<* ELF reserved section index used for common symbols. *>
+const ushort SHN_COMMON = 0xFFF2;
 
 enum SymbolType : char
 {
@@ -98,12 +103,29 @@ fn void Object.deinit(&self)
 	alloc::free(allocator, self);
 }
 
-<* Get or create the named output section's mutable bytes. *>
+<*
+ Get or create the named output section's mutable bytes. BSS has no bytes;
+ use `reserve_zero` to reserve logical zero-initialized storage.
+*>
 fn List{char}* get_section(Object* object, Section section)
 {
 	switch (object.format)
 	{
 		case ELF: return elf::get_section(object.implementation, section);
+		default: unreachable("unsupported object format in initialized object");
+	}
+}
+
+<*
+ Align and reserve `size` zero-initialized bytes in a BSS section. The BSS
+ byte list stays empty; the returned offset addresses the reserved range.
+ @require section.kind == SectionKind.BSS && alignment > 0 && (alignment & (alignment - 1)) == 0
+*>
+fn ulong reserve_zero(Object* object, Section section, ulong size, ulong alignment)
+{
+	switch (object.format)
+	{
+		case ELF: return elf::reserve_zero(object.implementation, section, size, alignment);
 		default: unreachable("unsupported object format in initialized object");
 	}
 }
@@ -146,6 +168,25 @@ fn String declare_symbol(
 	switch (object.format)
 	{
 		case ELF: return elf::declare_symbol(object.implementation, section, name, has_name, linkage, symbol_type, offset, size);
+		default: unreachable("unsupported object format in initialized object");
+	}
+}
+
+<*
+ Declare a strong common variable symbol. `alignment` is stored in ELF st_value as
+ required for SHN_COMMON symbols; `size` is its allocated size.
+ @require alignment > 0 && (alignment & (alignment - 1)) == 0
+*>
+fn String declare_common(
+	Object* object,
+	String name,
+	ulong size,
+	ulong alignment,
+)
+{
+	switch (object.format)
+	{
+		case ELF: return elf::declare_common_symbol(object.implementation, name, size, alignment);
 		default: unreachable("unsupported object format in initialized object");
 	}
 }

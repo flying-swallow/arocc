@@ -171,6 +171,12 @@ def _test_impl(ctx):
 c3_binary = rule(implementation = _bin_impl, attrs = _exe_attrs, executable = True)
 c3_test = rule(implementation = _test_impl, attrs = _exe_attrs, test = True)
 
+# A test whose executable is an ordinary C3 program (`fn int main`), run directly
+# with no shell launcher: its exit status is the test result. `args`, `env`,
+# `data`, `size` and `shard_count` work as for any Bazel test; a sharded program
+# reads TEST_TOTAL_SHARDS / TEST_SHARD_INDEX and touches TEST_SHARD_STATUS_FILE.
+c3_main_test = rule(implementation = _bin_impl, attrs = _exe_attrs, test = True)
+
 def _apply_path_prefix(path, prefixes):
     # Prefer the most specific mapping when prefixes overlap.
     for key in sorted(prefixes.keys(), key = lambda value: len(value), reverse = True):
@@ -226,10 +232,6 @@ def _add_archive_entry(entries, file, path):
         fail("c3_source_archive: %s and %s both map to %s" % (previous.path, file.path, path))
     entries[path] = file
 
-def _tar_quote(path):
-    # build_tar.py parses INPUT=DEST and uses backslash to quote '=' in INPUT.
-    return path.replace("\\", "\\\\").replace("=", "\\=")
-
 def _c3_source_archive_impl(ctx):
     transitive_srcs, transitive_data = _collect(ctx)
     entries = {}
@@ -239,23 +241,23 @@ def _c3_source_archive_impl(ctx):
     for file in transitive_data.to_list():
         _add_archive_entry(entries, file, _distribution_data_path(file, ctx.attr.data_path_prefixes))
 
-    archive = ctx.actions.declare_file(ctx.label.name + ".tar")
+    archive = ctx.actions.declare_file(ctx.label.name + ".zip")
     args = ctx.actions.args()
-    args.add("--output")
+    args.add("c")
     args.add(archive.path)
-    args.add("--root_directory")
-    args.add(".")
     input_files = []
     for path in sorted(entries.keys()):
         file = entries[path]
-        args.add("--file")
-        args.add("%s=%s" % (_tar_quote(file.path), path))
+        # zipper takes ZIP_PATH=FILE and splits on the first '='.
+        if "=" in path:
+            fail("c3_source_archive: archive path may not contain '=': %s" % path)
+        args.add("%s=%s" % (path, file.path))
         input_files.append(file)
     ctx.actions.run(
-        executable = ctx.executable._build_tar,
+        executable = ctx.executable._zipper,
         arguments = [args],
         inputs = depset(input_files),
-        tools = [ctx.executable._build_tar],
+        tools = [ctx.executable._zipper],
         outputs = [archive],
         mnemonic = "C3SourceArchive",
         progress_message = "Packaging C3 source distribution %{label}",
@@ -283,12 +285,12 @@ c3_source_archive = rule(
         "data_path_prefixes": attr.string_dict(
             doc = "Optional archive path-prefix rewrites for runtime data, keyed by File.short_path.",
         ),
-        "_build_tar": attr.label(
-            default = Label("@bazel_tools//tools/build_defs/pkg:build_tar"),
+        "_zipper": attr.label(
+            default = Label("@bazel_tools//tools/zip:zipper"),
             allow_files = True,
             executable = True,
             cfg = "exec",
         ),
     },
-    doc = "Creates a relocatable tar archive from C3Info sources, transitive runtime data, and extra files.",
+    doc = "Creates a relocatable zip archive from C3Info sources, transitive runtime data, and extra files.",
 )

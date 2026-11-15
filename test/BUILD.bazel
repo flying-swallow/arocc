@@ -1,28 +1,31 @@
-# Test fixtures only; test code lives in //src/tests (unit) and
-# //src/tests/migration, //src/tests/fuzz (harnesses). This is a single package
-# so recursive globs see every fixture without crossing package boundaries.
+# Test fixtures. Layout follows c3c's test/:
 #
-#   cases/ records/          Zig runner corpora (test/runner.zig, record_runner.zig)
-#   unit/                    data for //src/tests unit tests
-#   regression/<area>/       cases.txt (+ fixtures/) for //src/tests/migration:<area>_regression
-#   native/                  native backend cases and sources
-#   reference/               reference-gate baseline and logs
+#   src/<group>/             harness code: test_suite runner, records, gcc, cli,
+#                            probes, manifest runner, fuzz, shared lib (own packages)
+#   test_suite/<area>/       integration cases (own package, //test/test_suite)
+#   unit/<area>/             C3 unit tests with their data/ (own packages)
+#   records/                 record-layout corpus (//test/src/records)
+#   regression/<area>/       probe data: assembly/ and ir/ cases, preprocessor/ fixture tree
+#   native/                  backend CLI sources
+#   gcc/                     GCC C testsuite copy (GPL-3.0+, see gcc/SOURCE)
 #   portability/             runfiles path with a space
-#   fuzz/ zig/               Zig/C fuzz inputs and Zig probes (build.zig, reference tree)
+#   fuzz/corpus/             fuzz replay inputs
+#
+# This is a single package so recursive globs see every fixture without
+# crossing package boundaries.
 
 _FIXTURE_VISIBILITY = [
     "//:__pkg__",
-    "//src/tests:__subpackages__",
+    "//test:__subpackages__",
+    "//tools:__subpackages__",
 ]
 
 # Individual fixture files are addressable as //test:<path>.
 exports_files(
     glob(
         [
-            "unit/**",
             "regression/**",
             "native/**",
-            "reference/**",
             "portability/**",
             "fuzz/**",
         ],
@@ -30,9 +33,10 @@ exports_files(
     visibility = _FIXTURE_VISIBILITY,
 )
 
+# GCC C testsuite copy for //test/src/gcc:gcc_testsuite_*.
 filegroup(
-    name = "test_cases",
-    srcs = glob(["cases/**"]),
+    name = "gcc_testsuite",
+    srcs = glob(["gcc/**"]),
     visibility = _FIXTURE_VISIBILITY,
 )
 
@@ -42,41 +46,14 @@ filegroup(
     visibility = _FIXTURE_VISIBILITY,
 )
 
-filegroup(
-    name = "unit_integer_values",
-    srcs = glob(["unit/integer_values/*.txt"]),
-    visibility = _FIXTURE_VISIBILITY,
-)
-
-filegroup(
-    name = "unit_float_values",
-    srcs = glob(["unit/float_values/*.txt"]),
-    visibility = _FIXTURE_VISIBILITY,
-)
-
-filegroup(
-    name = "unit_literals",
-    srcs = glob(["unit/literals/*.txt"]),
-    visibility = _FIXTURE_VISIBILITY,
-)
-
 [filegroup(
     name = "regression_%s_fixtures" % area,
     srcs = glob(["regression/%s/fixtures/**" % area]),
     visibility = _FIXTURE_VISIBILITY,
 ) for area in [
     "assembly",
-    "attribute",
-    "builtin",
-    "declaration",
     "preprocessor",
 ]]
-
-filegroup(
-    name = "native_ir_backend_cases",
-    srcs = glob(["native/ir_backend_cases/*.c"]),
-    visibility = _FIXTURE_VISIBILITY,
-)
 
 filegroup(
     name = "fuzz_corpus",
@@ -84,33 +61,47 @@ filegroup(
     visibility = _FIXTURE_VISIBILITY,
 )
 
+UNIT_AREAS = [
+    "backend",
+    "builtins",
+    "driver",
+    "lexer",
+    "parser",
+    "preprocessor",
+    "tree",
+    "types",
+    "values",
+]
+
 test_suite(
     name = "unit",
-    tests = [
-        "//src/tests:unit_tests",
-        "//src/tests/migration:runner_tests",
+    tests = ["//test/unit/%s:all" % area for area in UNIT_AREAS] + [
+        "//test/src/lib:harness_lib_tests",
+        "//test/src/manifest:runner_tests",
+        "//test/src/test_suite:test_suite_runner_tests",
+        "//test/src/gcc:gcc_testsuite_tests",
     ],
 )
 
 test_suite(
     name = "integration",
     tests = [
-        "//src/tests/migration:runfiles_portability_integration",
-        "//src/tests/migration:library_consumer",
-        "//src/tests/migration:cli_tests",
-        "//src/tests/migration:frontend_regression",
-        "//src/tests/migration:backend_cli_regression",
-        "//src/tests/migration:native_backend_cli_integration",
-        "//src/tests/migration:native_assembly_integration",
-        "//src/tests/migration:preprocessor_integration",
+        "//test/src/cli:runfiles_portability_integration",
+        "//test/src/cli:library_consumer",
+        "//test/src/cli:cli_tests",
+        "//test/src/cli:backend_cli_regression",
+        "//test/src/cli:native_backend_cli_integration",
+        "//test/src/probes:native_assembly_integration",
+        "//test/src/probes:preprocessor_integration",
+        "//test/test_suite:all",
     ],
 )
 
 test_suite(
     name = "records",
     tests = [
-        "//src/tests/migration:record_runner_tests",
-        "//src/tests/migration:record_regression",
+        "//test/src/records:record_runner_tests",
+        "//test/src/records:record_regression",
     ],
 )
 
@@ -120,11 +111,6 @@ test_suite(
         ":unit",
         ":integration",
         ":records",
-        "//src/tests/migration:assembly_regression",
-        "//src/tests/migration:declaration_regression",
-        "//src/tests/migration:initializer_regression",
-        "//src/tests/migration:macro_regression",
-        "//src/tests/migration:preprocessor_regression",
-        "//src/tests/migration:predefined_macro_regression",
+        "//test/src/probes:assembly_regression",
     ],
 )

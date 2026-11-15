@@ -37,7 +37,7 @@ enum BoundsSafety : char
 }
 
 <* The floating-point evaluation method for intermediate results within a single expression. `value` is Zig's i8 tag. *>
-enum FPEvalMethod : char (ichar value)
+enum FPEvalMethod : char(ichar value)
 {
 	<* The evaluation method cannot be determined or is inconsistent for this target. *>
 	INDETERMINATE { -1 },
@@ -74,20 +74,20 @@ enum Tristate : char
 <* Declaration order matters: `at_least` compares ordinals like Zig's backing ints. *>
 enum Standard : char
 {
-	C89,      // ISO C 1990
+	C89,  // ISO C 1990
 	ISO9899,  // ISO C 1990 with amendment 1
-	GNU89,    // ISO C 1990 with GNU extensions
-	C99,      // ISO C 1999
-	GNU99,    // ISO C 1999 with GNU extensions
-	C11,      // ISO C 2011
-	GNU11,    // ISO C 2011 with GNU extensions
-	C17,      // ISO C 2017
+	GNU89,  // ISO C 1990 with GNU extensions
+	C99,  // ISO C 1999
+	GNU99,  // ISO C 1999 with GNU extensions
+	C11,  // ISO C 2011
+	GNU11,  // ISO C 2011 with GNU extensions
+	C17,  // ISO C 2017
 	DEFAULT,  // default: GNU keywords on top of C17, without suppressing GNU-extension warnings
-	GNU17,    // ISO C 2017 with GNU extensions
-	C23,      // ISO C 2023
-	GNU23,    // ISO C 2023 with GNU extensions
-	C2Y,      // Working Draft for ISO C2Y
-	GNU2Y,    // Working Draft for ISO C2Y with GNU extensions
+	GNU17,  // ISO C 2017 with GNU extensions
+	C23,  // ISO C 2023
+	GNU23,  // ISO C 2023 with GNU extensions
+	C2Y,  // Working Draft for ISO C2Y
+	GNU2Y,  // Working Draft for ISO C2Y with GNU extensions
 }
 
 struct StandardName @private
@@ -97,7 +97,10 @@ struct StandardName @private
 }
 
 const StandardName[*] STANDARD_NAMES @private = {
-	{ "c89", C89 }, { "c90", C89 }, { "iso9899:1990", C89 },
+	{
+		"c89", C89
+	}
+	, { "c90", C89 }, { "iso9899:1990", C89 },
 	{ "iso9899:199409", ISO9899 }, { "gnu89", GNU89 }, { "gnu90", GNU89 },
 	{ "c99", C99 }, { "iso9899:1999", C99 }, { "c9x", C99 },
 	{ "iso9899:199x", C99 }, { "gnu99", GNU99 }, { "gnu9x", GNU99 },
@@ -184,10 +187,10 @@ fn bool Standard.codepoint_allowed_in_identifier(self, uint codepoint, bool is_s
 <* Zig's `packed struct(u4)`; the bit value is `(char)ldrex`. *>
 bitstruct ArmLdrex : char
 {
-	bool b : 0; // byte (8-bit)
-	bool h : 1; // half (16-bit)
-	bool w : 2; // word (32-bit)
-	bool d : 3; // double (64-bit)
+	bool b: 0;  // byte (8-bit)
+	bool h: 1;  // half (16-bit)
+	bool w: 2;  // word (32-bit)
+	bool d: 3;  // double (64-bit)
 }
 
 const char ARM_LDREX_B_INT = 1;
@@ -337,29 +340,29 @@ fn void LangOpts.set_target_options(&self, Target* t)
 			ArmLdrex ldrex;
 			switch (arm_version)
 			{
-				case 6:
-					if (t.cpu.has(ARM_MCLASS))
-					{
-						ldrex = ARM_LDREX_NONE;
-					}
-					else if (t.cpu.has(ARM_V6K) || t.cpu.has(ARM_V6KZ))
-					{
-						ldrex = ARM_LDREX_ALL;
-					}
-					else
-					{
-						ldrex = { .w = true };
-					}
-				case 7:
-				case 8:
-					ldrex = t.cpu.has(ARM_MCLASS) ? (ArmLdrex){ .b = true, .h = true, .w = true } : ARM_LDREX_ALL;
-				case 9:
-					ldrex = ARM_LDREX_ALL;
-				default:
+			case 6:
+				if (t.cpu.has(ARM_MCLASS))
+				{
 					ldrex = ARM_LDREX_NONE;
-			}
-			self.has_arm_ldrex = true;
-			self.arm_ldrex = ldrex;
+				}
+				else if (t.cpu.has(ARM_V6K) || t.cpu.has(ARM_V6KZ))
+				{
+					ldrex = ARM_LDREX_ALL;
+				}
+				else
+				{
+					ldrex = { .w = true };
+				}
+			case 7:
+			case 8:
+				ldrex = t.cpu.has(ARM_MCLASS) ? (ArmLdrex){ .b = true, .h = true, .w = true }: ARM_LDREX_ALL;
+			case 9:
+				ldrex = ARM_LDREX_ALL;
+			default:
+				ldrex = ARM_LDREX_NONE;
+		}
+		self.has_arm_ldrex = true;
+		self.arm_ldrex = ldrex;
 		case AARCH64:
 		case AARCH64_BE:
 			// ARM ldrex is always full-width

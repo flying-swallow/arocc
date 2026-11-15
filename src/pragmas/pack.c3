@@ -319,7 +319,8 @@ fn void TreeParserAdapter.diagnose(&self, uint index, Diagnostic kind, ulong val
 	}
 	if ((usz)index >= p.tree.tokens.len) return;
 	bool has_opt = kind != Diagnostic.SHOW && kind != Diagnostic.UNDEFINED_POP;
-	diagnostics::Message msg = { .kind = WARNING, .text = message, .has_opt = has_opt, .opt = opt };
+	diagnostics::Message msg = { .kind = WARNING, .text = message, .has_opt = has_opt, .opt = opt,
+		.has_location = true, .location = p.tree.tokens[(usz)index].loc.expand(p.comp) };
 	if (catch p.diagnostics.add_with_location(p.comp, msg, p.pp.expansion_slice((tokens::TokenIndex)index), true)) return;
 }
 

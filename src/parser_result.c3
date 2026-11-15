@@ -204,8 +204,8 @@ fn value::Value pointer_value(parser::Parser* p, type_store::NodeIndex node, val
 fn bool add_offset_checked(value::Value* offset_so_far, value::Value delta, compilation::Compilation* comp)
 {
 	if (offset_so_far.is_none() || delta.is_none() ||
-		!offset_so_far.is(value_interner::InternerKeyTag.INT, comp) ||
-		!delta.is(value_interner::InternerKeyTag.INT, comp)) return false;
+		!offset_so_far.is_int(comp) ||
+		!delta.is_int(comp)) return false;
 	value::Value updated = value::NONE;
 	if (updated.add(*offset_so_far, delta, comp.type_store.ptrdiff, comp)) return false;
 	*offset_so_far = updated;
@@ -215,14 +215,14 @@ fn bool add_offset_checked(value::Value* offset_so_far, value::Value delta, comp
 <* Resolve a saved pointer expression only when its value is a symbolic address. *>
 fn value::Value compute_saved_pointer_offset(parser::Parser* p, type_store::NodeIndex node, value::Value offset)
 {
-	if (offset.is_none() || !offset.is(value_interner::InternerKeyTag.INT, p.comp)) return value::NONE;
+	if (offset.is_none() || !offset.is_int(p.comp)) return value::NONE;
 	if (try saved = p.tree.value_of(node))
 	{
 		if (!saved.is(value_interner::InternerKeyTag.POINTER, p.comp)) return value::NONE;
 		value_interner::InternerKey key = p.comp.interner.get(saved.ref());
 		value::Value base_offset = value::from_ref(key.pointer.offset);
 		value::Value combined = value::NONE;
-		if (!base_offset.is(value_interner::InternerKeyTag.INT, p.comp) ||
+		if (!base_offset.is_int(p.comp) ||
 			combined.add(base_offset, offset, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
 		return value::pointer({ .node = key.pointer.node, .offset = combined.ref() }, p.comp);
 	}
@@ -257,7 +257,7 @@ fn value::Value compute_offset_extra(parser::Parser* p, type_store::NodeIndex no
 		{
 			if (try index_val = p.tree.value_of(n.array_access.index))
 			{
-				if (!index_val.is(value_interner::InternerKeyTag.INT, p.comp)) return value::NONE;
+				if (!index_val.is_int(p.comp)) return value::NONE;
 				if (try elem_size = n.array_access.qt.sizeof_or_null(p.comp))
 				{
 					value::Value delta = value::NONE;

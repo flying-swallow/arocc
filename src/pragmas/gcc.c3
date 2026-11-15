@@ -74,13 +74,15 @@ fn bool paste_strings(preprocessor::Preprocessor* pp, TokenWithExpansionLocs[] l
 
 fn void? emit(preprocessor::Preprocessor* pp, TokenWithExpansionLocs tok, diagnostics::MessageKind kind, String message, bool pragma_warning = false)
 {
-	diagnostics::Message m = { .kind = kind, .text = message, .has_opt = pragma_warning, .opt = diagnostics::Option.PRAGMA_MESSAGES };
+	diagnostics::Message m = { .kind = kind, .text = message, .has_opt = pragma_warning, .opt = diagnostics::Option.PRAGMA_MESSAGES,
+		.has_location = true, .location = tok.loc.expand(pp.comp) };
 	return pp.diagnostics.add_with_location(pp.comp, m, tok.expansion_slice(), true);
 }
 
 fn void? emit_option(preprocessor::Preprocessor* pp, TokenWithExpansionLocs tok, diagnostics::MessageKind kind, String message, diagnostics::Option option, bool extension = false)
 {
-	diagnostics::Message m = { .kind = kind, .text = message, .has_opt = true, .opt = option, .extension = extension };
+	diagnostics::Message m = { .kind = kind, .text = message, .has_opt = true, .opt = option, .extension = extension,
+		.has_location = true, .location = tok.loc.expand(pp.comp) };
 	return pp.diagnostics.add_with_location(pp.comp, m, tok.expansion_slice(), true);
 }
 

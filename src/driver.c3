@@ -311,6 +311,66 @@ fn bool? parse_frontend_flag(DriverOptions* opts, String arg, Diagnostics* sink)
 	return false;
 }
 
+<* Parse linker search-path and library options without adding branches to the
+ main argument parser. *>
+fn bool? parse_link_flag(DriverOptions* opts, String[] args, usz* i)
+{
+	String arg = args[*i];
+	if (arg.starts_with("-L"))
+	{
+		String path = arg[2..];
+		if (path.len == 0)
+		{
+			(*i)++;
+			if (*i >= args.len) return MISSING_ARGUMENT~;
+			path = args[*i];
+		}
+		opts.lib_dirs.push(path);
+		return true;
+	}
+	if (arg == "-l" || (arg.starts_with("-l") && arg.len > 2))
+	{
+		if (arg.len == 2)
+		{
+			(*i)++;
+			if (*i >= args.len) return MISSING_ARGUMENT~;
+			String owned = string::format(opts.a, "-l%s", args[*i]);
+			opts.owned_link_args.push(owned);
+			opts.link_objects.push(owned);
+		}
+		else { opts.link_objects.push(arg); }
+		return true;
+	}
+	return false;
+}
+
+fn void push_source_input(DriverOptions* opts, String arg)
+{
+	opts.inputs.push(arg);
+	opts.input_link_slots.push((usz)opts.link_objects.len());
+}
+
+fn bool is_link_input_path(String arg)
+{
+	if (arg.ends_with(".o") || arg.ends_with(".obj") || arg.ends_with(".a") || arg.ends_with(".so")) return true;
+	String basename = arg;
+	if (try slash = arg.rindex_of_char('/')) basename = arg[slash + 1..];
+	if (try version_at = basename.index_of(".so."))
+	{
+		String version = basename[version_at + 4..];
+		if (version.len == 0) return false;
+		bool component_has_digit = false;
+		foreach (c : version)
+		{
+			if (c >= '0' && c <= '9') { component_has_digit = true; }
+			else if (c == '.' && component_has_digit) { component_has_digit = false; }
+			else { return false; }
+		}
+		return component_has_digit;
+	}
+	return false;
+}
+
 <* Parse arguments (including argv[0]) into caller-owned reusable state.
  Recognized source paths and option values are borrowed from args. Unknown
  options are retained as diagnostics-free parse failures instead of silently
@@ -327,6 +387,7 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		if (arg == "--help" || arg == "-h") { opts.action = HELP; result.action = HELP; result.input_count = (uint)opts.inputs.len(); return result; }
 		if (arg == "--version") { opts.action = VERSION; result.action = VERSION; result.input_count = (uint)opts.inputs.len(); return result; }
 		if (parse_frontend_flag(opts, arg, sink)!) { i++; continue; }
+		if (parse_link_flag(opts, args, &i)!) { i++; continue; }
 		else if (arg.starts_with("-D")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.defines.push(v); opts.macro_effects.push({ .kind = DEFINE, .value = v }); }
 		else if (arg.starts_with("-U")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.undefs.push(v); opts.macro_effects.push({ .kind = UNDEFINE, .value = v }); }
 		else if (arg.starts_with("-I")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.includes.push({ .kind = NORMAL, .path = v }); }
@@ -356,7 +417,6 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		else if (arg.starts_with("--resource-dir=")) { opts.resource_dir = arg[15..]; opts.has_resource_dir = true; }
 		else if (arg.starts_with("-resource-dir=")) { opts.resource_dir = arg[14..]; opts.has_resource_dir = true; }
 		else if (arg.starts_with("-isysroot")) { opts.sysroot = arg[9..]; opts.has_sysroot = true; }
-		else if (arg.starts_with("-L")) { String value = arg[2..]; if (value.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; } }
 		else if (arg == "-Wp,-v") { /* accepted; verbose search paths are not implemented */ }
 		else if (arg == "-Wno-error" || arg == "-Werror" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers" || arg == "-pedantic" || arg == "-pedantic-errors" || arg == "-fcaret-diagnostics" || arg == "-fno-caret-diagnostics" || arg == "-fcolor-diagnostics" || arg == "-fno-color-diagnostics") { /* applied by diagnostics setup */ }
 		else if (arg.starts_with("-mcpu=")) { opts.cpu = arg[6..]; opts.has_cpu = true; }
@@ -379,7 +439,7 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		{
 			parse_warning_option(opts, arg);
 		}
-		else if (arg == "-") { opts.inputs.push(arg); }
+		else if (arg == "-") { push_source_input(opts, arg); }
 		else if (arg.starts_with("-f") || arg.starts_with("-m"))
 		{
 			if (sink == null) return INVALID_ARGUMENT~;
@@ -390,8 +450,8 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 			if (sink == null) return INVALID_ARGUMENT~;
 			add_driver_warning(opts.a, sink, "unknown argument '%s'", arg)!;
 		}
-		else if (arg.ends_with(".o") || arg.ends_with(".obj")) { opts.link_objects.push(arg); }
-		else { opts.inputs.push(arg); }
+		else if (is_link_input_path(arg)) { opts.link_objects.push(arg); }
+		else { push_source_input(opts, arg); }
 		i++;
 	}
 	result.input_count = (uint)opts.inputs.len();
@@ -495,6 +555,7 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 	comp.code_gen_options.pic_level = pic.level;
 	comp.code_gen_options.is_pie = pic.is_pie;
 	tc_opts.has_sysroot = opts.has_sysroot; tc_opts.sysroot = opts.sysroot;
+	tc_opts.user_lib_dirs = opts.lib_dirs.array_view();
 	tc_opts.has_resource_dir = opts.has_resource_dir; tc_opts.resource_dir = opts.resource_dir;
 	tc_opts.nobuiltininc = opts.nobuiltininc; tc_opts.nostdinc = opts.nostdinc; tc_opts.nostdlibinc = opts.nostdlibinc;
 	tc_opts.nostdlib = opts.nostdlib; tc_opts.nodefaultlibs = opts.nodefaultlibs;
@@ -1023,6 +1084,11 @@ fn bool use_object_emitter(Compilation* comp, DriverOptions* opts, bool link_mod
 		opts.nostdlib && opts.static_link && !opts.shared && !opts.static_pie);
 }
 
+fn bool dce_keeps_external_definitions(DriverOptions* opts, bool link_mode)
+{
+	return !link_mode || opts.shared || opts.rdynamic || opts.link_objects.len() != 0;
+}
+
 fn int emit_ir_object(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	List{String}* link_objects, String output_name, ir::Ir* generated_ir, bool link_mode,
 	ir::ErrorList* errors)
@@ -1070,7 +1136,8 @@ fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	errors.init(comp.gpa);
 	defer errors.free();
 	fault opt_fault = @catch(ir_opt::run(generated_ir,
-		{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program, .verify = opts.verify_ir },
+		{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
+			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode) },
 		&errors));
 	if (opt_fault)
 	{
@@ -1392,6 +1459,36 @@ fn int run(Compilation* comp, Diagnostics* d, String[] args, String executable_d
 	return run_with_stdin(comp, d, args, executable_dir, io::stdin());
 }
 
+<* Merge user linker inputs and generated source objects at the argv positions
+ recorded for each translation unit. *>
+fn void merge_link_inputs(String[] user, usz[] slots, String[] compiled, usz[] tu_end,
+	bool whole_program, List{String}* out)
+{
+	if (whole_program)
+	{
+		usz object_slot = slots.len == 0 ? 0 : slots[0];
+		for (usz slot = 0; slot <= user.len; slot++)
+		{
+			if (slot == object_slot) out.push_all(compiled);
+			if (slot < user.len) out.push(user[slot]);
+		}
+		return;
+	}
+	usz object_begin = 0;
+	usz tu = 0;
+	for (usz slot = 0; slot <= user.len; slot++)
+	{
+		while (tu < slots.len && slots[tu] == slot)
+		{
+			usz object_end = tu_end[tu];
+			for (usz object = object_begin; object < object_end; object++) out.push(compiled[object]);
+			object_begin = object_end;
+			tu++;
+		}
+		if (slot < user.len) out.push(user[slot]);
+	}
+}
+
 <* Test seam for CLI stdin; production callers should use `run`. *>
 fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	String executable_dir, File* stdin_file)
@@ -1528,10 +1625,12 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	driver_tempfiles::DriverTempFiles temp_files;
 	temp_files.init(comp.gpa);
 	defer temp_files.free();
-	List{String} link_objects;
-	link_objects.init(comp.gpa);
-	defer link_objects.free();
-	link_objects.push_all(opts.link_objects.array_view());
+	List{String} compiled_objects;
+	compiled_objects.init(comp.gpa);
+	defer compiled_objects.free();
+	List{usz} tu_object_end;
+	tu_object_end.init(comp.gpa);
+	defer tu_object_end.free();
 	WholeProgram wp;
 	wp.init(comp.gpa, &comp.interner);
 	defer wp.free();
@@ -1616,9 +1715,10 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		}
 		if (this_tu_id == 0) output_source = source_opt;
 		int file_status = process_source(comp, d, &opts, &extra,
-			&tc, &temp_files, &link_objects, link_mode, source_opt, builtin_source,
+			&tc, &temp_files, &compiled_objects, link_mode, source_opt, builtin_source,
 			command_line_source, imacros.array_view(), implicit_includes.array_view(),
 			whole_program ? &wp : null, this_tu_id);
+		tu_object_end.push((usz)compiled_objects.len());
 		if (file_status != 0) status = file_status;
 	}
 	if (d.errors != errors_before_run) return 1;
@@ -1631,12 +1731,17 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 			(void)add_driver_fatal(comp.gpa, d, "unable to create output file name: %s", f);
 			return 1;
 		}
-		if (emit_ir_output(comp, d, &opts, &tc, &temp_files, &link_objects,
+		if (emit_ir_output(comp, d, &opts, &tc, &temp_files, &compiled_objects,
 			output_opt, &wp.program, link_mode) != 0) return 1;
 	}
 	if (link_mode)
 	{
-		if (catch f = invoke_linker(comp, d, &tc, &opts, link_objects.array_view()))
+		List{String} merged_link_inputs;
+		merged_link_inputs.init(comp.gpa);
+		defer merged_link_inputs.free();
+		merge_link_inputs(opts.link_objects.array_view(), opts.input_link_slots.array_view(),
+			compiled_objects.array_view(), tu_object_end.array_view(), whole_program, &merged_link_inputs);
+		if (catch f = invoke_linker(comp, d, &tc, &opts, merged_link_inputs.array_view()))
 		{
 			(void)f;
 			return 1;

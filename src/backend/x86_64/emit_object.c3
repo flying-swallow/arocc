@@ -36,11 +36,14 @@ fn object::Linkage object_linkage(ir::Linkage linkage)
 
 fn object::Section global_section(ir::DataSection section)
 {
-	if (section == ir::DataSection.RODATA) return object::SECTION_READ_ONLY_DATA;
-	// The object API has no BSS or common section, so zero initialized data is
-	// represented in writable data. COMMON therefore behaves like -fno-common;
-	// tentative globals from separate translation units cannot be merged here.
-	return object::SECTION_DATA;
+	switch (section)
+	{
+		case RODATA: return object::SECTION_READ_ONLY_DATA;
+		case BSS: return object::SECTION_BSS;
+		case DATA: return object::SECTION_DATA;
+		case EXTERN: unreachable("external globals do not have an object section");
+		case COMMON: unreachable("common globals do not have an object section");
+	}
 }
 
 fn bool declared(List{String}* names, String name)
@@ -86,27 +89,41 @@ fn void declare_object_symbols(ir::Ir* ir, object::Object* obj, List{String}* na
 			continue;
 		}
 
-		object::Section section = global_section(decl.global.section);
-		List{char}* bytes = object::get_section(obj, section);
 		ulong alignment = decl.global.align > 0 ? decl.global.align : 1;
-		if (section.kind == object::SectionKind.READ_ONLY_DATA && alignment > rodata_align)
+		if (decl.global.section == ir::DataSection.COMMON)
 		{
-			rodata_align = alignment;
-			object::set_section_align(obj, section, rodata_align);
+			assert(decl.linkage == ir::Linkage.EXTERNAL, "COMMON globals require external linkage");
+			object::declare_common(obj, decl.name, decl.global.size, alignment);
+			names.push(decl.name);
+			if (decl.global.relocs.len)
+			{
+				record_error(errors, decl.name, "COMMON global relocations are unsupported");
+			}
+			continue;
 		}
-		else if (section.kind == object::SectionKind.DATA && alignment > data_align)
+
+		object::Section section = global_section(decl.global.section);
+		ulong offset;
+		List{char}* bytes = null;
+		if (decl.global.section == ir::DataSection.BSS)
 		{
-			data_align = alignment;
-			object::set_section_align(obj, section, data_align);
-		}
-		ulong offset = (ulong)bytes.len();
-		while (offset % alignment != 0) { bytes.push(0); offset++; }
-		if (decl.global.section == ir::DataSection.BSS || decl.global.section == ir::DataSection.COMMON)
-		{
-			for (ulong i = 0; i < decl.global.size; i++) bytes.push(0);
+			offset = object::reserve_zero(obj, section, decl.global.size, alignment);
 		}
 		else
 		{
+			bytes = object::get_section(obj, section);
+			if (section.kind == object::SectionKind.READ_ONLY_DATA && alignment > rodata_align)
+			{
+				rodata_align = alignment;
+				object::set_section_align(obj, section, rodata_align);
+			}
+			else if (section.kind == object::SectionKind.DATA && alignment > data_align)
+			{
+				data_align = alignment;
+				object::set_section_align(obj, section, data_align);
+			}
+			offset = (ulong)bytes.len();
+			while (offset % alignment != 0) { bytes.push(0); offset++; }
 			bytes.push_all(decl.global.bytes);
 			for (ulong i = (ulong)decl.global.bytes.len; i < decl.global.size; i++) bytes.push(0);
 		}
@@ -114,6 +131,11 @@ fn void declare_object_symbols(ir::Ir* ir, object::Object* obj, List{String}* na
 			object::SymbolType.VARIABLE, offset, decl.global.size);
 		names.push(decl.name);
 
+		if (decl.global.section == ir::DataSection.BSS && decl.global.relocs.len)
+		{
+			record_error(errors, decl.name, "BSS global relocations are unsupported");
+			continue;
+		}
 		foreach (relocation : decl.global.relocs)
 		{
 			if (relocation.offset > decl.global.size || decl.global.size - relocation.offset < 8)
@@ -150,6 +172,7 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 		object::set_section_align(obj, object::SECTION_FUNC, 16);
 		object::get_section(obj, object::SECTION_DATA);
 		object::get_section(obj, object::SECTION_READ_ONLY_DATA);
+		object::get_section(obj, object::SECTION_BSS);
 
 		// Definitions and IR-declared externals exist before references are queued.
 		declare_object_symbols(ir, obj, &names, &relocations, errors);

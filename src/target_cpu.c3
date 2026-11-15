@@ -968,6 +968,7 @@ enum CpuModel : ushort (String name, String llvm_name, FeatureFamily family, Fea
 	ARM_CORTEX_A53 { "cortex_a53", "cortex-a53", ARM, { ARM_V8A } },
 	// aarch64
 	AARCH64_GENERIC { "generic", "generic", AARCH64, { AARCH64_FP_ARMV8, AARCH64_NEON } },
+	ARMV8A { "armv8a", "generic", AARCH64, { AARCH64_V8A } },
 	APPLE_A7 { "apple_a7", "apple-a7", AARCH64, { AARCH64_V8A, AARCH64_AES, AARCH64_SHA2 } },
 	APPLE_M1 { "apple_m1", "apple-m1", AARCH64, { AARCH64_V8_5A, AARCH64_AES, AARCH64_SHA3, AARCH64_FULLFP16 } },
 	APPLE_M2 { "apple_m2", "apple-m2", AARCH64, { AARCH64_V8_6A, AARCH64_AES, AARCH64_SHA3, AARCH64_FULLFP16 } },
@@ -998,6 +999,12 @@ enum CpuModel : ushort (String name, String llvm_name, FeatureFamily family, Fea
 	GENERIC_RV64 { "generic_rv64", "generic-rv64", RISCV, { RISCV_64BIT, RISCV_I } },
 	BASELINE_RV32 { "baseline_rv32", "", RISCV, { RISCV_32BIT, RISCV_A, RISCV_C, RISCV_D, RISCV_I, RISCV_M } },
 	BASELINE_RV64 { "baseline_rv64", "", RISCV, { RISCV_64BIT, RISCV_A, RISCV_C, RISCV_D, RISCV_I, RISCV_M } },
+	// Zig 0.18 std.Target.riscv models; `zcd`/`zcf` are not modeled here, so their
+	// implied `d`/`f` extensions are listed directly.
+	RV32GC { "rv32gc", "", RISCV, { RISCV_32BIT, RISCV_A, RISCV_C, RISCV_D, RISCV_F, RISCV_I, RISCV_M, RISCV_ZIFENCEI } },
+	RV32I { "rv32i", "", RISCV, { RISCV_32BIT, RISCV_I } },
+	RV64GC { "rv64gc", "", RISCV, { RISCV_64BIT, RISCV_A, RISCV_C, RISCV_D, RISCV_I, RISCV_M, RISCV_ZIFENCEI } },
+	RV64I { "rv64i", "", RISCV, { RISCV_64BIT, RISCV_I } },
 	// sparc
 	SPARC_V8 { "v8", "v8", SPARC, {} },
 	SPARC_V9 { "v9", "v9", SPARC, { SPARC_V9 } },

@@ -76,11 +76,11 @@ fn uint128 parse_nan_payload(char[] bytes, uint width)
 }
 
 <* Construct std.math.nan(T) with the parsed payload, matching eval.zig's bitwise OR. *>
-fn value_interner::KeyFloat nan_with_payload(ulong bits, char[] payload)
+fn value_interner::InternerKey nan_with_payload(ulong bits, char[] payload)
 {
-	value_interner::KeyFloatTag tag = float_value::tag_for_bits(bits);
+	value_interner::InternerKeyTag tag = float_value::tag_for_bits(bits);
 	uint payload_width = float_value::format_of(tag).frac_bits;
-	if (tag == value_interner::KeyFloatTag.F80) payload_width = 63;
+	if (tag == value_interner::InternerKeyTag.F80) payload_width = 63;
 	uint128 parsed = parse_nan_payload(payload, (uint)bits);
 	uint128 payload_mask = ((uint128)1 << payload_width) - 1;
 	return float_value::from_raw(tag, float_value::std_nan(tag).raw() | (parsed & payload_mask));

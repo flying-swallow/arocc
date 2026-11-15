@@ -1,6 +1,6 @@
 // Software floating point core: generic unpack / round_pack for all five
 // formats, f80/f128 arithmetic, f128 fused multiply-add, and the exact f128 hub
-// conversions that KeyFloat.cast is built on.
+// conversions that InternerKey.cast is built on.
 //
 // OWNER: plan 10 stage 1 agent 10.2 `wide-float`. Stage 0 fixed the signatures.
 //
@@ -23,7 +23,7 @@
 //     the sign of a zero product/quotient is the XOR of the operand signs.
 //
 // Reference behaviour pinned by running Zig 0.17.0 (x86_64-linux, see
-// src/tests/float_wide_tests.c3 for the vectors) and kept here on purpose:
+// test/unit/values/float_wide_tests.c3 for the vectors) and kept here on purpose:
 //   - f128 `a - b` is __subtf3 = __addtf3(a, -b): when only b is NaN the result
 //     is b quieted WITH ITS SIGN FLIPPED.
 //   - x87 NaN selection (f80): an unnormal / pseudo-NaN / pseudo-infinity
@@ -90,7 +90,7 @@ struct Unpacked
 }
 
 <* Split a value of any width (f80 non-canonical encodings classify as in float_value.c3). *>
-fn Unpacked KeyFloat.unpack(self)
+fn Unpacked InternerKey.unpack(self)
 {
 	FloatFormat fmt = format_of(self.tag);
 	Unpacked u = { .cls = self.classify(), .sign = self.signbit() };
@@ -108,7 +108,7 @@ fn Unpacked KeyFloat.unpack(self)
 			if (be == 0) be = 1;
 			if (fmt.explicit_int)
 			{
-				u.sig = (uint128)self.f80.lo;
+				u.sig = (uint128)self.f80().lo;
 			}
 			else
 			{
@@ -195,7 +195,7 @@ fn WideRounded wide_round_at(uint128 sig, long exp, bool sticky, long lsb, Round
  target precision (or a value far below the subnormal range), so that the
  sticky delta can never decide a tie on its own.
 *>
-fn KeyFloat round_pack(KeyFloatTag tag, bool sign, int exp, uint128 sig, bool sticky, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
+fn InternerKey round_pack(InternerKeyTag tag, bool sign, int exp, uint128 sig, bool sticky, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
 {
 	FloatFormat fmt = format_of(tag);
 	long p = (long)fmt.frac_bits + 1;
@@ -272,17 +272,17 @@ fn KeyFloat round_pack(KeyFloatTag tag, bool sign, int exp, uint128 sig, bool st
  f80 follows __extendxftf2 bit for bit (see the file header for what it does
  with non-canonical encodings).
 *>
-fn F128Bits KeyFloat.to_f128(self)
+fn F128Bits InternerKey.to_f128(self)
 {
 	switch (self.tag)
 	{
 		case F128:
-			return self.f128;
+			return self.f128();
 		case F80:
 			// compiler-rt f128_floatCast_f80, literally.
-			ulong fraction = self.f80.lo;
-			uint128 sign = (uint128)(self.f80.hi & 0x8000) << 112;
-			uint128 exp = (uint128)(self.f80.hi & 0x7FFF);
+			ulong fraction = self.f80().lo;
+			uint128 sign = (uint128)(self.f80().hi & 0x8000) << 112;
+			uint128 exp = (uint128)(self.f80().hi & 0x7FFF);
 			uint128 abs_result;
 			if (exp == 0 && fraction == 0)
 			{
@@ -310,9 +310,9 @@ fn F128Bits KeyFloat.to_f128(self)
 				case NAN:
 					return wide_f128_from(sign | (uint128)0x7FFF << 112 | u.sig << (112 - fmt.frac_bits));
 				case INFINITE:
-					return inf(F128, u.sign).f128;
+					return inf(F128, u.sign).f128();
 				default:
-					return round_pack(F128, u.sign, u.exp, u.sig, false).f128;
+					return round_pack(F128, u.sign, u.exp, u.sig, false).f128();
 			}
 	}
 }
@@ -323,9 +323,9 @@ fn F128Bits KeyFloat.to_f128(self)
  Exception (reference): dest F80 keeps the NaN's quiet bit as is and may turn a
  signaling NaN into an infinity (__trunctfxf2, see the file header).
 *>
-fn KeyFloat from_f128(F128Bits x, KeyFloatTag dest, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
+fn InternerKey from_f128(F128Bits x, InternerKeyTag dest, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
 {
-	KeyFloat k = f128_value(x);
+	InternerKey k = f128_value(x);
 	if (dest == F128) return k;
 	Unpacked u = k.unpack();
 	switch (u.cls)
@@ -425,7 +425,7 @@ fn WideU256 wide_sub256(WideU256 a, WideU256 b) @local
 }
 
 <* Round (-1)^sign * x * 2^exp (+ sticky) to `tag`, compressing x to 128 bits first. *>
-fn KeyFloat wide_round_pack256(KeyFloatTag tag, bool sign, long exp, WideU256 x, bool sticky, FloatStatus* status) @local
+fn InternerKey wide_round_pack256(InternerKeyTag tag, bool sign, long exp, WideU256 x, bool sticky, FloatStatus* status) @local
 {
 	long n = wide_bitlen256(x);
 	long e = exp;
@@ -443,7 +443,7 @@ fn KeyFloat wide_round_pack256(KeyFloatTag tag, bool sign, long exp, WideU256 x,
 // -----------------------------------------------------------------------------
 
 <* a + b for finite a, b (zeros allowed), rounded to nearest even. *>
-fn KeyFloat wide_add_core(KeyFloatTag tag, Unpacked a, Unpacked b, FloatStatus* status) @local
+fn InternerKey wide_add_core(InternerKeyTag tag, Unpacked a, Unpacked b, FloatStatus* status) @local
 {
 	bool az = a.cls == ZERO;
 	bool bz = b.cls == ZERO;
@@ -492,7 +492,7 @@ fn KeyFloat wide_add_core(KeyFloatTag tag, Unpacked a, Unpacked b, FloatStatus* 
 }
 
 <* a * b for finite nonzero a, b. *>
-fn KeyFloat wide_mul_core(KeyFloatTag tag, Unpacked a, Unpacked b, FloatStatus* status) @local
+fn InternerKey wide_mul_core(InternerKeyTag tag, Unpacked a, Unpacked b, FloatStatus* status) @local
 {
 	WideU256 p = wide_mul256(a.sig, b.sig);
 	return wide_round_pack256(tag, a.sign != b.sign, (long)a.exp + b.exp, p, false, status);
@@ -597,10 +597,10 @@ fn F80Bits wide_f80_addsub(F80Bits a, F80Bits b, bool negate_b, FloatStatus* sta
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F80;
 		}
-		return inf(F80, ua.sign).f80;
+		return inf(F80, ua.sign).f80();
 	}
-	if (ub.cls == INFINITE) return inf(F80, ub.sign).f80;
-	return wide_add_core(F80, ua, ub, status).f80;
+	if (ub.cls == INFINITE) return inf(F80, ub.sign).f80();
+	return wide_add_core(F80, ua, ub, status).f80();
 }
 
 <* Zig f80 `a + b` (x87). *>
@@ -630,10 +630,10 @@ fn F80Bits f80_mul(F80Bits a, F80Bits b, FloatStatus* status = null)
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F80;
 		}
-		return inf(F80, sign).f80;
+		return inf(F80, sign).f80();
 	}
-	if (ua.cls == ZERO || ub.cls == ZERO) return zero(F80, sign).f80;
-	return wide_mul_core(F80, ua, ub, status).f80;
+	if (ua.cls == ZERO || ub.cls == ZERO) return zero(F80, sign).f80();
+	return wide_mul_core(F80, ua, ub, status).f80();
 }
 
 <* Zig f80 `a / b` (x87). *>
@@ -651,9 +651,9 @@ fn F80Bits f80_div(F80Bits a, F80Bits b, FloatStatus* status = null)
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F80;
 		}
-		return inf(F80, sign).f80;
+		return inf(F80, sign).f80();
 	}
-	if (ub.cls == INFINITE) return zero(F80, sign).f80;
+	if (ub.cls == INFINITE) return zero(F80, sign).f80();
 	if (ua.cls == ZERO)
 	{
 		if (ub.cls == ZERO)
@@ -661,15 +661,15 @@ fn F80Bits f80_div(F80Bits a, F80Bits b, FloatStatus* status = null)
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F80;
 		}
-		return zero(F80, sign).f80;
+		return zero(F80, sign).f80();
 	}
 	if (ub.cls == ZERO)
 	{
 		wide_raise(status, { .div_by_zero = true });
-		return inf(F80, sign).f80;
+		return inf(F80, sign).f80();
 	}
 	WideQuotient q = wide_div_exact(ua, ub);
-	return round_pack(F80, sign, (int)q.exp, q.q, q.sticky, NEAREST_EVEN, status).f80;
+	return round_pack(F80, sign, (int)q.exp, q.q, q.sticky, NEAREST_EVEN, status).f80();
 }
 
 // -----------------------------------------------------------------------------
@@ -677,24 +677,24 @@ fn F80Bits f80_div(F80Bits a, F80Bits b, FloatStatus* status = null)
 // -----------------------------------------------------------------------------
 
 <* compiler-rt: the first NaN operand (a, then b) quieted; INVALID when either is signaling. *>
-fn bool wide_f128_nan_rules(KeyFloat a, KeyFloat b, F128Bits* out, FloatStatus* status) @local
+fn bool wide_f128_nan_rules(InternerKey a, InternerKey b, F128Bits* out, FloatStatus* status) @local
 {
 	bool an = a.is_nan();
 	bool bn = b.is_nan();
 	if (!an && !bn) return false;
-	if ((an && (a.f128.hi & 0x0000_8000_0000_0000) == 0) || (bn && (b.f128.hi & 0x0000_8000_0000_0000) == 0))
+	if ((an && (a.f128().hi & 0x0000_8000_0000_0000) == 0) || (bn && (b.f128().hi & 0x0000_8000_0000_0000) == 0))
 	{
 		wide_raise(status, { .invalid = true });
 	}
-	*out = an ? a.quiet().f128 : b.quiet().f128;
+	*out = an ? a.quiet().f128() : b.quiet().f128();
 	return true;
 }
 
 <* Zig f128 `a + b` (compiler-rt __addtf3). *>
 fn F128Bits f128_add(F128Bits a, F128Bits b, FloatStatus* status = null)
 {
-	KeyFloat ka = f128_value(a);
-	KeyFloat kb = f128_value(b);
+	InternerKey ka = f128_value(a);
+	InternerKey kb = f128_value(b);
 	F128Bits out;
 	if (wide_f128_nan_rules(ka, kb, &out, status)) return out;
 	Unpacked ua = ka.unpack();
@@ -709,7 +709,7 @@ fn F128Bits f128_add(F128Bits a, F128Bits b, FloatStatus* status = null)
 		return a;
 	}
 	if (ub.cls == INFINITE) return b;
-	return wide_add_core(F128, ua, ub, status).f128;
+	return wide_add_core(F128, ua, ub, status).f128();
 }
 
 <* Zig f128 `a - b` (compiler-rt __subtf3 = a + (-b)). *>
@@ -721,8 +721,8 @@ fn F128Bits f128_sub(F128Bits a, F128Bits b, FloatStatus* status = null)
 <* Zig f128 `a * b` (compiler-rt __multf3). *>
 fn F128Bits f128_mul(F128Bits a, F128Bits b, FloatStatus* status = null)
 {
-	KeyFloat ka = f128_value(a);
-	KeyFloat kb = f128_value(b);
+	InternerKey ka = f128_value(a);
+	InternerKey kb = f128_value(b);
 	F128Bits out;
 	if (wide_f128_nan_rules(ka, kb, &out, status)) return out;
 	Unpacked ua = ka.unpack();
@@ -735,17 +735,17 @@ fn F128Bits f128_mul(F128Bits a, F128Bits b, FloatStatus* status = null)
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F128;
 		}
-		return inf(F128, sign).f128;
+		return inf(F128, sign).f128();
 	}
-	if (ua.cls == ZERO || ub.cls == ZERO) return zero(F128, sign).f128;
-	return wide_mul_core(F128, ua, ub, status).f128;
+	if (ua.cls == ZERO || ub.cls == ZERO) return zero(F128, sign).f128();
+	return wide_mul_core(F128, ua, ub, status).f128();
 }
 
 <* Zig f128 `a / b` (compiler-rt __divtf3). *>
 fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 {
-	KeyFloat ka = f128_value(a);
-	KeyFloat kb = f128_value(b);
+	InternerKey ka = f128_value(a);
+	InternerKey kb = f128_value(b);
 	F128Bits out;
 	if (wide_f128_nan_rules(ka, kb, &out, status)) return out;
 	Unpacked ua = ka.unpack();
@@ -758,9 +758,9 @@ fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F128;
 		}
-		return inf(F128, sign).f128;
+		return inf(F128, sign).f128();
 	}
-	if (ub.cls == INFINITE) return zero(F128, sign).f128;
+	if (ub.cls == INFINITE) return zero(F128, sign).f128();
 	if (ua.cls == ZERO)
 	{
 		if (ub.cls == ZERO)
@@ -768,15 +768,15 @@ fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 			wide_raise(status, { .invalid = true });
 			return DEFAULT_NAN_F128;
 		}
-		return zero(F128, sign).f128;
+		return zero(F128, sign).f128();
 	}
 	if (ub.cls == ZERO)
 	{
 		wide_raise(status, { .div_by_zero = true });
-		return inf(F128, sign).f128;
+		return inf(F128, sign).f128();
 	}
 	WideQuotient q = wide_div_exact(ua, ub);
-	KeyFloat correct = round_pack(F128, sign, (int)q.exp, q.q, q.sticky, NEAREST_EVEN, status);
+	InternerKey correct = round_pack(F128, sign, (int)q.exp, q.q, q.sticky, NEAREST_EVEN, status);
 	// Reproduce __divtf3's subnormal path. Its quotient estimate is strictly
 	// below a/b, so an exact power-of-two ratio comes out as (2^113 - 1) one
 	// binade lower with the round bit set; otherwise q113 is the truncated
@@ -797,7 +797,7 @@ fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 		round = ((q.q >> (extra - 1)) & 1) != 0;
 	}
 	long written = ebin + 16383;
-	if (written >= 1) return correct.f128;
+	if (written >= 1) return correct.f128();
 	uint128 sign_bit = sign ? WIDE_F128_SIGN : 0;
 	uint128 round_up = round ? 1 : 0;
 	if (written == 0)
@@ -817,7 +817,7 @@ fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 // -----------------------------------------------------------------------------
 
 <* Exact IEEE fma for finite nonzero x, y, z (status flags of f128_mul_add). *>
-fn KeyFloat wide_fma_exact(Unpacked x, Unpacked y, Unpacked z, FloatStatus* status) @local
+fn InternerKey wide_fma_exact(Unpacked x, Unpacked y, Unpacked z, FloatStatus* status) @local
 {
 	WideU256 p = wide_mul256(x.sig, y.sig);
 	bool ps = x.sign != y.sign;

@@ -17,7 +17,7 @@
 //  - Before reading generated slices (and again after growing generated_buf)
 //    paste_tokens writes a NUL at generated_buf's length (Zig's tokenizer is bounds-checked;
 //    C3's requires the sentinel).
-// Zig quirks kept on purpose (source-derived, see src/tests/macro_paste_tests.c3):
+// Zig quirks kept on purpose (source-derived, see test/unit/preprocessor/macro_paste_tests.c3):
 //  - stringify does not escape '\' inside u8 character literals
 //    (CHAR_LITERAL_UTF_8 is missing from Zig's string/char list).
 //  - When the stringified text ends in '\' but re-tokenizes as a terminated

@@ -275,7 +275,7 @@ fn value::Value? fold_pointer_arithmetic(tree::NodeKind op, value::Value lhs, va
 		if (lhs_pointer == rhs_pointer) return NOT_FOLDABLE~;
 		value_interner::KeyPointer pointer = lhs_pointer ? lhs_key.pointer : rhs_key.pointer;
 		value::Value index = lhs_pointer ? rhs : lhs;
-		if (!index.is(value_interner::InternerKeyTag.INT, comp)) return NOT_FOLDABLE~;
+		if (!index.is_int(comp)) return NOT_FOLDABLE~;
 		value::Value delta = value::NONE;
 		bool multiply_overflow = delta.mul(value::int_u64(elem_size, comp), index, ptrdiff, comp);
 		value::Value offset = value::from_ref(pointer.offset);
@@ -297,7 +297,7 @@ fn value::Value? fold_pointer_arithmetic(tree::NodeKind op, value::Value lhs, va
 			difference.div(difference, value::int_u64(elem_size, comp), ptrdiff, comp);
 			return difference;
 		}
-		if (!rhs.is(value_interner::InternerKeyTag.INT, comp)) return NOT_FOLDABLE~;
+		if (!rhs.is_int(comp)) return NOT_FOLDABLE~;
 		value::Value delta = value::NONE;
 		bool multiply_overflow = delta.mul(value::int_u64(elem_size, comp), rhs, ptrdiff, comp);
 		value::Value offset = value::from_ref(lhs_key.pointer.offset);
@@ -597,7 +597,7 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 			}
 			if (!result.qt.is_int(p.comp) && !result.qt.is_float(p.comp) && !result.qt.is_pointer(p.comp)) return invalid_unary(p, result.qt, op_tok);
 			if (result.qt.is_pointer(p.comp) && !(validate_pointer_arithmetic(p, result.qt, op_tok)!)) return PARSING_FAILED~;
-			if (!eval || !result.val.is(value_interner::InternerKeyTag.INT, p.comp) || !result.qt.is_int(p.comp))
+			if (!eval || !result.val.is_int(p.comp) || !result.qt.is_int(p.comp))
 			{
 				result.val = value::NONE;
 			}

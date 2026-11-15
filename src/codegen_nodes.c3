@@ -976,8 +976,7 @@ fn void CodeGen.write_integer_bytes(&self, char[] data, usz start, usz byte_coun
 	for (usz i = 0; i < little.len; i++) little[i] = 0;
 	if (!val.is_zero(self.comp))
 	{
-		value_interner::BigIntSpace space;
-		bigint::BigIntConst integer = val.to_big_int(&space, self.comp);
+		bigint::BigIntConst integer = val.to_big_int(self.comp);
 		for (usz i = 0; i < byte_count; i++)
 		{
 			usz limb_index = i / 8;
@@ -1012,27 +1011,19 @@ fn void CodeGen.write_integer_bytes(&self, char[] data, usz start, usz byte_coun
 <* Serialize a floating constant's raw target-format bits, including ABI padding. *>
 fn void CodeGen.write_float_bytes(&self, char[] data, usz start, usz byte_count, ulong bit_count, value::Value val)
 {
-	value_interner::KeyFloatTag tag;
+	value_interner::InternerKeyTag tag;
 	switch (bit_count)
 	{
-		case 16: tag = value_interner::KeyFloatTag.F16;
-		case 32: tag = value_interner::KeyFloatTag.F32;
-		case 64: tag = value_interner::KeyFloatTag.F64;
-		case 80: tag = value_interner::KeyFloatTag.F80;
-		case 128: tag = value_interner::KeyFloatTag.F128;
+		case 16: tag = value_interner::InternerKeyTag.F16;
+		case 32: tag = value_interner::InternerKeyTag.F32;
+		case 64: tag = value_interner::InternerKeyTag.F64;
+		case 80: tag = value_interner::InternerKeyTag.F80;
+		case 128: tag = value_interner::InternerKeyTag.F128;
 		default: unreachable("unsupported floating storage width");
 	}
-	value_interner::KeyFloat bits = val.to_float(tag, self.comp);
-	ulong low = 0;
-	ulong high = 0;
-	switch (bits.tag)
-	{
-		case F16: low = bits.f16;
-		case F32: low = bits.f32;
-		case F64: low = bits.f64;
-		case F80: low = bits.f80.lo; high = bits.f80.hi;
-		case F128: low = bits.f128.lo; high = bits.f128.hi;
-	}
+	uint128 bits = val.to_float(tag, self.comp).raw();
+	ulong low = (ulong)bits;
+	ulong high = (ulong)(bits >> 64);
 	usz repr_bytes = (usz)((bit_count + 7) / 8);
 	assert(repr_bytes <= byte_count);
 	usz padding = byte_count - repr_bytes;
@@ -1186,7 +1177,7 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 			return;
 		}
 		if (key.tag == value_interner::InternerKeyTag.NULL ||
-			(key.tag == value_interner::InternerKeyTag.INT && val.is_zero(self.comp)))
+			(key.tag.is_int() && val.is_zero(self.comp)))
 		{
 			self.write_unsigned_bytes(data, 0, data.len, self.comp.target.null_repr());
 			return;
@@ -1245,7 +1236,7 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 	if (scalar == type_store::ScalarKind.BOOL || scalar == type_store::ScalarKind.ENUM ||
 		scalar == type_store::ScalarKind.INT)
 	{
-		if (key.tag == value_interner::InternerKeyTag.INT && key.int_val.tag == value_interner::KeyIntTag.BIG_INT)
+		if (key.tag.is_int() && !key.int_fits_64())
 		{
 			return self.fail("TODO CodeGen.genVar big integer initializer\n");
 		}

@@ -26,6 +26,12 @@ c3_library(
         "src/backend/object.c3",
         "src/backend/elf.c3",
         "src/backend/elf_link.c3",
+        "src/backend/link/link_diag.c3",
+        "src/backend/link/link_fs.c3",
+        "src/backend/link/elf_reader.c3",
+        "src/backend/link/archive.c3",
+        "src/backend/link/ld_script.c3",
+        "src/backend/link/ld_args.c3",
         "src/backend/assembly.c3",
         "src/backend/assembly_x86_64.c3",
         "src/backend/x86_64/bits.c3",
@@ -166,8 +172,8 @@ builtin_defs(
         "src/aro/Builtins/x86.def",
         "src/aro/Builtins/xcore.def",
     ],
-    # //src/tests:builtin_defs_regen_tests diffs these outputs against an in-process emit.
-    visibility = ["//src/tests:__pkg__"],
+    # //test/unit/builtins:builtin_defs_regen_tests diffs these outputs against an in-process emit.
+    visibility = ["//test/unit/builtins:__pkg__"],
 )
 
 exports_files(["src/builtin_properties.c3"])
@@ -215,22 +221,14 @@ c3_binary(
     visibility = ["//visibility:public"],
 )
 
-# Integration fixture corpus (cases, includes, ast/ and expanded/ goldens)
-# as runtime data for //src/tests/migration:* runner targets.
-filegroup(
-    name = "test_cases",
-    srcs = ["//test:test_cases"],
-    visibility = ["//src/tests/migration:__pkg__"],
-)
-
 # Complete record-layout fixture corpus and any future sibling runtime files.
 filegroup(
     name = "record_fixtures_tree",
     srcs = ["//test:record_fixtures"],
-    visibility = ["//src/tests/migration:__pkg__"],
+    visibility = ["//test/src/records:__pkg__"],
 )
 
-# The 19 builtin .def inputs as runtime data (plan 12.1 //src/tests:def_parse_tests).
+# The 19 builtin .def inputs as runtime data (plan 12.1 //test/unit/builtins:def_parse_tests).
 filegroup(
     name = "builtin_def_files",
     srcs = glob(["src/aro/Builtins/*.def"]),

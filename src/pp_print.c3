@@ -1,5 +1,5 @@
 // -E output from src/aro/Preprocessor.zig (prettyPrintTokens and helpers).
-// OWNER: plan 13.6 `probe` (together with src/tests/migration/pp_probe.c3 and the
+// OWNER: plan 13.6 `probe` (together with test/src/probes/pp_probe.c3 and the
 // macro_regression fixture list).
 //
 // Output goes to an OutStream (Zig *std.Io.Writer); write faults propagate.

@@ -1,80 +1,104 @@
 ## Layout
 
-`test/` holds fixtures only (one Bazel package, `//test`). Test code lives in
-`src/tests` (unit tests), `src/tests/migration` (C3 runners, probes, regression
-and native drivers) and `src/tests/fuzz`.
+Modeled on c3c's `test/`: harness code in `test/src/`, integration cases in
+`test/test_suite/`, C3 unit tests in `test/unit/`. Everything is C3; no Python,
+shell or Zig runtime is needed.
 
-| Path | Contents | Used by |
+| Path | Contents | Targets |
 |---|---|---|
-| `cases/` | integration corpus (manifest-driven `.c` cases, goldens) | `test/runner.zig`, `//src/tests/migration:frontend_regression`, … |
-| `records/` | record-layout corpus | `test/record_runner.zig`, `//src/tests/migration:record_regression` |
-| `unit/` | number/float/literal vectors, `profiling_stub.c` | `//src/tests:*_vector_tests`, `literal_tests`, `profiling_*_tests` |
-| `regression/<area>/` | `cases.txt` (+ `fixtures/`) per area | `//src/tests/migration:<area>_regression` |
-| `native/` | native IR backend cases, backend CLI sources | `//src/tests/migration:native_*` |
-| `reference/` | `baseline.json`, reference-gate results and logs | `//src/tests/migration:reference_regression`, `run_reference_gate.py` |
-| `portability/` | runfiles path containing a space | `//src/tests/migration:runfiles_portability_integration` |
-| `fuzz/` | fuzz corpus, `main.c`, `fuzz_lib.zig` | `//src/tests/fuzz:*`, `build.zig` |
-| `zig/` | Zig reference probes (`*_probe.zig`, `bigint_vectors.zig`) | vector regeneration |
-| `runner.zig`, `record_runner.zig` | Zig reference harness | `build.zig` |
+| `src/test_suite/` | c3c-style suite runner | `//test/src/test_suite:test_suite_runner`, `:test_suite_runner_tests` |
+| `src/records/` | record-layout runner | `//test/src/records:record_regression`, `:record_runner_tests` |
+| `src/gcc/` | GCC testsuite harness, `baseline.json` (known non-PASS cases) | `//test/src/gcc:gcc_testsuite_*` |
+| `src/cli/` | driver/CLI, native backend, library-consumer and runfiles tests | `//test/src/cli:*` |
+| `src/probes/` | in-process probes (`pp_probe`, `ir_probe`, `assembly_probe`) and their regressions | `//test/src/probes:*` |
+| `src/manifest/` | Aro `/** manifest: */` runner (used by `assembly_regression`) and shared child-process/path helpers | `//test/src/manifest:runner_lib`, `:runner_tests` |
+| `src/fuzz/` | fuzz replay and AFL shim (`main.c`) | `//test/src/fuzz:replay_test`, `:afl_fuzz` |
+| `src/lib/` | shared harness library (process, fs, JSON, tar, runfiles) | `//test/src/lib:harness_lib` |
+| `test_suite/<area>/` | integration cases (self-contained `.c` / `.ct`, `_support/` include trees) | `//test/test_suite:test_suite_<area>`, `:all` |
+| `unit/<area>/` | C3 unit tests; `data/` holds their vectors and fixtures | `//test/unit/<area>:<name>`, `//test/unit/<area>:all` |
+| `records/` | record-layout corpus | `//test/src/records:record_regression` |
+| `regression/<area>/` | probe data: `assembly/`, `ir/` scenarios, `preprocessor/` fixture tree | `//test/src/probes:*` |
+| `native/` | backend CLI sources | `//test/src/cli:native_backend_cli_integration` |
+| `gcc/` | GCC C testsuite copy (GPL-3.0+, `gcc/SOURCE`) | `//test/src/gcc:gcc_testsuite_*` |
+| `portability/` | runfiles path containing a space | `//test/src/cli:runfiles_portability_integration` |
+| `fuzz/corpus/` | fuzz inputs | `//test/src/fuzz:replay_test` |
 
-Single fixture files are addressable as `//test:<path>`; directories have
-filegroups (`//test:test_cases`, `//test:regression_<area>_fixtures`, …).
+Unit areas are `backend`, `builtins`, `driver`, `lexer`, `parser`,
+`preprocessor`, `tree`, `types` and `values`. Add a unit test as
+`test/unit/<area>/<name>_tests.c3`, one `c3_test` line in that area's
+`BUILD.bazel`, and the target in its `all` suite. Single fixture files are
+addressable as `//test:<path>`; directories have filegroups
+(`//test:record_fixtures`, `//test:regression_<area>_fixtures`, …).
 
-## Integration fixtures
+Code generators that keep checked-in tables in sync live in `//tools`
+(`gen_identifier_tables`, `gen_x86_encodings`, `gen_target_record_vectors`).
 
-The C fixtures under `test/cases` drive the integration runner. A case is a
-`.c` file with a `/** manifest: ... */` comment, preferably near the bottom.
-The runner starts the compiler in the case file's directory and passes the
-case's basename, so includes and golden files resolve from that directory.
+## Integration test suite
 
-### Manifest
+`test/test_suite/<area>/` holds the integration cases, one self-contained file
+per case, in the style of c3c's `test/test_suite`. `//test/src/test_suite:test_suite_runner`
+discovers cases recursively, runs them on worker threads with the production
+`aro_c3`, and prints a progress bar, a box per failure and a summary line.
+Each area is one Bazel target (`//test/test_suite:test_suite_<area>`;
+`//test/test_suite:all` runs every area):
 
-The first manifest line is the test kind. Following lines contain `key = value`
-options; a blank line ends the options and starts the expected diagnostic or
-output data. Diagnostic lines are checked in order as substrings of compiler
-diagnostics. Output goldens are compared byte for byte, without normalization.
+```sh
+bazel test //test/test_suite:test_suite_preprocessor
+bazel build //:aro_c3 //test/src/test_suite:test_suite_runner
+bazel-bin/test/src/test_suite/test_suite_runner bazel-bin/aro_c3 test/test_suite            # whole tree
+bazel-bin/test/src/test_suite/test_suite_runner bazel-bin/aro_c3 "test/test_suite/lexer/latin1.c"
+bazel-bin/test/src/test_suite/test_suite_runner bazel-bin/aro_c3 test/test_suite -s         # only #skip cases
+```
 
-#### Test kinds
+Options: `-s`/`--skipped` (run only skipped cases), `--threads N`,
+`--no-terminal`, `--cc PATH` (needed by `run` cases), `--support DIR`
+(default: the nearest `_support/`), `--failures FILE` (write
+`<path>\t<reason>` per failed case). `ARO_C3_OPT` (default `-O1`) and
+`ARO_C3_FLAGS` apply to `run` cases.
 
-Six kinds are recognized:
+Each case is written to a per-worker directory that also holds a copy of
+`test/test_suite/_support/` (`include/`, `embed/`, `frameworks/`), and the
+compiler runs there with the case's basename, so `-Iinclude` and diagnostics
+such as `name.c:3:5: error: ...` keep their usual form.
 
-- `syntax`: run with `-fsyntax-only --verbose-ast`, check diagnostics, and
-  compare stdout with `test/cases/ast/<case>.c` when that file exists. The AST
-  golden is optional.
-- `syntax_ignore_errors`: use the same compiler flags and optional AST golden,
-  but do not compare diagnostics.
-- `expand_error`: run with `-E -P` and check diagnostics; no expansion golden
-  is required.
-- `expand`: run with `-E -P`, check diagnostics, and compare stdout exactly
-  with `test/cases/expanded/<case>.c`.
-- `expand_partial`: run with `-E -P`, check diagnostics, and require stdout to
-  end with the exact bytes in `test/cases/expanded/<case>.c`. This is a suffix
-  match, not a full-output comparison; the expected file must exist.
-- `compare_output`: recognized by the manifest parser, but not implemented by
-  either runner. It is reported as `unsupported`; the compiler is not run for
-  that case.
+### Case format
 
-#### Options
+A `.c` case is one translation unit. A `.ct` case may also contain extra input
+files and an expected stdout section. Directives are `// #key: value` comments.
 
-- `skip = reason`: record a reason for a check omitted by the fixture. Multiple
-  `skip` lines are allowed.
-- `args = ...`: pass compiler arguments. The current parser splits this value
-  on spaces.
-- `env = KEY=VALUE ...`: set child environment variables. Entries are split
-  on spaces; overrides replace matching inherited variables.
+Header directives sit on their own line and are removed from the written
+file:
 
-Example:
+| Directive | Meaning |
+|---|---|
+| `// #kind: K` | `syntax` (default: `-fsyntax-only --verbose-ast`), `syntax_ignore_errors`, `expand` / `expand_partial` / `expand_error` (`-E -P`), `run` (compile with `-c`, link with `--cc`, run) |
+| `// #opt: ARGS` | compiler arguments, split on spaces; repeatable |
+| `// #env: K=V ...` | child environment overrides |
+| `// #exit: N` | expected exit status (the program's for `run`; required there) |
+| `// #skip: REASON` | known failure; not run unless `-s` is given |
+| `// #todo: NOTE` | informational |
+| `// #error: TEXT` (also `#warning`, `#note`, `#fatal`) | a diagnostic anywhere (another file, the command line, no location); `TEXT` is a substring of `location: message` |
+| `// #file: NAME` | `.ct` only: the following lines are another input file (written, not passed) |
+| `// #expect: stdout` | `.ct` only: the rest of the section is the expected stdout: exact for `syntax` (AST) and `expand`, a suffix for `expand_partial`, the program output for `run` |
+
+Trailing directives follow code on the line they describe and are removed
+from the written line, so the compiled bytes equal the case's code:
 
 ```c
-/** manifest:
-syntax
-args = -Iinclude -Wfoo
-skip = thing is broken
-env = MYENV=1
-
-foo.c: 1:4: error: something went wrong
-*/
+// #kind: expand_error
+// #opt: -std=c23
+#ifdef FOO
+#elifdef // #error@9: macro name missing
+#endif
+int x = y; // #error: use of undeclared identifier 'y' // #note@5: here
 ```
+
+`#error@9` also pins the column. Diagnostics are matched as a set: every
+`file:line:col: kind: message` line on stderr must match a distinct
+expectation (same file, line, kind and column if given; message substring),
+and every expectation must be matched. Unless `#exit` is given, a nonzero
+exit fails a case that expects no error. Comments that only look like
+directives (`// #if ...`, `// #error "x"`) are ordinary code.
 
 ## C3 and Bazel test commands
 
@@ -97,12 +121,12 @@ the C3 test runner and disables ANSI colors in `test.log`:
 
 ```sh
 # Run only tests whose name contains "generic" (--test-filter).
-bazel test //src/tests:parser_expression_tests --test_filter=generic
+bazel test //test/unit/parser:parser_expression_tests --test_filter=generic
 # Pass runner flags through: show output, skip leak checks, log level.
-bazel test //src/tests:parser_expression_tests --test_output=all \
+bazel test //test/unit/parser:parser_expression_tests --test_output=all \
   --test_arg=--test-show-output --test_arg=--test-noleak
 # Run the test binary directly with the same launcher.
-bazel run //src/tests:parser_expression_tests -- --test-filter generic
+bazel run //test/unit/parser:parser_expression_tests -- --test-filter generic
 ```
 
 The public suites are `//test:unit`, `//test:integration`, `//test:records`,
@@ -112,10 +136,10 @@ separate replay target, so it is not the default full-suite command. Replay
 and AFL targets are opt-in:
 
 ```sh
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //src/tests/fuzz:replay_test
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //test/src/fuzz:replay_test
 # AFLplusplus is needed only for this target; AFL_CC names afl-clang-fast.
 env C3C="$C3C" AFL_CC=/path/to/afl-clang-fast "$BAZEL" --output_user_root="$BAZEL_ROOT" test \
-  --action_env=AFL_CC //src/tests/fuzz:afl_fuzz
+  --action_env=AFL_CC //test/src/fuzz:afl_fuzz
 ```
 
 The profiling feature tests are part of `//test:unit`. The enabled variant
@@ -125,99 +149,60 @@ not require an external Tracy client library.
 The runner unit tests are part of `//test:unit`; they can also be run alone:
 
 ```sh
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //src/tests/migration:runner_tests
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt //src/tests/migration:runner_tests
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg //test/src/manifest:runner_tests
+env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt //test/src/manifest:runner_tests
 ```
 
-The manual reference comparison needs a reference compiler executable. An
-optional `ARO_REFERENCE_CASES_DIR` points it at a frozen fixture directory:
+The manifest runner (`//test/src/manifest:runner_lib`, a port of the former
+`test/runner.zig`) reads Aro's `/** manifest: */` case format with `ast/` and
+`expanded/` goldens. Its only current suite is
+`//test/src/probes:assembly_regression`, driven by the case list
+`test/regression/assembly/cases.txt` (`name.c [result=pass|fail|unsupported]
+[exit=N] [signal=N] [fatal]`; `//` starts a comment line).
+
+## GCC testsuite
+
+`test/gcc/` is a copy of the GCC C testsuite files the harness uses (top-level
+`gcc.c-torture/{compile,execute,execute/ieee}` and `gcc.dg`, plus files they
+include). It is GPL-3.0-or-later test input; `test/gcc/SOURCE` records the GCC
+commit.
+
+`//test/src/gcc` (`gcc_testsuite.c3`) treats GCC's expectations as golden:
+torture `compile` cases must compile cleanly, torture `execute`/`ieee` cases must
+build, link and exit 0, and `gcc.dg` cases must report an error/warning on every
+`dg-error`/`dg-warning` line (message text is not compared) and no other errors.
+Panics and signals are CRASH, backend `TODO` errors UNSUPPORTED, and unknown
+effective targets SKIP (with the reason).
 
 ```sh
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test \
-  //src/tests/migration:reference_regression \
-  --test_env=ARO_REFERENCE_EXE=/absolute/path/to/reference/arocc \
-  --test_env=ARO_REFERENCE_CASES_DIR=/path/to/frozen-worktree/test/cases
+bazel test //test/src/gcc:gcc_testsuite          # 4 sharded suites, part of //...
+bazel run //test/src/gcc:gcc_testsuite_update_baseline
+# ad-hoc subset from the repo root (no baseline update outside `bazel run`):
+bazel-bin/test/src/gcc/gcc_testsuite_update_baseline --suite dg --filter 'pr1*' --out /tmp/aro-gcc
+bazel test //test/src/gcc:gcc_testsuite_tests   # directive parser checks
 ```
 
-To run selected fixtures with a compiler executable, write their filenames to
-a case list and run the CLI. The compiler executable is a separate override
-from `C3C`: pass it as `<arocc-exe>` or set `ARO_RUNNER_EXE` when omitting that
-positional argument.
-
-```sh
-cat > /tmp/focused-cases.txt <<'EOF'
-unknown pragmas.c
-EOF
-
-env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" run -c dbg //src/tests/migration:runner -- \
-  --cases /tmp/focused-cases.txt /absolute/path/to/arocc test/cases
-```
-
-Use an absolute compiler path where possible. The runner does not search
-`PATH`; relative compiler paths resolve against the runner's working directory.
-A focused list may contain one or more `.c` basenames, including names with
-spaces. Lines beginning with `//` are comments; `#` is not a comment marker
-because names such as `#pragma pack msvc.c` are valid. For example:
-
-```text
-// stage: preprocessor
-#elifndef.c
-#embed.c result=fail exit=1
-hello world.c result=unsupported
-crashy case.c result=fail signal=11
-missing include.c exit=1 fatal
-```
-
-The filename extends through the first `.c` followed by whitespace or end of
-line. The result, exit, signal, and fatal fields are expectations used by
-`--gate`; omitted fields default to `result=pass exit=0 signal=0` with no fatal
-diagnostic. Without `--gate`, the runner checks each fixture's manifest
-diagnostics and goldens while preserving the legacy runner's behavior of
-accepting any child exit status. Add `--log /tmp/outcomes.tsv` to save per-case
-result, exit, signal, fatal-diagnostic, byte-count, and gate columns after the
-cases run.
-
-For `--gate`, provide `--cases FILE --gate`; the default expected result is
-`result=pass exit=0 signal=0` with no fatal diagnostic. Case-list entries can
-override `result` (`pass`, `fail`, or `unsupported`), `exit`, `signal`, and
-`fatal`. Gate mode checks the complete outcome against that expectation. Use
-`--all` with `--cases` to require a full corpus classification: missing files,
-an empty selection, or unlisted corpus files are configuration errors. A case
-list by itself can intentionally select only a subset.
-
-### Reading integration reports
-
-- `passed` counts cases whose implemented checks completed successfully.
-  `failed` includes fixture mismatches, malformed manifests, spawn errors, and
-  crashes. Child nonzero exits are shown separately and do not alone fail a
-  fixture in non-gate mode.
-- `unsupported (compare_output)` counts cases the runner did not execute. They
-  are not passes, even when the suite prints `RESULT: PASS`.
-- `known skips` counts `skip =` annotations from cases that reached PASS after
-  the implemented checks ran. The annotated check did not run; the annotation
-  is not a passing result for that omitted check.
-- In gate mode, `gate mismatches` compares each whole outcome with its case-list
-  expectation. An expected `unsupported` outcome can match the gate while still
-  remaining unsupported and unexecuted.
-- `RESULT: ERROR` means selection or configuration was invalid. Check
-  `selected`, `executed`, `unsupported`, and `known skips` before treating a
-  `RESULT: PASS` as evidence of coverage; unsupported cases and skipped checks
-  never count as executed passing coverage.
+The targets are gated by `test/src/gcc/baseline.json`: only a new
+non-PASS result (or a status change such as FAIL -> CRASH) fails; flips to or from
+TIMEOUT are reported but not gated. Each test's undeclared outputs hold
+`summary.md` (the worklist: crashes first, then failure groups) and
+`results.jsonl` (one record per case with the command and output).
+`--zig-arocc <binary>` adds an informational differential run against Zig arocc.
 
 ## Record layout fixtures
 
 See [record_readme.md](record_readme.md) for the fixture format, target/define
 reproduction, and record report interpretation.
 
-`//src/tests/migration:record_regression` runs the C3 record runner against
+`//test/src/records:record_regression` runs the C3 record runner against
 `test/records`. The runner parses every `// MAPPING|...` comment and executes
 each supported target/define tuple. Run the focused record targets with:
 
 ```sh
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c dbg \
-  //src/tests/migration:record_runner_tests //src/tests/migration:record_regression
+  //test/src/records:record_runner_tests //test/src/records:record_regression
 env C3C="$C3C" "$BAZEL" --output_user_root="$BAZEL_ROOT" test -c opt \
-  //src/tests/migration:record_runner_tests //src/tests/migration:record_regression
+  //test/src/records:record_runner_tests //test/src/records:record_regression
 ```
 
 The record port currently runs the full mapping inventory; it has no CLI option
@@ -271,61 +256,3 @@ The frozen record regression currently selects 9,353 tuples: 9,009 execute,
 9,007 pass, 2 match expected failures and are counted as skipped, and 344 are
 invalid targets. A zero failure count does not turn expected-failure or
 invalid-target tuples into passing coverage.
-
-## Legacy/reference Zig workflows
-
-The Zig runner and build commands below are retained only as legacy/reference
-workflows. Use the C3 and Bazel commands above for the current suite.
-
-The pinned Zig reference gate can be reproduced with:
-
-```sh
-# Legacy/reference Zig gate; not the current C3/Bazel suite.
-python3 src/tests/migration/run_reference_gate.py \
-  --source-tree /path/to/frozen-worktree \
-  --zig /path/to/zig-0.18.0-dev.828+9da287565
-```
-
-This helper runs the historical `build`, `test-unit`, `test-integration`,
-`test-record`, and `test-fmt` Zig commands and writes its results to
-`test/reference/reference-results.json`. The C3 Bazel target
-`//src/tests/migration:reference_regression` is a separate, manual target requiring
-`ARO_REFERENCE_EXE`; it is not a Zig invocation.
-
-### Legacy/reference Zig fuzzing with AFLplusplus
-
-Fuzz testing requires [AFLplusplus](https://github.com/AFLplusplus/AFLplusplus).
-The existing Zig fuzz target can be built and run as follows:
-
-```sh-session
-# Legacy/reference Zig commands.
-zig build fuzz
-afl-fuzz -i test/cases -o test/fuzz-output -- ./zig-out/bin/arofuzz
-```
-
-A Dockerfile is provided to make it easier to get started with fuzzing. It
-requires build args `ZIG_VERSION` and `ZIG_PUBKEY`. `ZIG_VERSION` is the Zig
-release filename without `.tar.xz`; `ZIG_PUBKEY` is the minisign public key
-from the Zig download page. `USER_ID` and `GROUP_ID` can match file ownership
-with the host. Please read
-[AFLplusplus' common-sense risks](https://github.com/AFLplusplus/AFLplusplus/blob/stable/docs/fuzzing_in_depth.md#0-common-sense-risks)
-before running the fuzzer.
-
-The legacy/reference Docker workflow is:
-
-```sh-session
-docker build -t aro-fuzz \
-    --build-arg ZIG_VERSION=zig-linux-x86_64-0.12.0-dev.1595+70d8baaec \
-    --build-arg ZIG_PUBKEY=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U \
-    --build-arg USER_ID=$(id -u ${USER}) \
-    --build-arg GROUP_ID=$(id -g ${USER}) \
-    test/docker/fuzz
-docker run --rm -it -v $PWD:/arocc -w /arocc --mount type=tmpfs,destination=/ramdisk -e AFL_TMPDIR=/ramdisk aro-fuzz
-```
-
-The old Zig fuzz-test command is also retained for reference:
-
-```sh-session
-# Legacy/reference Zig command.
-zig build test-unit --fuzz
-```

@@ -655,11 +655,15 @@ fn bool? find_biarch_multilibs(Env* env, Detected* result, String[2] path, bool 
 	bool is_x32 = target.abi == GNUX32 || target.abi == MUSLX32;
 	ushort target_ptr_width = target.ptr_bit_width();
 	Want want;
+	// A sibling multilib directory means the default dir holds the other width.
 	if ((target_ptr_width == 32 && multilib_filter.exists(&alt_32, env)) ||
-	(target_ptr_width == 64 && is_x32 && multilib_filter.exists(&alt_x32, env)) ||
-	(target_ptr_width == 64 && !is_x32 && multilib_filter.exists(&alt_64, env)))
+	(target_ptr_width == 64 && is_x32 && multilib_filter.exists(&alt_x32, env)))
 	{
 		want = WANT64;
+	}
+	else if (target_ptr_width == 64 && !is_x32 && multilib_filter.exists(&alt_64, env))
+	{
+		want = WANT32;
 	}
 	else if (target_ptr_width == 32)
 	{

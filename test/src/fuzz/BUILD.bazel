@@ -1,0 +1,42 @@
+load("//tools:c3.bzl", "c3_binary", "c3_test")
+
+exports_files(["fuzz_lib.c3"])
+
+c3_test(
+    name = "replay_test",
+    srcs = ["fuzz_lib.c3", "replay.c3"],
+    copts = ["-U", "VMEM_TEMP"],
+    data = [
+        "//test:fuzz/corpus/deep_declaration.c",
+        "//test:fuzz/corpus/embedded_nul.bin",
+        "//test:fuzz/corpus/malformed.c",
+        "//test:fuzz/corpus/recursive_macro.c",
+        "//test:fuzz/corpus/valid.c",
+        # compile_one locates include/stddef.h relative to the cwd (runfiles root).
+        "//:aro_builtin_headers",
+    ],
+    deps = ["//:aro_c3_lib"],
+)
+
+# This compiler shim is only used by //test/src/fuzz:afl_fuzz. Set AFL_CC to the
+# installed afl-clang-fast path and pass --action_env=AFL_CC to Bazel.
+c3_binary(
+    name = "afl_cc",
+    srcs = ["afl_cc.c3"],
+    deps = ["//test/src/lib:harness_lib"],
+    visibility = ["//visibility:private"],
+)
+
+c3_binary(
+    name = "afl_fuzz",
+    # Needs AFL++ (afl-clang-fast); excluded from //... and built explicitly.
+    tags = ["manual"],
+    srcs = ["fuzz_lib.c3"],
+    deps = ["//:aro_c3_lib"],
+    copts = ["-U", "VMEM_TEMP"],
+    native_srcs = ["main.c"],
+    native_cc = ":afl_cc",
+    native_copts = ["-O2", "-g"],
+    no_entry = True,
+    visibility = ["//visibility:public"],
+)

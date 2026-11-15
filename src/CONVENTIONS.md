@@ -35,7 +35,7 @@ Shared rules for every module under `src/`. Established by plan 04 (source, stri
 - Zig functions returning `?[]const u8` return `String?` with a module fault (`tokenizer::NO_LEXEME`), or `""` when the empty string can never be a real value (documented on the function).
 - Zig labeled `switch` with `continue :loop .state` maps to `switch LOOP: (State.START)` with `nextcase LOOP: State.X;`.
 - Zig `enum(u8)` with explicit tag values: use an associated value, `enum E : char (char value) { A { 1 }, ... }`, and read `e.value`.
-- Generated table data is produced by a checked-in script under `tools/` that reads the Zig source (`tools/gen_identifier_tables.py`, with `--check`), never hand-copied.
+- Generated table data is produced by a checked-in script under `tools/` that reads the Zig source (`bazel run //test/tools/gen_identifier_tables -- --check`), never hand-copied.
 
 ## Errors
 - Zig error sets map to C3 faults declared with `excuse` in the module that raises them, named in SCREAMING_CASE (`error.FileTooBig` becomes `compilation::FILE_TOO_BIG`). Fallible functions return `T?` and callers propagate with `!`.
@@ -78,7 +78,7 @@ The following issues were observed against the earlier c3c 0.8.5 compiler. Reche
 - `void?` is not allowed as a variable type. Capture the fault with `fault f = @catch(call());`.
 - An enum's value count is `Enum::len` and its values `Enum::values`; `Enum.len` does not compile.
 - Functions and globals from other modules need their module prefix (`diagnostics::warning_exists`, `diagnostics::@message`). Types and enum values do not.
-- `int`, `float` (and other type names) cannot be struct/union member names; Zig `Key.int`/`.float`/`.complex` became `int_val`/`float_val`/`complex_val`.
+- `int`, `float` (and other type names) cannot be struct/union member names. Interner keys sidestep this: numeric keys are flat (`InternerKeyTag.INT_POSITIVE`/`INT_NEGATIVE`, `F16`..`F128`, `CF16`..`CF128`) with the payload in `InternerKey.limbs`; constructors (`int_key`, `float_key`, `complex_key`) put limbs in `tmem`.
 - A `<* @return? A, B *>` contract is enforced: a stub returning `aro::UNSUPPORTED~` from such a function does not compile. Stage-0 stubs of functions with declared faults, or with no fault at all (Zig `!T` where the only error is OOM), use `unreachable("stage 0 stub")`.
 - Two modules may not both export a type with the same name if a third imports both (`type_store::Order` exists, so bigint's `std.math.Order` is `BigIntOrder`).
 - `DString.str_view().ptr` is not the start of the allocation, so freeing it leaks or crashes. Return `copy_str(a)` and `free()` the DString.
@@ -94,13 +94,12 @@ The following issues were observed against the earlier c3c 0.8.5 compiler. Reche
 - `@clz` / `@ctz` need compile-time constants; at run time use the methods `x.clz()` / `x.ctz()` (they work on `uint128`).
 - A type name needs a lowercase letter: `struct A` is parsed as a constant (`Abc` works).
 - `float128` literals are folded at double precision (`(float128)0.1` is the widened double); build f128 constants from bits.
-- Modules may import each other cyclically, and a module may add methods to another module's type (`fn KeyFloat.add(...)` in `aro::float_value`); callers must import the defining module.
+- Modules may import each other cyclically, and a module may add methods to another module's type (`fn InternerKey.add(...)` in `aro::float_value`); callers must import the defining module.
 - A doc-comment (`<* ... *>`) line that starts with `@name(` is parsed as a custom contract ("Expected a string description"); start such lines with a word (`Zig @round(...)`).
 - `uint128 * (ulong_a - 1)` is rejected ("widening ... done in more than one way"); cast the subtraction: `(uint128)(a - 1)`.
 - A compound `float16` expression (`a * c + b * d`) is evaluated in `float` and rounded to half only at the end; Zig rounds after every operation. Round each step (assign or return through a `float16` function).
 - Small-int arithmetic is promoted to `int`: `(ushort_val << 1) >> 11` keeps the shifted-out bit. Cast back (`(ushort)(x << 1)`) where Zig's fixed-width wrap matters.
-- Observed (not minimised): `KeyComplex r = cond ? annex_g::complex_float_mul(..) : annex_g::complex_float_div(..);` lost `r.cf64[1]` at -O0; an `if`/`else` assignment works.
-- `cond ? x : y` on a struct holding an anonymous union (`KeyFloat`) is miscompiled at -O0: the result's upper union bytes are garbage (f128 `hi`). Use `if` + separate `return`/assignment; a ternary on the union member type itself (`F128Bits`) works.
+- c3c (0.8.5–0.8.7) lowers a union to its first largest member's LLVM type, and `cond ? x : y` on an aggregate is a by-value load/phi/store. At -O0 that copies field by field and drops the representative member's padding bytes, so with the old `F80Bits {ulong, ushort}` as `KeyFloat`'s/`KeyComplex`'s union rep the upper `f128`/`cf128` bytes came back as garbage (c3c repro: `test/unit/regression/ternary.c3`, `ternary_union_with_padded_rep`). `F80Bits`/`F128Bits`/`FloatBits` are now padding-free `uint128` bitstructs, which avoids it; the existing `if`/`else` rewrites are kept. Don't put a padded struct in a union that is copied by value.
 - A conditional `c ? 1 : 0` is an `int` and does not convert implicitly to `uint128` in arithmetic (`x + (c ? 1 : 0)`); assign it to a `uint128` local first.
 - A module name may be at most 31 characters (`module text_literal_semantics_manual_tests;` is rejected); shorten test module names.
 - An enum value's name: `e.nameof` does not compile; format it with `string::tformat("%s", e)` (or `io::printf`).

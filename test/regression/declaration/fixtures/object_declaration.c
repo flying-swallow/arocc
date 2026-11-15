@@ -1,4 +1,0 @@
-/** manifest:
-syntax
-*/
-int value;

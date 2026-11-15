@@ -320,18 +320,8 @@ fn String int_value_text(parser::Parser* p, parser_result::Result arg)
 	DString text;
 	text.init(tmem);
 	value_interner::InternerKey key = p.comp.interner.get(arg.val.ref());
-	if (key.tag != value_interner::InternerKeyTag.INT) return "";
-	switch (key.int_val.tag)
-	{
-		case U64: text.appendf("%d", key.int_val.u64);
-		case I64: text.appendf("%d", key.int_val.i64);
-		case BIG_INT:
-		{
-			String value_text = key.int_val.big_int.to_string_alloc(p.comp.gpa, 10, false);
-			defer alloc::free(p.comp.gpa, value_text.ptr);
-			text.append_string(value_text);
-		}
-	}
+	if (!key.tag.is_int()) return "";
+	text.appendf("%s", key);
 	return text.str_view();
 }
 
@@ -340,10 +330,10 @@ fn String arg_actual_kind(parser::Parser* p, parser_result::Result arg)
 {
 	if (arg.val.is_none()) return "an expression";
 	value_interner::InternerKeyTag tag = p.comp.interner.get(arg.val.ref()).tag;
-	if (tag == value_interner::InternerKeyTag.INT) return "an integer constant";
+	if (tag.is_int()) return "an integer constant";
 	if (tag == value_interner::InternerKeyTag.BYTES) return "a string";
-	if (tag == value_interner::InternerKeyTag.FLOAT) return "a floating point number";
-	if (tag == value_interner::InternerKeyTag.COMPLEX) return "a complex floating point number";
+	if (tag.is_float()) return "a floating point number";
+	if (tag.is_complex()) return "a complex floating point number";
 	if (tag == value_interner::InternerKeyTag.NULL) return "nullptr";
 	return "an expression";
 }
@@ -364,7 +354,7 @@ fn bool? Wip.arg_u32(&self, parser::Parser* p, Parsed attr, usz index, uint* out
 			*out = v;
 			return true;
 		}
-		if (p.comp.interner.get(arg.val.ref()).tag == value_interner::InternerKeyTag.INT)
+		if (arg.val.is_int(p.comp))
 		{
 			self.emit_at(p, attr, argument_token(p, attr, arg), attribute_diagnostics::AttrDiag.ARG_INT_OUT_OF_RANGE, int_value_text(p, arg))!;
 			return false;

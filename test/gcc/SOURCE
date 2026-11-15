@@ -1,0 +1,4 @@
+Copied from the GCC testsuite (gcc/testsuite) (vendoring tool since removed; see git history).
+GCC commit: fceddda853fa2543b6d3ddbbe75f7e2468521a91 2026-11-14
+These files are part of GCC and licensed under GPL-3.0-or-later (see COPYING3);
+they are test inputs only and are not linked into aro.

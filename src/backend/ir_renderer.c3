@@ -232,8 +232,8 @@ fn void? Ir.write_type(&self, value_interner::InternerRef ty_ref, Terminal term)
 		case NORETURN_TY: io::write_all(term.writer, "noreturn_ty")!;
 		case VOID_TY: io::write_all(term.writer, "void_ty")!;
 		case FUNC_TY: io::write_all(term.writer, "func_ty")!;
-		case INT_TY: io::fprintf(term.writer, "i%d", ty.bits)!;
-		case FLOAT_TY: io::fprintf(term.writer, "f%d", ty.bits)!;
+		case INT_TY: io::fprintf(term.writer, "i%d", ty.ty_bits)!;
+		case FLOAT_TY: io::fprintf(term.writer, "f%d", ty.ty_bits)!;
 		case ARRAY_TY: io::fprintf(term.writer, "[%d * ", ty.array_ty.len)!; self.write_type(ty.array_ty.child, plain_term(term))!; term.writer.write_byte(']')!;
 		case VECTOR_TY: io::fprintf(term.writer, "<%d * ", ty.vector_ty.len)!; self.write_type(ty.vector_ty.child, plain_term(term))!; term.writer.write_byte('>')!;
 		case RECORD_TY:
@@ -250,18 +250,15 @@ fn void? Ir.write_value(&self, value_interner::InternerRef val, Terminal term)
 	switch (key.tag)
 	{
 		case NULL: io::write_all(term.writer, "nullptr_t")!;
-		case INT:
-			switch (key.int_val.tag)
-			{
-				case U64: io::fprintf(term.writer, "%d", key.int_val.u64)!;
-				case I64: io::fprintf(term.writer, "%d", key.int_val.i64)!;
-				case BIG_INT:
-					String number = key.int_val.big_int.to_string_alloc(self.allocator, 10, false);
-					defer alloc::free(self.allocator, number.ptr); io::write_all(term.writer, number)!;
-			}
-		case FLOAT:
+		case INT_POSITIVE:
+		case INT_NEGATIVE: io::fprintf(term.writer, "%s", key)!;
+		case F16:
+		case F32:
+		case F64:
+		case F80:
+		case F128:
 			DString number; number.init(self.allocator); defer number.free();
-			float_value::print_float(key.float_val, &number); io::write_all(term.writer, number.str_view())!;
+			float_value::print_float(key, &number); io::write_all(term.writer, number.str_view())!;
 		case BYTES: self.write_escaped_bytes(key.bytes, term)!;
 		default: unreachable();
 	}

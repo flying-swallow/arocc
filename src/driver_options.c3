@@ -20,6 +20,9 @@ struct DriverOptions
 	ParseAction action;
 	List{String} inputs;
 	List{String} link_objects;
+	List{String} lib_dirs;
+	List{usz} input_link_slots;
+	List{String} owned_link_args;
 	List{String} defines;
 	List{String} undefs;
 	<* Macro operations in command-line order, for the preprocessor setup stage. *>
@@ -155,6 +158,9 @@ fn void DriverOptions.init(&self, Allocator a)
 	*self = { .a = a, .action = CONTINUE, .pic = DEFAULT, .line_commands = true };
 	self.inputs.init(a);
 	self.link_objects.init(a);
+	self.lib_dirs.init(a);
+	self.input_link_slots.init(a);
+	self.owned_link_args.init(a);
 	self.defines.init(a);
 	self.undefs.init(a);
 	self.macro_effects.init(a);
@@ -165,7 +171,9 @@ fn void DriverOptions.init(&self, Allocator a)
 
 fn void DriverOptions.free(&self)
 {
-	self.inputs.free(); self.link_objects.free(); self.defines.free();
+	foreach (arg : self.owned_link_args) alloc::free(self.a, arg.ptr);
+	self.inputs.free(); self.link_objects.free(); self.lib_dirs.free();
+	self.input_link_slots.free(); self.owned_link_args.free(); self.defines.free();
 	self.undefs.free(); self.includes.free(); self.embed_dirs.free(); self.macro_effects.free();
 	self.warning_policies.free();
 	*self = {};

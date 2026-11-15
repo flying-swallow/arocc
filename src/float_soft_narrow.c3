@@ -35,7 +35,7 @@ import aro::value_interner;
 // constant-folds with another sign, never reaches the result, and the order of
 // two NaN operands does not depend on how the backend commutes add/mul.
 //
-// Observed (Zig 0.17.0 x86_64-linux probe, see src/tests/float_narrow_tests.c3):
+// Observed (Zig 0.17.0 x86_64-linux probe, see test/unit/values/float_narrow_tests.c3):
 // the LLVM backend (-O ReleaseSafe -mcpu baseline) gives exactly these results
 // in every case probed. With -mcpu native, LLVM may commute the operands of
 // a + b and a * b, so with two NaN operands the rhs NaN can win. The self-hosted
@@ -229,7 +229,7 @@ fn int narrow_ctz(uint128 x, FloatFormat fmt) @inline
  magnitude with inf's bits, so a pseudo-infinity (integer bit clear) gives
  int::max, and an unnormal gives e - bias.
 *>
-fn int KeyFloat.ilogb(self)
+fn int InternerKey.ilogb(self)
 {
 	FloatFormat fmt = format_of(self.tag);
 	int significand_bits = narrow_mantissa_bits(fmt);
@@ -267,7 +267,7 @@ fn int KeyFloat.ilogb(self)
  (int::min included) overflows, and Zig's results are reproduced wherever Zig
  itself does not trap.
 *>
-fn KeyFloat KeyFloat.scalbn(self, int n_in)
+fn InternerKey InternerKey.scalbn(self, int n_in)
 {
 	if (!self.is_finite()) return self;
 	FloatFormat fmt = format_of(self.tag);
@@ -333,7 +333,7 @@ fn KeyFloat KeyFloat.scalbn(self, int n_in)
  pseudo-denormal (exponent 0, integer bit set) has the value of biased
  exponent 1, so it is moved there.
 *>
-fn uint128 narrow_magnitude_key(KeyFloat f) @inline
+fn uint128 narrow_magnitude_key(InternerKey f) @inline
 {
 	uint128 m = f.raw() & ~sign_mask(f.tag);
 	if (f.tag == F80 && (m >> 64) == 0 && (m >> 63) != 0) m += (uint128)1 << 64;
@@ -341,7 +341,7 @@ fn uint128 narrow_magnitude_key(KeyFloat f) @inline
 }
 
 <* `a < b` for two non-NaN values of one width (+0 == -0). *>
-fn bool narrow_less_than(KeyFloat a, KeyFloat b)
+fn bool narrow_less_than(InternerKey a, InternerKey b)
 {
 	if (a.is_zero() && b.is_zero()) return false;
 	bool sa = a.signbit();
@@ -360,9 +360,9 @@ fn bool narrow_less_than(KeyFloat a, KeyFloat b)
  Otherwise the larger value (equal values: the lhs).
  @require self.tag == other.tag : "operands must have the same width"
 *>
-fn KeyFloat KeyFloat.max(self, KeyFloat other)
+fn InternerKey InternerKey.max(self, InternerKey other)
 {
-	// No `?:` on KeyFloat values: c3c 0.8.5 miscompiles it (see CONVENTIONS.md).
+	// No `?:` on InternerKey values: see CONVENTIONS.md (c3c by-value aggregate ternary).
 	if (self.is_nan()) return other; // with two NaNs: the rhs, unchanged (observed)
 	if (other.is_nan()) return self;
 	if (self.is_zero() && other.is_zero())

@@ -44,7 +44,7 @@
 //       tokens into Compilation.generated_buf).
 //   pp_print.c3 (13.6 `probe`)
 //       prettyPrintTokens (-E output), macro dumps, line markers, C string
-//       escaping. src/tests/migration/pp_probe.c3 drives everything in memory.
+//       escaping. test/src/probes/pp_probe.c3 drives everything in memory.
 //
 // Data flow for one file: preprocess -> preprocess_extra reads raw tokens from
 // a Tokenizer. Directives are handled in place; other tokens go to

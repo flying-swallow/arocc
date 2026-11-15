@@ -14,14 +14,12 @@ excuse FATAL_ERROR;
 <*
  Zig `Compilation.Diagnostic`. `fmt` is C3 printf syntax.
 *>
-enum CompDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
+enum CompDiag : ushort(String fmt, MessageKind kind, DiagMeta meta)
 {
 	BACKSLASH_NEWLINE_ESCAPE { "backslash and newline separated by space", WARNING, { .has_opt = true, .opt = Option.BACKSLASH_NEWLINE_ESCAPE } },
 	MS_SEARCH_RULE { "#include resolved using non-portable Microsoft search rules as: %s", WARNING, { .has_opt = true, .opt = Option.MICROSOFT_INCLUDE, .extension = true } },
 	CTRL_Z_EOF { "treating Ctrl-Z as end-of-file is a Microsoft extension", OFF, { .has_opt = true, .opt = Option.MICROSOFT_END_OF_FILE, .extension = true } },
 }
-
-
 
 struct Compilation
 {
@@ -77,14 +75,22 @@ struct Compilation
 	CodeModel cmodel;
 }
 
-enum IncludeKind : char { QUOTE, NORMAL, FRAMEWORK, SYSTEM, SYSTEM_FRAMEWORK, AFTER }
+enum IncludeKind : char
+{
+	QUOTE, NORMAL, FRAMEWORK, SYSTEM, SYSTEM_FRAMEWORK, AFTER
+}
 
-struct IncludeDir { IncludeKind kind; String path; }
+struct IncludeDir
+{
+	IncludeKind kind; String path;
+}
+
 alias IncludeExistsFn = fn bool(void* ctx, String path);
 <* Returns an owned byte slice allocated from `a`, truncated to `limit` when finite. *>
-alias IncludeReadFn = fn char[]? (void* ctx, Allocator a, String path, ulong limit);
-alias IncludeMTimeFn = fn ulong? (void* ctx, String path);
-struct IncludeFileServices {
+alias IncludeReadFn = fn char[]?(void* ctx, Allocator a, String path, ulong limit);
+alias IncludeMTimeFn = fn ulong?(void* ctx, String path);
+struct IncludeFileServices
+{
 	void* ctx;
 	IncludeExistsFn exists;
 	IncludeReadFn read;
@@ -127,7 +133,7 @@ const ulong MAX_SOURCE_EPOCH_TIMESTAMP = 253402300799;
  i64 truncated toward zero). A fault is treated like Zig's failed u64 cast
  (InvalidEpoch).
 *>
-alias ClockNowFn = fn long? (void* ctx);
+alias ClockNowFn = fn long?(void* ctx);
 
 <* Clock source; `ctx` is passed to `now`. *>
 struct WallClock
@@ -145,7 +151,10 @@ const WallClock SYSTEM_CLOCK = { null, &system_clock_now };
 fn long? fixed_clock_now(void* ctx) => *(long*)ctx;
 
 <* A clock that always reads `*seconds` (borrowed; must outlive the compilation's use of it). *>
-fn WallClock fixed_clock(long* seconds) => { seconds, &fixed_clock_now };
+fn WallClock fixed_clock(long* seconds) =>
+{
+	seconds, &fixed_clock_now
+};
 
 <* Read `clock` (Zig `Io.Clock.real.now(io).toSeconds()`). *>
 fn long? Compilation.now_seconds(&self) => self.clock.now(self.clock.ctx);
@@ -210,7 +219,7 @@ fn void Compilation.free(&self)
 		self.diagnostics.free();
 		alloc::free(gpa, self.diagnostics);
 	}
-	*self = {};
+	* self = {};
 }
 
 fn StringId Compilation.intern_string(&self, String str) => self.string_interner.intern(str);
@@ -219,6 +228,20 @@ fn String StringId.lookup(self, Compilation* comp) => self.lookup_extra(&comp.st
 
 <* Warnings sent to the diagnostics output (Zig tests read `diagnostics.warnings`). *>
 fn uint Compilation.warning_count(&self) => self.diagnostics.warnings;
+
+<* Zig `fixedEnumTagType`: MSVC (and Clang on an MSVC target) always give enums an `int` tag. *>
+fn bool Compilation.fixed_enum_tag_is_int(&self)
+{
+	switch (self.langopts.emulate)
+	{
+		case MSVC: return true;
+		case NO:
+		case CLANG:
+			return (self.target.os.tag == target::OsTag.WINDOWS || self.target.os.tag == target::OsTag.UEFI) &&
+			self.target.abi == target::Abi.MSVC;
+		case GCC: return false;
+	}
+}
 
 <*
  Return the source for `id`. The returned value's slices stay valid until
@@ -313,52 +336,52 @@ fn Source? Compilation.add_source_from_owned_buffer(&self, String path, char[] b
 			case '\r':
 				switch (state)
 				{
-					case START:
-					case CR:
-					case BEGINNING_OF_FILE:
-						line++;
-						state = CR;
-						contents[i] = '\n';
-						i++;
-					case BACK_SLASH:
-					case TRAILING_WS:
-					case BACK_SLASH_CR:
-						i = backslash_loc;
-						splice_list.push(i);
-						if (state == TRAILING_WS)
-						{
-							self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind)!;
-						}
-						state = state == BACK_SLASH_CR ? CR : BACK_SLASH_CR;
-						line++;
-					case BOM1:
-					case BOM2:
-						break SCAN; // invalid utf-8
-				}
+				case START:
+				case CR:
+				case BEGINNING_OF_FILE:
+					line++;
+					state = CR;
+					contents[i] = '\n';
+					i++;
+				case BACK_SLASH:
+				case TRAILING_WS:
+				case BACK_SLASH_CR:
+					i = backslash_loc;
+					splice_list.push(i);
+					if (state == TRAILING_WS)
+					{
+						self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind)!;
+					}
+					state = state == BACK_SLASH_CR ? CR : BACK_SLASH_CR;
+					line++;
+				case BOM1:
+				case BOM2:
+					break SCAN;  // invalid utf-8
+			}
 			case '\n':
 				switch (state)
 				{
-					case START:
-					case BEGINNING_OF_FILE:
-						line++;
-						i++;
-					case CR:
-					case BACK_SLASH_CR:
-						break;
-					case BACK_SLASH:
-					case TRAILING_WS:
-						i = backslash_loc;
-						splice_list.push(i);
-						if (state == TRAILING_WS)
-						{
-							self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind)!;
-						}
-						line++;
-					case BOM1:
-					case BOM2:
-						break SCAN;
-				}
-				state = START;
+				case START:
+				case BEGINNING_OF_FILE:
+					line++;
+					i++;
+				case CR:
+				case BACK_SLASH_CR:
+					break;
+				case BACK_SLASH:
+				case TRAILING_WS:
+					i = backslash_loc;
+					splice_list.push(i);
+					if (state == TRAILING_WS)
+					{
+						self.add_newline_escape_error(duped_path, contents, splice_list.array_view(), i, line, kind)!;
+					}
+					line++;
+				case BOM1:
+				case BOM2:
+					break SCAN;
+			}
+			state = START;
 			case '\\':
 				backslash_loc = i;
 				state = BACK_SLASH;
@@ -369,20 +392,20 @@ fn Source? Compilation.add_source_from_owned_buffer(&self, String path, char[] b
 			case ' ':
 				switch (state)
 				{
-					case START:
-					case TRAILING_WS:
-						break;
-					case BEGINNING_OF_FILE:
-					case CR:
-					case BACK_SLASH_CR:
-						state = START;
-					case BACK_SLASH:
-						state = TRAILING_WS;
-					case BOM1:
-					case BOM2:
-						break SCAN;
-				}
-				i++;
+				case START:
+				case TRAILING_WS:
+					break;
+				case BEGINNING_OF_FILE:
+				case CR:
+				case BACK_SLASH_CR:
+					state = START;
+				case BACK_SLASH:
+					state = TRAILING_WS;
+				case BOM1:
+				case BOM2:
+					break SCAN;
+			}
+			i++;
 			case 0xEF:
 				i++;
 				state = state == BEGINNING_OF_FILE ? BOM1 : START;
@@ -392,7 +415,7 @@ fn Source? Compilation.add_source_from_owned_buffer(&self, String path, char[] b
 			case 0xBF:
 				if (state == BOM2)
 				{
-					i = 0; // rewind and overwrite the BOM
+					i = 0;  // rewind and overwrite the BOM
 				}
 				else
 				{
@@ -443,7 +466,11 @@ fn void? Compilation.add_newline_escape_error(&self, String path, char[] buf, ui
 		.kind = kind,
 		.splice_locs = splice_locs,
 	};
-	ExpandedLocation loc = tmp_source.line_col({ .id = source::UNUSED_ID, .byte_offset = byte_offset, .line = line });
+	ExpandedLocation loc = tmp_source.line_col(
+	{
+		.id = source::UNUSED_ID, .byte_offset = byte_offset, .line = line
+	}
+	);
 	if (loc.line.len) loc.line = loc.line[:loc.line.len - 1];
 	loc.width += 1;
 	loc.col += 1;
@@ -489,7 +516,7 @@ fn SourceId Compilation.add_source_alias(&self, SourceId id, String new_path, So
 excuse NO_FLOAT80;
 
 <* Zig `Compilation.CharUnitSize`: the byte width of one string-literal code unit. *>
-enum CharUnitSize : char (uint size)
+enum CharUnitSize : char(uint size)
 {
 	ONE { 1 },
 	TWO { 2 },

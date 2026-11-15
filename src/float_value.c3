@@ -7,19 +7,19 @@
 // How the six parts fit together (plan 10 parallel breakdown)
 // =============================================================================
 //
-// Every float constant is stored as raw bits in the interner's `KeyFloat` (tag +
-// bit pattern, value_interner.c3) and every complex constant as `KeyComplex`
+// Every float constant is stored as raw bits in the interner's `InternerKey` (tag +
+// bit pattern, value_interner.c3) and every complex constant as `InternerKey`
 // (two components of one width). Nothing in this port holds a float constant in
-// a host `double`/`long double`: `KeyFloat` *is* the float type. All five files
+// a host `double`/`long double`: `InternerKey` *is* the float type. All five files
 // below are one module, `aro::float_value`, except annex_g.c3 (`aro::annex_g`,
 // like src/aro/annex_g.zig):
 //
 //   float_value.c3       (stage 0 + 10.3 `conversions`)
 //       Shared types (FloatFormat, FloatClass, RoundingMode, FloatStatus), bit
 //       access and classification (implemented in stage 0, see below), the
-//       width-generic `KeyFloat.add/sub/mul/div` dispatch (implemented in stage
+//       width-generic `InternerKey.add/sub/mul/div` dispatch (implemented in stage
 //       0, it forwards to the narrow/wide files), and the CONVERSIONS section:
-//       KeyFloat.cast (@floatCast), int -> float (@floatFromInt, bigIntToFloat),
+//       InternerKey.cast (@floatCast), int -> float (@floatFromInt, bigIntToFloat),
 //       float -> big int (setFloat .trunc), parse_f128 (std.fmt.parseFloat) and
 //       the Value-level operations (float_to_int, int_to_float, float_cast,
 //       to_float, imag, real_part, imaginary_part, complex_conj, add/sub/mul/div).
@@ -29,13 +29,13 @@
 //   float_soft_wide.c3   (10.2 `wide-float`)
 //       The software core: unpack / round_pack for every format, f80/f128
 //       add/sub/mul/div, f128 fused mul_add, and the exact hub conversions
-//       KeyFloat.to_f128 / from_f128 that KeyFloat.cast is built on.
+//       InternerKey.to_f128 / from_f128 that InternerKey.cast is built on.
 //   float_print.c3       (10.4 `compare-print`)
-//       KeyFloat.compare (std.math.compare), the Value-level float/complex
+//       InternerKey.compare (std.math.compare), the Value-level float/complex
 //       compare, isInf/isNan/isInfSign over Values, and Value.print's float and
 //       complex output (Zig `{d}` = shortest round-trip decimal of an f64).
 //   annex_g.c3           (10.5 `annex-g`)
-//       complex_float_mul / complex_float_div, written once over KeyFloat with
+//       complex_float_mul / complex_float_div, written once over InternerKey with
 //       the dispatching methods, so they work at every width.
 //   test/zig/float_probe.zig + test/unit/float_values/*  (10.6 `vectors`)
 //       Reference bit-pattern vectors produced by running the Zig 0.17.0 binary
@@ -44,19 +44,19 @@
 //       every "confirm with vectors" item below. The binary is development-only:
 //       no production or test target may depend on it.
 //
-// Data flow: Parser.parseFloat = parse_f128 then KeyFloat.cast to the literal's
+// Data flow: Parser.parseFloat = parse_f128 then InternerKey.cast to the literal's
 // width. Value arithmetic = to_float() both operands at the result width (via the
-// f128 hub: KeyFloat.cast), then KeyFloat.add/... which dispatches to
+// f128 hub: InternerKey.cast), then InternerKey.add/... which dispatches to
 // narrow (f16/f32/f64) or wide (f80/f128). Complex mul/div go through annex_g.
 // Printing casts to f64 first (Zig does), so it needs only from_f128(.., F64).
 //
 // The integrator (stage 2) makes value.c3's float branches forward here, e.g.
 // `if (scalar_kind.is_float) return float_value::add(res, lhs, rhs, qt, comp);`
 // (aro::value and aro::float_value import each other; c3c 0.8.5 accepts
-// cyclic module imports), and writes src/tests/float_value_tests.c3.
+// cyclic module imports), and writes test/unit/values/float_value_tests.c3.
 //
 // =============================================================================
-// Native capability decision (backed by //src/tests:float_capability_tests)
+// Native capability decision (backed by //test/unit/values:float_capability_tests)
 // =============================================================================
 //
 // Probed with c3c 0.8.5 on x86_64-linux-gnu at -O0 and -O2:
@@ -92,7 +92,7 @@
 //     source states the exact value. Never write a float128 literal.
 //
 // Native operations may only appear in float_soft_narrow.c3 (and in tests).
-// Every other file manipulates KeyFloat bits or calls the dispatchers.
+// Every other file manipulates InternerKey bits or calls the dispatchers.
 //
 // =============================================================================
 // Reference semantics (what "matches Zig" means for each width)
@@ -148,7 +148,7 @@ import aro::value_interner, aro::value, aro::compilation, aro::type_store, aro::
 // =============================================================================
 
 <*
- IEEE / x87 storage format of one KeyFloatTag. `frac_bits` counts the stored
+ IEEE / x87 storage format of one InternerKeyTag. `frac_bits` counts the stored
  fraction bits (for f80 *excluding* the explicit integer bit); `explicit_int`
  is true only for f80, whose bit 63 holds the integer bit.
 *>
@@ -169,7 +169,7 @@ const FloatFormat FORMAT_F64 = { 64, 11, 52, false, 1023 };
 const FloatFormat FORMAT_F80 = { 80, 15, 63, true, 16383 };
 const FloatFormat FORMAT_F128 = { 128, 15, 112, false, 16383 };
 
-fn FloatFormat format_of(KeyFloatTag tag)
+fn FloatFormat format_of(InternerKeyTag tag)
 {
 	switch (tag)
 	{
@@ -178,7 +178,8 @@ fn FloatFormat format_of(KeyFloatTag tag)
 		case F64: return FORMAT_F64;
 		case F80: return FORMAT_F80;
 		case F128: return FORMAT_F128;
-	}
+			default: unreachable("not a float tag");
+}
 }
 
 <* Value class of a float bit pattern (see the f80 encoding rule above). *>
@@ -261,7 +262,7 @@ const F128Bits STD_NAN_F128 = { .lo = 0, .hi = 0x7FFF_8000_0000_0000 };
  Zig `switch (bitSizeof(T))` -> width tag.
  @require bits == 16 || bits == 32 || bits == 64 || bits == 80 || bits == 128 : "not a float width"
 *>
-fn KeyFloatTag tag_for_bits(ulong bits)
+fn InternerKeyTag tag_for_bits(ulong bits)
 {
 	switch (bits)
 	{
@@ -273,135 +274,48 @@ fn KeyFloatTag tag_for_bits(ulong bits)
 	}
 }
 
-fn KeyComplexTag complex_tag_of(KeyFloatTag tag) => KeyComplexTag::values[tag.ordinal];
-fn KeyFloatTag KeyComplexTag.scalar(self) => KeyFloatTag::values[self.ordinal];
+fn InternerKeyTag complex_tag_of(InternerKeyTag tag) => tag.complex();
 
-<* The bit pattern zero-extended to 128 bits (f80: `hi` << 64 | `lo`). *>
-fn uint128 KeyFloat.raw(self)
-{
-	switch (self.tag)
-	{
-		case F16: return (uint128)self.f16;
-		case F32: return (uint128)self.f32;
-		case F64: return (uint128)self.f64;
-		case F80: return (uint128)self.f80.hi << 64 | (uint128)self.f80.lo;
-		case F128: return (uint128)self.f128.hi << 64 | (uint128)self.f128.lo;
-	}
-}
-
-<* Inverse of KeyFloat.raw; bits above the width are ignored. *>
-fn KeyFloat from_raw(KeyFloatTag tag, uint128 bits)
+<* Bits 0..N-1 set for width `tag` (f80: 80, f128: all 128). *>
+fn uint128 width_mask(InternerKeyTag tag) @local
 {
 	switch (tag)
 	{
-		case F16: return
-		{
-			.tag = F16, .f16 = (ushort)bits
-		};
-		case F32: return
-		{
-			.tag = F32, .f32 = (uint)bits
-		};
-		case F64: return
-		{
-			.tag = F64, .f64 = (ulong)bits
-		};
-		case F80: return
-		{
-			.tag = F80, .f80 = { .lo = (ulong)bits, .hi = (ushort)(bits >> 64) }
-		};
-		case F128: return
-		{
-			.tag = F128, .f128 = { .lo = (ulong)bits, .hi = (ulong)(bits >> 64) }
-		};
+		case F16: return 0xFFFF;
+		case F32: return 0xFFFF_FFFF;
+		case F64: return 0xFFFF_FFFF_FFFF_FFFF;
+		case F80: return ((uint128)1 << 80) - 1;
+		case F128: return ~(uint128)0;
+		default: unreachable("not a float tag");
 	}
 }
 
-fn KeyFloat f16_value(ushort bits) =>
-{
-	.tag = F16, .f16 = bits
-};
-fn KeyFloat f32_value(uint bits) =>
-{
-	.tag = F32, .f32 = bits
-};
-fn KeyFloat f64_value(ulong bits) =>
-{
-	.tag = F64, .f64 = bits
-};
-fn KeyFloat f80_value(F80Bits bits) =>
-{
-	.tag = F80, .f80 = bits
-};
-fn KeyFloat f128_value(F128Bits bits) =>
-{
-	.tag = F128, .f128 = bits
-};
+<* The bit pattern zero-extended to 128 bits (f80: `hi` << 64 | `lo`). *>
+fn uint128 InternerKey.raw(self) => self.float_bits();
+
+<* Inverse of InternerKey.raw; bits above the width are ignored. Limbs live in tmem. *>
+fn InternerKey from_raw(InternerKeyTag tag, uint128 bits) => value_interner::float_key(tag, bits);
+
+fn InternerKey f16_value(ushort bits) => from_raw(F16, bits);
+fn InternerKey f32_value(uint bits) => from_raw(F32, bits);
+fn InternerKey f64_value(ulong bits) => from_raw(F64, bits);
+fn InternerKey f80_value(F80Bits bits) => from_raw(F80, (uint128)bits);
+fn InternerKey f128_value(F128Bits bits) => from_raw(F128, (uint128)bits);
 
 <* Components of a complex constant: [0] real, [1] imaginary. *>
-fn KeyFloat[2] KeyComplex.parts(self)
-{
-	switch (self.tag)
-	{
-		case CF16: return
-		{
-			f16_value(self.cf16[0]), f16_value(self.cf16[1])
-		};
-		case CF32: return
-		{
-			f32_value(self.cf32[0]), f32_value(self.cf32[1])
-		};
-		case CF64: return
-		{
-			f64_value(self.cf64[0]), f64_value(self.cf64[1])
-		};
-		case CF80: return
-		{
-			f80_value(self.cf80[0]), f80_value(self.cf80[1])
-		};
-		case CF128: return
-		{
-			f128_value(self.cf128[0]), f128_value(self.cf128[1])
-		};
-	}
-}
+fn InternerKey[2] InternerKey.parts(self) => { self.re(), self.im() };
 
 <*
  Build a complex constant from two components of the same width.
  @require re.tag == im.tag : "complex components must have the same width"
 *>
-fn KeyComplex make_complex(KeyFloat re, KeyFloat im)
-{
-	switch (re.tag)
-	{
-		case F16: return
-		{
-			.tag = CF16, .cf16 = { re.f16, im.f16 }
-		};
-		case F32: return
-		{
-			.tag = CF32, .cf32 = { re.f32, im.f32 }
-		};
-		case F64: return
-		{
-			.tag = CF64, .cf64 = { re.f64, im.f64 }
-		};
-		case F80: return
-		{
-			.tag = CF80, .cf80 = { re.f80, im.f80 }
-		};
-		case F128: return
-		{
-			.tag = CF128, .cf128 = { re.f128, im.f128 }
-		};
-	}
-}
+fn InternerKey make_complex(InternerKey re, InternerKey im) => value_interner::complex_key(re, im);
 
 <* Sign bit mask of the width (bit total_bits - 1). *>
-fn uint128 sign_mask(KeyFloatTag tag) => (uint128)1 << (format_of(tag).total_bits - 1);
+fn uint128 sign_mask(InternerKeyTag tag) => (uint128)1 << (format_of(tag).total_bits - 1);
 
 <* Biased exponent field. *>
-fn uint KeyFloat.biased_exponent(self)
+fn uint InternerKey.biased_exponent(self)
 {
 	FloatFormat fmt = format_of(self.tag);
 	uint shift = (uint)fmt.frac_bits + (fmt.explicit_int ? 1 : 0);
@@ -409,15 +323,15 @@ fn uint KeyFloat.biased_exponent(self)
 }
 
 <* Stored fraction field (f80: bits 0..62, i.e. without the explicit integer bit). *>
-fn uint128 KeyFloat.fraction(self)
+fn uint128 InternerKey.fraction(self)
 {
 	FloatFormat fmt = format_of(self.tag);
 	return self.raw() & (((uint128)1 << fmt.frac_bits) - 1);
 }
 
-fn bool KeyFloat.signbit(self) => (self.raw() & sign_mask(self.tag)) != 0;
+fn bool InternerKey.signbit(self) => (self.raw() & sign_mask(self.tag)) != 0;
 
-fn FloatClass KeyFloat.classify(self)
+fn FloatClass InternerKey.classify(self)
 {
 	FloatFormat fmt = format_of(self.tag);
 	uint e = self.biased_exponent();
@@ -436,37 +350,37 @@ fn FloatClass KeyFloat.classify(self)
 	return NORMAL;
 }
 
-fn bool KeyFloat.is_nan(self) => self.classify() == NAN;
-fn bool KeyFloat.is_inf(self) => self.classify() == INFINITE;
+fn bool InternerKey.is_nan(self) => self.classify() == NAN;
+fn bool InternerKey.is_inf(self) => self.classify() == INFINITE;
 <* std.math.isFinite: not inf and not NaN. *>
-fn bool KeyFloat.is_finite(self) => self.classify() != INFINITE && self.classify() != NAN;
+fn bool InternerKey.is_finite(self) => self.classify() != INFINITE && self.classify() != NAN;
 <* Zig `x == 0` (either sign). *>
-fn bool KeyFloat.is_zero(self) => self.classify() == ZERO;
-fn bool KeyFloat.is_positive_zero(self) => self.classify() == ZERO && !self.signbit();
-fn bool KeyFloat.is_negative_zero(self) => self.classify() == ZERO && self.signbit();
+fn bool InternerKey.is_zero(self) => self.classify() == ZERO;
+fn bool InternerKey.is_positive_zero(self) => self.classify() == ZERO && !self.signbit();
+fn bool InternerKey.is_negative_zero(self) => self.classify() == ZERO && self.signbit();
 <* std.math.isPositiveInf / isNegativeInf *>
-fn bool KeyFloat.is_positive_inf(self) => self.classify() == INFINITE && !self.signbit();
-fn bool KeyFloat.is_negative_inf(self) => self.classify() == INFINITE && self.signbit();
+fn bool InternerKey.is_positive_inf(self) => self.classify() == INFINITE && !self.signbit();
+fn bool InternerKey.is_negative_inf(self) => self.classify() == INFINITE && self.signbit();
 
 <* Zig unary minus: flips the sign bit only (also of NaN; no quieting). *>
-fn KeyFloat KeyFloat.neg(self) => from_raw(self.tag, self.raw() ^ sign_mask(self.tag));
+fn InternerKey InternerKey.neg(self) => from_raw(self.tag, self.raw() ^ sign_mask(self.tag));
 <* Zig @abs: clears the sign bit only. *>
-fn KeyFloat KeyFloat.abs(self) => from_raw(self.tag, self.raw() & ~sign_mask(self.tag));
+fn InternerKey InternerKey.abs(self) => from_raw(self.tag, self.raw() & ~sign_mask(self.tag));
 <*
  std.math.copysign(magnitude = self, sign = sign_of): bit operation, NaN included.
  @require self.tag == sign_of.tag : "operands must have the same width"
 *>
-fn KeyFloat KeyFloat.copysign(self, KeyFloat sign_of)
+fn InternerKey InternerKey.copysign(self, InternerKey sign_of)
 {
 	uint128 m = sign_mask(self.tag);
 	return from_raw(self.tag, (self.raw() & ~m) | (sign_of.raw() & m));
 }
 
 <* +0.0 or -0.0 *>
-fn KeyFloat zero(KeyFloatTag tag, bool negative = false) => from_raw(tag, negative ? sign_mask(tag) : 0);
+fn InternerKey zero(InternerKeyTag tag, bool negative = false) => from_raw(tag, negative ? sign_mask(tag) : 0);
 
 <* 1.0 *>
-fn KeyFloat one(KeyFloatTag tag)
+fn InternerKey one(InternerKeyTag tag)
 {
 	FloatFormat fmt = format_of(tag);
 	uint shift = (uint)fmt.frac_bits + (fmt.explicit_int ? 1 : 0);
@@ -476,7 +390,7 @@ fn KeyFloat one(KeyFloatTag tag)
 }
 
 <* std.math.inf(T), negated when `negative`. *>
-fn KeyFloat inf(KeyFloatTag tag, bool negative = false)
+fn InternerKey inf(InternerKeyTag tag, bool negative = false)
 {
 	FloatFormat fmt = format_of(tag);
 	uint shift = (uint)fmt.frac_bits + (fmt.explicit_int ? 1 : 0);
@@ -487,7 +401,7 @@ fn KeyFloat inf(KeyFloatTag tag, bool negative = false)
 }
 
 <* std.math.nan(T) *>
-fn KeyFloat std_nan(KeyFloatTag tag)
+fn InternerKey std_nan(InternerKeyTag tag)
 {
 	switch (tag)
 	{
@@ -496,11 +410,12 @@ fn KeyFloat std_nan(KeyFloatTag tag)
 		case F64: return f64_value(STD_NAN_F64);
 		case F80: return f80_value(STD_NAN_F80);
 		case F128: return f128_value(STD_NAN_F128);
-	}
+			default: unreachable("not a float tag");
+}
 }
 
 <* The reference's result of an invalid operation at this width (see NaN rules). *>
-fn KeyFloat default_nan(KeyFloatTag tag)
+fn InternerKey default_nan(InternerKeyTag tag)
 {
 	switch (tag)
 	{
@@ -509,11 +424,12 @@ fn KeyFloat default_nan(KeyFloatTag tag)
 		case F64: return f64_value(DEFAULT_NAN_F64);
 		case F80: return f80_value(DEFAULT_NAN_F80);
 		case F128: return f128_value(DEFAULT_NAN_F128);
-	}
+			default: unreachable("not a float tag");
+}
 }
 
 <* Sets the quiet bit (the top fraction bit) of a NaN; other values unchanged. *>
-fn KeyFloat KeyFloat.quiet(self)
+fn InternerKey InternerKey.quiet(self)
 {
 	if (!self.is_nan()) return self;
 	FloatFormat fmt = format_of(self.tag);
@@ -530,61 +446,65 @@ fn KeyFloat KeyFloat.quiet(self)
 <*
  @require self.tag == rhs.tag : "operands must have the same width"
 *>
-fn KeyFloat KeyFloat.add(self, KeyFloat rhs)
+fn InternerKey InternerKey.add(self, InternerKey rhs)
 {
 	switch (self.tag)
 	{
-		case F16: return f16_value(f16_add(self.f16, rhs.f16));
-		case F32: return f32_value(f32_add(self.f32, rhs.f32));
-		case F64: return f64_value(f64_add(self.f64, rhs.f64));
-		case F80: return f80_value(f80_add(self.f80, rhs.f80));
-		case F128: return f128_value(f128_add(self.f128, rhs.f128));
-	}
+		case F16: return f16_value(f16_add(self.f16(), rhs.f16()));
+		case F32: return f32_value(f32_add(self.f32(), rhs.f32()));
+		case F64: return f64_value(f64_add(self.f64(), rhs.f64()));
+		case F80: return f80_value(f80_add(self.f80(), rhs.f80()));
+		case F128: return f128_value(f128_add(self.f128(), rhs.f128()));
+			default: unreachable("not a float tag");
+}
 }
 
 <*
  @require self.tag == rhs.tag : "operands must have the same width"
 *>
-fn KeyFloat KeyFloat.sub(self, KeyFloat rhs)
+fn InternerKey InternerKey.sub(self, InternerKey rhs)
 {
 	switch (self.tag)
 	{
-		case F16: return f16_value(f16_sub(self.f16, rhs.f16));
-		case F32: return f32_value(f32_sub(self.f32, rhs.f32));
-		case F64: return f64_value(f64_sub(self.f64, rhs.f64));
-		case F80: return f80_value(f80_sub(self.f80, rhs.f80));
-		case F128: return f128_value(f128_sub(self.f128, rhs.f128));
-	}
+		case F16: return f16_value(f16_sub(self.f16(), rhs.f16()));
+		case F32: return f32_value(f32_sub(self.f32(), rhs.f32()));
+		case F64: return f64_value(f64_sub(self.f64(), rhs.f64()));
+		case F80: return f80_value(f80_sub(self.f80(), rhs.f80()));
+		case F128: return f128_value(f128_sub(self.f128(), rhs.f128()));
+			default: unreachable("not a float tag");
+}
 }
 
 <*
  @require self.tag == rhs.tag : "operands must have the same width"
 *>
-fn KeyFloat KeyFloat.mul(self, KeyFloat rhs)
+fn InternerKey InternerKey.mul(self, InternerKey rhs)
 {
 	switch (self.tag)
 	{
-		case F16: return f16_value(f16_mul(self.f16, rhs.f16));
-		case F32: return f32_value(f32_mul(self.f32, rhs.f32));
-		case F64: return f64_value(f64_mul(self.f64, rhs.f64));
-		case F80: return f80_value(f80_mul(self.f80, rhs.f80));
-		case F128: return f128_value(f128_mul(self.f128, rhs.f128));
-	}
+		case F16: return f16_value(f16_mul(self.f16(), rhs.f16()));
+		case F32: return f32_value(f32_mul(self.f32(), rhs.f32()));
+		case F64: return f64_value(f64_mul(self.f64(), rhs.f64()));
+		case F80: return f80_value(f80_mul(self.f80(), rhs.f80()));
+		case F128: return f128_value(f128_mul(self.f128(), rhs.f128()));
+			default: unreachable("not a float tag");
+}
 }
 
 <*
  @require self.tag == rhs.tag : "operands must have the same width"
 *>
-fn KeyFloat KeyFloat.div(self, KeyFloat rhs)
+fn InternerKey InternerKey.div(self, InternerKey rhs)
 {
 	switch (self.tag)
 	{
-		case F16: return f16_value(f16_div(self.f16, rhs.f16));
-		case F32: return f32_value(f32_div(self.f32, rhs.f32));
-		case F64: return f64_value(f64_div(self.f64, rhs.f64));
-		case F80: return f80_value(f80_div(self.f80, rhs.f80));
-		case F128: return f128_value(f128_div(self.f128, rhs.f128));
-	}
+		case F16: return f16_value(f16_div(self.f16(), rhs.f16()));
+		case F32: return f32_value(f32_div(self.f32(), rhs.f32()));
+		case F64: return f64_value(f64_div(self.f64(), rhs.f64()));
+		case F80: return f80_value(f80_div(self.f80(), rhs.f80()));
+		case F128: return f128_value(f128_div(self.f128(), rhs.f128()));
+			default: unreachable("not a float tag");
+}
 }
 
 // =============================================================================
@@ -593,7 +513,7 @@ fn KeyFloat KeyFloat.div(self, KeyFloat rhs)
 //
 // Everything below works on bit patterns. It needs three primitives from
 // float_soft_wide.c3: round_pack (one correctly rounded result from an exact
-// sig * 2^exp), KeyFloat.to_f128 and from_f128 (the exact hub), plus
+// sig * 2^exp), InternerKey.to_f128 and from_f128 (the exact hub), plus
 // f128_mul / f128_div for parseFloat's fast path and the narrow/wide dispatchers
 // for the Value-level arithmetic.
 //
@@ -610,7 +530,7 @@ fn KeyFloat KeyFloat.div(self, KeyFloat rhs)
 // gives the default NaN; to f16 compiler-rt __truncxfhf2 ignores the integer bit
 // (0x3fff4000.. is 1.5); to f128 __extendxftf2 is what to_f128 models.
 
-fn bool cast_keeps_nan_quiet_bit(KeyFloatTag src, KeyFloatTag dest)
+fn bool cast_keeps_nan_quiet_bit(InternerKeyTag src, InternerKeyTag dest)
 {
 	switch
 	{
@@ -628,24 +548,24 @@ fn bool cast_keeps_nan_quiet_bit(KeyFloatTag src, KeyFloatTag dest)
  cast_keeps_nan_quiet_bit. Non-canonical f80 sources as described above. Same
  tag returns `self` unchanged.
 *>
-fn KeyFloat KeyFloat.cast(self, KeyFloatTag dest)
+fn InternerKey InternerKey.cast(self, InternerKeyTag dest)
 {
 	if (self.tag == dest) return self;
-	KeyFloat src = self;
-	if (src.tag == F80 && (src.f80.hi & 0x7FFF) != 0 && (src.f80.lo >> 63) == 0)
+	InternerKey src = self;
+	if (src.tag == F80 && (src.f80().hi & 0x7FFF) != 0 && (src.f80().lo >> 63) == 0)
 	{
 		if (dest == F32 || dest == F64) return default_nan(dest);
-		if (dest == F16) src.f80.lo |= (ulong)1 << 63;
+		if (dest == F16) src = from_raw(F80, src.raw() | (uint128)1 << 63);
 	}
 	if (src.tag == F16 && dest == F32 && src.is_nan())
 	{
 		// __extendhfsf2: the fraction (quiet bit included) moves up unchanged.
 		// from_f128 always quiets a narrow NaN, so this pair is done here.
-		uint bits = 0x7F80_0000 | ((uint)(src.f16 & 0x03FF) << 13);
+		uint bits = 0x7F80_0000 | ((uint)(src.f16() & 0x03FF) << 13);
 		if (src.signbit()) bits |= 0x8000_0000;
 		return f32_value(bits);
 	}
-	KeyFloat r = from_f128(src.to_f128(), dest);
+	InternerKey r = from_f128(src.to_f128(), dest);
 	if (!cast_keeps_nan_quiet_bit(src.tag, dest)) r = r.quiet();
 	return r;
 }
@@ -654,10 +574,10 @@ fn KeyFloat KeyFloat.cast(self, KeyFloatTag dest)
  Zig @floatFromInt(x) for a u64 into `dest`: rounded once to nearest even
  (u64 -> f16 overflows to +inf from 65520 up; u64 fits f80/f128 exactly).
 *>
-fn KeyFloat from_u64(ulong x, KeyFloatTag dest) => round_pack(dest, false, 0, (uint128)x, false);
+fn InternerKey from_u64(ulong x, InternerKeyTag dest) => round_pack(dest, false, 0, (uint128)x, false);
 
 <* Zig @floatFromInt(x) for an i64 into `dest`; -0 never results (0 -> +0.0). *>
-fn KeyFloat from_i64(long x, KeyFloatTag dest)
+fn InternerKey from_i64(long x, InternerKeyTag dest)
 {
 	bool negative = x < 0;
 	// Two's-complement negation in ulong handles long::min (magnitude 2^63).
@@ -680,7 +600,7 @@ fn F128Bits mul_add_limb(F128Bits r, ulong limb)
 {
 	uint e_field = f128_exp_field(r);
 	if (e_field == 0x7FFF) return r;  // +inf * 2^64 + finite = +inf
-	if (e_field == 0) return round_pack(F128, false, 0, (uint128)limb, false).f128;  // r == +0
+	if (e_field == 0) return round_pack(F128, false, 0, (uint128)limb, false).f128();  // r == +0
 	uint128 sig = ((uint128)1 << 112) | ((uint128)(r.hi & F128_HI_FRAC_MASK) << 64) | (uint128)r.lo;
 	// r = sig * 2^e with e = e_field - bias - 112 >= -112; r * 2^64 = sig * 2^s.
 	int s = (int)e_field - 16383 - 112 + 64;
@@ -689,7 +609,7 @@ fn F128Bits mul_add_limb(F128Bits r, ulong limb)
 		// r is an integer, so sig has at least -e trailing zero bits and the
 		// right shift below is exact; sig << 14 < 2^127.
 		uint128 m = s >= 0 ? sig << s : sig >> - s;
-		return round_pack(F128, false, 0, m + (uint128)limb, false).f128;
+		return round_pack(F128, false, 0, m + (uint128)limb, false).f128();
 	}
 	int d = s - 14;
 	uint128 m = sig << 14;
@@ -703,7 +623,7 @@ fn F128Bits mul_add_limb(F128Bits r, ulong limb)
 		m += (uint128)(limb >> d);
 		sticky = (limb & (((ulong)1 << d) - 1)) != 0;
 	}
-	return round_pack(F128, false, d, m, sticky).f128;
+	return round_pack(F128, false, d, m, sticky).f128();
 }
 
 <*
@@ -729,14 +649,11 @@ fn F128Bits big_int_to_f128(BigIntConst big)
  big_int -> @floatCast(bigIntToFloat(..)) i.e. big_int_to_f128 then cast to
  `dest` (two roundings - a reference quirk to keep).
 *>
-fn KeyFloat key_int_to_float(KeyInt i, KeyFloatTag dest)
+fn InternerKey key_int_to_float(InternerKey i, InternerKeyTag dest)
 {
-	switch (i.tag)
-	{
-		case U64: return from_u64(i.u64, dest);
-		case I64: return from_i64(i.i64, dest);
-		case BIG_INT: return f128_value(big_int_to_f128(i.big_int)).cast(dest);
-	}
+	if (!i.int_fits_64()) return f128_value(big_int_to_f128(i.to_big_int())).cast(dest);
+	if (i.tag == INT_NEGATIVE) return from_i64((long)i.int_low_u64(), dest);
+	return from_u64(i.int_low_u64(), dest);
 }
 
 <*
@@ -1132,7 +1049,7 @@ fn bool starts_with_ignore_case(String s, String prefix)
 fn bool parse_inf_or_nan(String s, bool negative, F128Bits* out)
 {
 	sz consumed;
-	KeyFloat value;
+	InternerKey value;
 	if (starts_with_ignore_case(s, "inf"))
 	{
 		consumed = 3;
@@ -1149,14 +1066,14 @@ fn bool parse_inf_or_nan(String s, bool negative, F128Bits* out)
 		return false;
 	}
 	if (s.len != consumed) return false;
-	*out = value.f128;
+	*out = value.f128();
 	return true;
 }
 
 <* convert_hex.zig convertHex for f128 (round to nearest even on two guard bits). *>
 fn F128Bits convert_hex(ParsedNumber n)
 {
-	if (n.mantissa == 0) return zero(F128, n.negative).f128;
+	if (n.mantissa == 0) return zero(F128, n.negative).f128();
 
 	const long MAX_EXP = 16383;
 	const long MIN_EXP = -16382;
@@ -1206,12 +1123,12 @@ fn F128Bits convert_hex(ParsedNumber n)
 	if (m >> 112 == 0) e = EXP_BIAS;
 
 	// Infinity and range error
-	if (e > MAX_EXP) return inf(F128, n.negative).f128;
+	if (e > MAX_EXP) return inf(F128, n.negative).f128();
 
 	uint128 bits = m & (((uint128)1 << 112) - 1);
 	bits |= (uint128)((e - EXP_BIAS) & 0x7FFF) << 112;
 	if (n.negative) bits |= (uint128)1 << 127;
-	return from_raw(F128, bits).f128;
+	return from_raw(F128, bits).f128();
 }
 
 <* 10^i as an exact f128 (i <= 48: 5^i < 2^113). *>
@@ -1219,7 +1136,7 @@ fn F128Bits f128_pow10(long i)
 {
 	uint128 p5 = 1;
 	for (long k = 0; k < i; k++) p5 *= 5;
-	return round_pack(F128, false, (int)i, p5, false).f128;
+	return round_pack(F128, false, (int)i, p5, false).f128();
 }
 
 <*
@@ -1241,7 +1158,7 @@ fn bool convert_fast(ParsedNumber n, F128Bits* out)
 	if (n.exponent <= MAX_EXPONENT_FAST_PATH)
 	{
 		// normal fast path
-		value = round_pack(F128, false, 0, n.mantissa, false).f128;
+		value = round_pack(F128, false, 0, n.mantissa, false).f128();
 		if (n.exponent < 0)
 		{
 			value = f128_div(value, f128_pow10(-n.exponent));
@@ -1261,7 +1178,7 @@ fn bool convert_fast(ParsedNumber n, F128Bits* out)
 		if (n.mantissa != 0 && pow > ~(uint128)0 / n.mantissa) return false;
 		uint128 mantissa = n.mantissa * pow;
 		if (mantissa > MAX_MANTISSA_FAST_PATH) return false;
-		value = f128_mul(round_pack(F128, false, 0, mantissa, false).f128, f128_pow10(MAX_EXPONENT_FAST_PATH));
+		value = f128_mul(round_pack(F128, false, 0, mantissa, false).f128(), f128_pow10(MAX_EXPONENT_FAST_PATH));
 	}
 	if (n.negative) value.hi ^= F128_SIGN_BIT;
 	*out = value;
@@ -1568,7 +1485,7 @@ struct BiasedFp
 fn F128Bits BiasedFp.to_f128(self, bool negative)
 {
 	uint128 word = self.f | ((uint128)(uint)self.e << 112);
-	F128Bits r = from_raw(F128, word).f128;
+	F128Bits r = from_raw(F128, word).f128();
 	if (negative) r.hi ^= F128_SIGN_BIT;
 	return r;
 }
@@ -1688,27 +1605,27 @@ fn F128Bits? parse_f128(String s)
 // -----------------------------------------------------------------------------
 
 <* Zig `switch (qt.bitSizeof(comp))` -> width tag. *>
-fn KeyFloatTag width_of(QualType qt, Compilation* comp) => tag_for_bits(qt.bit_sizeof(comp));
+fn InternerKeyTag width_of(QualType qt, Compilation* comp) => tag_for_bits(qt.bit_sizeof(comp));
 
 <* Width of a complex type's element (`qt.childType(comp).bitSizeof(comp)`). *>
-fn KeyFloatTag element_width_of(QualType qt, Compilation* comp) => width_of(qt.child_type(comp), comp);
+fn InternerKeyTag element_width_of(QualType qt, Compilation* comp) => width_of(qt.child_type(comp), comp);
 
-fn Value intern_float(KeyFloat f, Compilation* comp) => value::intern(comp, { .tag = FLOAT, .float_val = f });
-fn Value intern_complex(KeyComplex c, Compilation* comp) => value::intern(comp, { .tag = COMPLEX, .complex_val = c });
+fn Value intern_float(InternerKey f, Compilation* comp) => value::intern(comp, f);
+fn Value intern_complex(InternerKey c, Compilation* comp) => value::intern(comp, c);
 
 <*
  Value.toFloat(T): the real part of `v` as a `dest`-width float.
-   int -> key_int_to_float; float -> KeyFloat.cast; complex -> real part cast.
+   int -> key_int_to_float; float -> InternerKey.cast; complex -> real part cast.
  Precondition: v is not none and its key is INT, FLOAT or COMPLEX.
 *>
-fn KeyFloat to_float(Value v, KeyFloatTag dest, Compilation* comp)
+fn InternerKey to_float(Value v, InternerKeyTag dest, Compilation* comp)
 {
 	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
-		case INT: return key_int_to_float(key.int_val, dest);
-		case FLOAT: return key.float_val.cast(dest);
-		case COMPLEX: return key.complex_val.parts()[0].cast(dest);
+		case INT: return key_int_to_float(key, dest);
+		case FLOAT: return key.cast(dest);
+		case COMPLEX: return key.parts()[0].cast(dest);
 		default: unreachable("to_float of a non-arithmetic value");
 	}
 }
@@ -1716,16 +1633,16 @@ fn KeyFloat to_float(Value v, KeyFloatTag dest, Compilation* comp)
 <*
  Value.imag(T): int/float -> +0.0; complex -> the imaginary part cast to `dest`.
 *>
-fn KeyFloat imag(Value v, KeyFloatTag dest, Compilation* comp)
+fn InternerKey imag(Value v, InternerKeyTag dest, Compilation* comp)
 {
 	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
 		case INT:
 		case FLOAT:
 			return zero(dest);
 		case COMPLEX:
-			return key.complex_val.parts()[1].cast(dest);
+			return key.parts()[1].cast(dest);
 		default:
 			unreachable("imag of a non-arithmetic value");
 	}
@@ -1750,12 +1667,12 @@ fn FloatToIntChangeKind float_to_int(Value* v, QualType dest_ty, Compilation* co
 {
 	if (v.is_none()) return NONE;
 
-	KeyFloat float_val = to_float(*v, F128, comp);
+	InternerKey float_val = to_float(*v, F128, comp);
 	bool was_zero = float_val.is_zero();
 
 	if (dest_ty.is(comp, BOOL))
 	{
-		KeyFloat one_val = one(F128);
+		InternerKey one_val = one(F128);
 		bool was_one = float_val.raw() == one_val.raw();
 		*v = value::from_bool(!was_zero);
 		if (was_zero || was_one) return NONE;
@@ -1774,11 +1691,11 @@ fn FloatToIntChangeKind float_to_int(Value* v, QualType dest_ty, Compilation* co
 	}
 
 	usz bits = (usz)dest_ty.bit_sizeof(comp);
-	sz limb_len = calc_float_limb_len(float_val.f128);
+	sz limb_len = calc_float_limb_len(float_val.f128());
 	sz twos_len = bigint::calc_twos_comp_limb_count(bits);
 	Limb[] limbs = alloc::new_array(tmem, Limb, (usz)(limb_len > twos_len ? limb_len: twos_len));
 	BigIntMutable big = value::mutable_over(limbs);
-	bool had_fraction = f128_to_big_int_trunc(float_val.f128, &big);
+	bool had_fraction = f128_to_big_int_trunc(float_val.f128(), &big);
 
 	bool fits = big.to_const().fits_in_twos_comp(signedness, bits);
 	*v = value::intern_big(comp, big.to_const());
@@ -1800,13 +1717,13 @@ fn void int_to_float(Value* v, QualType dest_ty, Compilation* comp)
 
 	if (dest_ty.is(comp, COMPLEX))
 	{
-		KeyFloatTag w = element_width_of(dest_ty, comp);
+		InternerKeyTag w = element_width_of(dest_ty, comp);
 		*v = intern_complex(make_complex(to_float(*v, w, comp), zero(w)), comp);
 		return;
 	}
 	InternerKey key = comp.interner.get(v.ref());
-	assert(key.tag == INT, "int_to_float of a non-int value");
-	*v = intern_float(key_int_to_float(key.int_val, width_of(dest_ty, comp)), comp);
+	assert(key.tag.is_int(), "int_to_float of a non-int value");
+	*v = intern_float(key_int_to_float(key, width_of(dest_ty, comp)), comp);
 }
 
 <*
@@ -1818,7 +1735,7 @@ fn void float_cast(Value* v, QualType dest_ty, Compilation* comp)
 	if (v.is_none()) return;
 	if (try t = dest_ty.get(comp, COMPLEX))
 	{
-		KeyFloatTag w = width_of(t.complex, comp);
+		InternerKeyTag w = width_of(t.complex, comp);
 		*v = intern_complex(make_complex(to_float(*v, w, comp), imag(*v, w, comp)), comp);
 		return;
 	}
@@ -1830,13 +1747,13 @@ fn Value real_part(Value v, Compilation* comp)
 {
 	if (v.is_none()) return v;
 	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
 		case INT:
 		case FLOAT:
 			return v;
 		case COMPLEX:
-			return intern_float(key.complex_val.parts()[0], comp);
+			return intern_float(key.parts()[0], comp);
 		default:
 			unreachable("real_part of a non-arithmetic value");
 	}
@@ -1847,13 +1764,13 @@ fn Value imaginary_part(Value v, Compilation* comp)
 {
 	if (v.is_none()) return v;
 	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag)
+	switch (key.tag.kind)
 	{
 		case INT:
 		case FLOAT:
 			return value::ZERO;
 		case COMPLEX:
-			return intern_float(key.complex_val.parts()[1], comp);
+			return intern_float(key.parts()[1], comp);
 		default:
 			unreachable("imaginary_part of a non-arithmetic value");
 	}
@@ -1862,7 +1779,7 @@ fn Value imaginary_part(Value v, Compilation* comp)
 <* Value.complexConj: { to_float(w), -imag(w) } (sign flip, also of +0 and NaN), w = qt's element width. *>
 fn Value complex_conj(Value v, QualType qt, Compilation* comp)
 {
-	KeyFloatTag w = element_width_of(qt, comp);
+	InternerKeyTag w = element_width_of(qt, comp);
 	return intern_complex(make_complex(to_float(v, w, comp), imag(v, w, comp).neg()), comp);
 }
 
@@ -1875,7 +1792,7 @@ enum FloatOp : char
 	DIV,
 }
 
-fn KeyFloat apply_float_op(FloatOp op, KeyFloat a, KeyFloat b)
+fn InternerKey apply_float_op(FloatOp op, InternerKey a, InternerKey b)
 {
 	switch (op)
 	{
@@ -1895,12 +1812,12 @@ fn void float_arith(Value* res, Value lhs, Value rhs, QualType qt, Compilation* 
 {
 	if (qt.scalar_kind(comp) == COMPLEX_FLOAT)
 	{
-		KeyFloatTag w = element_width_of(qt, comp);
-		KeyFloat a = to_float(lhs, w, comp);
-		KeyFloat b = imag(lhs, w, comp);
-		KeyFloat c = to_float(rhs, w, comp);
-		KeyFloat d = imag(rhs, w, comp);
-		KeyComplex result;
+		InternerKeyTag w = element_width_of(qt, comp);
+		InternerKey a = to_float(lhs, w, comp);
+		InternerKey b = imag(lhs, w, comp);
+		InternerKey c = to_float(rhs, w, comp);
+		InternerKey d = imag(rhs, w, comp);
+		InternerKey result;
 		switch (op)
 		{
 			case ADD: result = make_complex(a.add(c), b.add(d));  // complexAddSub
@@ -1911,7 +1828,7 @@ fn void float_arith(Value* res, Value lhs, Value rhs, QualType qt, Compilation* 
 		* res = intern_complex(result, comp);
 		return;
 	}
-	KeyFloatTag w = width_of(qt, comp);
+	InternerKeyTag w = width_of(qt, comp);
 	*res = intern_float(apply_float_op(op, to_float(lhs, w, comp), to_float(rhs, w, comp)), comp);
 }
 

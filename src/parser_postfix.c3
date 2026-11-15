@@ -13,8 +13,9 @@ excuse PARSING_FAILED;
 <* The optional builtin-call hook does not recognize this callee and wants ordinary call handling. *>
 excuse NO_BUILTIN_CALL;
 
-<* Whether `callee` names one of the overflow builtins with custom raw-argument checks. *>
-fn bool is_overflow_builtin_callee(parser::Parser* p, type_store::NodeIndex callee)
+<* Whether `callee` names a builtin whose variadic arguments must reach its custom check unpromoted
+   (mirrors upstream `CallExpr.shouldPromoteVarArg`). *>
+fn bool is_unpromoted_builtin_callee(parser::Parser* p, type_store::NodeIndex callee)
 {
 	tree::Node callee_node = callee.get(&p.tree);
 	if (callee_node.kind != tree::NodeKind.BUILTIN_REF) return false;
@@ -23,7 +24,11 @@ fn bool is_overflow_builtin_callee(parser::Parser* p, type_store::NodeIndex call
 	{
 		return expanded.tag == common::TAG___BUILTIN_ADD_OVERFLOW ||
 			expanded.tag == common::TAG___BUILTIN_SUB_OVERFLOW ||
-			expanded.tag == common::TAG___BUILTIN_MUL_OVERFLOW;
+			expanded.tag == common::TAG___BUILTIN_MUL_OVERFLOW ||
+			expanded.tag == common::TAG___BUILTIN_COMPLEX ||
+			expanded.tag == common::TAG___BUILTIN_ISINF ||
+			expanded.tag == common::TAG___BUILTIN_ISINF_SIGN ||
+			expanded.tag == common::TAG___BUILTIN_ISNAN;
 	}
 	return false;
 }
@@ -278,7 +283,7 @@ fn value::Value string_subscript_value(parser::Parser* p, parser_result::Result 
 {
 	if (base.val.is_none() || !base.val.is(value_interner::InternerKeyTag.BYTES, p.comp)) return value::NONE;
 	if (base.node.get(&p.tree).kind != tree::NodeKind.STRING_LITERAL_EXPR) return value::NONE;
-	if (index.val.is_none() || !index.val.is(value_interner::InternerKeyTag.INT, p.comp)) return value::NONE;
+	if (index.val.is_none() || !index.val.is_int(p.comp)) return value::NONE;
 	if (try arr = base.qt.get(p.comp, type_store::TypeTag.ARRAY))
 	{
 		type_store::QualType elem = arr.array.elem;
@@ -764,7 +769,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			type_store::Func call_fn;
 			uint typed_params_len = 0xFFFF_FFFF;
 			type_store::FuncKind func_kind = type_store::FuncKind.NORMAL;
-			bool preserve_builtin_args = is_overflow_builtin_callee(p, lhs.node);
+			bool preserve_builtin_args = is_unpromoted_builtin_callee(p, lhs.node);
 			if (!function_qt.is_invalid())
 			{
 				if (!function_qt.is(p.comp, type_store::TypeTag.FUNC))

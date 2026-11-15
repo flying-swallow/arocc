@@ -11,6 +11,3 @@ out/
 # Stray local probe binaries
 /arocc_path_resolution_check
 /fuzz_oom_probe
-
-# Per-run logs from run_reference_gate.py (results kept in reference-results.json)
-test/migration/reference-logs/

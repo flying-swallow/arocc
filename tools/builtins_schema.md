@@ -11,16 +11,16 @@ Zig reference: `build/generate_def.zig`, `build.zig` (`generateDef`, 19 inputs),
 
 | File | Owner | Role |
 |---|---|---|
-| `src/c3/builtin_properties.c3` | 12.4 lookup-props | Enums (Header, Language, FormatKind, AttributeField, BuiltinGroup), `Attributes` bitstruct, `BuiltinTag`, `BuiltinRecord`, name lookups. Imports only std. |
-| `src/c3/builtins.c3` | 12.4 lookup-props | `Builtins` cache, `from_name`, per-group lookup, arch search order, table wiring. |
-| `src/c3/builtin_type_description.c3` | 12.3 type-desc | Component/type iterators; `create_type` / `create_builtin` build types through `TypeStore` directly. |
+| `src/builtin_properties.c3` | 12.4 lookup-props | Enums (Header, Language, FormatKind, AttributeField, BuiltinGroup), `Attributes` bitstruct, `BuiltinTag`, `BuiltinRecord`, name lookups. Imports only std. |
+| `src/builtins.c3` | 12.4 lookup-props | `Builtins` cache, `from_name`, per-group lookup, arch search order, table wiring. |
+| `src/builtin_type_description.c3` | 12.3 type-desc | Component/type iterators; `create_type` / `create_builtin` build types through `TypeStore` directly. |
 | `tools/generate_def_schema.c3` | stage 0 (frozen) | `DefEntry`, `DefFile`, `DefDiag`, parse faults. |
 | `tools/generate_def_parse.c3` | 12.1 def-parser | `parse_def`. |
 | `tools/generate_def.c3` | 12.2 table-gen | `emit_table`. |
 | `tools/generate_def_main.c3` | 12.2 table-gen | CLI `main` (done in stage 0). |
 | `tools/builtins.bzl` | 12.2 table-gen | `builtin_defs` rule (done in stage 0). |
-| `test/c3/generate_def_tests.c3` | stage 0, extendable | Contract checks for the shared types. |
-| `test/c3/builtins_tests.c3` | stage 2 integrator | Acceptance tests. |
+| `test/unit/builtins/generate_def_tests.c3` | stage 0, extendable | Contract checks for the shared types. |
+| `test/unit/builtins/builtins_tests.c3` | stage 2 integrator | Acceptance tests. |
 
 The plan gives "`tools/generate_def.c3`" to both def-parser and table-gen. The
 contract splits it into the files above, so the two agents never edit the same
@@ -34,7 +34,7 @@ unit tests can link the parser and emitter without a second `main`.
 src/aro/Builtins/<group>.def --(//tools:generate_def, one action per file)--> bazel-bin/builtin_defs/<group>.c3
 //:builtin_defs (19 outputs) ----------------------------------------------> listed in //:aro_c3_lib srcs
 //tools:generate_def = generate_def_main.c3 + //tools:generate_def_lib
-//tools:generate_def_lib = generate_def{,_parse,_schema}.c3 + //:src/c3/builtin_properties.c3
+//tools:generate_def_lib = generate_def{,_parse,_schema}.c3 + //:src/builtin_properties.c3
 ```
 
 The generator never depends on `aro_c3_lib`, because that would be a cycle.
@@ -192,7 +192,7 @@ The layout was checked at full scale. With the real generated tables
 `aro_c3_lib` plus a small test takes about 2.0 s at -O0 and 1.6 s at -O2,
 against about 1.7 s with empty tables (stage 2 measurement). The
 uppercase-collision counts above (1 pair in common, 8 in ve, none elsewhere)
-were verified against the generated tables by `//test/c3:builtins_tests`.
+were verified against the generated tables by `//test/unit/builtins:builtins_tests`.
 
 ## Runtime API
 
@@ -235,10 +235,10 @@ were verified against the generated tables by `//test/c3:builtins_tests`.
 
 ## Acceptance split (plan 12)
 
-Parser faults are covered by `//test/c3:def_parse_tests`, emitter layout by
-`//test/c3:def_emit_tests`, regeneration determinism (parse + emit twice, and
+Parser faults are covered by `//test/unit/builtins:def_parse_tests`, emitter layout by
+`//test/unit/builtins:def_emit_tests`, regeneration determinism (parse + emit twice, and
 equality with the Bazel `GenerateDef` outputs) by
-`//test/c3:builtin_defs_regen_tests`. The integrator's `//test/c3:builtins_tests`
+`//test/unit/builtins:builtin_defs_regen_tests`. The integrator's `//test/unit/builtins:builtins_tests`
 covers:
 
 - every definition round-trips, i.e. name, then tag, then name and record,

@@ -3,7 +3,7 @@
 // OWNER: plan 10 stage 1 agent 10.5 `annex-g`. Stage 0 fixed the signatures.
 //
 // Contract:
-//   - Written once over KeyFloat with the dispatching float_value methods
+//   - Written once over InternerKey with the dispatching float_value methods
 //     (mul/add/sub/div, is_nan/is_inf/is_finite/is_positive_zero, abs, copysign,
 //     max, ilogb, scalbn, inf/zero/one constructors), so one body serves every
 //     width; the four (or two) components always share one width. No native
@@ -33,10 +33,10 @@ module aro::annex_g;
 import aro::value_interner, aro::float_value;
 
 <* Zig `copysign(if (isInf(v)) @as(T, 1.0) else @as(T, 0.0), v)`. *>
-fn KeyFloat box(KeyFloat v)
+fn InternerKey box(InternerKey v)
 {
-	// if/else, not `?:`: c3c 0.8.5 miscompiles ternaries on KeyFloat at -O0.
-	KeyFloat mag;
+	// if/else, not `?:`: see CONVENTIONS.md (c3c by-value aggregate ternary).
+	InternerKey mag;
 	if (v.is_inf())
 	{
 		mag = float_value::one(v.tag);
@@ -49,7 +49,7 @@ fn KeyFloat box(KeyFloat v)
 }
 
 <* Zig `if (isNan(v)) v = copysign(@as(T, 0.0), v);` *>
-fn KeyFloat nan_to_zero(KeyFloat v)
+fn InternerKey nan_to_zero(InternerKey v)
 {
 	if (v.is_nan()) return float_value::zero(v.tag).copysign(v);
 	return v;
@@ -60,15 +60,15 @@ fn KeyFloat nan_to_zero(KeyFloat v)
  infinity/NaN recovery. Returns { x, y } as a complex of the operands' width.
  @require a.tag == b.tag && a.tag == c.tag && a.tag == d.tag : "operands must have the same width"
 *>
-fn KeyComplex complex_float_mul(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
+fn InternerKey complex_float_mul(InternerKey a, InternerKey b, InternerKey c, InternerKey d)
 {
-	KeyFloatTag t = a.tag;
-	KeyFloat ac = a.mul(c);
-	KeyFloat bd = b.mul(d);
-	KeyFloat ad = a.mul(d);
-	KeyFloat bc = b.mul(c);
-	KeyFloat x = ac.sub(bd);
-	KeyFloat y = ad.add(bc);
+	InternerKeyTag t = a.tag;
+	InternerKey ac = a.mul(c);
+	InternerKey bd = b.mul(d);
+	InternerKey ad = a.mul(d);
+	InternerKey bc = b.mul(c);
+	InternerKey x = ac.sub(bd);
+	InternerKey y = ad.add(bc);
 	if (x.is_nan() && y.is_nan())
 	{
 		bool recalc = false;
@@ -102,7 +102,7 @@ fn KeyComplex complex_float_mul(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
 		}
 		if (recalc)
 		{
-			KeyFloat inf_t = float_value::inf(t);
+			InternerKey inf_t = float_value::inf(t);
 			x = inf_t.mul(a.mul(c).sub(b.mul(d)));
 			y = inf_t.mul(a.mul(d).add(b.mul(c)));
 		}
@@ -116,11 +116,11 @@ fn KeyComplex complex_float_mul(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
  operands' width.
  @require a.tag == b.tag && a.tag == c.tag && a.tag == d.tag : "operands must have the same width"
 *>
-fn KeyComplex complex_float_div(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
+fn InternerKey complex_float_div(InternerKey a, InternerKey b, InternerKey c, InternerKey d)
 {
-	KeyFloatTag t = a.tag;
+	InternerKeyTag t = a.tag;
 	int denom_logb = 0;
-	KeyFloat max_cd = c.abs().max(d.abs());
+	InternerKey max_cd = c.abs().max(d.abs());
 	if (max_cd.is_finite())
 	{
 		if (max_cd.is_zero())
@@ -136,14 +136,14 @@ fn KeyComplex complex_float_div(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
 			d = d.scalbn(-denom_logb);
 		}
 	}
-	KeyFloat denom = c.mul(c).add(d.mul(d));
-	KeyFloat x = a.mul(c).add(b.mul(d)).div(denom).scalbn(-denom_logb);
-	KeyFloat y = b.mul(c).sub(a.mul(d)).div(denom).scalbn(-denom_logb);
+	InternerKey denom = c.mul(c).add(d.mul(d));
+	InternerKey x = a.mul(c).add(b.mul(d)).div(denom).scalbn(-denom_logb);
+	InternerKey y = b.mul(c).sub(a.mul(d)).div(denom).scalbn(-denom_logb);
 	if (x.is_nan() && y.is_nan())
 	{
 		if (denom.is_positive_zero() && (!a.is_nan() || !b.is_nan()))
 		{
-			KeyFloat signed_inf = float_value::inf(t).copysign(c);
+			InternerKey signed_inf = float_value::inf(t).copysign(c);
 			x = signed_inf.mul(a);
 			y = signed_inf.mul(b);
 		}
@@ -151,7 +151,7 @@ fn KeyComplex complex_float_div(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
 		{
 			a = box(a);
 			b = box(b);
-			KeyFloat inf_t = float_value::inf(t);
+			InternerKey inf_t = float_value::inf(t);
 			x = inf_t.mul(a.mul(c).add(b.mul(d)));
 			y = inf_t.mul(b.mul(c).sub(a.mul(d)));
 		}
@@ -159,7 +159,7 @@ fn KeyComplex complex_float_div(KeyFloat a, KeyFloat b, KeyFloat c, KeyFloat d)
 		{
 			c = box(c);
 			d = box(d);
-			KeyFloat zero_t = float_value::zero(t);
+			InternerKey zero_t = float_value::zero(t);
 			x = zero_t.mul(a.mul(c).add(b.mul(d)));
 			y = zero_t.mul(b.mul(c).sub(a.mul(d)));
 		}

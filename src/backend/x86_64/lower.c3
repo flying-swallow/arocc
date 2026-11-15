@@ -126,11 +126,11 @@ fn ushort? Lowering.bits(&self, value_interner::InternerRef ty)
 	switch (key.tag)
 	{
 		case INT_TY:
-			if (key.bits <= 8) return 8;
-			if (key.bits <= 16) return 16;
-			if (key.bits <= 32) return 32;
-			if (key.bits <= 64) return 64;
-			self.fail("TODO: %d-bit integers", key.bits)!;
+			if (key.ty_bits <= 8) return 8;
+			if (key.ty_bits <= 16) return 16;
+			if (key.ty_bits <= 32) return 32;
+			if (key.ty_bits <= 64) return 64;
+			self.fail("TODO: %d-bit integers", key.ty_bits)!;
 		case PTR_TY: return 64;
 		case FLOAT_TY: self.fail("TODO: floating point lowering")!;
 		default: self.fail("TODO: lowering values of aggregate type")!;
@@ -208,15 +208,11 @@ fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 			}
 			self.emit(LEA, reg_op(reg.to_bits(64)), label_mem_op(label));
 			return 64;
-		case INT:
+		case INT_POSITIVE:
+		case INT_NEGATIVE:
 			ushort w = self.bits(inst.ty)!;
-			long value;
-			switch (key.int_val.tag)
-			{
-				case U64: value = (long)key.int_val.u64;
-				case I64: value = key.int_val.i64;
-				case BIG_INT: self.fail("TODO: big integer constants")!;
-			}
+			if (!key.int_fits_64()) self.fail("TODO: big integer constants")!;
+			long value = (long)key.int_low_u64();
 			// Truncate to the operand width, keeping the signed reading the assembler expects.
 			switch (w)
 			{
@@ -227,7 +223,11 @@ fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 			}
 			self.emit(MOV, reg_op(reg.to_bits(w)), imm_op(value));
 			return w;
-		case FLOAT: self.fail("TODO: floating point constants")!;
+		case F16:
+		case F32:
+		case F64:
+		case F80:
+		case F128: self.fail("TODO: floating point constants")!;
 		default: self.fail("TODO: constants of this kind")!;
 	}
 	unreachable();
