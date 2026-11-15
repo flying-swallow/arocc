@@ -1,0 +1,9 @@
+// This tests that pragmas in locations where the parser does not check for them
+// do not cause undefined behavior.  See https://github.com/Vexu/arocc/issues/82
+// Parser improvements may reduce or eliminate the errors reported.
+
+int foo,
+#pragma bar bar // #error@2: expected identifier or '('
+int baz;
+#pragma qux
+

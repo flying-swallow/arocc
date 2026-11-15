@@ -1,0 +1,51 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: preprocessor. One target per line so parallel additions merge cleanly.
+
+c3_test(name = "dep_file_tests", srcs = ["dep_file_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "include_search_tests", srcs = ["include_search_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "include_integration_tests", srcs = ["include_integration_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_contract_tests", srcs = ["pp_contract_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pragma_tests", srcs = ["pragma_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "hideset_tests", srcs = ["hideset_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_expression_tests", srcs = ["pp_expression_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "macro_paste_tests", srcs = ["macro_paste_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_directives_tests", srcs = ["pp_directives_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_reference_tests", srcs = ["pp_reference_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_print_tests", srcs = ["pp_print_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "predefined_contract_tests", srcs = ["predefined_contract_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_builtin_integration_tests", srcs = ["pp_builtin_integration_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "macro_expand_tests", srcs = ["macro_expand_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "macro_expand_manual_tests", srcs = ["macro_expand_manual_tests.c3"], deps = ["//:aro_c3_lib"], tags = ["manual"])
+c3_test(name = "predefined_macros_x86_tests", srcs = ["predefined_macros_x86_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_builtin_macros_tests", srcs = ["pp_builtin_macros_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "predefined_macros_other_tests", srcs = ["predefined_macros_other_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "pp_feature_queries_tests", srcs = ["pp_feature_queries_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "predefined_macros_tests", srcs = ["predefined_macros_tests.c3"], deps = ["//:aro_c3_lib"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":dep_file_tests",
+        ":include_search_tests",
+        ":include_integration_tests",
+        ":pp_contract_tests",
+        ":pragma_tests",
+        ":hideset_tests",
+        ":pp_expression_tests",
+        ":macro_paste_tests",
+        ":pp_directives_tests",
+        ":pp_reference_tests",
+        ":pp_print_tests",
+        ":predefined_contract_tests",
+        ":pp_builtin_integration_tests",
+        ":macro_expand_tests",
+        ":predefined_macros_x86_tests",
+        ":pp_builtin_macros_tests",
+        ":predefined_macros_other_tests",
+        ":pp_feature_queries_tests",
+        ":predefined_macros_tests",
+    ],
+    visibility = ["//test:__pkg__"],
+)

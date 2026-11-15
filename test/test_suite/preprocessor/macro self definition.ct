@@ -1,0 +1,15 @@
+// #kind: expand
+#define FOO FOO
+
+FOO
+
+#define BAR BAZ
+#define BAZ BAR
+
+BAR
+BAZ
+
+// #expect: stdout
+FOO
+BAR
+BAZ

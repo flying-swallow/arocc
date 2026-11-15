@@ -1,0 +1,7 @@
+// #kind: expand
+// #opt: --emulate=clang -Iinclude -Wpedantic
+// #warning: base_file_redirect.h:1:32: __BASE_FILE__ is a clang extension [-Wbase-file-extension]
+#include <base_file_redirect.h>
+
+// #expect: stdout
+static const char *base_file = "clang __BASE_FILE__.c";

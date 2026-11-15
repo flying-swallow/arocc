@@ -1,0 +1,21 @@
+load("//tools:c3.bzl", "c3_binary", "c3_test")
+
+# Regenerates src/backend/x86_64/encoding_table.c3 from a Zig compiler checkout:
+#   bazel run //tools/gen_x86_encodings -- \
+#       ZIG_X86_64_DIR src/backend/x86_64/encoding_table.c3 [ZIG_COMMIT]
+# ZIG_X86_64_DIR is <zig>/src/codegen/x86_64; relative paths are taken from
+# the workspace root.
+c3_binary(
+    name = "gen_x86_encodings",
+    srcs = ["gen_x86_encodings.c3"],
+    deps = ["//test/src/lib:harness_lib"],
+)
+
+c3_test(
+    name = "gen_x86_encodings_tests",
+    srcs = [
+        "gen_x86_encodings.c3",
+        "gen_x86_encodings_tests.c3",
+    ],
+    deps = ["//test/src/lib:harness_lib"],
+)

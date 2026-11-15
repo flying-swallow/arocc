@@ -1,0 +1,18 @@
+load("//tools:c3.bzl", "c3_binary", "c3_test")
+
+# Regenerates src/identifier_tables.c3 from src/aro/char_info/identifier_tables.zig.
+#   bazel run //tools/gen_identifier_tables [-- --check]
+c3_binary(
+    name = "gen_identifier_tables",
+    srcs = ["gen_identifier_tables.c3"],
+    deps = ["//test/src/lib:harness_lib"],
+)
+
+c3_test(
+    name = "gen_identifier_tables_tests",
+    srcs = [
+        "gen_identifier_tables.c3",
+        "gen_identifier_tables_tests.c3",
+    ],
+    deps = ["//test/src/lib:harness_lib"],
+)

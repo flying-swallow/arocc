@@ -1,0 +1,6 @@
+module(name = "aro_library_consumer", version = "0.0.0")
+
+# The integration script points this dependency at an extracted public Aro
+# source package with --override_module. No source files are imported from the
+# checkout containing this consumer workspace.
+bazel_dep(name = "aro", version = "0.1.0-dev")

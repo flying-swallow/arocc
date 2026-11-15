@@ -1,0 +1,14 @@
+// #kind: expand_partial
+// #opt: -dN
+#define FOO 42
+#define BAR FOO
+int x = BAR;
+#undef FOO
+#define FOO 43
+
+// #expect: stdout
+#define FOO
+#define BAR
+int x = 42;
+#undef FOO
+#define FOO

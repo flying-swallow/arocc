@@ -1,0 +1,608 @@
+// Typed parsers for specialized expression builtins. The caller supplies the
+// same expression productions used elsewhere and installs the BuiltinParser
+// as ExpressionParser's optional `parser::IBuiltinParser`.
+module aro::parser_builtin;
+import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer;
+import aro::type_store, aro::value, aro::compilation, aro::parser_diagnostics, aro::lang_opts;
+import aro::builtins, aro::builtin_defs::common, aro::parser_expression;
+import aro::string_interner;
+import aro::bigint;
+import std::collections::list;
+import std::core::dstring;
+
+excuse PARSING_FAILED;
+
+<* Specialized builtin grammar. Operand expressions come from the owner's
+   `expressions` grammar, whose productions must consume exactly one expression
+   and leave the parser at its following token. `parser` is set on each
+   `parse_builtin_primary` call. *>
+struct BuiltinParser (parser::IBuiltinParser)
+{
+	parser::Parser* parser;
+	parser::IExpressionGrammar expressions;
+	tokens::TokenIndex opener;
+}
+
+<* Zig `assignExpr` through the owner's grammar. HOOK_ABSENT when it provides none. *>
+fn parser_result::Result? BuiltinParser.assign_expr(&self, bool eval)
+{
+	parser::IExpressionGrammar g = self.expressions;
+	if (!g || !&g.assignment_expression) return parser::HOOK_ABSENT~;
+	return g.assignment_expression(self.parser, eval);
+}
+
+<* Zig `integerConstExpr` through the owner's grammar. HOOK_ABSENT when it provides none. *>
+fn parser_result::Result? BuiltinParser.integer_const_expr(&self, parser::ConstDeclFoldingMode mode, bool eval)
+{
+	parser::IExpressionGrammar g = self.expressions;
+	if (!g || !&g.integer_constant_expression) return parser::HOOK_ABSENT~;
+	return g.integer_constant_expression(self.parser, mode, eval);
+}
+
+<* ExpressionParser builtin hook. It resolves the source spelling through the
+   normal builtin cache, dispatches only the supported common tags, and leaves
+   every other identifier to ordinary primary-expression parsing. *>
+fn parser_result::Result? BuiltinParser.parse_builtin_primary(&self, parser::Parser* p, bool eval) @dynamic
+{
+	BuiltinParser* configured = self;
+	String spelling = p.tree.tok_slice(p.tok_i);
+	builtins::Expanded? maybe_expanded = p.comp.builtins.get_or_create(p.comp, spelling);
+	if (catch maybe_expanded) return parser_expression::NO_EXPRESSION~;
+	builtins::Expanded expanded = maybe_expanded;
+	BuiltinParser active = *configured;
+	active.parser = p;
+	bool specialized = expanded.tag == common::TAG___BUILTIN_BIT_CAST ||
+		expanded.tag == common::TAG___BUILTIN_SHUFFLEVECTOR ||
+		expanded.tag == common::TAG___BUILTIN_CONVERTVECTOR ||
+		expanded.tag == common::TAG___BUILTIN_CHOOSE_EXPR ||
+		expanded.tag == common::TAG___BUILTIN_VA_ARG ||
+		expanded.tag == common::TAG___BUILTIN_VA_ARG_PACK ||
+		expanded.tag == common::TAG___BUILTIN_VA_ARG_PACK_LEN ||
+		expanded.tag == common::TAG___BUILTIN_OFFSETOF ||
+		expanded.tag == common::TAG___BUILTIN_BITOFFSETOF ||
+		expanded.tag == common::TAG___BUILTIN_TYPES_COMPATIBLE_P;
+	if (!specialized) return parser_expression::NO_EXPRESSION~;
+	tokens::TokenIndex builtin_tok = p.tok_i;
+	p.advance();
+	if (expanded.tag == common::TAG___BUILTIN_BIT_CAST) return active.bit_cast(builtin_tok, eval);
+	if (expanded.tag == common::TAG___BUILTIN_SHUFFLEVECTOR) return active.shufflevector(builtin_tok, eval);
+	if (expanded.tag == common::TAG___BUILTIN_CONVERTVECTOR) return active.convertvector(builtin_tok, eval);
+	if (expanded.tag == common::TAG___BUILTIN_CHOOSE_EXPR) return active.choose_expr(eval);
+	if (expanded.tag == common::TAG___BUILTIN_VA_ARG) return active.va_arg(builtin_tok, eval);
+	if (expanded.tag == common::TAG___BUILTIN_VA_ARG_PACK) return active.va_arg_pack(builtin_tok);
+	if (expanded.tag == common::TAG___BUILTIN_VA_ARG_PACK_LEN) return active.va_arg_pack_len(builtin_tok);
+	if (expanded.tag == common::TAG___BUILTIN_OFFSETOF) return active.offsetof(builtin_tok, false, eval);
+	if (expanded.tag == common::TAG___BUILTIN_BITOFFSETOF) return active.offsetof(builtin_tok, true, eval);
+	if (expanded.tag == common::TAG___BUILTIN_TYPES_COMPATIBLE_P) return active.types_compatible(builtin_tok);
+	return parser_expression::NO_EXPRESSION~;
+}
+
+fn void? BuiltinParser.open(&self)
+{
+	self.opener = self.parser.tok_i;
+	return self.parser.expect(tokenizer::TokenId.L_PAREN);
+}
+
+fn void? BuiltinParser.comma(&self)
+{
+	return self.parser.expect(tokenizer::TokenId.COMMA);
+}
+
+fn void? BuiltinParser.close(&self)
+{
+	return self.parser.expect_closing(tokenizer::TokenId.R_PAREN, self.opener);
+}
+
+<* Recover an offsetof parse to the matching closing parenthesis. *>
+fn void BuiltinParser.recover_offsetof(&self)
+{
+	parser::Parser* p = self.parser;
+	uint nesting = 0;
+	while (!p.at_eof())
+	{
+		tokenizer::TokenId id = p.tree.tokens[(usz)p.tok_i].id;
+		if (id == tokenizer::TokenId.R_PAREN)
+		{
+			if (nesting == 0) { p.advance(); return; }
+			nesting--;
+		}
+		else if (id == tokenizer::TokenId.L_PAREN || id == tokenizer::TokenId.L_BRACE || id == tokenizer::TokenId.L_BRACKET) { nesting++; }
+		else if ((id == tokenizer::TokenId.R_BRACE || id == tokenizer::TokenId.R_BRACKET) && nesting > 0) { nesting--; }
+		p.advance();
+	}
+}
+
+fn bool add_offset_bits(long* offset_bits, ulong delta)
+{
+	if (delta > (ulong)long::max) return false;
+	int128 total = (int128)*offset_bits + (int128)delta;
+	if (total < (int128)long::min || total > (int128)long::max) return false;
+	*offset_bits = (long)total;
+	return true;
+}
+
+fn bool add_array_offset_bits(long* offset_bits, ulong stride_bits, long index)
+{
+	int128 delta = (int128)stride_bits * (int128)index;
+	if (delta < (int128)long::min || delta > (int128)long::max) return false;
+	int128 total = (int128)*offset_bits + delta;
+	if (total < (int128)long::min || total > (int128)long::max) return false;
+	*offset_bits = (long)total;
+	return true;
+}
+
+fn String offsetof_index_text(parser_result::Result index, parser::Parser* p)
+{
+	DString text;
+	text.init(tmem);
+	(void)index.val.print(index.qt, p.comp, &text);
+	return text.str_view();
+}
+
+fn void? BuiltinParser.check_offsetof_array_bounds(&self, parser_result::Result index,
+	type_store::QualType array_qt, type_store::NodeIndex array_node, tokens::TokenIndex bracket_tok)
+{
+	parser::Parser* p = self.parser;
+	if (!index.qt.is_real_int(p.comp) || index.val.is_none()) return;
+	if (try len = array_qt.array_len(p.comp))
+	{
+		if (len == 0) return;
+		if (len == 1)
+		{
+			tree::Node array_expr = array_node.get(&p.tree);
+			if (array_expr.kind == tree::NodeKind.MEMBER_ACCESS_EXPR || array_expr.kind == tree::NodeKind.MEMBER_ACCESS_PTR_EXPR)
+			{
+				type_store::QualType base_qt = array_expr.member_access.base.qt(&p.tree);
+				if (try pointer = base_qt.get(p.comp, type_store::TypeTag.POINTER)) base_qt = pointer.pointer.child;
+				if (try record = base_qt.get_record(p.comp))
+				{
+					if ((usz)array_expr.member_access.member_index + 1 == record.fields.len)
+					{
+						if (!index.val.is_zero(p.comp))
+						{
+							DString message;
+							message.init(tmem);
+							message.appendf("array index %s is past the end of the array",
+								offsetof_index_text(index, p));
+							p.emit_parser_diag(parser_diagnostics::ParserDiag.OLD_STYLE_FLEXIBLE_STRUCT,
+								message.str_view(), bracket_tok)!;
+						}
+						return;
+					}
+				}
+			}
+		}
+		ulong index_int = index.val.to_u64(p.comp) ?? ulong::max;
+		if (index.qt.signedness(p.comp) == lang_opts::Signedness.UNSIGNED)
+		{
+			if (index_int >= len)
+			{
+				p.err(parser_diagnostics::ParserDiag.ARRAY_AFTER, bracket_tok,
+					p.fmt_value(index.val, index.qt))!;
+			}
+		}
+		else if (value::compare(index.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+		{
+			p.err(parser_diagnostics::ParserDiag.ARRAY_BEFORE, bracket_tok,
+				p.fmt_value(index.val, index.qt))!;
+		}
+		else if (index_int >= len)
+		{
+			p.err(parser_diagnostics::ParserDiag.ARRAY_AFTER, bracket_tok,
+				p.fmt_value(index.val, index.qt))!;
+		}
+	}
+}
+
+<* Resolve a named field, including fields promoted through anonymous records.
+   The returned access chain mirrors fieldAccessExtra in Parser.zig. *>
+fn bool BuiltinParser.find_offsetof_field(&self, type_store::Record record,
+	type_store::NodeIndex base, string_interner::StringId target_name, tokens::TokenIndex access_tok,
+	type_store::NodeIndex* out_node, type_store::QualType* out_qt, ulong* out_offset_bits)
+{
+	parser::Parser* p = self.parser;
+	for (usz i = 0; i < record.fields.len; i++)
+	{
+		type_store::RecordField field = record.fields[i];
+		if (field.name_tok == (type_store::TokenIndex)0)
+		{
+			if (try nested_record = field.qt.get_record(p.comp))
+			{
+				if (nested_record.has_field(p.comp, target_name))
+				{
+					type_store::NodeIndex anonymous_access = p.tree.add_node({ .kind = tree::NodeKind.MEMBER_ACCESS_EXPR,
+						.member_access = { .qt = field.qt, .base = base, .access_tok = access_tok, .member_index = (uint)i } });
+					if (self.find_offsetof_field(nested_record, anonymous_access, target_name, access_tok,
+						out_node, out_qt, out_offset_bits))
+					{
+						*out_offset_bits += field.layout.offset_bits;
+						return true;
+					}
+				}
+			}
+		}
+		if (field.name == target_name)
+		{
+			*out_node = p.tree.add_node({ .kind = tree::NodeKind.MEMBER_ACCESS_EXPR,
+				.member_access = { .qt = field.qt, .base = base, .access_tok = access_tok, .member_index = (uint)i } });
+			*out_qt = field.qt;
+			*out_offset_bits = field.layout.offset_bits;
+			return true;
+		}
+	}
+	return false;
+}
+
+<* __builtin_bit_cast(type-name, expression). *>
+fn parser_result::Result? BuiltinParser.bit_cast(&self, tokens::TokenIndex builtin_tok, bool eval = true)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	type_store::QualType dest = p.parse_typed_type_name() ?? type_store::INVALID;
+	if (dest.is_invalid()) return PARSING_FAILED~;
+	if (catch self.comma()) return PARSING_FAILED~;
+	parser_result::Result operand = self.assign_expr(eval)!;
+	operand.lval_conversion(p);
+	if (catch self.close()) return PARSING_FAILED~;
+	operand.save_value(p);
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.CAST, .cast = {
+		.l_paren = builtin_tok, .kind = tree::CastKind.BITCAST, .operand = operand.node,
+		.qt = dest, .implicit = false,
+	} });
+	return { .node = node, .qt = dest };
+}
+
+<* __builtin_shufflevector(lhs, rhs, integer-constant-index...). *>
+fn parser_result::Result? BuiltinParser.shufflevector(&self, tokens::TokenIndex builtin_tok, bool eval = true)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	tokens::TokenIndex lhs_tok = p.tok_i;
+	parser_result::Result lhs = self.assign_expr(eval)!;
+	lhs.value_conversion(p);
+	if (catch self.comma()) return PARSING_FAILED~;
+	tokens::TokenIndex rhs_tok = p.tok_i;
+	parser_result::Result rhs = self.assign_expr(eval)!;
+	rhs.value_conversion(p);
+	value::Value negative_one = value::int_i64(-1, p.comp);
+	List{type_store::NodeIndex} indexes;
+	indexes.init(p.comp.gpa);
+	defer indexes.free();
+	while (p.is_at(tokenizer::TokenId.COMMA))
+	{
+		p.advance();
+		tokens::TokenIndex index_tok = p.tok_i;
+		parser_result::Result index = self.integer_const_expr(parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval)!;
+		if (!index.qt.is_int(p.comp) || index.val.is_none())
+		{
+			p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR, "expression is not an integer constant expression", index_tok)!;
+			return PARSING_FAILED~;
+		}
+		if (value::compare(index.val, bigint::CompareOperator.LT, negative_one, p.comp))
+		{
+			p.err(parser_diagnostics::ParserDiag.SHUFFLEVECTOR_NEGATIVE_INDEX, index_tok)!;
+		}
+		else if (try lhs_vec = lhs.qt.get(p.comp, type_store::TypeTag.VECTOR))
+		{
+			if (try rhs_vec = rhs.qt.get(p.comp, type_store::TypeTag.VECTOR))
+			{
+				ulong max_index = (ulong)lhs_vec.vector.len + (ulong)rhs_vec.vector.len;
+				if (value::compare(index.val, bigint::CompareOperator.GTE, value::int_u64(max_index, p.comp), p.comp))
+				{
+					p.err(parser_diagnostics::ParserDiag.SHUFFLEVECTOR_INDEX_TOO_BIG, index_tok)!;
+				}
+			}
+		}
+		indexes.push(index.node);
+		index.save_value(p);
+	}
+	if (catch self.close()) return PARSING_FAILED~;
+	type_store::QualType result_qt = type_store::INVALID;
+	if (!lhs.qt.is_invalid() && !lhs.qt.is(p.comp, type_store::TypeTag.VECTOR)) { p.err(parser_diagnostics::ParserDiag.SHUFFLEVECTOR_ARG, lhs_tok, "first")!; }
+	else if (!rhs.qt.is_invalid() && !rhs.qt.is(p.comp, type_store::TypeTag.VECTOR)) { p.err(parser_diagnostics::ParserDiag.SHUFFLEVECTOR_ARG, rhs_tok, "second")!; }
+	else if (!lhs.qt.is_invalid() && !rhs.qt.is_invalid() && !lhs.qt.eql(rhs.qt, p.comp)) { p.err(parser_diagnostics::ParserDiag.SHUFFLEVECTOR_SAME_TYPE, builtin_tok)!; }
+	else if (indexes.len() == 0) { result_qt = lhs.qt; }
+	else if (try vec = lhs.qt.get(p.comp, type_store::TypeTag.VECTOR)) { result_qt = p.comp.type_store.put(type_store::type_vector(vec.vector.elem, (uint)indexes.len())); }
+	lhs.save_value(p);
+	rhs.save_value(p);
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_SHUFFLEVECTOR, .shufflevector = {
+		.builtin_tok = builtin_tok, .qt = result_qt, .lhs = lhs.node, .rhs = rhs.node, .indexes = indexes.array_view(),
+	} });
+	return { .node = node, .qt = result_qt };
+}
+
+<* __builtin_va_arg(list, type-name). *>
+fn parser_result::Result? BuiltinParser.va_arg(&self, tokens::TokenIndex builtin_tok, bool eval = true)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	tokens::TokenIndex list_tok = p.tok_i;
+	parser_result::Result va_list = self.assign_expr(eval)!;
+	va_list.lval_conversion(p);
+	if (catch self.comma()) return PARSING_FAILED~;
+	type_store::QualType result_qt = p.parse_typed_type_name() ?? type_store::INVALID;
+	if (catch self.close()) return PARSING_FAILED~;
+	if (!va_list.qt.eql(p.comp.type_store.va_list, p.comp))
+	{
+		p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_VA_ARG, list_tok, p.fmt_qt(va_list.qt))!;
+		return PARSING_FAILED~;
+	}
+	va_list.save_value(p);
+	type_store::NodeIndex[1] args = { va_list.node };
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
+		.builtin_tok = builtin_tok, .qt = result_qt, .args = args[0:1],
+	} });
+	return { .node = node, .qt = result_qt };
+}
+
+<* __builtin_va_arg_pack() and __builtin_va_arg_pack_len(). *>
+fn parser_result::Result? BuiltinParser.va_arg_pack(&self, tokens::TokenIndex builtin_tok)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	if (catch self.close()) return PARSING_FAILED~;
+	bool valid_function = p.check_va_pack_function(builtin_tok, "__builtin_va_arg_pack")!;
+	type_store::QualType result_qt = type_store::INVALID;
+	if (valid_function)
+	{
+		parser::VaArgPackCallContext call = p.va_arg_pack_call_context();
+		if (!call.active) { p.err(parser_diagnostics::ParserDiag.VA_PACK_NON_CALL, builtin_tok)!; }
+		else if (!call.variadic) { p.err(parser_diagnostics::ParserDiag.VA_PACK_NON_VARIADIC_CALL, builtin_tok)!; }
+		else if (call.typed) { p.err(parser_diagnostics::ParserDiag.VA_PACK_NON_VARIADIC_ARG, builtin_tok)!; }
+		else { result_qt = type_store::VOID; }
+	}
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_VA_ARG_PACK, .va_arg_pack = { .builtin_tok = builtin_tok } });
+	return { .node = node, .qt = result_qt };
+}
+
+fn parser_result::Result? BuiltinParser.va_arg_pack_len(&self, tokens::TokenIndex builtin_tok)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	if (catch self.close()) return PARSING_FAILED~;
+	p.check_va_pack_function(builtin_tok, "__builtin_va_arg_pack_len")!;
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_VA_ARG_PACK_LEN, .va_arg_pack = { .builtin_tok = builtin_tok } });
+	return { .node = node, .qt = type_store::INT };
+}
+
+<* __builtin_offsetof / __builtin_bitoffsetof with member and array designators. *>
+fn parser_result::Result? BuiltinParser.offsetof(&self, tokens::TokenIndex builtin_tok, bool bits = false, bool eval = true)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	tokens::TokenIndex type_tok = p.tok_i;
+	type_store::QualType base_qt = p.parse_typed_type_name() ?? type_store::INVALID;
+	if (base_qt.is_invalid()) { self.recover_offsetof(); return PARSING_FAILED~; }
+	type_store::Record record;
+	if (try found_record = base_qt.get_record(p.comp)) { record = found_record; }
+	else
+	{
+		p.err(parser_diagnostics::ParserDiag.OFFSETOF_TY, type_tok, p.fmt_qt(base_qt))!;
+		self.recover_offsetof();
+		return PARSING_FAILED~;
+	}
+	if (!record.has_layout)
+	{
+		p.err(parser_diagnostics::ParserDiag.OFFSETOF_INCOMPLETE, type_tok, p.fmt_qt(base_qt))!;
+		self.recover_offsetof();
+		return PARSING_FAILED~;
+	}
+	if (catch self.comma()) { self.recover_offsetof(); return PARSING_FAILED~; }
+	if (!p.is_at(tokenizer::TokenId.IDENTIFIER) && !p.is_at(tokenizer::TokenId.EXTENDED_IDENTIFIER))
+	{
+		p.err(parser_diagnostics::ParserDiag.EXPECTED_IDENTIFIER, p.tok_i)!;
+		self.recover_offsetof();
+		return PARSING_FAILED~;
+	}
+	tokens::TokenIndex initial_name_tok = p.tok_i;
+	string_interner::StringId initial_name = p.comp.intern_string(p.tree.tok_slice(initial_name_tok));
+	p.advance();
+	type_store::NodeIndex access = p.tree.add_node({ .kind = tree::NodeKind.DEFAULT_INIT_EXPR, .default_init = { .last_tok = p.tok_i, .qt = base_qt } });
+	type_store::NodeIndex initial_field_access;
+	type_store::QualType initial_field_qt;
+	ulong initial_field_offset_bits;
+	if (!self.find_offsetof_field(record, access, initial_name, builtin_tok,
+		&initial_field_access, &initial_field_qt, &initial_field_offset_bits))
+	{
+		p.err(parser_diagnostics::ParserDiag.NO_SUCH_MEMBER, initial_name_tok,
+			p.tree.tok_slice(initial_name_tok), p.fmt_qt(base_qt))!;
+		self.recover_offsetof();
+		return PARSING_FAILED~;
+	}
+	type_store::QualType current_qt = base_qt;
+	long offset_bits = 0;
+	bool offset_known = true;
+	if (!add_offset_bits(&offset_bits, initial_field_offset_bits)) offset_known = false;
+	access = initial_field_access;
+	current_qt = initial_field_qt;
+	tokens::TokenIndex access_tok = builtin_tok;
+	while (p.is_at(tokenizer::TokenId.PERIOD) || p.is_at(tokenizer::TokenId.L_BRACKET))
+	{
+		if (p.is_at(tokenizer::TokenId.PERIOD))
+		{
+			access_tok = p.tok_i;
+			p.advance();
+			if (!p.is_at(tokenizer::TokenId.IDENTIFIER) && !p.is_at(tokenizer::TokenId.EXTENDED_IDENTIFIER))
+			{
+				p.err(parser_diagnostics::ParserDiag.EXPECTED_IDENTIFIER, p.tok_i)!;
+				self.recover_offsetof();
+				return PARSING_FAILED~;
+			}
+			if (try found_record = current_qt.get_record(p.comp)) { record = found_record; }
+			else
+			{
+				p.err(parser_diagnostics::ParserDiag.OFFSETOF_TY, p.tok_i, p.fmt_qt(current_qt))!;
+				self.recover_offsetof();
+				return PARSING_FAILED~;
+			}
+			if (!record.has_layout)
+			{
+				p.err(parser_diagnostics::ParserDiag.OFFSETOF_INCOMPLETE, p.tok_i, p.fmt_qt(current_qt))!;
+				self.recover_offsetof();
+				return PARSING_FAILED~;
+			}
+		}
+		if (p.is_at(tokenizer::TokenId.L_BRACKET))
+		{
+			tokens::TokenIndex bracket_tok = p.tok_i;
+			p.advance();
+			// Prefer the full assignment grammar; fall back to an integer constant expression.
+			parser_result::Result? maybe_index = self.assign_expr(eval);
+			if (catch absent = maybe_index)
+			{
+				if (absent == parser::HOOK_ABSENT)
+				{
+					maybe_index = self.integer_const_expr(parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval);
+				}
+			}
+			if (catch caught_fault = maybe_index) { self.recover_offsetof(); return caught_fault~; }
+			parser_result::Result index = maybe_index;
+			if (catch p.expect(tokenizer::TokenId.R_BRACKET)) { self.recover_offsetof(); return PARSING_FAILED~; }
+			type_store::Type array_type;
+			if (try found_array = current_qt.get(p.comp, type_store::TypeTag.ARRAY)) { array_type = found_array; }
+			else
+			{
+				p.err(parser_diagnostics::ParserDiag.OFFSETOF_ARRAY, bracket_tok, p.fmt_qt(current_qt))!;
+				self.recover_offsetof();
+				return PARSING_FAILED~;
+			}
+			index.value_conversion(p);
+			if (!index.qt.is_invalid() && !index.qt.is_real_int(p.comp)) { p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket_tok)!; }
+			self.check_offsetof_array_bounds(index, current_qt, access, bracket_tok)!;
+			if (try index_value = index.val.to_i64(p.comp))
+			{
+				if (!add_array_offset_bits(&offset_bits, array_type.array.elem.bit_sizeof(p.comp), index_value)) offset_known = false;
+			}
+			else { offset_known = false; }
+			index.save_value(p);
+			parser_result::Result array_base = { .node = access, .qt = current_qt };
+			array_base.lval_conversion(p);
+			access = p.tree.add_node({ .kind = tree::NodeKind.ARRAY_ACCESS_EXPR, .array_access = {
+				.l_bracket_tok = bracket_tok, .base = array_base.node, .index = index.node, .qt = array_type.array.elem,
+			} });
+			current_qt = array_type.array.elem;
+			continue;
+		}
+		if (!p.is_at(tokenizer::TokenId.IDENTIFIER) && !p.is_at(tokenizer::TokenId.EXTENDED_IDENTIFIER))
+		{
+			self.recover_offsetof();
+			return PARSING_FAILED~;
+		}
+		tokens::TokenIndex name_tok = p.tok_i;
+		String name = p.tree.tok_slice(name_tok);
+		string_interner::StringId field_name = p.comp.intern_string(name);
+		type_store::NodeIndex field_access;
+		type_store::QualType field_qt;
+		ulong field_offset_bits;
+		if (!self.find_offsetof_field(record, access, field_name, access_tok,
+			&field_access, &field_qt, &field_offset_bits))
+		{
+			p.err(parser_diagnostics::ParserDiag.NO_SUCH_MEMBER, name_tok, name, p.fmt_qt(base_qt))!;
+			self.recover_offsetof();
+			return PARSING_FAILED~;
+		}
+		p.advance();
+		if (!add_offset_bits(&offset_bits, field_offset_bits)) offset_known = false;
+		access = field_access;
+		current_qt = field_qt;
+	}
+	if (catch self.close()) { self.recover_offsetof(); return PARSING_FAILED~; }
+	long offset = bits ? offset_bits : offset_bits / 8;
+	value::Value result_value = offset_known ? value::int_i64(offset, p.comp) : value::NONE;
+	type_store::NodeIndex[1] args = { access };
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
+		.builtin_tok = builtin_tok, .qt = p.comp.type_store.size, .args = args[0:1],
+	} });
+	if (!result_value.is_none()) p.tree.set_value(node, result_value);
+	return { .node = node, .qt = p.comp.type_store.size, .val = result_value };
+}
+
+<* __builtin_convertvector(expression, vector-type). *>
+fn parser_result::Result? BuiltinParser.convertvector(&self, tokens::TokenIndex builtin_tok, bool eval = true)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	parser_result::Result operand = self.assign_expr(eval)!;
+	operand.value_conversion(p);
+	if (catch self.comma()) return PARSING_FAILED~;
+	type_store::QualType dest = p.parse_typed_type_name() ?? type_store::INVALID;
+	if (catch self.close()) return PARSING_FAILED~;
+	if (operand.qt.is_invalid() || dest.is_invalid()) { dest = type_store::INVALID; }
+	else
+	{
+		if (try operand_vec = operand.qt.get(p.comp, type_store::TypeTag.VECTOR))
+		{
+			if (try dest_vec = dest.get(p.comp, type_store::TypeTag.VECTOR))
+			{
+				if (operand_vec.vector.len != dest_vec.vector.len)
+				{
+					p.emit_parser_diag(parser_diagnostics::ParserDiag.CONVERTVECTOR_SIZE, "first two arguments to __builtin_convertvector must have the same number of elements", builtin_tok)!;
+				}
+			}
+			else
+			{
+				p.err(parser_diagnostics::ParserDiag.CONVERTVECTOR_ARG, builtin_tok, "second")!;
+			}
+		}
+		else
+		{
+			p.err(parser_diagnostics::ParserDiag.CONVERTVECTOR_ARG, builtin_tok, "first")!;
+		}
+	}
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CONVERTVECTOR, .convertvector = {
+		.builtin_tok = builtin_tok, .dest_qt = dest, .operand = operand.node,
+	} });
+	return { .node = node, .qt = dest };
+}
+
+<* __builtin_types_compatible_p(type-name, type-name). *>
+fn parser_result::Result? BuiltinParser.types_compatible(&self, tokens::TokenIndex builtin_tok)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	type_store::QualType lhs = p.parse_typed_type_name() ?? type_store::INVALID;
+	if (catch self.comma()) return PARSING_FAILED~;
+	type_store::QualType rhs = p.parse_typed_type_name() ?? type_store::INVALID;
+	if (catch self.close()) return PARSING_FAILED~;
+	bool invalid = lhs.is_invalid() || rhs.is_invalid();
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_TYPES_COMPATIBLE_P, .types_compatible = {
+		.builtin_tok = builtin_tok, .lhs = lhs, .rhs = rhs,
+	} });
+	parser_result::Result result = { .node = node, .qt = invalid ? type_store::INVALID : type_store::INT };
+	if (!invalid)
+	{
+		result.val = value::from_bool(lhs.eql(rhs, p.comp));
+		p.tree.set_value(node, result.val);
+	}
+	return result;
+}
+
+<* __builtin_choose_expr(constant, then-expression, else-expression). The
+   unselected expression is still parsed with eval=false so it is type checked
+   and represented in the tree without folding side effects. *>
+fn parser_result::Result? BuiltinParser.choose_expr(&self, bool eval = true)
+{
+	parser::Parser* p = self.parser;
+	if (catch self.open()) return PARSING_FAILED~;
+	tokens::TokenIndex cond_tok = p.tok_i;
+	parser_result::Result cond = self.integer_const_expr(parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING, eval)!;
+	if (cond.val.is_none())
+	{
+		p.emit_parser_diag(parser_diagnostics::ParserDiag.BUILTIN_CHOOSE_COND, "'__builtin_choose_expr' requires a constant expression", cond_tok)!;
+		return PARSING_FAILED~;
+	}
+	bool select_then = cond.val.to_bool(p.comp);
+	if (catch self.comma()) return PARSING_FAILED~;
+	parser_result::Result then_expr = self.assign_expr(eval && select_then)!;
+	if (catch self.comma()) return PARSING_FAILED~;
+	parser_result::Result else_expr = self.assign_expr(eval && !select_then)!;
+	if (catch self.close()) return PARSING_FAILED~;
+	parser_result::Result selected = select_then ? then_expr : else_expr;
+	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CHOOSE_EXPR, .conditional = {
+		.cond_tok = cond_tok, .qt = selected.qt, .cond = cond.node,
+		.then_expr = then_expr.node, .else_expr = else_expr.node,
+	} });
+	selected.node = node;
+	if (!selected.val.is_none()) p.tree.set_value(node, selected.val);
+	return selected;
+}

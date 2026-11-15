@@ -1,3 +1,13 @@
 .zig-cache/
 zig-out/
 test/fuzz-output/
+bazel-*
+.agentic-loop/
+
+# C3 compiler output
+obj/
+out/
+
+# Stray local probe binaries
+/arocc_path_resolution_check
+/fuzz_oom_probe

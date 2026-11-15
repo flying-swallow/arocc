@@ -1,0 +1,9 @@
+// #kind: expand
+#define FOO
+#ifdef FOO
+#ifdef FOO
+#else
+#endif
+#endif
+
+// #expect: stdout

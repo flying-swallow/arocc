@@ -1,0 +1,9 @@
+module(name = "aro", version = "0.1.0-dev")
+
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+c3c = use_repo_rule("//tools:c3c_repo.bzl", "c3c_repo")
+native_assembler = use_repo_rule("//tools:native_assembler_repo.bzl", "native_assembler_repo")
+
+c3c(name = "c3c")
+native_assembler(name = "native_assembler_tools")

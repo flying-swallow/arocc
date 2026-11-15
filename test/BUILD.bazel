@@ -1,0 +1,116 @@
+# Test fixtures. Layout follows c3c's test/:
+#
+#   src/<group>/             harness code: test_suite runner, records, gcc, cli,
+#                            probes, manifest runner, fuzz, shared lib (own packages)
+#   test_suite/<area>/       integration cases (own package, //test/test_suite)
+#   unit/<area>/             C3 unit tests with their data/ (own packages)
+#   records/                 record-layout corpus (//test/src/records)
+#   regression/<area>/       probe data: assembly/ and ir/ cases, preprocessor/ fixture tree
+#   native/                  backend CLI sources
+#   gcc/                     GCC C testsuite copy (GPL-3.0+, see gcc/SOURCE)
+#   portability/             runfiles path with a space
+#   fuzz/corpus/             fuzz replay inputs
+#
+# This is a single package so recursive globs see every fixture without
+# crossing package boundaries.
+
+_FIXTURE_VISIBILITY = [
+    "//:__pkg__",
+    "//test:__subpackages__",
+    "//tools:__subpackages__",
+]
+
+# Individual fixture files are addressable as //test:<path>.
+exports_files(
+    glob(
+        [
+            "regression/**",
+            "native/**",
+            "portability/**",
+            "fuzz/**",
+        ],
+    ),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+# GCC C testsuite copy for //test/src/gcc:gcc_testsuite_*.
+filegroup(
+    name = "gcc_testsuite",
+    srcs = glob(["gcc/**"]),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+filegroup(
+    name = "record_fixtures",
+    srcs = glob(["records/**"]),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+[filegroup(
+    name = "regression_%s_fixtures" % area,
+    srcs = glob(["regression/%s/fixtures/**" % area]),
+    visibility = _FIXTURE_VISIBILITY,
+) for area in [
+    "assembly",
+    "preprocessor",
+]]
+
+filegroup(
+    name = "fuzz_corpus",
+    srcs = glob(["fuzz/corpus/**"]),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+UNIT_AREAS = [
+    "backend",
+    "builtins",
+    "driver",
+    "lexer",
+    "parser",
+    "preprocessor",
+    "tree",
+    "types",
+    "values",
+]
+
+test_suite(
+    name = "unit",
+    tests = ["//test/unit/%s:all" % area for area in UNIT_AREAS] + [
+        "//test/src/lib:harness_lib_tests",
+        "//test/src/manifest:runner_tests",
+        "//test/src/test_suite:test_suite_runner_tests",
+        "//test/src/gcc:gcc_testsuite_tests",
+    ],
+)
+
+test_suite(
+    name = "integration",
+    tests = [
+        "//test/src/cli:runfiles_portability_integration",
+        "//test/src/cli:library_consumer",
+        "//test/src/cli:cli_tests",
+        "//test/src/cli:backend_cli_regression",
+        "//test/src/cli:native_backend_cli_integration",
+        "//test/src/probes:native_assembly_integration",
+        "//test/src/probes:preprocessor_integration",
+        "//test/test_suite:all",
+    ],
+)
+
+test_suite(
+    name = "records",
+    tests = [
+        "//test/src/records:record_runner_tests",
+        "//test/src/records:record_regression",
+    ],
+)
+
+test_suite(
+    name = "regression",
+    tests = [
+        ":unit",
+        ":integration",
+        ":records",
+        "//test/src/probes:assembly_regression",
+    ],
+)

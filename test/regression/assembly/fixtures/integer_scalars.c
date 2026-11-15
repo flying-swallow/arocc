@@ -1,0 +1,4 @@
+/** manifest:
+expand
+*/
+integer-scalars

@@ -1,0 +1,21 @@
+// #kind: expand
+/* comment **/
+
+int I_exist;
+
+/*
+int I_dont;
+*/
+
+/* */int x;
+/*
+*/int y;
+
+int foo/**/; int/*
+*/bar;
+
+// #expect: stdout
+int I_exist;
+     int x;
+  int y;
+int foo    ; int  bar;

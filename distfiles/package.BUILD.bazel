@@ -1,0 +1,16 @@
+load("//tools:c3.bzl", "c3_library")
+
+# This standalone package includes the generated builtin and system-default
+# modules under src, so the source glob is its complete compiler input set.
+c3_library(
+    name = "aro",
+    srcs = glob(["src/**/*.c3"]),
+    data = glob(["include/*.h"]),
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "aro_distribution",
+    actual = ":aro",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,10 @@
+// #kind: expand
+// #env: SOURCE_DATE_EPOCH=0
+__DATE__
+__TIME__
+__TIMESTAMP__
+
+// #expect: stdout
+"Jan  1 1970"
+"00:00:00"
+"Thu Jan  1 00:00:00 1970"

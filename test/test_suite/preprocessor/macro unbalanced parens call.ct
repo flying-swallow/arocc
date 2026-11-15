@@ -1,0 +1,8 @@
+// #kind: expand
+#define FIRST(x) x
+#define SECOND FIRST
+#define THIRD SECOND( FIRST
+THIRD 42)
+
+// #expect: stdout
+ FIRST 42

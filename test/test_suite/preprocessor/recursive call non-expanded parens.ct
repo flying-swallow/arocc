@@ -1,0 +1,8 @@
+// #kind: expand
+#define foo(X) 1 bar
+#define bar(X) 2 foo
+
+foo(X)(Y)(Z)
+
+// #expect: stdout
+1 2 1 bar

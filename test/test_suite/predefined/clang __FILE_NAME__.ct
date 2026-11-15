@@ -1,0 +1,6 @@
+// #kind: expand
+// #opt: --emulate=clang -Wpedantic
+const char *file_name = __FILE_NAME__; // #warning@25: __FILE_NAME__ is a clang extension [-Wfile-name-extension]
+
+// #expect: stdout
+const char *file_name = "clang __FILE_NAME__.c";

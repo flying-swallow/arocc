@@ -1,0 +1,9 @@
+// #kind: expand
+// #opt: -pedantic
+#define ASM_SIZE(inst, ...)   ASM_SEL(inst##l##__VA_ARGS__, \ // #warning@48: passing no argument for the '...' parameter of a variadic macro is incompatible with C standards before C23 [-Wvariadic-macro-arguments-omitted]
+                                          inst##q##__VA_ARGS__) // #warning@52: passing no argument for the '...' parameter of a variadic macro is incompatible with C standards before C23 [-Wvariadic-macro-arguments-omitted]
+
+ASM_SIZE(bts)
+
+// #expect: stdout
+ASM_SEL(btsl, btsq)

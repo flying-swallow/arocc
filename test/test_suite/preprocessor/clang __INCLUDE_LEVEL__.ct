@@ -1,0 +1,11 @@
+// #kind: expand
+// #opt: --emulate=clang -Iinclude -Wpedantic
+// #warning: nested_include_1.h:1:34: __INCLUDE_LEVEL__ is a clang extension
+// #warning: nested_include_2.h:1:35: __INCLUDE_LEVEL__ is a clang extension
+static int main_include_level = __INCLUDE_LEVEL__; // #warning@33: __INCLUDE_LEVEL__ is a clang extension
+#include <nested_include_1.h>
+
+// #expect: stdout
+static int main_include_level = 0;
+static int first_include_level = 1;
+static int second_include_level = 2;
