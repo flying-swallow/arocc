@@ -48,32 +48,6 @@ excuse PARSING_FAILED;
 // ---------------------------------------------------------------------------
 // Zig `text_literal.Parser.Diagnostic` constants (exact Zig text).
 
-<*
- Zig `text_literal.Parser.Diagnostic` (exact Zig text). `fmt` is C3 printf syntax; `{c}` arguments are `Ascii` values.
-*>
-enum TextLiteralDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
-{
-	ILLEGAL_CHAR_ENCODING_ERROR { "illegal character encoding in character literal", ERROR, {} },
-	ILLEGAL_CHAR_ENCODING_WARNING { "illegal character encoding in character literal", WARNING, { .has_opt = true, .opt = Option.INVALID_SOURCE_ENCODING } },
-	MISSING_HEX_ESCAPE { "\\%s used with no following hex digits", ERROR, {} },
-	ESCAPE_SEQUENCE_OVERFLOW { "escape sequence out of range", ERROR, {} },
-	INCOMPLETE_UNIVERSAL_CHARACTER { "incomplete universal character name", ERROR, {} },
-	INVALID_UNIVERSAL_CHARACTER { "invalid universal character", ERROR, {} },
-	CHAR_TOO_LARGE { "character too large for enclosing character literal type", ERROR, {} },
-	UCN_BASIC_CHAR_ERROR { "character '%s' cannot be specified by a universal character name", ERROR, {} },
-	UCN_BASIC_CHAR_WARNING { "specifying character '%s' with a universal character name is incompatible with C standards before C23", OFF, { .has_opt = true, .opt = Option.PRE_C23_COMPAT } },
-	UCN_CONTROL_CHAR_ERROR { "universal character name refers to a control character", ERROR, {} },
-	UCN_CONTROL_CHAR_WARNING { "universal character name referring to a control character is incompatible with C standards before C23", OFF, { .has_opt = true, .opt = Option.PRE_C23_COMPAT } },
-	C89_UCN_IN_LITERAL { "universal character names are only valid in C99 or later", WARNING, { .has_opt = true, .opt = Option.UNICODE } },
-	NON_STANDARD_ESCAPE_CHAR { "use of non-standard escape character '\\%s'", OFF, { .extension = true } },
-	UNKNOWN_ESCAPE_SEQUENCE { "unknown escape sequence '\\%s'", WARNING, { .has_opt = true, .opt = Option.UNKNOWN_ESCAPE_SEQUENCE } },
-	FOUR_CHAR_CHAR_LITERAL { "multi-character character constant", OFF, { .has_opt = true, .opt = Option.FOUR_CHAR_CONSTANTS } },
-	MULTICHAR_LITERAL_WARNING { "multi-character character constant", WARNING, { .has_opt = true, .opt = Option.MULTICHAR } },
-	INVALID_MULTICHAR_LITERAL { "%s character literals may not contain multiple characters", ERROR, {} },
-	CHAR_LIT_TOO_WIDE { "character constant too long for its type", WARNING, {} },
-	U8_CHAR_LIT { "UTF-8 character literal is a C23 extension", WARNING, { .has_opt = true, .opt = Option.C23_EXTENSIONS, .extension = true } },
-}
-
 // ---------------------------------------------------------------------------
 // Shared diagnostic plumbing (implemented in stage 0; used by number_literal too)
 
@@ -415,17 +389,17 @@ fn TextLiteralParser text_parser(Compilation* comp, String literal, TextLiteralK
 
 <*
  Zig `Parser.parse`: evaluate a character constant.
- - UTF_8 kind before C23: warn TextLiteralDiag.U8_CHAR_LIT.
+ - UTF_8 kind before C23: warn Diagnostic.U8_CHAR_LIT.
  - Fast path: a single ASCII byte is the value.
  - Otherwise collect u32 chars from `next`: VALUE/CODEPOINT append the value,
    IMPROPERLY_ENCODED appends each byte, UTF8_TEXT appends each codepoint and
-   errs TextLiteralDiag.CHAR_TOO_LARGE if the largest exceeds max_codepoint.
+   errs Diagnostic.CHAR_TOO_LARGE if the largest exceeds max_codepoint.
  - More than one char: CHAR kind with exactly 4 -> warn
-   TextLiteralDiag.FOUR_CHAR_CHAR_LITERAL; other CHAR -> warn
-   TextLiteralDiag.MULTICHAR_LITERAL_WARNING; WIDE -> err TextLiteralDiag.INVALID_MULTICHAR_LITERAL
+   Diagnostic.FOUR_CHAR_CHAR_LITERAL; other CHAR -> warn
+   Diagnostic.MULTICHAR_LITERAL_WARNING; WIDE -> err Diagnostic.INVALID_MULTICHAR_LITERAL
    with "wide"; UTF_8/16/32 -> same with "Unicode".
  - CHAR multichar: val = (val << 8) + (u8)item for each item, tracking u32 shl
-   overflow -> err TextLiteralDiag.CHAR_LIT_TOO_WIDE. Otherwise val = the last char (0 if none).
+   overflow -> err Diagnostic.CHAR_LIT_TOO_WIDE. Otherwise val = the last char (0 if none).
  - CHAR, not multichar, val > 0x7F and char_signedness == SIGNED:
    { is_signed, (i8)(u8)val }. Else { unsigned = val }.
  @return? compilation::FATAL_ERROR
@@ -434,7 +408,7 @@ fn CharLiteralValue? TextLiteralParser.parse(&self)
 {
 	if (self.kind == UTF_8 && !self.comp.langopts.standard.at_least(C23))
 	{
-		self.warn(TextLiteralDiag.U8_CHAR_LIT)!;
+		self.warn(Diagnostic.U8_CHAR_LIT)!;
 	}
 	uint val = 0;
 
@@ -469,7 +443,7 @@ fn CharLiteralValue? TextLiteralParser.parse(&self)
 						if (c > max_codepoint_seen) max_codepoint_seen = c;
 						chars.push(c);
 					}
-					if (max_codepoint_seen > self.max_codepoint) self.err(TextLiteralDiag.CHAR_TOO_LARGE)!;
+					if (max_codepoint_seen > self.max_codepoint) self.err(Diagnostic.CHAR_TOO_LARGE)!;
 			}
 		}
 
@@ -478,16 +452,16 @@ fn CharLiteralValue? TextLiteralParser.parse(&self)
 		{
 			if (self.kind == CHAR && chars.len() == 4)
 			{
-				self.warn(TextLiteralDiag.FOUR_CHAR_CHAR_LITERAL)!;
+				self.warn(Diagnostic.FOUR_CHAR_CHAR_LITERAL)!;
 			}
 			else if (self.kind == CHAR)
 			{
-				self.warn(TextLiteralDiag.MULTICHAR_LITERAL_WARNING)!;
+				self.warn(Diagnostic.MULTICHAR_LITERAL_WARNING)!;
 			}
 			else
 			{
 				String kind_name = self.kind == WIDE ? "wide" : "Unicode";
-				self.err(TextLiteralDiag.INVALID_MULTICHAR_LITERAL, kind_name)!;
+				self.err(Diagnostic.INVALID_MULTICHAR_LITERAL, kind_name)!;
 			}
 		}
 
@@ -505,7 +479,7 @@ fn CharLiteralValue? TextLiteralParser.parse(&self)
 			val = chars[chars.len() - 1];
 		}
 
-		if (multichar_overflow) self.err(TextLiteralDiag.CHAR_LIT_TOO_WIDE)!;
+		if (multichar_overflow) self.err(Diagnostic.CHAR_LIT_TOO_WIDE)!;
 	}
 
 	// C99 6.4.4.4.10
@@ -526,25 +500,25 @@ fn CharLiteralValue? TextLiteralParser.parse(&self)
  when decoding stops after a reported error, Zig null).
  - Unescaped run up to the next '\\': UTF8_TEXT if valid UTF-8. Invalid:
    !diagnose_incorrect_encoding -> IMPROPERLY_ENCODED silently;
-   incorrect_encoding_is_error -> warn TextLiteralDiag.ILLEGAL_CHAR_ENCODING_ERROR and
-   IMPROPERLY_ENCODED; kind != CHAR -> err TextLiteralDiag.ILLEGAL_CHAR_ENCODING_ERROR and
-   false; else warn TextLiteralDiag.ILLEGAL_CHAR_ENCODING_WARNING and IMPROPERLY_ENCODED.
- - "\\u" / "\\U": parseUnicodeEscape (missing hex -> TextLiteralDiag.MISSING_HEX_ESCAPE;
-   4/8 digits, shl overflow -> TextLiteralDiag.ESCAPE_SEQUENCE_OVERFLOW with
-   offset += start + prefix_len; short -> TextLiteralDiag.INCOMPLETE_UNIVERSAL_CHARACTER;
+   incorrect_encoding_is_error -> warn Diagnostic.ILLEGAL_CHAR_ENCODING_ERROR and
+   IMPROPERLY_ENCODED; kind != CHAR -> err Diagnostic.ILLEGAL_CHAR_ENCODING_ERROR and
+   false; else warn Diagnostic.ILLEGAL_CHAR_ENCODING_WARNING and IMPROPERLY_ENCODED.
+ - "\\u" / "\\U": parseUnicodeEscape (missing hex -> Diagnostic.MISSING_HEX_ESCAPE;
+   4/8 digits, shl overflow -> Diagnostic.ESCAPE_SEQUENCE_OVERFLOW with
+   offset += start + prefix_len; short -> Diagnostic.INCOMPLETE_UNIVERSAL_CHARACTER;
    > u21 max or not a valid codepoint (surrogate) ->
-   TextLiteralDiag.INVALID_UNIVERSAL_CHARACTER with the same offset; > max_codepoint ->
-   TextLiteralDiag.CHAR_TOO_LARGE; < 0xA0 except '$' '@' '`': before C23 err
-   TextLiteralDiag.UCN_BASIC_CHAR_ERROR (0x20..0x7F, Ascii arg) or
-   TextLiteralDiag.UCN_CONTROL_CHAR_ERROR; before C99 also warn TextLiteralDiag.C89_UCN_IN_LITERAL;
+   Diagnostic.INVALID_UNIVERSAL_CHARACTER with the same offset; > max_codepoint ->
+   Diagnostic.CHAR_TOO_LARGE; < 0xA0 except '$' '@' '`': before C23 err
+   Diagnostic.UCN_BASIC_CHAR_ERROR (0x20..0x7F, Ascii arg) or
+   Diagnostic.UCN_CONTROL_CHAR_ERROR; before C99 also warn Diagnostic.C89_UCN_IN_LITERAL;
    result CODEPOINT). Note: Zig's *_WARNING branches are unreachable because
    they repeat the !C23 test; keep that.
  - Other escapes: parseEscapedChar (\' \" \\ ? n r t a b f v; \e \E -> 0x1B and
-   \( \{ \[ \% -> the char, both warn TextLiteralDiag.NON_STANDARD_ESCAPE_CHAR with
+   \( \{ \[ \% -> the char, both warn Diagnostic.NON_STANDARD_ESCAPE_CHAR with
    offset += i; \x hex (any length) / up to 3 octal digits: shl overflow or
-   > kind.max_int -> err TextLiteralDiag.ESCAPE_SEQUENCE_OVERFLOW (offset += start +
-   prefix_len), value 0; \x with no digits -> TextLiteralDiag.MISSING_HEX_ESCAPE 'x';
-   unknown -> warn TextLiteralDiag.UNKNOWN_ESCAPE_SEQUENCE, value = the char).
+   > kind.max_int -> err Diagnostic.ESCAPE_SEQUENCE_OVERFLOW (offset += start +
+   prefix_len), value 0; \x with no digits -> Diagnostic.MISSING_HEX_ESCAPE 'x';
+   unknown -> warn Diagnostic.UNKNOWN_ESCAPE_SEQUENCE, value = the char).
  @return? compilation::FATAL_ERROR
 *>
 fn bool? TextLiteralParser.next(&self, TextLiteralItem* out)
@@ -568,15 +542,15 @@ fn bool? TextLiteralParser.next(&self, TextLiteralItem* out)
 		if (!self.diagnose_incorrect_encoding) return true;
 		if (self.incorrect_encoding_is_error)
 		{
-			self.warn(TextLiteralDiag.ILLEGAL_CHAR_ENCODING_ERROR)!;
+			self.warn(Diagnostic.ILLEGAL_CHAR_ENCODING_ERROR)!;
 			return true;
 		}
 		if (self.kind != CHAR)
 		{
-			self.err(TextLiteralDiag.ILLEGAL_CHAR_ENCODING_ERROR)!;
+			self.err(Diagnostic.ILLEGAL_CHAR_ENCODING_ERROR)!;
 			return false;
 		}
-		self.warn(TextLiteralDiag.ILLEGAL_CHAR_ENCODING_WARNING)!;
+		self.warn(Diagnostic.ILLEGAL_CHAR_ENCODING_WARNING)!;
 		return true;
 	}
 	switch (self.literal[start + 1])
@@ -595,7 +569,7 @@ fn bool? TextLiteralParser.next(&self, TextLiteralItem* out)
  `errored` do nothing, otherwise warn and set `errored`. Resets `offset`.
  @return? compilation::FATAL_ERROR
 *>
-macro void? TextLiteralParser.err(&self, TextLiteralDiag $diag, ...)
+macro void? TextLiteralParser.err(&self, Diagnostic $diag, ...)
 {
 	defer self.offset = 0;
 	if (self.errored) return;
@@ -608,7 +582,7 @@ macro void? TextLiteralParser.err(&self, TextLiteralDiag $diag, ...)
  emit_literal_diagnostic at `loc` with byte_offset += offset.
  @return? compilation::FATAL_ERROR
 *>
-macro void? TextLiteralParser.warn(&self, TextLiteralDiag $diag, ...)
+macro void? TextLiteralParser.warn(&self, Diagnostic $diag, ...)
 {
 	defer self.offset = 0;
 	if (self.errored) return;
@@ -667,7 +641,7 @@ fn bool? parse_unicode_escape(TextLiteralParser* p, TextLiteralItem* out) @priva
 	p.i += 2;
 	if (p.i >= p.literal.len || escape_digit(p.literal[p.i], 16) < 0)
 	{
-		p.err(TextLiteralDiag.MISSING_HEX_ESCAPE, ascii(kind))!;
+		p.err(Diagnostic.MISSING_HEX_ESCAPE, ascii(kind))!;
 		return false;
 	}
 	sz expected_len = kind == 'u' ? 4 : 8;
@@ -689,13 +663,13 @@ fn bool? parse_unicode_escape(TextLiteralParser* p, TextLiteralItem* out) @priva
 	if (overflowed)
 	{
 		p.offset += (uint)(start + p.prefix_len());
-		p.err(TextLiteralDiag.ESCAPE_SEQUENCE_OVERFLOW)!;
+		p.err(Diagnostic.ESCAPE_SEQUENCE_OVERFLOW)!;
 		return false;
 	}
 
 	if (count != expected_len)
 	{
-		p.err(TextLiteralDiag.INCOMPLETE_UNIVERSAL_CHARACTER)!;
+		p.err(Diagnostic.INCOMPLETE_UNIVERSAL_CHARACTER)!;
 		return false;
 	}
 
@@ -703,13 +677,13 @@ fn bool? parse_unicode_escape(TextLiteralParser* p, TextLiteralItem* out) @priva
 	if (val > 0x10FFFF || (val >= 0xD800 && val <= 0xDFFF))
 	{
 		p.offset += (uint)(start + p.prefix_len());
-		p.err(TextLiteralDiag.INVALID_UNIVERSAL_CHARACTER)!;
+		p.err(Diagnostic.INVALID_UNIVERSAL_CHARACTER)!;
 		return false;
 	}
 
 	if (val > p.max_codepoint)
 	{
-		p.err(TextLiteralDiag.CHAR_TOO_LARGE)!;
+		p.err(Diagnostic.CHAR_TOO_LARGE)!;
 		return false;
 	}
 
@@ -720,28 +694,28 @@ fn bool? parse_unicode_escape(TextLiteralParser* p, TextLiteralItem* out) @priva
 		{
 			if (is_error)
 			{
-				p.err(TextLiteralDiag.UCN_BASIC_CHAR_ERROR, ascii(val))!;
+				p.err(Diagnostic.UCN_BASIC_CHAR_ERROR, ascii(val))!;
 			}
 			else if (!p.comp.langopts.standard.at_least(C23))
 			{
 				// Unreachable in Zig too (same condition as is_error); kept verbatim.
-				p.warn(TextLiteralDiag.UCN_BASIC_CHAR_WARNING, ascii(val))!;
+				p.warn(Diagnostic.UCN_BASIC_CHAR_WARNING, ascii(val))!;
 			}
 		}
 		else
 		{
 			if (is_error)
 			{
-				p.err(TextLiteralDiag.UCN_CONTROL_CHAR_ERROR)!;
+				p.err(Diagnostic.UCN_CONTROL_CHAR_ERROR)!;
 			}
 			else if (!p.comp.langopts.standard.at_least(C23))
 			{
-				p.warn(TextLiteralDiag.UCN_CONTROL_CHAR_WARNING)!;
+				p.warn(Diagnostic.UCN_CONTROL_CHAR_WARNING)!;
 			}
 		}
 	}
 
-	if (!p.comp.langopts.standard.at_least(C99)) p.warn(TextLiteralDiag.C89_UCN_IN_LITERAL)!;
+	if (!p.comp.langopts.standard.at_least(C99)) p.warn(Diagnostic.C89_UCN_IN_LITERAL)!;
 	*out = { .tag = CODEPOINT, .value = val };
 	return true;
 }
@@ -776,14 +750,14 @@ fn TextLiteralItem? parse_escaped_char(TextLiteralParser* p) @private
 		case 'e':
 		case 'E':
 			p.offset += (uint)p.i;
-			p.warn(TextLiteralDiag.NON_STANDARD_ESCAPE_CHAR, ascii(c))!;
+			p.warn(Diagnostic.NON_STANDARD_ESCAPE_CHAR, ascii(c))!;
 			return value_item(0x1B);
 		case '(':
 		case '{':
 		case '[':
 		case '%':
 			p.offset += (uint)p.i;
-			p.warn(TextLiteralDiag.NON_STANDARD_ESCAPE_CHAR, ascii(c))!;
+			p.warn(Diagnostic.NON_STANDARD_ESCAPE_CHAR, ascii(c))!;
 			return value_item(c);
 		case 'f': return value_item(0x0C);
 		case 'v': return value_item(0x0B);
@@ -796,7 +770,7 @@ fn TextLiteralItem? parse_escaped_char(TextLiteralParser* p) @private
 			p.offset += (uint)p.i;
 			// Zig's Ascii.init (@intCast to u7) traps on a non-ASCII byte; format it as "x.." instead.
 			Ascii a = { .val = c };
-			p.warn(TextLiteralDiag.UNKNOWN_ESCAPE_SEQUENCE, a)!;
+			p.warn(Diagnostic.UNKNOWN_ESCAPE_SEQUENCE, a)!;
 			return value_item(c);
 	}
 }
@@ -838,13 +812,13 @@ fn uint? parse_number_escape(TextLiteralParser* p, uint base) @private
 	if (overflowed || val > p.kind.max_int(p.comp))
 	{
 		p.offset += (uint)(start + p.prefix_len());
-		p.err(TextLiteralDiag.ESCAPE_SEQUENCE_OVERFLOW)!;
+		p.err(Diagnostic.ESCAPE_SEQUENCE_OVERFLOW)!;
 		return 0;
 	}
 	if (count == 0)
 	{
 		assert(base == 16);
-		p.err(TextLiteralDiag.MISSING_HEX_ESCAPE, ascii('x'))!;
+		p.err(Diagnostic.MISSING_HEX_ESCAPE, ascii('x'))!;
 	}
 	return val;
 }

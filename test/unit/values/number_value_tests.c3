@@ -54,10 +54,13 @@ fn NumberValue float_lit(Compilation* comp, String bytes, Suffix suffix)
 	return number_value::number_value(comp, { .bytes = bytes, .is_float = true, .prefix = DECIMAL, .suffix = suffix });
 }
 
-fn void expect_diags(NumberValue v, NumberValueDiag[] want)
+fn void expect_diags(NumberValue v, Diagnostic[] want)
 {
-	check(v.diags.len, want.len);
-	foreach (i, w : want) assert(v.diags.items[i] == w);
+	Diagnostic[5] got;
+	usz n;
+	v.diags.@each(; $diag) { got[n++] = $diag; };
+	check(n, want.len);
+	foreach (i, w : want) assert(got[i] == w);
 }
 
 fn ulong u64_of(Compilation* comp, Value v) => v.to_u64(comp)!!;
@@ -235,9 +238,9 @@ fn void literal_overflow() @test
 		v = int_lit(comp, HEX, "1'0000'0000'0000'0000", U);
 		expect_diags(v, { INT_LITERAL_TOO_BIG });
 		check(u64_of(comp, v.val), 0);
-		test::eq(NumberValueDiag.INT_LITERAL_TOO_BIG.fmt,
+		test::eq(Diagnostic.INT_LITERAL_TOO_BIG.fmt,
 			"integer literal is too large to be represented in any integer type");
-		test::eq(NumberValueDiag.IMPLICITLY_UNSIGNED_LITERAL.fmt,
+		test::eq(Diagnostic.IMPLICITLY_UNSIGNED_LITERAL.fmt,
 			"integer literal is too large to be represented in a signed integer type, interpreting as unsigned");
 	};
 }
@@ -385,7 +388,7 @@ fn void imaginary_integers() @test
 		v = int_lit(comp, DECIMAL, "9223372036854775808", I);
 		expect_diags(v, { IMPLICITLY_UNSIGNED_LITERAL, GNU_IMAGINARY_CONSTANT });
 		assert(v.literal_qt == type_store::INT128);
-		test::eq(NumberValueDiag.GNU_IMAGINARY_CONSTANT.fmt, "imaginary constants are a GNU extension");
+		test::eq(Diagnostic.GNU_IMAGINARY_CONSTANT.fmt, "imaginary constants are a GNU extension");
 	};
 }
 
@@ -567,19 +570,17 @@ fn void pp_values() @test
 	// warns implicitly-unsigned and the operand is unsigned.
 	PpNumberValue p = pp(DECIMAL, "9223372036854775808", NONE);
 	assert(!p.rejected && !p.is_signed);
-	check(p.diags.len, 1);
-	assert(p.diags.items[0] == IMPLICITLY_UNSIGNED_LITERAL);
+	assert(p.diags == (NumberDiags){ .implicitly_unsigned_literal = true });
 	assert(p.unsigned == 9223372036854775808UL);
 	// [fixture preprocessor binary operators.c:74] 9223372036854775807L is signed, no diagnostic
 	p = pp(DECIMAL, "9223372036854775807", L);
-	assert(p.is_signed && p.diags.len == 0);
+	assert(p.is_signed && p.diags == (NumberDiags){});
 	check(p.signed, long::max);
 	// [fixture imaginary constants.c:18] `#if 1.0i` -> float_literal_in_expr
 	p = pp(DECIMAL, "1.0", I, true);
 	assert(p.rejected);
-	check(p.diags.len, 1);
-	assert(p.diags.items[0] == FLOAT_LITERAL_IN_EXPR);
-	test::eq(NumberValueDiag.FLOAT_LITERAL_IN_EXPR.fmt, "floating point literal in preprocessor expression");
+	assert(p.diags == (NumberDiags){ .float_literal_in_expr = true });
+	test::eq(Diagnostic.FLOAT_LITERAL_IN_EXPR.fmt, "floating point literal in preprocessor expression");
 	// [source] imaginary integer is rejected too; unsigned suffix stays unsigned
 	p = pp(DECIMAL, "1", I);
 	assert(p.rejected);
@@ -587,15 +588,13 @@ fn void pp_values() @test
 	assert(!p.is_signed && p.unsigned == 4);
 	// [source] hex above i64 max: unsigned, no warning
 	p = pp(HEX, "FFFFFFFFFFFFFFFF", NONE);
-	assert(!p.is_signed && p.unsigned == ulong::max && p.diags.len == 0);
+	assert(!p.is_signed && p.unsigned == ulong::max && p.diags == (NumberDiags){});
 	// [source] overflow wraps; overflow + implicitly unsigned may both appear
 	p = pp(DECIMAL, "18446744073709551616", NONE);
-	check(p.diags.len, 1);
-	assert(p.diags.items[0] == INT_LITERAL_TOO_BIG);
+	assert(p.diags == (NumberDiags){ .int_literal_too_big = true });
 	assert(p.is_signed && p.signed == 0);
 	p = pp(DECIMAL, "36893488147419103231", NONE); // 2^65 - 1 -> wraps to u64 max
-	check(p.diags.len, 2);
-	assert(p.diags.items[0] == INT_LITERAL_TOO_BIG && p.diags.items[1] == IMPLICITLY_UNSIGNED_LITERAL);
+	assert(p.diags == (NumberDiags){ .int_literal_too_big = true, .implicitly_unsigned_literal = true });
 	assert(!p.is_signed && p.unsigned == ulong::max);
 	// [source] digit separators and binary
 	p = pp(BINARY, "1001'0110", NONE);

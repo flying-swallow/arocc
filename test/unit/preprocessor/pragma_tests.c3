@@ -345,7 +345,7 @@ struct PackFixture (pack::IParserAdapter)
 	ulong integer;
 	bool integer_ok;
 	uint diagnostics;
-	pack::Diagnostic last_diagnostic;
+	pack::PackDiag last_diagnostic;
 }
 
 fn uint PackFixture.token_count(&self) @dynamic => self.count;
@@ -357,7 +357,7 @@ fn bool PackFixture.parse_integer(&self, uint index, ulong* value) @dynamic
 	*value = self.integer;
 	return true;
 }
-fn void PackFixture.diagnose(&self, uint index, pack::Diagnostic kind, ulong value) @dynamic
+fn void PackFixture.diagnose(&self, uint index, pack::PackDiag kind, ulong value) @dynamic
 {
 	self.diagnostics++;
 	self.last_diagnostic = kind;
@@ -409,7 +409,7 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 	fixture.count = 3;
 	pack::HandleResult result = state.handle(&fixture, 0);
 	assert(!result.ok);
-	check(fixture.last_diagnostic, pack::Diagnostic.INTEGER);
+	check(fixture.last_diagnostic, pack::PackDiag.INTEGER);
 	check(fixture.diagnostics, 1);
 
 	fixture.ids = { tokenizer::TokenId.L_PAREN, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.PP_NUM, tokenizer::TokenId.R_PAREN };
@@ -428,7 +428,7 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 	fixture.integer = 8;
 	result = state.handle(&fixture, 0);
 	assert(!result.ok);
-	check(fixture.last_diagnostic, pack::Diagnostic.UNDEFINED_POP);
+	check(fixture.last_diagnostic, pack::PackDiag.UNDEFINED_POP);
 	check(fixture.diagnostics, 2);
 	check(state.stack.len(), 0);
 	assert(state.current.has_value);

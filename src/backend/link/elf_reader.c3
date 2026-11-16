@@ -193,14 +193,14 @@ fn String? cstr(char[] table, uint off)
 <* @return? MALFORMED_ELF *>
 fn void? malformed(Diagnostics* d, String path, String reason)
 {
-	@link_err(d, LinkDiag.MALFORMED_ELF, path, reason)!;
+	@link_err(d, Diagnostic.MALFORMED_ELF, path, reason)!;
 	return MALFORMED_ELF~;
 }
 
 <* @return? UNSUPPORTED_ELF *>
 fn void? unsupported(Diagnostics* d, String path, String reason)
 {
-	@link_err(d, LinkDiag.UNSUPPORTED_ELF, path, reason)!;
+	@link_err(d, Diagnostic.UNSUPPORTED_ELF, path, reason)!;
 	return UNSUPPORTED_ELF~;
 }
 

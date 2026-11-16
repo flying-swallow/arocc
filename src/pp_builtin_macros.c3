@@ -104,7 +104,7 @@ fn ulong? parse_epoch_u64(String text)
 <*
  BuiltinProvider.source_epoch: Zig Preprocessor.init's
  `options.source_epoch orelse (comp.environment.sourceEpoch(io) catch ...)`.
- On INVALID_EPOCH add PpDiag.INVALID_SOURCE_EPOCH's text/kind/opt with no
+ On INVALID_EPOCH add Diagnostic.INVALID_SOURCE_EPOCH's text/kind/opt with no
  location directly to comp.diagnostics (FATAL_ERROR propagates) and return
  DEFAULT_SOURCE_EPOCH (`provided` 0).
  @return? compilation::FATAL_ERROR
@@ -116,7 +116,7 @@ fn SourceEpoch? builtin_source_epoch(void* ctx, Preprocessor* pp)
 	if (catch f = epoch)
 	{
 		assert(f == INVALID_EPOCH);
-		comp.diagnostics.add(diagnostics::@message(PpDiag.INVALID_SOURCE_EPOCH, PpDiag.INVALID_SOURCE_EPOCH.fmt))!;
+		comp.diagnostics.add(diagnostics::@message(Diagnostic.INVALID_SOURCE_EPOCH, Diagnostic.INVALID_SOURCE_EPOCH.fmt))!;
 		return DEFAULT_SOURCE_EPOCH;
 	}
 	return epoch;
@@ -281,24 +281,24 @@ fn String path_basename(String path)
                 "\"<escaped replacement><escaped rest>\"" (no newline, stop);
                 otherwise "\"<escaped path>\"\n". Escaping is Zig
                 std.zig.fmtEscapes.
- BASE_FILE      PpDiag.BASE_FILE_IS_CLANG_EXTENSION at expansion_source_loc;
+ BASE_FILE      Diagnostic.BASE_FILE_IS_CLANG_EXTENSION at expansion_source_loc;
                 like FILE for pp.base_file but Zig never breaks out of the
                 replacement loop, so it writes one replaced literal per
                 matching prefix and then ALWAYS the unreplaced
                 "\"<escaped path>\"" too (no newline) -- preserve this.
- FILE_BASENAME  PpDiag.FILE_NAME_IS_CLANG_EXTENSION; "\"<escaped basename>\""
+ FILE_BASENAME  Diagnostic.FILE_NAME_IS_CLANG_EXTENSION; "\"<escaped basename>\""
                 (std.fs.path.basename).
  LINE           PP_NUM "<expansion_source_loc.line>\n".
- COUNTER        PpDiag.PRE_C2Y_COUNTER (standard >= C2Y) else PpDiag.C2Y_COUNTER
-                at `tok`; PpDiag.COUNTER_OVERFLOW at `tok` if counter >
+ COUNTER        Diagnostic.PRE_C2Y_COUNTER (standard >= C2Y) else Diagnostic.C2Y_COUNTER
+                at `tok`; Diagnostic.COUNTER_OVERFLOW at `tok` if counter >
                 0x7FFF_FFFF; PP_NUM "<counter>\n" with the old value, counter
                 wraps (+%= 1).
- DATE, TIME     PpDiag.DATE_TIME at expansion_source_loc; STRING_LITERAL from
+ DATE, TIME     Diagnostic.DATE_TIME at expansion_source_loc; STRING_LITERAL from
                 write_date_time_stamp(source_epoch.timestamp).
- TIMESTAMP      PpDiag.DATE_TIME; timestamp = provided epoch, or for `system`
+ TIMESTAMP      Diagnostic.DATE_TIME; timestamp = provided epoch, or for `system`
                 pp.m_time(expansion_source_loc.id) (aro::UNSUPPORTED until
                 plan 15 propagates).
- INCLUDE_LEVEL  PpDiag.INCLUDE_LEVEL_IS_CLANG_EXTENSION; PP_NUM "<include_depth>\n".
+ INCLUDE_LEVEL  Diagnostic.INCLUDE_LEVEL_IS_CLANG_EXTENSION; PP_NUM "<include_depth>\n".
  Diagnostics "at expansion_source_loc" use pp.err_loc.
  @return? compilation::FATAL_ERROR, aro::UNSUPPORTED
 *>
@@ -331,7 +331,7 @@ fn void? builtin_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, Tok
 			}
 			buf.push(pp.make_generated_token(start, STRING_LITERAL, tok));
 		case BASE_FILE:
-			pp.err_loc(pp.expansion_source_loc, PpDiag.BASE_FILE_IS_CLANG_EXTENSION)!;
+			pp.err_loc(pp.expansion_source_loc, Diagnostic.BASE_FILE_IS_CLANG_EXTENSION)!;
 			sz start = comp.generated_buf.len();
 			Source base = comp.get_source(pp.base_file);
 			// Zig's loop has no `break`, so its `else` always runs: one replaced
@@ -351,7 +351,7 @@ fn void? builtin_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, Tok
 			pp.gen_text("\"");
 			buf.push(pp.make_generated_token(start, STRING_LITERAL, tok));
 		case FILE_BASENAME:
-			pp.err_loc(pp.expansion_source_loc, PpDiag.FILE_NAME_IS_CLANG_EXTENSION)!;
+			pp.err_loc(pp.expansion_source_loc, Diagnostic.FILE_NAME_IS_CLANG_EXTENSION)!;
 			sz start = comp.generated_buf.len();
 			Source src = comp.get_source(pp.expansion_source_loc.id);
 			pp.gen_text("\"");
@@ -366,33 +366,33 @@ fn void? builtin_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, Tok
 			bool c2y = comp.langopts.standard.at_least(C2Y);
 			if (c2y)
 			{
-				pp.err(tok, PpDiag.PRE_C2Y_COUNTER)!;
+				pp.err(tok, Diagnostic.PRE_C2Y_COUNTER)!;
 			}
 			else
 			{
-				pp.err(tok, PpDiag.C2Y_COUNTER)!;
+				pp.err(tok, Diagnostic.C2Y_COUNTER)!;
 			}
 			uint val = pp.counter;
-			if (val > 0x7FFF_FFFF) pp.err(tok, PpDiag.COUNTER_OVERFLOW)!;
+			if (val > 0x7FFF_FFFF) pp.err(tok, Diagnostic.COUNTER_OVERFLOW)!;
 			pp.counter += 1; // wraps (Zig +%=)
 			sz start = comp.generated_buf.len();
 			pp.gen_text(string::tformat("%d\n", val));
 			buf.push(pp.make_generated_token(start, PP_NUM, tok));
 		case DATE:
 		case TIME:
-			pp.err_loc(pp.expansion_source_loc, PpDiag.DATE_TIME)!;
+			pp.err_loc(pp.expansion_source_loc, Diagnostic.DATE_TIME)!;
 			sz start = comp.generated_buf.len();
 			pp.write_date_time_stamp(kind == DATE ? DateTimeStampKind.DATE : DateTimeStampKind.TIME, pp.source_epoch.timestamp);
 			buf.push(pp.make_generated_token(start, STRING_LITERAL, tok));
 		case TIMESTAMP:
-			pp.err_loc(pp.expansion_source_loc, PpDiag.DATE_TIME)!;
+			pp.err_loc(pp.expansion_source_loc, Diagnostic.DATE_TIME)!;
 			sz start = comp.generated_buf.len();
 			ulong timestamp = pp.source_epoch.timestamp;
 			if (!pp.source_epoch.provided) timestamp = pp.m_time(pp.expansion_source_loc.id)!;
 			pp.write_date_time_stamp(TIMESTAMP, timestamp);
 			buf.push(pp.make_generated_token(start, STRING_LITERAL, tok));
 		case INCLUDE_LEVEL:
-			pp.err_loc(pp.expansion_source_loc, PpDiag.INCLUDE_LEVEL_IS_CLANG_EXTENSION)!;
+			pp.err_loc(pp.expansion_source_loc, Diagnostic.INCLUDE_LEVEL_IS_CLANG_EXTENSION)!;
 			sz start = comp.generated_buf.len();
 			pp.gen_text(string::tformat("%d\n", pp.include_depth));
 			buf.push(pp.make_generated_token(start, PP_NUM, tok));

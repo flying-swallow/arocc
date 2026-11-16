@@ -31,7 +31,7 @@ fn Target tgt(String triple, String cpu)
 	return t;
 }
 
-alias SectionFn = fn void (Compilation*, MacroWriter*, bool is_gnu);
+alias SectionFn = fn void? (Compilation*, DString*, bool is_gnu);
 
 <* Compilation knobs the sections read. Zero value = Zig defaults (pic NONE, cmodel DEFAULT). *>
 struct Opts
@@ -71,10 +71,10 @@ fn String emit(String triple, String cpu, SectionFn section, Opts o = {})
 		comp.code_gen_options.is_rwpi = o.rwpi;
 		comp.cmodel = o.cmodel;
 		type_store::init_named_types(&comp);
-		MacroWriter w;
+		DString w;
 		w.init(&ta);
-		section(&comp, &w, o.is_gnu);
-		result = w.written().tcopy();
+		section(&comp, &w, o.is_gnu)!!;
+		result = w.str_view().tcopy();
 		w.free();
 		comp.free();
 	}
@@ -82,18 +82,18 @@ fn String emit(String triple, String cpu, SectionFn section, Opts o = {})
 	return result;
 }
 
-fn void sec_riscv(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_riscv_defines(c, w);
-fn void sec_other_os(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_other_os_defines(c, w, g);
-fn void sec_unix(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_unix_defines(c, w, g);
-fn void sec_pthread(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_pthread_defines(c, w);
-fn void sec_mips(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_mips_defines(c, w, g);
-fn void sec_ppc(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_powerpc_defines(c, w);
-fn void sec_sparc(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_sparc_defines(c, w, g);
-fn void sec_msp430_arc(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_msp430_arc_defines(c, w);
-fn void sec_wasm(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_wasm_defines(c, w);
-fn void sec_s390x(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_s390x_defines(c, w);
-fn void sec_arm(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_arm_defines(c, w);
-fn void sec_a64(Compilation* c, MacroWriter* w, bool g) => predefined_macros::write_aarch64_defines(c, w);
+fn void? sec_riscv(Compilation* c, DString* w, bool g) => predefined_macros::write_riscv_defines(c, w);
+fn void? sec_other_os(Compilation* c, DString* w, bool g) => predefined_macros::write_other_os_defines(c, w, g);
+fn void? sec_unix(Compilation* c, DString* w, bool g) => predefined_macros::write_unix_defines(c, w, g);
+fn void? sec_pthread(Compilation* c, DString* w, bool g) => predefined_macros::write_pthread_defines(c, w);
+fn void? sec_mips(Compilation* c, DString* w, bool g) => predefined_macros::write_mips_defines(c, w, g);
+fn void? sec_ppc(Compilation* c, DString* w, bool g) => predefined_macros::write_powerpc_defines(c, w);
+fn void? sec_sparc(Compilation* c, DString* w, bool g) => predefined_macros::write_sparc_defines(c, w, g);
+fn void? sec_msp430_arc(Compilation* c, DString* w, bool g) => predefined_macros::write_msp430_arc_defines(c, w);
+fn void? sec_wasm(Compilation* c, DString* w, bool g) => predefined_macros::write_wasm_defines(c, w);
+fn void? sec_s390x(Compilation* c, DString* w, bool g) => predefined_macros::write_s390x_defines(c, w);
+fn void? sec_arm(Compilation* c, DString* w, bool g) => predefined_macros::write_arm_defines(c, w);
+fn void? sec_a64(Compilation* c, DString* w, bool g) => predefined_macros::write_aarch64_defines(c, w);
 
 <* `out` contains the full line `line` (without the newline). *>
 fn bool has_line(String out, String line)

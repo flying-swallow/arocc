@@ -154,7 +154,7 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 			assert(key.tag == primitive_value::PrimitiveType.BYTES, "array initializer did not have a bytes key");
 			String directive_name = (ulong)key.bytes.len > bit_size / 8 ? "ascii" : "string";
 			data.appendf("  .%s ", directive_name);
-			text_literal_semantics::print_string(key.bytes, qt, comp, data, text_literal_semantics::PrintStringStyle.QUOTED);
+			text_literal_semantics::print_string(key.bytes, qt, comp, data, text_literal_semantics::PrintStringStyle.QUOTED)!;
 			data.append_char('\n');
 			return;
 		}

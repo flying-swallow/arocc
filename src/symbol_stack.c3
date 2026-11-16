@@ -4,10 +4,9 @@
 // `symbols`.
 //
 // Deviations from Zig:
-//  - Zig passes the whole `*Parser`; here every operation that can report a
-//    diagnostic takes a `SymbolContext*` (compilation and an `ISymbolHandler`
-//    for diagnostics and tentative-definition links), so the stack works
-//    without a Parser.
+//  - Every operation that can report a diagnostic takes a `SymbolContext*`
+//    (compilation plus the `Parser*`); diagnostics go straight through
+//    `Diagnostic.@emit`, like Zig's `p.err`.
 //  - Zig `!?T` (error or null) returns `bool?` with the value in an out
 //    parameter (`find_typedef`, `find_tag`, `define_tag`), or `NodeOptIndex?`
 //    with NODE_NULL for null (`define_typedef`, `define_symbol`,
@@ -18,7 +17,7 @@
 //
 // Full port of the lexical scope and declaration conflict behavior.
 module aro::symbol_stack;
-import aro::compilation, aro::lang_opts, aro::string_interner, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
+import aro::compilation, aro::diagnostics, aro::parser, aro::lang_opts, aro::string_interner, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
 import std::collections::list, std::collections::map;
 
 <* Zig `null` from `get` / `lookup` / `findSymbol`. *>
@@ -65,40 +64,11 @@ struct Scope
 	HashMap{uint, Symbol} tags;
 }
 
-<*
- The Parser diagnostics SymbolStack.zig emits (Parser/Diagnostic.zig names).
- Arguments: the callback receives the token; templates that print
- `p.tokSlice(tok)` take it from the token, REDEFINITION_OF_TYPEDEF also
- takes the two typedef base types (`qt_a` new, `qt_b` previous).
-*>
-enum SymbolDiag : char
-{
-	MUST_USE_STRUCT,
-	MUST_USE_UNION,
-	MUST_USE_ENUM,
-	WRONG_TAG,
-	PREVIOUS_DEFINITION,
-	REDEFINITION_OF_TYPEDEF,
-	REDEFINITION_DIFFERENT_SYM,
-	REDEFINITION_INCOMPATIBLE,
-	REDEFINITION,
-	REDEFINITION_OF_PARAMETER,
-}
-
-<* What SymbolStack.zig needs from the Parser. *>
-interface ISymbolHandler
-{
-	<* Zig `p.err(tok, diag, args)`; may fail with compilation::FATAL_ERROR. *>
-	fn void? symbol_diag(tokens::TokenIndex tok, SymbolDiag diag, QualType qt_a, QualType qt_b);
-	<* Zig `p.setTentativeDeclDefinition(decl, definition)`. *>
-	fn void symbol_tentative_definition(NodeIndex decl, NodeIndex definition);
-}
-
-<* Compilation plus the borrowed handler; must not outlive the handler. *>
+<* Compilation plus the borrowed parser that reports diagnostics; must not outlive the parser. *>
 struct SymbolContext
 {
 	Compilation* comp;
-	ISymbolHandler handler;
+	parser::Parser* parser;
 }
 
 <* Zig `SymbolStack`. Create with `init`, release with `free`. *>
@@ -170,8 +140,12 @@ fn bool? SymbolStack.find_typedef(&self, SymbolContext* ctx, StringId name, toke
 		case UNION:
 		case ENUM:
 			if (no_type_yet) return false;
-			SymbolDiag d = prev.kind == STRUCT ? MUST_USE_STRUCT : prev.kind == UNION ? MUST_USE_UNION : MUST_USE_ENUM;
-			ctx.handler.symbol_diag(name_tok, d, {}, {})!;
+			switch (prev.kind)
+			{
+				case STRUCT: Diagnostic.MUST_USE_STRUCT.@emit(ctx.parser, name_tok, ctx.parser.tree.tok_slice(name_tok))!;
+				case UNION: Diagnostic.MUST_USE_UNION.@emit(ctx.parser, name_tok, ctx.parser.tree.tok_slice(name_tok))!;
+				default: Diagnostic.MUST_USE_ENUM.@emit(ctx.parser, name_tok, ctx.parser.tree.tok_slice(name_tok))!;
+			}
 			*out = prev;
 			return true;
 		default: return false;
@@ -203,8 +177,8 @@ fn bool? SymbolStack.find_tag(&self, SymbolContext* ctx, StringId name, tokenize
 	}
 	if ((sym.kind == ENUM && kind == tokenizer::TokenId.KEYWORD_ENUM) || (sym.kind == STRUCT && kind == tokenizer::TokenId.KEYWORD_STRUCT) || (sym.kind == UNION && kind == tokenizer::TokenId.KEYWORD_UNION)) { *out = sym; return true; }
 	if (!@ok(self.get(name, TAGS))) return false;
-	ctx.handler.symbol_diag(name_tok, WRONG_TAG, {}, {})!;
-	ctx.handler.symbol_diag(sym.tok, PREVIOUS_DEFINITION, {}, {})!;
+	Diagnostic.WRONG_TAG.@emit(ctx.parser, name_tok, ctx.parser.tree.tok_slice(name_tok))!;
+	Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, sym.tok)!;
 	return false;
 }
 
@@ -269,8 +243,8 @@ fn NodeOptIndex? SymbolStack.define_typedef(&self, SymbolContext* ctx, StringId 
 				if (qt.is_invalid()) return type_store::NODE_NULL;
 				Type a = qt.get_type(ctx.comp);
 				Type b = prev.qt.get_type(ctx.comp);
-				ctx.handler.symbol_diag(tok, REDEFINITION_OF_TYPEDEF, a.type_def.base, b.type_def.base)!;
-				if (prev.tok != 0) ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+				Diagnostic.REDEFINITION_OF_TYPEDEF.@emit(ctx.parser, tok, ctx.parser.fmt_qt(a.type_def.base), ctx.parser.fmt_qt(b.type_def.base))!;
+				if (prev.tok != 0) Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 			} else {
 				old = (NodeOptIndex)prev.node;
 			}
@@ -278,8 +252,8 @@ fn NodeOptIndex? SymbolStack.define_typedef(&self, SymbolContext* ctx, StringId 
 		case DECL:
 		case DEF:
 		case CONSTEXPR:
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
-			ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 		default: unreachable("invalid ordinary symbol kind");
 		}
 	}
@@ -302,21 +276,21 @@ fn NodeOptIndex? SymbolStack.define_symbol(&self, SymbolContext* ctx, StringId n
 		switch (prev.kind) {
 		case ENUMERATION:
 			if (qt.is_invalid()) return type_store::NODE_NULL;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
-			ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 		case DECL:
 			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) {
 				if (qt.is_invalid()) return type_store::NODE_NULL;
-				ctx.handler.symbol_diag(tok, REDEFINITION_INCOMPATIBLE, {}, {})!;
-				ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
-			} else { if ((NodeOptIndex)prev.node != type_store::NODE_NULL) ctx.handler.symbol_tentative_definition(prev.node, node); old = (NodeOptIndex)prev.node; }
+				Diagnostic.REDEFINITION_INCOMPATIBLE.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+				Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
+			} else { if ((NodeOptIndex)prev.node != type_store::NODE_NULL) ctx.parser.symbol_tentative_definition(prev.node, node); old = (NodeOptIndex)prev.node; }
 		case DEF:
 		case CONSTEXPR:
-			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return type_store::NODE_NULL; ctx.handler.symbol_diag(tok, REDEFINITION, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!; }
+			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return type_store::NODE_NULL; Diagnostic.REDEFINITION.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!; }
 		case TYPEDEF:
 			if (qt.is_invalid()) return type_store::NODE_NULL;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
-			ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 	default: unreachable("invalid ordinary symbol kind");
 		}
 	}
@@ -347,19 +321,19 @@ fn NodeOptIndex? SymbolStack.declare_symbol(&self, SymbolContext* ctx, StringId 
 		switch (prev.kind) {
 		case ENUMERATION:
 			if (qt.is_invalid()) return type_store::NODE_NULL;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
-			ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 		case DECL:
-			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) { if (qt.is_invalid()) return type_store::NODE_NULL; ctx.handler.symbol_diag(tok, REDEFINITION_INCOMPATIBLE, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!; }
-			else { if ((NodeOptIndex)prev.node != type_store::NODE_NULL) ctx.handler.symbol_tentative_definition(node, prev.node); old = (NodeOptIndex)prev.node; }
+			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) { if (qt.is_invalid()) return type_store::NODE_NULL; Diagnostic.REDEFINITION_INCOMPATIBLE.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!; }
+			else { if ((NodeOptIndex)prev.node != type_store::NODE_NULL) ctx.parser.symbol_tentative_definition(node, prev.node); old = (NodeOptIndex)prev.node; }
 		case DEF:
 		case CONSTEXPR:
-			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) { if (qt.is_invalid()) return type_store::NODE_NULL; ctx.handler.symbol_diag(tok, REDEFINITION_INCOMPATIBLE, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!; }
-			else { if ((NodeOptIndex)prev.node != type_store::NODE_NULL) ctx.handler.symbol_tentative_definition(node, prev.node); return type_store::NODE_NULL; }
+			if (!prev.qt.is_invalid() && !qt.eql_qualified(prev.qt, ctx.comp)) { if (qt.is_invalid()) return type_store::NODE_NULL; Diagnostic.REDEFINITION_INCOMPATIBLE.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!; }
+			else { if ((NodeOptIndex)prev.node != type_store::NODE_NULL) ctx.parser.symbol_tentative_definition(node, prev.node); return type_store::NODE_NULL; }
 		case TYPEDEF:
 			if (qt.is_invalid()) return type_store::NODE_NULL;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
-			ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 	default: unreachable("invalid ordinary symbol kind");
 		}
 	}
@@ -382,11 +356,11 @@ fn void? SymbolStack.define_param(&self, SymbolContext* ctx, StringId name, Qual
 		case DECL:
 		case DEF:
 		case CONSTEXPR:
-			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return; ctx.handler.symbol_diag(tok, REDEFINITION_OF_PARAMETER, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!; return; }
+			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return; Diagnostic.REDEFINITION_OF_PARAMETER.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!; return; }
 		case TYPEDEF:
 			if (qt.is_invalid()) return;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!;
-			ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 		default: unreachable("invalid ordinary symbol kind");
 		}
 	}
@@ -409,8 +383,8 @@ fn bool? SymbolStack.define_tag(&self, SymbolContext* ctx, StringId name, tokeni
 		return false;
 	}
 	if ((prev.kind == ENUM && kind == tokenizer::TokenId.KEYWORD_ENUM) || (prev.kind == STRUCT && kind == tokenizer::TokenId.KEYWORD_STRUCT) || (prev.kind == UNION && kind == tokenizer::TokenId.KEYWORD_UNION)) { *out = prev; return true; }
-	ctx.handler.symbol_diag(tok, WRONG_TAG, {}, {})!;
-	ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+	Diagnostic.WRONG_TAG.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!;
+	Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 	return false;
 }
 
@@ -425,15 +399,15 @@ fn void? SymbolStack.define_enumeration(&self, SymbolContext* ctx, StringId name
 	if (try prev = self.get(name, VARS)) {
 		switch (prev.kind) {
 		case ENUMERATION:
-			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return; ctx.handler.symbol_diag(tok, REDEFINITION, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!; return; }
+			if (!prev.qt.is_invalid()) { if (qt.is_invalid()) return; Diagnostic.REDEFINITION.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!; return; }
 		case DECL:
 		case DEF:
 		case CONSTEXPR:
 			if (qt.is_invalid()) return;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!; return;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!; return;
 		case TYPEDEF:
 			if (qt.is_invalid()) return;
-			ctx.handler.symbol_diag(tok, REDEFINITION_DIFFERENT_SYM, {}, {})!; ctx.handler.symbol_diag(prev.tok, PREVIOUS_DEFINITION, {}, {})!;
+			Diagnostic.REDEFINITION_DIFFERENT_SYM.@emit(ctx.parser, tok, ctx.parser.tree.tok_slice(tok))!; Diagnostic.PREVIOUS_DEFINITION.@emit(ctx.parser, prev.tok)!;
 		default: unreachable("invalid ordinary symbol kind");
 		}
 	}

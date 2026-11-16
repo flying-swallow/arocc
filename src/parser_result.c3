@@ -3,7 +3,7 @@
 // parser layer; these helpers preserve the typed AST and constant value.
 module aro::parser_result;
 import aro::primitive_value;
-import aro::parser, aro::tree, aro::type_store, aro::value, aro::value_interner, aro::tokens, aro::parser_diagnostics;
+import aro::parser, aro::tree, aro::type_store, aro::value, aro::value_interner, aro::tokens, aro::diagnostics;
 import aro::compilation;
 import aro::lang_opts;
 import aro::attribute, aro::builtins;
@@ -17,7 +17,10 @@ struct Result
 }
 
 <* The operation requesting a scalar coercion selects the wording for pointer diagnostics. *>
-enum CoercionContext : char { EXPRESSION, INITIALIZATION, ASSIGNMENT, RETURN, ARGUMENT }
+enum CoercionContext : char
+{
+	EXPRESSION, INITIALIZATION, ASSIGNMENT, RETURN, ARGUMENT
+}
 
 <* Append an attribute message using Zig's stringEscape formatting. *>
 fn void append_escaped(DString* buf, String text)
@@ -32,8 +35,14 @@ fn void append_escaped(DString* buf, String text)
 			case '\\': buf.append_string("\\\\");
 			case '"': buf.append_string("\\\"");
 			default:
-				if (c >= ' ' && c <= '~') { buf.append_char(c); }
-				else { buf.appendf("\\x%02x", c); }
+				if (c >= ' ' && c <= '~')
+				{
+					buf.append_char(c);
+				}
+				else
+				{
+					buf.appendf("\\x%02x", c);
+				}
 		}
 	}
 }
@@ -53,71 +62,69 @@ fn void? diagnose_unused_value(parser::Parser* p, type_store::NodeIndex node, ui
 	{
 		switch (cur.kind)
 		{
-			case tree::NodeKind.ASSIGN_EXPR: case tree::NodeKind.MUL_ASSIGN_EXPR:
-			case tree::NodeKind.DIV_ASSIGN_EXPR: case tree::NodeKind.MOD_ASSIGN_EXPR:
-			case tree::NodeKind.ADD_ASSIGN_EXPR: case tree::NodeKind.SUB_ASSIGN_EXPR:
-			case tree::NodeKind.SHL_ASSIGN_EXPR: case tree::NodeKind.SHR_ASSIGN_EXPR:
-			case tree::NodeKind.BIT_AND_ASSIGN_EXPR: case tree::NodeKind.BIT_XOR_ASSIGN_EXPR:
-			case tree::NodeKind.BIT_OR_ASSIGN_EXPR: case tree::NodeKind.PRE_INC_EXPR:
-			case tree::NodeKind.PRE_DEC_EXPR: case tree::NodeKind.POST_INC_EXPR:
+			case tree::NodeKind.ASSIGN_EXPR:
+			case tree::NodeKind.MUL_ASSIGN_EXPR:
+			case tree::NodeKind.DIV_ASSIGN_EXPR:
+			case tree::NodeKind.MOD_ASSIGN_EXPR:
+			case tree::NodeKind.ADD_ASSIGN_EXPR:
+			case tree::NodeKind.SUB_ASSIGN_EXPR:
+			case tree::NodeKind.SHL_ASSIGN_EXPR:
+			case tree::NodeKind.SHR_ASSIGN_EXPR:
+			case tree::NodeKind.BIT_AND_ASSIGN_EXPR:
+			case tree::NodeKind.BIT_XOR_ASSIGN_EXPR:
+			case tree::NodeKind.BIT_OR_ASSIGN_EXPR:
+			case tree::NodeKind.PRE_INC_EXPR:
+			case tree::NodeKind.PRE_DEC_EXPR:
+			case tree::NodeKind.POST_INC_EXPR:
 			case tree::NodeKind.POST_DEC_EXPR:
 				return;
 			case tree::NodeKind.EQUAL_EXPR:
-				return p.emit_parser_diag(parser_diagnostics::ParserDiag.UNUSED_COMPARISON, "equality comparison result unused", cur_node.tok(&p.tree));
+				return Diagnostic.UNUSED_COMPARISON.@emit(p, cur_node.tok(&p.tree), "equality");
 			case tree::NodeKind.NOT_EQUAL_EXPR:
-				return p.emit_parser_diag(parser_diagnostics::ParserDiag.UNUSED_COMPARISON, "inequality comparison result unused", cur_node.tok(&p.tree));
-			case tree::NodeKind.LESS_THAN_EXPR: case tree::NodeKind.LESS_THAN_EQUAL_EXPR:
-			case tree::NodeKind.GREATER_THAN_EXPR: case tree::NodeKind.GREATER_THAN_EQUAL_EXPR:
-				return p.emit_parser_diag(parser_diagnostics::ParserDiag.UNUSED_COMPARISON, "relational comparison result unused", cur_node.tok(&p.tree));
+				return Diagnostic.UNUSED_COMPARISON.@emit(p, cur_node.tok(&p.tree), "inequality");
+			case tree::NodeKind.LESS_THAN_EXPR:
+			case tree::NodeKind.LESS_THAN_EQUAL_EXPR:
+			case tree::NodeKind.GREATER_THAN_EXPR:
+			case tree::NodeKind.GREATER_THAN_EQUAL_EXPR:
+				return Diagnostic.UNUSED_COMPARISON.@emit(p, cur_node.tok(&p.tree), "relational");
 			case tree::NodeKind.CALL_EXPR:
-			{
-				tree::CalledFunctionAttr? maybe_info = p.tree.called_function_attr(cur.call.callee, attribute::AttributeTag.WARN_UNUSED_RESULT);
-				if (!@ok(maybe_info)) return;
-				tree::CalledFunctionAttr info = maybe_info!;
-				if (!info.has_attr) return;
-				attribute::Attribute attr = info.attr;
-				String attr_name = attr.name.name();
-				DString message;
-				message.init(tmem);
-				message.appendf("ignoring return value of '%s', declared with '", p.tree.tok_slice(info.tok));
-				if (attr.syntax == attribute::AttributeSyntax.STANDARD && attr.name.ns != attribute::AttrNamespace.STANDARD)
 				{
-					message.append_string(attr.name.ns.name);
-					message.append_string("::");
+					tree::CalledFunctionAttr? maybe_info = p.tree.called_function_attr(cur.call.callee, attribute::AttributeTag.WARN_UNUSED_RESULT);
+					if (!@ok(maybe_info)) return;
+					tree::CalledFunctionAttr info = maybe_info!;
+					if (!info.has_attr) return;
+					attribute::Attribute attr = info.attr;
+					String attr_name = attr.name.name();
+					bool namespaced = attr.syntax == attribute::AttributeSyntax.STANDARD && attr.name.ns != attribute::AttrNamespace.STANDARD;
+					String spelling = namespaced ? string::tformat("'%s::%s'", attr.name.ns.name, attr_name) : string::tformat("'%s'", attr_name);
+					bool has_msg = attr.args.warn_unused_result.has_msg;
+					DString escaped;
+					escaped.init(tmem);
+					if (has_msg) append_escaped(&escaped, attr.args.warn_unused_result.msg);
+					return Diagnostic.WARN_UNUSED_RESULT.@emit(p, cur.call.callee.tok(&p.tree), p.tree.tok_slice(info.tok), spelling,
+						has_msg ? ": " : "", escaped.str_view());
 				}
-				message.append_string(attr_name);
-				message.append_char('\'');
-				message.append_string(" attribute");
-				if (attr.args.warn_unused_result.has_msg)
-				{
-					message.append_string(": ");
-					append_escaped(&message, attr.args.warn_unused_result.msg);
-				}
-				return p.emit_parser_diag(parser_diagnostics::ParserDiag.WARN_UNUSED_RESULT, message.str_view(), cur.call.callee.tok(&p.tree));
-			}
 			case tree::NodeKind.BUILTIN_CALL_EXPR:
-			{
-				String name = p.tree.tok_slice(cur.builtin_call.builtin_tok);
-				builtins::Expanded builtin = p.comp.builtins.lookup(name);
-				if (builtin.attributes.pure)
 				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.BUILTIN_UNUSED,
-						"ignoring return value of function declared with 'pure' attribute", cur.builtin_call.builtin_tok)!;
+					String name = p.tree.tok_slice(cur.builtin_call.builtin_tok);
+					builtins::Expanded builtin = p.comp.builtins.lookup(name);
+					if (builtin.attributes.pure)
+					{
+						Diagnostic.BUILTIN_UNUSED.@emit(p, cur.builtin_call.builtin_tok, "'pure'")!;
+					}
+					if (builtin.attributes.is_const)
+					{
+						Diagnostic.BUILTIN_UNUSED.@emit(p, cur.builtin_call.builtin_tok, "'const'")!;
+					}
+					return;
 				}
-				if (builtin.attributes.is_const)
-				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.BUILTIN_UNUSED,
-						"ignoring return value of function declared with 'const' attribute", cur.builtin_call.builtin_tok)!;
-				}
-				return;
-			}
 			case tree::NodeKind.STMT_EXPR:
-			{
-				tree::Node body = cur.unary.operand.get(&p.tree);
-				if (body.compound_stmt.body.len == 0) return;
-				cur_node = body.compound_stmt.body[body.compound_stmt.body.len - 1];
-				cur = cur_node.get(&p.tree);
-			}
+				{
+					tree::Node body = cur.unary.operand.get(&p.tree);
+					if (body.compound_stmt.body.len == 0) return;
+					cur_node = body.compound_stmt.body[body.compound_stmt.body.len - 1];
+					cur = cur_node.get(&p.tree);
+				}
 			case tree::NodeKind.COMMA_EXPR:
 				cur_node = cur.binary.rhs;
 				cur = cur_node.get(&p.tree);
@@ -125,26 +132,20 @@ fn void? diagnose_unused_value(parser::Parser* p, type_store::NodeIndex node, ui
 				cur_node = cur.unary.operand;
 				cur = cur_node.get(&p.tree);
 			default:
-				return p.emit_parser_diag(parser_diagnostics::ParserDiag.UNUSED_VALUE, "expression result unused", cur_node.tok(&p.tree));
+				return Diagnostic.UNUSED_VALUE.@emit(p, cur_node.tok(&p.tree));
 		}
 	}
-}
-
-<* Report a Result conversion diagnostic at `tok` through `Parser.err`, which formats the args. *>
-macro void? Result.conversion_err(&self, parser::Parser* p, tokens::TokenIndex tok, parser_diagnostics::ParserDiag $diag, ...)
-{
-	return p.err($diag, tok, ...$vaarg);
 }
 
 fn void? Result.explicit_cast_warnings(&self, parser::Parser* p, tokens::TokenIndex tok, type_store::QualType dest, type_store::QualType original)
 {
 	if (dest.is_qualified())
 	{
-		self.conversion_err(p, tok, parser_diagnostics::ParserDiag.QUAL_CAST, p.fmt_qt(dest))!;
+		Diagnostic.QUAL_CAST.@emit(p, tok, p.fmt_qt(dest))!;
 	}
 	if (dest.is_int(p.comp) && original.is_pointer(p.comp) && dest.size_compare(original, p.comp) == type_store::TypeSizeOrder.LT)
 	{
-		self.conversion_err(p, tok, parser_diagnostics::ParserDiag.CAST_TO_SMALLER_INT, p.fmt_qt(dest), p.fmt_qt(original))!;
+		Diagnostic.CAST_TO_SMALLER_INT.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
 	}
 }
 
@@ -153,10 +154,10 @@ fn void? Result.explicit_cast_warnings(&self, parser::Parser* p, tokens::TokenIn
  truncation to zero reads "changes non-zero value". `old_val` has type `src`; the
  converted value (`self.val`) has type `dest`.
 *>
-macro void? Result.value_changed_err(&self, parser::Parser* p, tokens::TokenIndex tok, parser_diagnostics::ParserDiag $diag, type_store::QualType src, type_store::QualType dest, value::Value old_val)
+macro void? Result.value_changed_err(&self, parser::Parser* p, tokens::TokenIndex tok, Diagnostic $diag, type_store::QualType src, type_store::QualType dest, value::Value old_val)
 {
 	String zero_str = self.val.is_zero(p.comp) ? "non-zero " : "";
-	return p.err($diag, tok, p.fmt_qt(src), p.fmt_qt(dest), zero_str, p.fmt_value(old_val, src), p.fmt_value(self.val, dest));
+	return $diag.@emit(p, tok, p.fmt_qt(src), p.fmt_qt(dest), zero_str, p.fmt_value(old_val, src), p.fmt_value(self.val, dest));
 }
 
 fn void Result.init(&self, type_store::NodeIndex node, type_store::QualType qt, value::Value val = value::NONE)
@@ -173,7 +174,11 @@ fn bool Result.check_invalid_un(&self, parser::Parser* p, tree::NodeKind kind, t
 {
 	if (!self.qt.is_invalid()) return false;
 	self.val = value::NONE;
-	self.node = p.tree.add_node({ .kind = kind, .unary = { .qt = self.qt, .operand = self.node, .op_tok = tok } });
+	self.node = p.tree.add_node(
+		{
+			.kind = kind, .unary = { .qt = self.qt, .operand = self.node, .op_tok = tok }
+		}
+	);
 	return true;
 }
 
@@ -181,13 +186,17 @@ fn bool Result.check_invalid_un(&self, parser::Parser* p, tree::NodeKind kind, t
 fn void Result.implicit_cast(&self, parser::Parser* p, tree::CastKind kind)
 {
 	tokens::TokenIndex tok = self.node.tok(&p.tree);
-	self.node = p.tree.add_node({ .kind = tree::NodeKind.CAST, .cast = {
-		.l_paren = tok,
-		.kind = kind,
-		.operand = self.node,
-		.qt = self.qt,
-		.implicit = true,
-	} });
+	self.node = p.tree.add_node(
+		{
+			.kind = tree::NodeKind.CAST, .cast = {
+				.l_paren = tok,
+				.kind = kind,
+				.operand = self.node,
+				.qt = self.qt,
+				.implicit = true,
+			}
+		}
+	);
 }
 
 <* Get the pointer constant carried by array/function decay when the node supports it. *>
@@ -200,7 +209,11 @@ fn value::Value pointer_value(parser::Parser* p, type_store::NodeIndex node, val
 			// Zig looks up this name as a symbol, but predefined function-name identifiers are
 			// not declared symbols. Use the declaration stored on the reference instead (option B:
 			// keep the 'not a compile-time constant' check; make values fold instead).
-			return value::pointer({ .node = (uint)n.decl_ref.decl, .offset = offset.ref() }, p.comp);
+			return value::pointer(
+				{
+					.node = (uint)n.decl_ref.decl, .offset = offset.ref()
+			}
+			, p.comp);
 		case tree::NodeKind.STRING_LITERAL_EXPR:
 			if (try saved = p.tree.value_of(node))
 			{
@@ -218,8 +231,8 @@ fn value::Value pointer_value(parser::Parser* p, type_store::NodeIndex node, val
 fn bool add_offset_checked(value::Value* offset_so_far, value::Value delta, compilation::Compilation* comp)
 {
 	if (offset_so_far.is_none() || delta.is_none() ||
-		!offset_so_far.is_int(comp) ||
-		!delta.is_int(comp)) return false;
+	!offset_so_far.is_int(comp) ||
+	!delta.is_int(comp)) return false;
 	value::Value updated = value::NONE;
 	if (updated.add(*offset_so_far, delta, comp.type_store.ptrdiff, comp)) return false;
 	*offset_so_far = updated;
@@ -237,8 +250,12 @@ fn value::Value compute_saved_pointer_offset(parser::Parser* p, type_store::Node
 		value::Value base_offset = value::from_ref(key.pointer.offset);
 		value::Value combined = value::NONE;
 		if (!base_offset.is_int(p.comp) ||
-			combined.add(base_offset, offset, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
-		return value::pointer({ .node = key.pointer.node, .offset = combined.ref() }, p.comp);
+		combined.add(base_offset, offset, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
+		return value::pointer(
+			{
+				.node = key.pointer.node, .offset = combined.ref()
+		}
+		, p.comp);
 	}
 	return value::NONE;
 }
@@ -250,17 +267,17 @@ fn value::Value compute_offset_extra(parser::Parser* p, type_store::NodeIndex no
 	switch (n.kind)
 	{
 		case tree::NodeKind.CAST:
-		{
-			value::Value saved_pointer = compute_saved_pointer_offset(p, node, *offset_so_far);
-			if (!saved_pointer.is_none()) return saved_pointer;
-			// Array decay preserves the address of the array lvalue. Other casts
-			// need a saved symbolic pointer before they can serve as an address base.
-			if (n.cast.kind == tree::CastKind.ARRAY_TO_POINTER)
 			{
-				return compute_offset_extra(p, n.cast.operand, offset_so_far);
+				value::Value saved_pointer = compute_saved_pointer_offset(p, node, *offset_so_far);
+				if (!saved_pointer.is_none()) return saved_pointer;
+				// Array decay preserves the address of the array lvalue. Other casts
+				// need a saved symbolic pointer before they can serve as an address base.
+				if (n.cast.kind == tree::CastKind.ARRAY_TO_POINTER)
+				{
+					return compute_offset_extra(p, n.cast.operand, offset_so_far);
+				}
+				return value::NONE;
 			}
-			return value::NONE;
-		}
 		case tree::NodeKind.PAREN_EXPR:
 			return compute_offset_extra(p, n.unary.operand, offset_so_far);
 		case tree::NodeKind.DECL_REF_EXPR:
@@ -268,63 +285,63 @@ fn value::Value compute_offset_extra(parser::Parser* p, type_store::NodeIndex no
 		case tree::NodeKind.DEREF_EXPR:
 			return compute_saved_pointer_offset(p, n.unary.operand, *offset_so_far);
 		case tree::NodeKind.ARRAY_ACCESS_EXPR:
-		{
-			if (try index_val = p.tree.value_of(n.array_access.index))
 			{
-				if (!index_val.is_int(p.comp)) return value::NONE;
-				if (try elem_size = n.array_access.qt.sizeof_or_null(p.comp))
+				if (try index_val = p.tree.value_of(n.array_access.index))
 				{
-					value::Value delta = value::NONE;
-					if (delta.mul(value::int_u64(elem_size, p.comp), index_val, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
-					if (!add_offset_checked(offset_so_far, delta, p.comp)) return value::NONE;
-
-					type_store::QualType base_qt = n.array_access.base.qt(&p.tree);
-					if (base_qt.is_pointer(p.comp))
+					if (!index_val.is_int(p.comp)) return value::NONE;
+					if (try elem_size = n.array_access.qt.sizeof_or_null(p.comp))
 					{
-						tree::Node base = n.array_access.base.get(&p.tree);
-						if (base.kind == tree::NodeKind.CAST && base.cast.kind == tree::CastKind.ARRAY_TO_POINTER)
+						value::Value delta = value::NONE;
+						if (delta.mul(value::int_u64(elem_size, p.comp), index_val, p.comp.type_store.ptrdiff, p.comp)) return value::NONE;
+						if (!add_offset_checked(offset_so_far, delta, p.comp)) return value::NONE;
+
+						type_store::QualType base_qt = n.array_access.base.qt(&p.tree);
+						if (base_qt.is_pointer(p.comp))
 						{
-							return compute_offset_extra(p, n.array_access.base, offset_so_far);
+							tree::Node base = n.array_access.base.get(&p.tree);
+							if (base.kind == tree::NodeKind.CAST && base.cast.kind == tree::CastKind.ARRAY_TO_POINTER)
+							{
+								return compute_offset_extra(p, n.array_access.base, offset_so_far);
+							}
+							return compute_saved_pointer_offset(p, n.array_access.base, *offset_so_far);
 						}
-						return compute_saved_pointer_offset(p, n.array_access.base, *offset_so_far);
+						return compute_offset_extra(p, n.array_access.base, offset_so_far);
 					}
-					return compute_offset_extra(p, n.array_access.base, offset_so_far);
 				}
+				return value::NONE;
 			}
-			return value::NONE;
-		}
 		case tree::NodeKind.MEMBER_ACCESS_EXPR:
-		{
-			type_store::QualType ty = n.member_access.base.qt(&p.tree).non_atomic(p.comp);
-			if (try record_ty = ty.get_record(p.comp))
 			{
-				if (n.member_access.member_index >= record_ty.fields.len) return value::NONE;
-				ulong field_offset_bits = record_ty.fields[n.member_access.member_index].layout.offset_bits;
-				if (field_offset_bits % 8 != 0) return value::NONE;
-				ulong field_offset_bytes = field_offset_bits / 8;
-				value::Value field_offset = value::int_u64(field_offset_bytes, p.comp);
-				if (!add_offset_checked(offset_so_far, field_offset, p.comp)) return value::NONE;
-				return compute_offset_extra(p, n.member_access.base, offset_so_far);
+				type_store::QualType ty = n.member_access.base.qt(&p.tree).non_atomic(p.comp);
+				if (try record_ty = ty.get_record(p.comp))
+				{
+					if (n.member_access.member_index >= record_ty.fields.len) return value::NONE;
+					ulong field_offset_bits = record_ty.fields[n.member_access.member_index].layout.offset_bits;
+					if (field_offset_bits % 8 != 0) return value::NONE;
+					ulong field_offset_bytes = field_offset_bits / 8;
+					value::Value field_offset = value::int_u64(field_offset_bytes, p.comp);
+					if (!add_offset_checked(offset_so_far, field_offset, p.comp)) return value::NONE;
+					return compute_offset_extra(p, n.member_access.base, offset_so_far);
+				}
+				return value::NONE;
 			}
-			return value::NONE;
-		}
 		case tree::NodeKind.MEMBER_ACCESS_PTR_EXPR:
-		{
-			type_store::QualType ty = n.member_access.base.qt(&p.tree).non_atomic(p.comp);
-			if (try pointer = ty.get(p.comp, type_store::TypeTag.POINTER)) ty = pointer.pointer.child;
-			ty = ty.non_atomic(p.comp);
-			if (try record_ty = ty.get_record(p.comp))
 			{
-				if (n.member_access.member_index >= record_ty.fields.len) return value::NONE;
-				ulong field_offset_bits = record_ty.fields[n.member_access.member_index].layout.offset_bits;
-				if (field_offset_bits % 8 != 0) return value::NONE;
-				ulong field_offset_bytes = field_offset_bits / 8;
-				value::Value field_offset = value::int_u64(field_offset_bytes, p.comp);
-				if (!add_offset_checked(offset_so_far, field_offset, p.comp)) return value::NONE;
-				return compute_saved_pointer_offset(p, n.member_access.base, *offset_so_far);
+				type_store::QualType ty = n.member_access.base.qt(&p.tree).non_atomic(p.comp);
+				if (try pointer = ty.get(p.comp, type_store::TypeTag.POINTER)) ty = pointer.pointer.child;
+				ty = ty.non_atomic(p.comp);
+				if (try record_ty = ty.get_record(p.comp))
+				{
+					if (n.member_access.member_index >= record_ty.fields.len) return value::NONE;
+					ulong field_offset_bits = record_ty.fields[n.member_access.member_index].layout.offset_bits;
+					if (field_offset_bits % 8 != 0) return value::NONE;
+					ulong field_offset_bytes = field_offset_bits / 8;
+					value::Value field_offset = value::int_u64(field_offset_bytes, p.comp);
+					if (!add_offset_checked(offset_so_far, field_offset, p.comp)) return value::NONE;
+					return compute_saved_pointer_offset(p, n.member_access.base, *offset_so_far);
+				}
+				return value::NONE;
 			}
-			return value::NONE;
-		}
 		default: return value::NONE;
 	}
 }
@@ -396,11 +413,11 @@ fn void? Result.int_conversion_warning(&self, parser::Parser* p, tokens::TokenIn
 {
 	switch (change_kind)
 	{
-		case value::IntCastChangeKind.TRUNCATED: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.INT_VALUE_CHANGED, src, dest, old_val);
+		case value::IntCastChangeKind.TRUNCATED: return self.value_changed_err(p, tok, Diagnostic.INT_VALUE_CHANGED, src, dest, old_val);
 		case value::IntCastChangeKind.SIGN_CHANGED:
-		{
-			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.SIGN_CONVERSION, p.fmt_qt(src), p.fmt_qt(dest));
-		}
+			{
+				return Diagnostic.SIGN_CONVERSION.@emit(p, tok, p.fmt_qt(src), p.fmt_qt(dest));
+			}
 		case value::IntCastChangeKind.NONE: return;
 	}
 }
@@ -410,19 +427,19 @@ fn void? Result.float_to_int_warning(&self, parser::Parser* p, tokens::TokenInde
 	switch (change_kind)
 	{
 		case value::FloatToIntChangeKind.NONE:
-		{
-			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_TO_INT, p.fmt_qt(src), p.fmt_qt(dest));
-		}
+			{
+				return Diagnostic.FLOAT_TO_INT.@emit(p, tok, p.fmt_qt(src), p.fmt_qt(dest));
+			}
 		case value::FloatToIntChangeKind.OUT_OF_RANGE:
-		{
-			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_OUT_OF_RANGE, p.fmt_qt(src), p.fmt_qt(dest));
-		}
+			{
+				return Diagnostic.FLOAT_OUT_OF_RANGE.@emit(p, tok, p.fmt_qt(src), p.fmt_qt(dest));
+			}
 		case value::FloatToIntChangeKind.OVERFLOW:
-		{
-			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_OVERFLOW_CONVERSION, p.fmt_qt(src), p.fmt_qt(dest));
-		}
-		case value::FloatToIntChangeKind.NONZERO_TO_ZERO: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_ZERO_CONVERSION, src, dest, old_val);
-		case value::FloatToIntChangeKind.VALUE_CHANGED: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_VALUE_CHANGED, src, dest, old_val);
+			{
+				return Diagnostic.FLOAT_OVERFLOW_CONVERSION.@emit(p, tok, p.fmt_qt(src), p.fmt_qt(dest));
+			}
+		case value::FloatToIntChangeKind.NONZERO_TO_ZERO: return self.value_changed_err(p, tok, Diagnostic.FLOAT_ZERO_CONVERSION, src, dest, old_val);
+		case value::FloatToIntChangeKind.VALUE_CHANGED: return self.value_changed_err(p, tok, Diagnostic.FLOAT_VALUE_CHANGED, src, dest, old_val);
 	}
 }
 
@@ -479,7 +496,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		self.val = value::NONE;
 		if (implicit)
 		{
-			self.conversion_err(p, tok, parser_diagnostics::ParserDiag.IMPLICIT_PTR_TO_INT, p.fmt_qt(original), p.fmt_qt(dest))!;
+			Diagnostic.IMPLICIT_PTR_TO_INT.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 		}
 		self.qt = dest.to_real(p.comp);
 		self.implicit_cast(p, tree::CastKind.POINTER_TO_INT);
@@ -610,7 +627,7 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 	{
 		if (implicit && !self.val.is_zero(p.comp))
 		{
-			self.conversion_err(p, tok, parser_diagnostics::ParserDiag.IMPLICIT_INT_TO_PTR, p.fmt_qt(original), p.fmt_qt(dest))!;
+			Diagnostic.IMPLICIT_INT_TO_PTR.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 		}
 		// Integer and pointer representations depend on the target. Keep even
 		// integer-to-pointer constant values unavailable rather than guessing.
@@ -629,20 +646,21 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 		if (implicit && !from_child.is(p.comp, type_store::TypeTag.VOID) && !to_child.is(p.comp, type_store::TypeTag.VOID))
 		{
 			bool discards_qualifiers = (from_child.is_const && !to_child.is_const) ||
-				(from_child.is_volatile && !to_child.is_volatile) ||
-				(from_child.is_restrict && !to_child.is_restrict);
+			(from_child.is_volatile && !to_child.is_volatile) ||
+			(from_child.is_restrict && !to_child.is_restrict);
 			if (from_child.eql(to_child, p.comp) && discards_qualifiers)
 			{
 				switch (context)
 				{
 					case INITIALIZATION:
-						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_INIT_DISCARDS_QUALS, p.fmt_qt(dest), p.fmt_qt(original))!;
-					case ASSIGNMENT: case EXPRESSION:
-						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_ASSIGN_DISCARDS_QUALS, p.fmt_qt(dest), p.fmt_qt(original))!;
+						Diagnostic.PTR_INIT_DISCARDS_QUALS.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
+					case ASSIGNMENT:
+					case EXPRESSION:
+						Diagnostic.PTR_ASSIGN_DISCARDS_QUALS.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
 					case RETURN:
-						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_RET_DISCARDS_QUALS, p.fmt_qt(original), p.fmt_qt(dest))!;
+						Diagnostic.PTR_RET_DISCARDS_QUALS.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 					case ARGUMENT:
-						self.conversion_err(p, tok, parser_diagnostics::ParserDiag.PTR_ARG_DISCARDS_QUALS, p.fmt_qt(original), p.fmt_qt(dest))!;
+						Diagnostic.PTR_ARG_DISCARDS_QUALS.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 				}
 			}
 			else if (!from_child.eql(to_child, p.comp))
@@ -653,46 +671,47 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 					case INITIALIZATION:
 						if (sign_only)
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_INIT_SIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+							Diagnostic.INCOMPATIBLE_PTR_INIT_SIGN.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
 						}
 						else
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_INIT, p.fmt_qt(dest), p.fmt_qt(original))!;
+							Diagnostic.INCOMPATIBLE_PTR_INIT.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
 						}
-					case ASSIGNMENT: case EXPRESSION:
+					case ASSIGNMENT:
+					case EXPRESSION:
 						if (sign_only)
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ASSIGN_SIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+							Diagnostic.INCOMPATIBLE_PTR_ASSIGN_SIGN.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
 						}
 						else
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ASSIGN, p.fmt_qt(dest), p.fmt_qt(original))!;
+							Diagnostic.INCOMPATIBLE_PTR_ASSIGN.@emit(p, tok, p.fmt_qt(dest), p.fmt_qt(original))!;
 						}
 					case RETURN:
 						if (sign_only)
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_RETURN_SIGN, p.fmt_qt(original), p.fmt_qt(dest))!;
+							Diagnostic.INCOMPATIBLE_RETURN_SIGN.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 						}
 						else
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_RETURN, p.fmt_qt(original), p.fmt_qt(dest))!;
+							Diagnostic.INCOMPATIBLE_RETURN.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 						}
 					case ARGUMENT:
 						if (sign_only)
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ARG_SIGN, p.fmt_qt(original), p.fmt_qt(dest))!;
+							Diagnostic.INCOMPATIBLE_PTR_ARG_SIGN.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 						}
 						else
 						{
-							self.conversion_err(p, tok, parser_diagnostics::ParserDiag.INCOMPATIBLE_PTR_ARG, p.fmt_qt(original), p.fmt_qt(dest))!;
+							Diagnostic.INCOMPATIBLE_PTR_ARG.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 						}
 				}
 			}
 		}
 		self.qt = dest;
 		bool adds_qualifiers = (!from_child.is_const || to_child.is_const) &&
-			(!from_child.is_volatile || to_child.is_volatile) &&
-			(!from_child.is_restrict || to_child.is_restrict);
+		(!from_child.is_volatile || to_child.is_volatile) &&
+		(!from_child.is_restrict || to_child.is_restrict);
 		self.implicit_cast(p, from_child.eql(to_child, p.comp) && adds_qualifiers ? tree::CastKind.NO_OP : tree::CastKind.BITCAST);
 	}
 }
@@ -829,10 +848,14 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 		self.explicit_cast_warnings(p, l_paren, dest, original)!;
 		self.val = value::NONE;
 		self.qt = dest;
-		self.node = p.tree.add_node({ .kind = tree::NodeKind.CAST, .cast = {
-			.l_paren = l_paren, .kind = tree::CastKind.TO_VOID, .operand = self.node,
-			.qt = dest, .implicit = false,
-		} });
+		self.node = p.tree.add_node(
+			{
+				.kind = tree::NodeKind.CAST, .cast = {
+					.l_paren = l_paren, .kind = tree::CastKind.TO_VOID, .operand = self.node,
+					.qt = dest, .implicit = false,
+				}
+			}
+		);
 		return true;
 	}
 	type_store::Type? dst_vec = dest.get(p.comp, type_store::TypeTag.VECTOR);
@@ -845,10 +868,14 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 			self.explicit_cast_warnings(p, l_paren, dest, original)!;
 			self.val = value::NONE;
 			self.qt = dest.unqualified();
-			self.node = p.tree.add_node({ .kind = tree::NodeKind.CAST, .cast = {
-				.l_paren = l_paren, .kind = tree::CastKind.BITCAST, .operand = self.node,
-				.qt = self.qt, .implicit = false,
-			} });
+			self.node = p.tree.add_node(
+				{
+					.kind = tree::NodeKind.CAST, .cast = {
+						.l_paren = l_paren, .kind = tree::CastKind.BITCAST, .operand = self.node,
+						.qt = self.qt, .implicit = false,
+					}
+				}
+			);
 			return true;
 		}
 		if (!self.qt.is_int(p.comp) || dest.size_compare(self.qt, p.comp) != type_store::TypeSizeOrder.EQ) return false;
@@ -863,10 +890,14 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 			self.explicit_cast_warnings(p, l_paren, dest, original)!;
 			self.val = value::NONE;
 			self.qt = dest.unqualified();
-			self.node = p.tree.add_node({ .kind = tree::NodeKind.CAST, .cast = {
-				.l_paren = l_paren, .kind = tree::CastKind.BITCAST, .operand = self.node,
-				.qt = self.qt, .implicit = false,
-			} });
+			self.node = p.tree.add_node(
+				{
+					.kind = tree::NodeKind.CAST, .cast = {
+						.l_paren = l_paren, .kind = tree::CastKind.BITCAST, .operand = self.node,
+						.qt = self.qt, .implicit = false,
+					}
+				}
+			);
 			return true;
 		}
 		type_store::ScalarKind src = self.qt.scalar_kind(p.comp);
@@ -888,13 +919,20 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 			if (src.is_int && !src.is_real) return false;
 			self.cast_to_pointer(p, dest.unqualified(), l_paren, false)!;
 		}
-		else { return false; }
+		else
+		{
+			return false;
+		}
 	}
 	self.explicit_cast_warnings(p, l_paren, dest, original)!;
-	self.node = p.tree.add_node({ .kind = tree::NodeKind.CAST, .cast = {
-		.l_paren = l_paren, .kind = tree::CastKind.NO_OP, .operand = self.node,
-		.qt = self.qt, .implicit = false,
-	} });
+	self.node = p.tree.add_node(
+		{
+			.kind = tree::NodeKind.CAST, .cast = {
+				.l_paren = l_paren, .kind = tree::CastKind.NO_OP, .operand = self.node,
+				.qt = self.qt, .implicit = false,
+			}
+		}
+	);
 	return true;
 }
 
@@ -946,8 +984,14 @@ fn void? Result.usual_arithmetic_conversion(&self, Result* rhs, parser::Parser* 
 		rhs.cast_to_float(p, target, tok)!;
 		return;
 	}
-	if (af) { rhs.cast_to_float(p, self.qt, tok)!; return; }
-	if (bf) { self.cast_to_float(p, rhs.qt, tok)!; return; }
+	if (af)
+	{
+		rhs.cast_to_float(p, self.qt, tok)!; return;
+	}
+	if (bf)
+	{
+		self.cast_to_float(p, rhs.qt, tok)!; return;
+	}
 	if (!self.qt.is_int(p.comp) || !rhs.qt.is_int(p.comp)) return;
 	type_store::QualType a = self.qt.to_real(p.comp);
 	type_store::QualType b = rhs.qt.to_real(p.comp);
@@ -1010,13 +1054,13 @@ fn tokens::TokenIndex? first_missing_value(parser::Parser* p, type_store::NodeIn
 	{
 		case tree::NodeKind.ARRAY_INIT_EXPR:
 		case tree::NodeKind.STRUCT_INIT_EXPR:
-		{
-			foreach (item : node.container_init.items)
 			{
-				if (try tok = first_missing_value(p, item)) return tok;
+				foreach (item : node.container_init.items)
+				{
+					if (try tok = first_missing_value(p, item)) return tok;
+				}
+				return NO_MISSING_VALUE~;
 			}
-			return NO_MISSING_VALUE~;
-		}
 		case tree::NodeKind.UNION_INIT_EXPR:
 			if (node.union_init.initializer.is_null()) return NO_MISSING_VALUE~;
 			return first_missing_value(p, node.union_init.initializer.unwrap());
@@ -1058,9 +1102,9 @@ fn bool? Result.require_initializer_value(&self, parser::Parser* p, parser::Init
 	{
 		case RUNTIME: return true;
 		case CONSTEXPR:
-			p.err(parser_diagnostics::ParserDiag.NON_CONSTANT_INITIALIZER, diagnostic_tok)!;
+			Diagnostic.NON_CONSTANT_INITIALIZER.@emit(p, diagnostic_tok)!;
 		case STATIC:
-			p.err(parser_diagnostics::ParserDiag.STATIC_NON_CONSTANT_INITIALIZER, diagnostic_tok)!;
+			Diagnostic.STATIC_NON_CONSTANT_INITIALIZER.@emit(p, diagnostic_tok)!;
 	}
 	return false;
 }

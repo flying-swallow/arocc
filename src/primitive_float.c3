@@ -21,14 +21,14 @@
 //         constants, classification, zero/one/inf/nan, the PrimitiveValue
 //         add/sub/mul/div dispatch (forwards to the narrow/wide files), and the
 //         CONVERSIONS section: PrimitiveValue.cast, int -> float, float -> big int.
-//     float_parse.c3       parse_f128 (std.fmt.parseFloat).
-//     float_soft_narrow.c3 f16/f32/f64 add/sub/mul/div (native per the decision
+//     primitive_float_parse.c3       parse_f128 (std.fmt.parseFloat).
+//     primitive_float_soft_narrow.c3 f16/f32/f64 add/sub/mul/div (native per the decision
 //         below) and the width-generic std.math helpers Annex G needs: ilogb,
 //         scalbn (ldexp), max.
-//     float_soft_wide.c3   The software core: unpack / round_pack for every
+//     primitive_float_soft_wide.c3   The software core: unpack / round_pack for every
 //         format, f80/f128 add/sub/mul/div, f128 fused mul_add, and the exact hub
 //         conversions PrimitiveValue.to_f128 / from_f128 that cast is built on.
-//     float_print.c3       PrimitiveValue.compare (std.math.compare) and the
+//     primitive_float_print.c3       PrimitiveValue.compare (std.math.compare) and the
 //         float / complex text output (Zig `{d}` = shortest round-trip decimal of
 //         an f64).
 //   aro::annex_g  (annex_g.c3, like src/aro/annex_g.zig)
@@ -80,7 +80,7 @@
 //     ...999A), (2) 0/0 gives the x86 default NaN 0xFFFF8000.. while the
 //     reference (Zig compiler-rt divtf3/addf3/mulf3) gives +0x7FFF8000.., and (3)
 //     it depends on the toolchain linking libgcc's soft-fp (plan 32 portability).
-//     float_soft_wide.c3 implements f128 in software. Tests MAY use native
+//     primitive_float_soft_wide.c3 implements f128 in software. Tests MAY use native
 //     float128 as an oracle for finite, non-NaN results built from bit patterns.
 //   f80: c3c 0.8.5 has no x87 extended type: SOFTWARE ONLY.
 //   uint128/int128 integer ops (+ - * / % << >> clz ctz): ALLOWED inside the
@@ -91,7 +91,7 @@
 //     still prefer bit-pattern constants (float_key) in production code so the
 //     source states the exact value. Never write a float128 literal.
 //
-// Native operations may only appear in float_soft_narrow.c3 (and in tests).
+// Native operations may only appear in primitive_float_soft_narrow.c3 (and in tests).
 // Every other file manipulates PrimitiveValue bits or calls the dispatchers.
 //
 // =============================================================================
@@ -327,8 +327,8 @@ fn PrimitiveValue PrimitiveValue.quiet(self)
 // Width-generic arithmetic (dispatch implemented in stage 0)
 // =============================================================================
 // Zig `a + b` etc. on two values of the same float type T, rounding to nearest
-// even, with the NaN rules above. f16/f32/f64 go to float_soft_narrow.c3,
-// f80/f128 to float_soft_wide.c3 (status flags are dropped here).
+// even, with the NaN rules above. f16/f32/f64 go to primitive_float_soft_narrow.c3,
+// f80/f128 to primitive_float_soft_wide.c3 (status flags are dropped here).
 
 <*
  @require self.tag == rhs.tag : "operands must have the same width"
@@ -399,9 +399,9 @@ fn PrimitiveValue PrimitiveValue.div(self, PrimitiveValue rhs)
 // =============================================================================
 //
 // Everything below works on bit patterns. It needs three primitives from
-// float_soft_wide.c3: round_pack (one correctly rounded result from an exact
+// primitive_float_soft_wide.c3: round_pack (one correctly rounded result from an exact
 // sig * 2^exp), PrimitiveValue.to_f128 and from_f128 (the exact hub), plus
-// f128_mul / f128_div for parseFloat's fast path (float_parse.c3).
+// f128_mul / f128_div for parseFloat's fast path (primitive_float_parse.c3).
 //
 // NaN through casts (observed with Zig 0.17.0 on x86_64-linux, LLVM backend,
 // baseline CPU; test/unit/float_values/nan.txt): sign kept, payload aligned

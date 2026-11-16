@@ -1,6 +1,6 @@
 // Port of TypeStore.Builder from src/aro/TypeStore.zig.
 module aro::type_store;
-import aro::compilation, aro::parser, aro::lang_opts, aro::parser_diagnostics, aro::tokens;
+import aro::compilation, aro::parser, aro::lang_opts, aro::diagnostics, aro::tokens;
 import std::core::dstring;
 
 
@@ -443,45 +443,34 @@ fn String BuilderSpecifierTag.zig_name(self)
 
 fn void? Builder.cannot_combine_with_typeof(&self, BuilderSpecifierTag tag, tokens::TokenIndex tok)
 {
-	return self.err(parser_diagnostics::ParserDiag.CANNOT_COMBINE_WITH_TYPEOF, tok, tag.zig_name());
+	return self.err(Diagnostic.CANNOT_COMBINE_WITH_TYPEOF, tok, tag.zig_name());
 }
 
-// Emit the exact diagnostic template through Parser's normal location and
-// suppression path. `text` is the already-rendered diagnostic payload.
-fn void? Builder.emit(&self, parser_diagnostics::ParserDiag diag, String text, tokens::TokenIndex tok)
+macro void? Builder.err(&self, Diagnostic $diag, tokens::TokenIndex tok, ...)
 {
-	return self.parser.emit_parser_diag(diag, text, tok);
-}
-
-macro void? Builder.err(&self, parser_diagnostics::ParserDiag $diag, tokens::TokenIndex tok, ...)
-{
-	return self.parser.err($diag, tok, ...$vaarg);
+	return $diag.@emit(self.parser, tok, ...$vaarg);
 }
 
 fn parser::QtArg Builder.fmt_qt(&self, type_store::QualType qt) => self.parser.fmt_qt(qt);
 
 fn void? Builder.cannot_combine(&self, tokens::TokenIndex tok)
 {
-	DString text;
-	text.init(tmem);
 	if (try value = self.type.str(&self.parser.comp.langopts))
 	{
-		text.appendf("cannot combine with previous '%s' specifier", value);
-		return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, text.str_view(), tok);
+		return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, value);
 	}
 	QualType qt = self.finish_quals(self.type.other)!;
 	// Zig's QualType.print reaches `unreachable` on the invalid index (TypeStore.zig
 	// `.invalid => unreachable` in Type lookup), so there is no Zig output to match.
 	// Emit the literal `invalid` here instead of trapping in C3's printer.
-	if (qt.is_invalid()) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC_QT, "cannot combine with previous 'invalid' specifier", tok);
-	return self.err(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC_QT, tok, self.fmt_qt(qt));
+	if (qt.is_invalid()) return Diagnostic.CANNOT_COMBINE_SPEC_QT.@emit(self.parser, tok, "'invalid'");
+	return self.err(Diagnostic.CANNOT_COMBINE_SPEC_QT, tok, self.fmt_qt(qt));
 }
 
 fn void? Builder.duplicate_spec(&self, tokens::TokenIndex tok, String spelling)
 {
 	if (self.parser.comp.langopts.emulate == GCC) return self.cannot_combine(tok);
-	String text = string::tformat("duplicate '%s' declaration specifier", spelling);
-	return self.emit(parser_diagnostics::ParserDiag.DUPLICATE_DECL_SPEC, text, self.parser.tok_i);
+	return Diagnostic.DUPLICATE_DECL_SPEC.@emit(self.parser, self.parser.tok_i, spelling);
 }
 
 <* Combine one declaration specifier using TypeStore.Builder's source-derived
@@ -489,12 +478,12 @@ fn void? Builder.duplicate_spec(&self, tokens::TokenIndex tok, String spelling)
 fn void? Builder.combine(&self, BuilderSpecifier incoming, tokens::TokenIndex tok)
 {
 	if (self.is_typeof) return self.cannot_combine_with_typeof(incoming.tag, tok);
-	if (self.has_atomic_type_tok) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous '_Atomic' specifier", tok);
-	if (self.is_typedef) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous 'type-name' specifier", tok);
+	if (self.has_atomic_type_tok) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "_Atomic");
+	if (self.is_typedef) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "type-name");
 	if (self.type.tag == OTHER && self.type.other.is_invalid()) return;
 	if (incoming.tag == COMPLEX) { self.complex_tok = tok; self.has_complex_tok = true; }
 	if (incoming.tag == BIT_INT) { self.bit_int_tok = tok; self.has_bit_int_tok = true; }
-	if (incoming.tag == INT128 && !self.parser.comp.target.has_int128()) self.emit(parser_diagnostics::ParserDiag.TYPE_NOT_SUPPORTED_ON_TARGET, "__int128 is not supported on this target", tok)!;
+	if (incoming.tag == INT128 && !self.parser.comp.target.has_int128()) Diagnostic.TYPE_NOT_SUPPORTED_ON_TARGET.@emit(self.parser, tok, "__int128")!;
 
 	BuilderSpecifierTag old = self.type.tag;
 	BuilderSpecifierTag next = NONE;
@@ -630,8 +619,14 @@ fn QualType? Builder.finish(&self)
 	switch (self.type.tag)
 	{
 		case NONE:
-			self.emit(self.parser.comp.langopts.standard.at_least(C23) ? parser_diagnostics::ParserDiag.MISSING_TYPE_SPECIFIER_C23 : parser_diagnostics::ParserDiag.MISSING_TYPE_SPECIFIER,
-				self.parser.comp.langopts.standard.at_least(C23) ? "a type specifier is required for all declarations" : "type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int", self.parser.tok_i)!;
+			if (self.parser.comp.langopts.standard.at_least(C23))
+			{
+				Diagnostic.MISSING_TYPE_SPECIFIER_C23.@emit(self.parser, self.parser.tok_i)!;
+			}
+			else
+			{
+				Diagnostic.MISSING_TYPE_SPECIFIER.@emit(self.parser, self.parser.tok_i)!;
+			}
 			qt = INT;
 		case OTHER: qt = self.type.other;
 		case VOID: qt = VOID; case BOOL: qt = BOOL; case NULLPTR_T: qt = NULLPTR_T;
@@ -653,15 +648,21 @@ fn QualType? Builder.finish(&self)
 			bool uns = self.type.tag == UBIT_INT;
 			if (self.type.bits < (uns ? 1UL : 2UL) || self.type.bits > 65535)
 			{
-				parser_diagnostics::ParserDiag d = self.type.bits > 65535 ? (uns ? parser_diagnostics::ParserDiag.UNSIGNED_BIT_INT_TOO_BIG : parser_diagnostics::ParserDiag.SIGNED_BIT_INT_TOO_BIG) : (uns ? parser_diagnostics::ParserDiag.UNSIGNED_BIT_INT_TOO_SMALL : parser_diagnostics::ParserDiag.SIGNED_BIT_INT_TOO_SMALL);
-				String message = self.type.bits > 65535 ? (uns ? "unsigned _BitInt of bit sizes greater than 65535 not supported" : "signed _BitInt of bit sizes greater than 65535 not supported") : (uns ? "unsigned _BitInt must have a bit size of at least 1" : "signed _BitInt must have a bit size of at least 2");
-				self.emit(d, message, self.has_bit_int_tok ? self.bit_int_tok : self.parser.tok_i)!;
+				tokens::TokenIndex bit_tok = self.has_bit_int_tok ? self.bit_int_tok : self.parser.tok_i;
+				if (self.type.bits > 65535)
+				{
+					if (uns) { Diagnostic.UNSIGNED_BIT_INT_TOO_BIG.@emit(self.parser, bit_tok, "")!; } else { Diagnostic.SIGNED_BIT_INT_TOO_BIG.@emit(self.parser, bit_tok)!; }
+				}
+				else
+				{
+					if (uns) { Diagnostic.UNSIGNED_BIT_INT_TOO_SMALL.@emit(self.parser, bit_tok)!; } else { Diagnostic.SIGNED_BIT_INT_TOO_SMALL.@emit(self.parser, bit_tok)!; }
+				}
 				return INVALID;
 			}
 			qt = self.parser.comp.type_store.put(type_bit_int((ushort)self.type.bits, uns ? UNSIGNED : SIGNED));
 		case COMPLEX_CHAR: case COMPLEX_SCHAR: case COMPLEX_UCHAR: case COMPLEX_SIGNED: case COMPLEX_UNSIGNED: case COMPLEX_SHORT: case COMPLEX_SSHORT: case COMPLEX_USHORT: case COMPLEX_SHORT_INT: case COMPLEX_SSHORT_INT: case COMPLEX_USHORT_INT: case COMPLEX_INT: case COMPLEX_SINT: case COMPLEX_UINT: case COMPLEX_LONG: case COMPLEX_SLONG: case COMPLEX_ULONG: case COMPLEX_LONG_INT: case COMPLEX_SLONG_INT: case COMPLEX_ULONG_INT: case COMPLEX_LONG_LONG: case COMPLEX_SLONG_LONG: case COMPLEX_ULONG_LONG: case COMPLEX_LONG_LONG_INT: case COMPLEX_SLONG_LONG_INT: case COMPLEX_ULONG_LONG_INT: case COMPLEX_INT128: case COMPLEX_SINT128: case COMPLEX_UINT128: case COMPLEX_INT24: case COMPLEX_SINT24: case COMPLEX_UINT24:
 			QualType base = self.complex_integer_base();
-			if (self.has_complex_tok) self.emit(parser_diagnostics::ParserDiag.COMPLEX_INT, "complex integer types are a GNU extension", self.complex_tok)!;
+			if (self.has_complex_tok) Diagnostic.COMPLEX_INT.@emit(self.parser, self.complex_tok)!;
 			qt = base.to_complex(self.parser.comp);
 		case COMPLEX_FLOAT16: qt = FLOAT16.to_complex(self.parser.comp);
 		case COMPLEX_FLOAT: qt = FLOAT.to_complex(self.parser.comp);
@@ -674,7 +675,7 @@ fn QualType? Builder.finish(&self)
 		case COMPLEX_FLOAT64X: qt = FLOAT64X.to_complex(self.parser.comp);
 		case COMPLEX_FLOAT128X: qt = FLOAT128X.to_complex(self.parser.comp);
 		case COMPLEX_BIT_INT: case COMPLEX_SBIT_INT: case COMPLEX_UBIT_INT:
-			self.emit(parser_diagnostics::ParserDiag.COMPLEX_BIT_INT, "'_Complex _BitInt' is invalid", self.has_complex_tok ? self.complex_tok : self.parser.tok_i)!;
+			Diagnostic.COMPLEX_BIT_INT.@emit(self.parser, self.has_complex_tok ? self.complex_tok : self.parser.tok_i)!;
 			return INVALID;
 		default: return INVALID;
 	}
@@ -706,15 +707,15 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 	if (self.has_atomic_type_tok || self.has_atomic)
 	{
 		tokens::TokenIndex atok = self.has_atomic_type_tok ? self.atomic_type_tok : self.atomic_tok;
-		if (qt.is_auto_type()) { self.emit(parser_diagnostics::ParserDiag.TODO, "TODO: _Atomic __auto_type", atok)!; return INVALID; }
-		if (qt.is_c23_auto()) { self.err(parser_diagnostics::ParserDiag.ATOMIC_AUTO, atok)!; return INVALID; }
-		if (qt.has_incomplete_size(self.parser.comp)) { self.err(parser_diagnostics::ParserDiag.ATOMIC_INCOMPLETE, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (qt.is_auto_type()) { Diagnostic.TODO.@emit(self.parser, atok, "_Atomic __auto_type")!; return INVALID; }
+		if (qt.is_c23_auto()) { self.err(Diagnostic.ATOMIC_AUTO, atok)!; return INVALID; }
+		if (qt.has_incomplete_size(self.parser.comp)) { self.err(Diagnostic.ATOMIC_INCOMPLETE, atok, self.fmt_qt(qt))!; return INVALID; }
 		Type t = qt.base(self.parser.comp).ty;
-		if (t.tag == ARRAY) { self.err(parser_diagnostics::ParserDiag.ATOMIC_ARRAY, atok, self.fmt_qt(qt))!; return INVALID; }
-		if (t.tag == FUNC) { self.err(parser_diagnostics::ParserDiag.ATOMIC_FUNC, atok, self.fmt_qt(qt))!; return INVALID; }
-		if (t.tag == ATOMIC) { self.err(parser_diagnostics::ParserDiag.ATOMIC_ATOMIC, atok, self.fmt_qt(qt))!; return INVALID; }
-		if (t.tag == COMPLEX) { self.err(parser_diagnostics::ParserDiag.ATOMIC_COMPLEX, atok, self.fmt_qt(qt))!; return INVALID; }
-		if (t.tag == BIT_INT) { self.err(parser_diagnostics::ParserDiag.ATOMIC_BIT_INT, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (t.tag == ARRAY) { self.err(Diagnostic.ATOMIC_ARRAY, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (t.tag == FUNC) { self.err(Diagnostic.ATOMIC_FUNC, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (t.tag == ATOMIC) { self.err(Diagnostic.ATOMIC_ATOMIC, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (t.tag == COMPLEX) { self.err(Diagnostic.ATOMIC_COMPLEX, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (t.tag == BIT_INT) { self.err(Diagnostic.ATOMIC_BIT_INT, atok, self.fmt_qt(qt))!; return INVALID; }
 		qt = self.parser.comp.type_store.put(type_atomic(qt));
 	}
 	if (self.has_const) qt.is_const = true;
@@ -725,17 +726,17 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 	{
 		if (input.is_auto_type())
 		{
-			self.emit(parser_diagnostics::ParserDiag.TODO, "TODO: restrict __auto_type", self.parser.tok_i)!;
+			Diagnostic.TODO.@emit(self.parser, self.parser.tok_i, "restrict __auto_type")!;
 			return parser::PARSING_FAILED~;
 		}
 		if (input.is_c23_auto())
 		{
-			self.err(parser_diagnostics::ParserDiag.RESTRICT_NON_POINTER, self.restrict_tok, self.fmt_qt(input))!;
+			self.err(Diagnostic.RESTRICT_NON_POINTER, self.restrict_tok, self.fmt_qt(input))!;
 			return qt;
 		}
 		TypeTag tag = input.base(self.parser.comp).ty.tag;
 		if (tag == ARRAY || tag == POINTER) { qt.is_restrict = true; }
-		else { self.err(parser_diagnostics::ParserDiag.RESTRICT_NON_POINTER, self.restrict_tok, self.fmt_qt(input))!; }
+		else { self.err(Diagnostic.RESTRICT_NON_POINTER, self.restrict_tok, self.fmt_qt(input))!; }
 	}
 	return qt;
 }
@@ -743,9 +744,9 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 <* Adopt the result type from typeof after enforcing its exclusive combination rules. *>
 fn void? Builder.combine_from_typeof(&self, QualType source_type, tokens::TokenIndex tok)
 {
-	if (self.has_atomic_type_tok) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous '_Atomic' specifier", tok);
-	if (self.is_typedef) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous 'type-name' specifier", tok);
-	if (self.is_typeof) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous 'typeof' specifier", tok);
+	if (self.has_atomic_type_tok) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "_Atomic");
+	if (self.is_typedef) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "type-name");
+	if (self.is_typeof) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "typeof");
 	if (self.type.tag != NONE) return self.cannot_combine_with_typeof(self.type.tag, tok);
 	self.is_typeof = true;
 	self.type = { .tag = OTHER, .other = source_type };
@@ -755,9 +756,9 @@ fn void? Builder.combine_from_typeof(&self, QualType source_type, tokens::TokenI
  mapping used by TypeStore.Builder, then remember the source token for finish. *>
 fn void? Builder.combine_atomic(&self, QualType base_qt, tokens::TokenIndex tok)
 {
-	if (self.has_atomic_type_tok) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous '_Atomic' specifier", tok);
-	if (self.is_typedef) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous 'type-name' specifier", tok);
-	if (self.is_typeof) return self.emit(parser_diagnostics::ParserDiag.CANNOT_COMBINE_SPEC, "cannot combine with previous 'typeof' specifier", tok);
+	if (self.has_atomic_type_tok) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "_Atomic");
+	if (self.is_typedef) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "type-name");
+	if (self.is_typeof) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "typeof");
 	BuilderSpecifier spec = builder_from_type(self.parser.comp, base_qt);
 	self.combine(spec, tok)!;
 	self.has_atomic_type_tok = true;

@@ -2,7 +2,7 @@
 // recognition and active function metadata are supplied by the declaration
 // owner because this module does not own those productions.
 module aro::parser_statement;
-import aro::attribute, aro::attribute_wip, aro::compilation, aro::parser, aro::parser_asm, aro::parser_attribute, aro::parser_expression, aro::parser_primary, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::parser_diagnostics;
+import aro::attribute, aro::attribute_wip, aro::compilation, aro::parser, aro::parser_asm, aro::parser_attribute, aro::parser_expression, aro::parser_primary, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
 import aro::type_store, aro::lang_opts, aro::bigint, aro::attribute_map;
 import aro::parser_declaration;
 import aro::parser_builtin, aro::parser_declarator, aro::parser_postfix, aro::text_literal;
@@ -13,12 +13,15 @@ import aro::value;
 
 excuse PARSING_FAILED;
 
-struct SwitchCaseEntry { value::Value start; value::Value end; tokens::TokenIndex tok; }
+struct SwitchCaseEntry
+{
+	value::Value start; value::Value end; tokens::TokenIndex tok;
+}
 
 fn bool switch_case_ranges_overlap(SwitchCaseEntry previous, value::Value start, value::Value end, parser::Parser* p)
 {
 	return !value::compare(end, bigint::CompareOperator.LT, previous.start, p.comp) &&
-		!value::compare(previous.end, bigint::CompareOperator.LT, start, p.comp);
+	!value::compare(previous.end, bigint::CompareOperator.LT, start, p.comp);
 }
 
 <* Local declarations inside statements, supplied by the declaration grammar. *>
@@ -36,8 +39,7 @@ interface ILocalDeclarationGrammar
 struct StatementParser (parser::IAddressOfLabel)
 {
 	parser::Parser* parser;
-	<* Expression productions: `expression` (required for statements) and an
-	   optional `integer_constant_expression`. *>
+	<* Expression productions; statements use `expression` and `integer_constant_expression`. *>
 	parser::IExpressionGrammar expressions;
 	<* Local declarations; null when statements contain only expressions. *>
 	ILocalDeclarationGrammar local_declarations;
@@ -69,7 +71,10 @@ struct StatementParser (parser::IAddressOfLabel)
 fn parser_result::Result? StatementParser.expr(&self, bool eval)
 {
 	parser::IExpressionGrammar g = self.expressions;
-	if (!g || !&g.expression) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	if (!g || !& g.expression)
+	{
+		self.parser.grammar_unavailable()!; return PARSING_FAILED~;
+	}
 	return g.expression(self.parser, eval);
 }
 
@@ -92,7 +97,7 @@ fn parser_result::Result? StatementParser.integer_const_expr(&self)
 	// Prefer the integer-constant production; fall back to a full expression.
 	parser_result::Result? maybe_result = parser::HOOK_ABSENT~;
 	parser::IExpressionGrammar g = self.expressions;
-	if (g && &g.integer_constant_expression)
+	if (g)
 	{
 		maybe_result = g.integer_constant_expression(p, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, true);
 	}
@@ -106,8 +111,7 @@ fn parser_result::Result? StatementParser.integer_const_expr(&self)
 	parser_result::Result result = maybe_result!;
 	if (!result.qt.is_invalid() && !result.qt.is_real_int(p.comp))
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR,
-			"expression is not an integer constant expression", start)!;
+		Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, start)!;
 		return PARSING_FAILED~;
 	}
 	return result;
@@ -148,15 +152,19 @@ fn parser_result::Result? StatementParser.handle_address_of_label(&self, parser:
 		return PARSING_FAILED~;
 	}
 	tokens::TokenIndex label_tok = p.tok_i;
-	p.emit_parser_diag(parser_diagnostics::ParserDiag.GNU_LABEL_AS_VALUE, "use of GNU address-of-label extension", op_tok)!;
+	Diagnostic.GNU_LABEL_AS_VALUE.@emit(p, op_tok)!;
 	if (self.in_function)
 	{
 		self.function_has_address_of_label = true;
 		if (!self.mark_label_used(p, label_tok)) self.gotos.push(label_tok);
 	}
 	p.advance();
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.ADDR_OF_LABEL,
-		.addr_of_label = { .label_tok = label_tok, .qt = type_store::VOID_POINTER } });
+	type_store::NodeIndex node = p.tree.add_node(
+		{
+			.kind = tree::NodeKind.ADDR_OF_LABEL,
+			.addr_of_label = { .label_tok = label_tok, .qt = type_store::VOID_POINTER }
+		}
+	);
 	return { .node = node, .qt = type_store::VOID_POINTER };
 }
 
@@ -220,9 +228,17 @@ fn void? append_statement_attributes(parser::Parser* p,
 				tokenizer::TokenId id = p.tree.tokens[(usz)range.start].id;
 				if (id == tokenizer::TokenId.IDENTIFIER || id == tokenizer::TokenId.EXTENDED_IDENTIFIER)
 				{
-					type_store::NodeIndex ident = p.tree.add_node({ .kind = tree::NodeKind.IDENTIFIER_ARG,
-						.identifier_arg = { .identifier_tok = range.start } });
-					args.push({ .node = ident, .qt = type_store::INVALID, .val = value::NONE });
+					type_store::NodeIndex ident = p.tree.add_node(
+						{
+							.kind = tree::NodeKind.IDENTIFIER_ARG,
+							.identifier_arg = { .identifier_tok = range.start }
+						}
+					);
+					args.push(
+					{
+						.node = ident, .qt = type_store::INVALID, .val = value::NONE
+					}
+					);
 					continue;
 				}
 			}
@@ -236,17 +252,17 @@ fn void? append_statement_attributes(parser::Parser* p,
 			{
 				if (p.at_eof())
 				{
-					p.err(parser_diagnostics::ParserDiag.EXPECTED_EOF, p.diag_index(),
-						"attribute argument expression")!;
+					Diagnostic.EXPECTED_EOF.@emit(p, p.diag_index(),
+					"attribute argument expression")!;
 				}
 				else if (p.tree.tokens[(usz)p.tok_i].id == tokenizer::TokenId.INVALID)
 				{
-					p.err(parser_diagnostics::ParserDiag.EXPECTED_INVALID, p.tok_i,
+					Diagnostic.EXPECTED_INVALID.@emit(p, p.tok_i,
 						"attribute argument expression")!;
 				}
 				else
 				{
-					p.err(parser_diagnostics::ParserDiag.EXPECTED_TOKEN, p.tok_i,
+					Diagnostic.EXPECTED_TOKEN.@emit(p, p.tok_i,
 						"attribute argument expression", p.tree.tokens[(usz)p.tok_i].id.symbol())!;
 				}
 				return PARSING_FAILED~;
@@ -339,8 +355,12 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		tokens::TokenIndex label_tok = p.tok_i;
 		p.advance();
 		p.advance();
-		type_store::NodeIndex labeled = p.tree.add_node({ .kind = tree::NodeKind.LABELED_STMT,
-			.labeled_stmt = { .label_tok = label_tok, .body = (type_store::NodeIndex)0 } });
+		type_store::NodeIndex labeled = p.tree.add_node(
+			{
+				.kind = tree::NodeKind.LABELED_STMT,
+				.labeled_stmt = { .label_tok = label_tok, .body = (type_store::NodeIndex)0 }
+		}
+		);
 		attribute_wip::Wip label_wip;
 		label_wip.init(p.comp.gpa);
 		defer label_wip.free();
@@ -362,13 +382,14 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		{
 			self.label_count++;
 			tokens::TokenIndex? previous = NO_MORE_ELEMENT~;
-			foreach (label : self.labels) if (same_token_text(p, label, label_tok)) { previous = label; break; }
+			foreach (label : self.labels) if (same_token_text(p, label, label_tok))
+			{
+				previous = label; break;
+			}
 			if (@ok(previous))
 			{
-				String duplicate = string::tformat("duplicate label '%s'", p.tree.tok_slice(label_tok));
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.DUPLICATE_LABEL, duplicate, label_tok)!;
-				String previous_msg = string::tformat("previous definition of label '%s' was here", p.tree.tok_slice(label_tok));
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.PREVIOUS_LABEL, previous_msg, previous!)!;
+				Diagnostic.DUPLICATE_LABEL.@emit(p, label_tok, p.tree.tok_slice(label_tok))!;
+				Diagnostic.PREVIOUS_LABEL.@emit(p, previous!, p.tree.tok_slice(label_tok))!;
 			}
 			else
 			{
@@ -378,8 +399,12 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		}
 		type_store::NodeIndex? maybe_body = self.parse_statement(true);
 		if (catch __fault = maybe_body) return __fault~;
-		p.tree.set_node({ .kind = tree::NodeKind.LABELED_STMT,
-			.labeled_stmt = { .label_tok = label_tok, .body = maybe_body } }, (sz)labeled);
+		p.tree.set_node(
+			{
+				.kind = tree::NodeKind.LABELED_STMT,
+				.labeled_stmt = { .label_tok = label_tok, .body = maybe_body }
+			}
+			, (sz)labeled);
 		return labeled;
 	}
 	if (self.asm_parser)
@@ -387,7 +412,10 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		type_store::NodeIndex? maybe_asm = self.asm_parser.parse_asm_statement(p);
 		if (try maybe_asm) return maybe_asm;
 		// NOT_ASM: not an asm statement, continue with the other statement forms.
-		if (catch __fault = maybe_asm) { if (__fault != parser::NOT_ASM) return __fault~; }
+		if (catch __fault = maybe_asm)
+		{
+			if (__fault != parser::NOT_ASM) return __fault~;
+		}
 	}
 	if (self.at(tokenizer::TokenId.L_BRACE))
 	{
@@ -397,7 +425,11 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 	{
 		tokens::TokenIndex semi = p.tok_i;
 		p.advance();
-		return p.tree.add_node({ .kind = tree::NodeKind.NULL_STMT, .null_stmt = { .semicolon_or_r_brace_tok = semi } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.NULL_STMT, .null_stmt = { .semicolon_or_r_brace_tok = semi }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_IF))
 	{
@@ -422,10 +454,14 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			type_store::NodeIndex maybe_else = self.parse_statement(true)!;
 			else_body = maybe_else.pack();
 		}
-		return p.tree.add_node({ .kind = tree::NodeKind.IF_STMT, .if_stmt = {
-			.if_tok = kw, .init = type_store::NODE_NULL, .cond = cond.node,
-			.then_body = then_body, .else_body = else_body,
-		} });
+		return p.tree.add_node(
+			{
+				.kind = tree::NodeKind.IF_STMT, .if_stmt = {
+					.if_tok = kw, .init = type_store::NODE_NULL, .cond = cond.node,
+					.then_body = then_body, .else_body = else_body,
+				}
+			}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_SWITCH))
 	{
@@ -463,7 +499,11 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		defer self.switch_depth--;
 		type_store::NodeIndex? maybe_body = self.parse_statement(true);
 		if (catch __fault = maybe_body) return __fault~;
-		return p.tree.add_node({ .kind = tree::NodeKind.SWITCH_STMT, .switch_stmt = { .switch_tok = kw, .init = type_store::NODE_NULL, .cond = cond.node, .body = maybe_body } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.SWITCH_STMT, .switch_stmt = { .switch_tok = kw, .init = type_store::NODE_NULL, .cond = cond.node, .body = maybe_body }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_CASE) || self.at(tokenizer::TokenId.KEYWORD_DEFAULT))
 	{
@@ -490,11 +530,11 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 				bool c2y = p.comp.langopts.standard.at_least(C2Y);
 				if (c2y)
 				{
-					p.err(parser_diagnostics::ParserDiag.PRE_C2Y_SWITCH_RANGE, ellipsis)!;
+					Diagnostic.PRE_C2Y_SWITCH_RANGE.@emit(p, ellipsis)!;
 				}
 				else
 				{
-					p.err(parser_diagnostics::ParserDiag.C2Y_SWITCH_RANGE, ellipsis)!;
+					Diagnostic.C2Y_SWITCH_RANGE.@emit(p, ellipsis)!;
 				}
 				parser_result::Result maybe_end = self.integer_const_expr()!;
 				maybe_case_end = maybe_end;
@@ -503,13 +543,13 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		if (catch self.expect(tokenizer::TokenId.COLON)) return PARSING_FAILED~;
 		if (!is_default && self.switch_depth == 0)
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.CASE_NOT_IN_SWITCH, "'case' statement not in a switch statement", kw)!;
+			Diagnostic.CASE_NOT_IN_SWITCH.@emit(p, kw, "case")!;
 		}
 		if (!is_default)
 		{
 			parser_result::Result case_result = maybe_case_value!;
 			if (self.switch_depth > 0 && has_decodable_type(case_result.qt, p) && has_decodable_type(self.switch_qt, p) &&
-				case_result.qt.is_int(p.comp) && self.switch_qt.is_int(p.comp))
+			case_result.qt.is_int(p.comp) && self.switch_qt.is_int(p.comp))
 			{
 				case_result.cast_to_int(p, self.switch_qt, kw + 1)!;
 			}
@@ -522,7 +562,7 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			{
 				parser_result::Result case_end_result = maybe_case_end!;
 				if (self.switch_depth > 0 && has_decodable_type(case_end_result.qt, p) && has_decodable_type(self.switch_qt, p) &&
-					case_end_result.qt.is_int(p.comp) && self.switch_qt.is_int(p.comp))
+				case_end_result.qt.is_int(p.comp) && self.switch_qt.is_int(p.comp))
 				{
 					case_end_result.cast_to_int(p, self.switch_qt, ellipsis + 1)!;
 				}
@@ -534,36 +574,46 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		if (!is_default && self.switch_depth > 0 && self.has_switch_case_values)
 		{
 			bool case_value_is_live = !case_value.is_none() &&
-				(case_value.opt_ref == value::ZERO.opt_ref || case_value.opt_ref == value::ONE.opt_ref ||
-					(usz)case_value.opt_ref < (usz)p.comp.interner.items.len());
+			(case_value.opt_ref == value::ZERO.opt_ref || case_value.opt_ref == value::ONE.opt_ref ||
+				(usz)case_value.opt_ref < (usz)p.comp.interner.items.len());
 			bool case_end_value_is_live = !case_end_value.is_none() &&
-				(case_end_value.opt_ref == value::ZERO.opt_ref || case_end_value.opt_ref == value::ONE.opt_ref ||
-					(usz)case_end_value.opt_ref < (usz)p.comp.interner.items.len());
+			(case_end_value.opt_ref == value::ZERO.opt_ref || case_end_value.opt_ref == value::ONE.opt_ref ||
+				(usz)case_end_value.opt_ref < (usz)p.comp.interner.items.len());
 			if (!case_value_is_live)
 			{
-				p.err(parser_diagnostics::ParserDiag.CASE_VAL_UNAVAILABLE, kw + 1)!;
+				Diagnostic.CASE_VAL_UNAVAILABLE.@emit(p, kw + 1)!;
 			}
 			else if (!case_end_value_is_live)
 			{
-				p.err(parser_diagnostics::ParserDiag.CASE_VAL_UNAVAILABLE, ellipsis + 1)!;
+				Diagnostic.CASE_VAL_UNAVAILABLE.@emit(p, ellipsis + 1)!;
 			}
 			else if (value::compare(case_end_value, bigint::CompareOperator.LT, case_value, p.comp))
 			{
-				p.err(parser_diagnostics::ParserDiag.EMPTY_CASE_RANGE, kw + 1)!;
+				Diagnostic.EMPTY_CASE_RANGE.@emit(p, kw + 1)!;
 			}
 			else
 			{
 				SwitchCaseEntry? previous = NO_MORE_ELEMENT~;
 				foreach (entry : self.switch_case_values)
 				{
-					if (switch_case_ranges_overlap(entry, case_value, case_end_value, p)) { previous = entry; break; }
+					if (switch_case_ranges_overlap(entry, case_value, case_end_value, p))
+					{
+						previous = entry; break;
+					}
 				}
 				if (@ok(previous))
 				{
-					p.err(parser_diagnostics::ParserDiag.DUPLICATE_SWITCH_CASE, kw + 1, p.fmt_value(case_value, case_qt))!;
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.PREVIOUS_CASE, "previous case defined here", previous!.tok)!;
+					Diagnostic.DUPLICATE_SWITCH_CASE.@emit(p, kw + 1, p.fmt_value(case_value, case_qt))!;
+					Diagnostic.PREVIOUS_CASE.@emit(p, previous!.tok)!;
 				}
-				else { self.switch_case_values.push({ .start = case_value, .end = case_end_value, .tok = case_expr_tok }); }
+				else
+				{
+					self.switch_case_values.push(
+					{
+						.start = case_value, .end = case_end_value, .tok = case_expr_tok
+					}
+					);
+				}
 			}
 		}
 		type_store::NodeIndex? maybe_body = self.parse_statement(true);
@@ -572,17 +622,28 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		{
 			if (self.switch_depth == 0)
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.CASE_NOT_IN_SWITCH, "'default' statement not in a switch statement", kw)!;
+				Diagnostic.CASE_NOT_IN_SWITCH.@emit(p, kw, "default")!;
 			}
 			else if (self.has_switch_case_values && self.switch_has_default)
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.MULTIPLE_DEFAULT, "multiple default cases in the same switch", kw)!;
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.PREVIOUS_CASE, "previous case defined here", self.switch_default_tok)!;
+				Diagnostic.MULTIPLE_DEFAULT.@emit(p, kw)!;
+				Diagnostic.PREVIOUS_CASE.@emit(p, self.switch_default_tok)!;
 			}
-			else if (self.has_switch_case_values) { self.switch_has_default = true; self.switch_default_tok = kw; }
-			return p.tree.add_node({ .kind = tree::NodeKind.DEFAULT_STMT, .default_stmt = { .default_tok = kw, .body = maybe_body } });
+			else if (self.has_switch_case_values)
+			{
+				self.switch_has_default = true; self.switch_default_tok = kw;
+			}
+			return p.tree.add_node(
+			{
+				.kind = tree::NodeKind.DEFAULT_STMT, .default_stmt = { .default_tok = kw, .body = maybe_body }
+			}
+			);
 		}
-		return p.tree.add_node({ .kind = tree::NodeKind.CASE_STMT, .case_stmt = { .case_tok = kw, .start = value_node, .end = end_node, .body = maybe_body } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.CASE_STMT, .case_stmt = { .case_tok = kw, .start = value_node, .end = end_node, .body = maybe_body }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_WHILE))
 	{
@@ -603,7 +664,11 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		if (catch __fault = maybe_body) return __fault~;
 		type_store::NodeIndex body;
 		body = maybe_body;
-		return p.tree.add_node({ .kind = tree::NodeKind.WHILE_STMT, .while_stmt = { .while_tok = kw, .cond = cond.node, .body = body } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.WHILE_STMT, .while_stmt = { .while_tok = kw, .cond = cond.node, .body = body }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_DO))
 	{
@@ -625,7 +690,11 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		cond.lval_conversion(p);
 		if (catch cond.usual_unary_conversion(p, opener + 1)) return PARSING_FAILED~;
 		cond.save_value(p);
-		return p.tree.add_node({ .kind = tree::NodeKind.DO_WHILE_STMT, .do_while_stmt = { .do_tok = kw, .cond = cond.node, .body = body } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.DO_WHILE_STMT, .do_while_stmt = { .do_tok = kw, .cond = cond.node, .body = body }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_FOR))
 	{
@@ -670,7 +739,10 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		{
 			uint init_prev_errors = p.diagnostics.errors;
 			parser_result::Result? maybe_init = self.expr(true);
-			if (catch __fault = maybe_init) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
+			if (catch __fault = maybe_init)
+			{
+				if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+			}
 			if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 			if (@ok(maybe_init))
 			{
@@ -682,7 +754,10 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			}
 		}
 		parser_result::Result? maybe_cond = self.expr(true);
-		if (catch __fault = maybe_cond) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
+		if (catch __fault = maybe_cond)
+		{
+			if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		}
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		type_store::NodeOptIndex cond_node = type_store::NODE_NULL;
 		if (@ok(maybe_cond))
@@ -695,7 +770,10 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		}
 		uint incr_prev_errors = p.diagnostics.errors;
 		parser_result::Result? maybe_incr = self.expr(true);
-		if (catch __fault = maybe_incr) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
+		if (catch __fault = maybe_incr)
+		{
+			if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		}
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		type_store::NodeOptIndex incr = type_store::NODE_NULL;
 		if (@ok(maybe_incr))
@@ -707,7 +785,11 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			incr = incr_expr.node.pack();
 		}
 		type_store::NodeIndex maybe_body = self.parse_statement(check_unused)!;
-		return p.tree.add_node({ .kind = tree::NodeKind.FOR_STMT, .for_stmt = { .for_tok = kw, .init = init, .cond = cond_node, .incr = incr, .body = maybe_body } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.FOR_STMT, .for_stmt = { .for_tok = kw, .init = init, .cond = cond_node, .incr = incr, .body = maybe_body }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_BREAK) || self.at(tokenizer::TokenId.KEYWORD_CONTINUE))
 	{
@@ -715,16 +797,24 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		tokens::TokenIndex kw = p.tok_i;
 		if (is_break && self.loop_depth == 0 && self.switch_depth == 0)
 		{
-			p.err(parser_diagnostics::ParserDiag.BREAK_NOT_IN_LOOP_OR_SWITCH, kw)!;
+			Diagnostic.BREAK_NOT_IN_LOOP_OR_SWITCH.@emit(p, kw)!;
 		}
 		if (!is_break && self.loop_depth == 0)
 		{
-			p.err(parser_diagnostics::ParserDiag.CONTINUE_NOT_IN_LOOP, kw)!;
+			Diagnostic.CONTINUE_NOT_IN_LOOP.@emit(p, kw)!;
 		}
 		p.advance();
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
-		if (is_break) return p.tree.add_node({ .kind = tree::NodeKind.BREAK_STMT, .break_stmt = { .break_tok = kw } });
-		return p.tree.add_node({ .kind = tree::NodeKind.CONTINUE_STMT, .continue_stmt = { .continue_tok = kw } });
+		if (is_break) return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.BREAK_STMT, .break_stmt = { .break_tok = kw }
+		}
+		);
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.CONTINUE_STMT, .continue_stmt = { .continue_tok = kw }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_GOTO))
 	{
@@ -739,15 +829,29 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 			expr.lval_conversion(p);
 			expr.save_value(p);
 			if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
-			if (self.in_function && !self.has_computed_goto) { self.has_computed_goto = true; self.computed_goto_tok = goto_tok; }
-			return p.tree.add_node({ .kind = tree::NodeKind.COMPUTED_GOTO_STMT, .computed_goto_stmt = { .goto_tok = goto_tok, .expr = expr.node } });
+			if (self.in_function && !self.has_computed_goto)
+			{
+				self.has_computed_goto = true; self.computed_goto_tok = goto_tok;
+			}
+			return p.tree.add_node(
+			{
+				.kind = tree::NodeKind.COMPUTED_GOTO_STMT, .computed_goto_stmt = { .goto_tok = goto_tok, .expr = expr.node }
+			}
+			);
 		}
-		if (!self.at(tokenizer::TokenId.IDENTIFIER)) { p.expected_token_diag(tokenizer::TokenId.IDENTIFIER)!; return PARSING_FAILED~; }
+		if (!self.at(tokenizer::TokenId.IDENTIFIER))
+		{
+			p.expected_token_diag(tokenizer::TokenId.IDENTIFIER)!; return PARSING_FAILED~;
+		}
 		tokens::TokenIndex label_tok = p.tok_i;
 		p.advance();
 		if (self.in_function && !self.mark_label_used(p, label_tok)) self.gotos.push(label_tok);
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
-		return p.tree.add_node({ .kind = tree::NodeKind.GOTO_STMT, .goto_stmt = { .label_tok = label_tok } });
+		return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.GOTO_STMT, .goto_stmt = { .label_tok = label_tok }
+		}
+		);
 	}
 	if (self.at(tokenizer::TokenId.KEYWORD_RETURN))
 	{
@@ -755,13 +859,16 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		p.advance();
 		tokens::TokenIndex expr_tok = p.tok_i;
 		parser_result::Result? maybe_expr = self.expr(true);
-		if (catch __fault = maybe_expr) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
+		if (catch __fault = maybe_expr)
+		{
+			if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		}
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		type_store::QualType ret_qt = self.has_function_context ? self.function_return_qt : type_store::INVALID;
 		String function_name = self.has_function_context ? p.tree.tok_slice(self.function_name_tok) : "<unknown>";
 		if (p.function_context.active && p.tree.attr_map.has_attribute(p.function_context.declaration, attribute::AttributeTag.NORETURN))
 		{
-			p.err(parser_diagnostics::ParserDiag.INVALID_NORETURN, expr_tok, function_name)!;
+			Diagnostic.INVALID_NORETURN.@emit(p, expr_tok, function_name)!;
 		}
 		bool ret_void = !ret_qt.is_invalid() && ret_qt.is(p.comp, type_store::TypeTag.VOID);
 		if (@ok(maybe_expr))
@@ -773,30 +880,41 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 				{
 					if (!expr.qt.is(p.comp, type_store::TypeTag.VOID))
 					{
-						p.err(parser_diagnostics::ParserDiag.VOID_FUNC_RETURNS_VALUE, expr_tok, function_name)!;
+						Diagnostic.VOID_FUNC_RETURNS_VALUE.@emit(p, expr_tok, function_name)!;
 					}
 				}
 				else
 				{
 					type_store::QualType original_qt = expr.qt;
-					if (expr.coerce_scalar(p, ret_qt, expr_tok, parser_result::CoercionContext.RETURN)!) { expr.save_value(p); }
+					if (expr.coerce_scalar(p, ret_qt, expr_tok, parser_result::CoercionContext.RETURN)!)
+					{
+						expr.save_value(p);
+					}
 					else
 					{
-						p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_RETURN, expr_tok, p.fmt_qt(original_qt), p.fmt_qt(ret_qt))!;
+						Diagnostic.INCOMPATIBLE_RETURN.@emit(p, expr_tok, p.fmt_qt(original_qt), p.fmt_qt(ret_qt))!;
 					}
 				}
 			}
-			return p.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT, .return_stmt = {
-				.return_tok = kw, .return_qt = ret_qt, .operand = tree::ReturnOperandKind.EXPR, .expr = expr.node,
-			} });
+			return p.tree.add_node(
+				{
+					.kind = tree::NodeKind.RETURN_STMT, .return_stmt = {
+						.return_tok = kw, .return_qt = ret_qt, .operand = tree::ReturnOperandKind.EXPR, .expr = expr.node,
+					}
+				}
+			);
 		}
 		if (self.has_function_context && !ret_qt.is_invalid() && !ret_void)
 		{
-			p.err(parser_diagnostics::ParserDiag.FUNC_SHOULD_RETURN, kw, function_name)!;
+			Diagnostic.FUNC_SHOULD_RETURN.@emit(p, kw, function_name)!;
 		}
-		return p.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT, .return_stmt = {
-			.return_tok = kw, .return_qt = ret_qt, .operand = tree::ReturnOperandKind.NONE,
-		} });
+		return p.tree.add_node(
+			{
+				.kind = tree::NodeKind.RETURN_STMT, .return_stmt = {
+					.return_tok = kw, .return_qt = ret_qt, .operand = tree::ReturnOperandKind.NONE,
+				}
+			}
+		);
 	}
 	if (self.local_declarations)
 	{
@@ -813,7 +931,10 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 	}
 	uint expr_prev_errors = p.diagnostics.errors;
 	parser_result::Result? maybe_expr = self.expr(true);
-	if (catch __fault = maybe_expr) { if (__fault != parser_expression::NO_EXPRESSION) return __fault~; }
+	if (catch __fault = maybe_expr)
+	{
+		if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+	}
 	if (@ok(maybe_expr))
 	{
 		if (catch self.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
@@ -823,42 +944,51 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, bool
 		expr.save_value(p);
 		return expr.node;
 	}
-	p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_STMT, "expected statement", p.diag_index())!;
+	Diagnostic.EXPECTED_STMT.@emit(p, p.diag_index())!;
 	return PARSING_FAILED~;
 }
 
-enum NoreturnKind : char { NO, YES, COMPLEX }
+enum NoreturnKind : char
+{
+	NO, YES, COMPLEX
+}
 
 fn NoreturnKind StatementParser.node_is_noreturn(&self, type_store::NodeIndex index)
 {
 	tree::Node node = index.get(&self.parser.tree);
 	switch (node.kind)
 	{
-		case tree::NodeKind.BREAK_STMT: case tree::NodeKind.CONTINUE_STMT: case tree::NodeKind.RETURN_STMT:
+		case tree::NodeKind.BREAK_STMT:
+		case tree::NodeKind.CONTINUE_STMT:
+		case tree::NodeKind.RETURN_STMT:
 			return NoreturnKind.YES;
 		case tree::NodeKind.IF_STMT:
-		{
-			NoreturnKind then_kind = self.node_is_noreturn(node.if_stmt.then_body);
-			NoreturnKind else_kind = node.if_stmt.else_body.is_null() ? NoreturnKind.NO : self.node_is_noreturn(node.if_stmt.else_body.unwrap());
-			if (then_kind == NoreturnKind.COMPLEX || else_kind == NoreturnKind.COMPLEX) return NoreturnKind.COMPLEX;
-			if (then_kind == NoreturnKind.YES && else_kind == NoreturnKind.YES) return NoreturnKind.YES;
-			return NoreturnKind.NO;
-		}
-		case tree::NodeKind.COMPOUND_STMT:
-		{
-			foreach (body_stmt : node.compound_stmt.body)
 			{
-				NoreturnKind kind = self.node_is_noreturn(body_stmt);
-				if (kind != NoreturnKind.NO) return kind;
+				NoreturnKind then_kind = self.node_is_noreturn(node.if_stmt.then_body);
+				NoreturnKind else_kind = node.if_stmt.else_body.is_null() ? NoreturnKind.NO : self.node_is_noreturn(node.if_stmt.else_body.unwrap());
+				if (then_kind == NoreturnKind.COMPLEX || else_kind == NoreturnKind.COMPLEX) return NoreturnKind.COMPLEX;
+				if (then_kind == NoreturnKind.YES && else_kind == NoreturnKind.YES) return NoreturnKind.YES;
+				return NoreturnKind.NO;
 			}
-			return NoreturnKind.NO;
-		}
+		case tree::NodeKind.COMPOUND_STMT:
+			{
+				foreach (body_stmt : node.compound_stmt.body)
+				{
+					NoreturnKind kind = self.node_is_noreturn(body_stmt);
+					if (kind != NoreturnKind.NO) return kind;
+				}
+				return NoreturnKind.NO;
+			}
 		case tree::NodeKind.LABELED_STMT:
 			return self.node_is_noreturn(node.labeled_stmt.body);
 		case tree::NodeKind.DEFAULT_STMT:
 			return self.node_is_noreturn(node.default_stmt.body);
-		case tree::NodeKind.WHILE_STMT: case tree::NodeKind.DO_WHILE_STMT: case tree::NodeKind.FOR_STMT:
-		case tree::NodeKind.SWITCH_STMT: case tree::NodeKind.GOTO_STMT: case tree::NodeKind.COMPUTED_GOTO_STMT:
+		case tree::NodeKind.WHILE_STMT:
+		case tree::NodeKind.DO_WHILE_STMT:
+		case tree::NodeKind.FOR_STMT:
+		case tree::NodeKind.SWITCH_STMT:
+		case tree::NodeKind.GOTO_STMT:
+		case tree::NodeKind.COMPUTED_GOTO_STMT:
 			return NoreturnKind.COMPLEX;
 		default: return NoreturnKind.NO;
 	}
@@ -871,10 +1001,10 @@ fn bool recoverable_statement_item_fault(fault f)
 {
 	if (f == compilation::FATAL_ERROR || f == mem::OUT_OF_MEMORY || f == parser::HOOK_ABSENT) return false;
 	return f == parser::PARSING_FAILED || f == parser_asm::PARSING_FAILED || f == parser_builtin::PARSING_FAILED ||
-		f == parser_declaration::PARSING_FAILED || f == parser_declarator::PARSING_FAILED ||
-		f == parser_expression::PARSING_FAILED || f == parser_postfix::PARSING_FAILED ||
-		f == parser_primary::PARSING_FAILED || f == PARSING_FAILED || f == text_literal::PARSING_FAILED ||
-		f == parser_expression::NO_EXPRESSION;
+	f == parser_declaration::PARSING_FAILED || f == parser_declarator::PARSING_FAILED ||
+	f == parser_expression::PARSING_FAILED || f == parser_postfix::PARSING_FAILED ||
+	f == parser_primary::PARSING_FAILED || f == PARSING_FAILED || f == text_literal::PARSING_FAILED ||
+	f == parser_expression::NO_EXPRESSION;
 }
 
 <* Skip a failed compound item from the parser's failure position. A true
@@ -946,7 +1076,7 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 	// expression is the value of the statement expression, so defer checks for
 	// earlier items until the next item begins.
 	bool is_statement_expression = !is_fn_body && p.tok_i > 0 &&
-		p.tree.tokens[(usz)(p.tok_i - 1)].id == tokenizer::TokenId.L_PAREN;
+	p.tree.tokens[(usz)(p.tok_i - 1)].id == tokenizer::TokenId.L_PAREN;
 	bool body_parsed = false;
 	parser::IAddressOfLabel old_address_of_label = p.address_of_label;
 	uint old_label_count = self.label_count;
@@ -972,13 +1102,12 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 		{
 			if (!self.mark_label_used(p, goto_tok))
 			{
-				String msg = string::tformat("use of undeclared label '%s'", p.tree.tok_slice(goto_tok));
-				(void)p.emit_parser_diag(parser_diagnostics::ParserDiag.UNDECLARED_LABEL, msg, goto_tok);
+				(void)Diagnostic.UNDECLARED_LABEL.@emit(p, goto_tok, p.tree.tok_slice(goto_tok));
 			}
 		}
 		if (body_parsed && self.has_computed_goto && !self.function_has_address_of_label)
 		{
-			(void)p.emit_parser_diag(parser_diagnostics::ParserDiag.INVALID_COMPUTED_GOTO, "computed goto in function with no address-of-label expressions", self.computed_goto_tok);
+			(void)Diagnostic.INVALID_COMPUTED_GOTO.@emit(p, self.computed_goto_tok);
 		}
 		self.labels.free();
 		self.label_nodes.free();
@@ -1026,7 +1155,7 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 			// errors from being duplicated.
 			if (p.diagnostics.errors == previous_stmt_errors)
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_STMT, "expected statement", p.diag_index())!;
+				Diagnostic.EXPECTED_STMT.@emit(p, p.diag_index())!;
 			}
 			previous_stmt = type_store::NODE_NULL;
 			if (self.recover_compound_item(item_start))
@@ -1047,7 +1176,9 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 		}
 		switch (stmt.kind)
 		{
-			case tree::NodeKind.CASE_STMT: case tree::NodeKind.DEFAULT_STMT: case tree::NodeKind.LABELED_STMT:
+			case tree::NodeKind.CASE_STMT:
+			case tree::NodeKind.DEFAULT_STMT:
+			case tree::NodeKind.LABELED_STMT:
 				has_noreturn = false;
 			default: {}
 		}
@@ -1059,7 +1190,7 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 	}
 	if (has_noreturn && noreturn_tok != r_brace && noreturn_label_count == self.label_count)
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.UNREACHABLE_CODE, "unreachable code", noreturn_tok)!;
+		Diagnostic.UNREACHABLE_CODE.@emit(p, noreturn_tok)!;
 	}
 	if (is_fn_body)
 	{
@@ -1069,7 +1200,7 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 		{
 			bool return_zero = false;
 			if (last_noreturn == NoreturnKind.NO && !ret_qt.is(p.comp, type_store::TypeTag.VOID) &&
-				!ret_qt.is(p.comp, type_store::TypeTag.FUNC) && !ret_qt.is(p.comp, type_store::TypeTag.ARRAY))
+			!ret_qt.is(p.comp, type_store::TypeTag.FUNC) && !ret_qt.is(p.comp, type_store::TypeTag.ARRAY))
 			{
 				if (p.tree.tok_slice(self.function_name_tok) == "main")
 				{
@@ -1078,18 +1209,26 @@ fn type_store::NodeIndex? StatementParser.parse_body(&self, bool is_fn_body = fa
 				}
 				if (!return_zero)
 				{
-					p.err(parser_diagnostics::ParserDiag.FUNC_DOES_NOT_RETURN, r_brace,
+					Diagnostic.FUNC_DOES_NOT_RETURN.@emit(p, r_brace,
 						p.tree.tok_slice(self.function_name_tok))!;
 				}
 			}
-			body.push(p.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT, .return_stmt = {
-				.return_tok = r_brace, .return_qt = ret_qt,
-				.operand = tree::ReturnOperandKind.IMPLICIT, .implicit_value = return_zero,
-			} }));
+			body.push(p.tree.add_node(
+					{
+						.kind = tree::NodeKind.RETURN_STMT, .return_stmt = {
+							.return_tok = r_brace, .return_qt = ret_qt,
+							.operand = tree::ReturnOperandKind.IMPLICIT, .implicit_value = return_zero,
+						}
+					}
+				));
 		}
 	}
 	if (is_fn_body) body_parsed = true;
-	return p.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT, .compound_stmt = {
-		.l_brace_tok = opener, .body = body.array_view(),
-	} });
+	return p.tree.add_node(
+		{
+			.kind = tree::NodeKind.COMPOUND_STMT, .compound_stmt = {
+				.l_brace_tok = opener, .body = body.array_view(),
+		}
+	}
+	);
 }

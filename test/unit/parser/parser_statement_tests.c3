@@ -1294,6 +1294,8 @@ fn parser_result::Result? StatementGrammar.expression(&self, parser::Parser* p, 
 	if (!self.expr) return parser::HOOK_ABSENT~;
 	return self.expr(self.context, p, eval);
 }
+fn parser_result::Result? StatementGrammar.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> parser::HOOK_ABSENT~;
 fn parser_result::Result? StatementGrammar.integer_constant_expression(&self, parser::Parser* p,
 	parser::ConstDeclFoldingMode mode, bool eval) @dynamic
 {

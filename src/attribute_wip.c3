@@ -3,7 +3,7 @@
 // parser can restore them after a failed or completed declarator.
 module aro::attribute_wip;
 import aro::primitive_value;
-import aro::attribute, aro::attribute_map, aro::attribute_diagnostics, aro::compilation, aro::diagnostics, aro::lang_opts;
+import aro::attribute, aro::attribute_map, aro::compilation, aro::diagnostics, aro::lang_opts;
 import aro::parser, aro::parser_result, aro::target, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::value, aro::value_interner;
 import std::collections::list;
 import std::core::dstring, std::io;
@@ -204,9 +204,9 @@ fn bool? Wip.arg_count(&self, parser::Parser* p, Parsed attr, uint count)
 	if (attr.args_len == count) return false;
 	switch (count)
 	{
-		case 0: self.emit(p, attr, attribute_diagnostics::AttrDiag.ARG_COUNT_ZERO)!;
-		case 1: self.emit(p, attr, attribute_diagnostics::AttrDiag.ARG_COUNT_ONE)!;
-		default: self.emit(p, attr, attribute_diagnostics::AttrDiag.ARG_COUNT, (long)count)!;
+		case 0: self.emit(p, attr, Diagnostic.ARG_COUNT_ZERO)!;
+		case 1: self.emit(p, attr, Diagnostic.ARG_COUNT_ONE)!;
+		default: self.emit(p, attr, Diagnostic.ARG_COUNT, (long)count)!;
 	}
 	return true;
 }
@@ -215,12 +215,12 @@ fn bool? Wip.arg_count_min_max(&self, parser::Parser* p, Parsed attr, uint min, 
 {
 	if (attr.args_len < min)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.NOT_ENOUGH_ARGS, (long)min)!;
+		self.emit(p, attr, Diagnostic.NOT_ENOUGH_ARGS, (long)min)!;
 		return true;
 	}
 	if (attr.args_len > max)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.TOO_MANY_ARGS, (long)max)!;
+		self.emit(p, attr, Diagnostic.TOO_MANY_ARGS, (long)max)!;
 		return true;
 	}
 	return false;
@@ -237,16 +237,9 @@ fn void Wip.commit(&self, parser::Parser* p, type_store::NodeIndex target)
 	p.tree.attr_map.set_decl_attrs(target, self.applied.array_view());
 }
 
-fn bool node_is_tag(tree::NodeKind kind)
-{
-	return kind == tree::NodeKind.STRUCT_DECL || kind == tree::NodeKind.UNION_DECL || kind == tree::NodeKind.ENUM_DECL || kind == tree::NodeKind.STRUCT_FORWARD_DECL || kind == tree::NodeKind.UNION_FORWARD_DECL || kind == tree::NodeKind.ENUM_FORWARD_DECL;
-}
-
-fn bool node_is_field(tree::NodeKind kind) => kind == tree::NodeKind.RECORD_FIELD || kind == tree::NodeKind.ENUM_FIELD;
-
 fn void? Wip.invalid_target(&self, parser::Parser* p, Parsed attr, String targets)
 {
-	self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_TARGET, targets)!;
+	self.emit(p, attr, Diagnostic.INVALID_TARGET, targets)!;
 }
 
 fn tokens::TokenIndex argument_token(parser::Parser* p, Parsed attr, parser_result::Result arg)
@@ -259,7 +252,7 @@ fn tokens::TokenIndex argument_token(parser::Parser* p, Parsed attr, parser_resu
 
 fn void? Wip.emit_arg_type(&self, parser::Parser* p, Parsed attr, parser_result::Result arg, String expected, String actual)
 {
-	return self.emit_at(p, attr, argument_token(p, attr, arg), attribute_diagnostics::AttrDiag.ARG_TYPE, expected, actual);
+	return self.emit_at(p, attr, argument_token(p, attr, arg), Diagnostic.ARG_TYPE, expected, actual);
 }
 
 <* Zig `Target` enum (Wip.zig): declaration kinds accepted by `check_target`; `text` is `Target.str`. *>
@@ -341,7 +334,7 @@ fn String arg_actual_kind(parser::Parser* p, parser_result::Result arg)
 
 fn void? Wip.emit_requires_string(&self, parser::Parser* p, Parsed attr, parser_result::Result arg)
 {
-	return self.emit_at(p, attr, argument_token(p, attr, arg), attribute_diagnostics::AttrDiag.ARG_REQUIRES_STRING);
+	return self.emit_at(p, attr, argument_token(p, attr, arg), Diagnostic.ARG_REQUIRES_STRING);
 }
 
 <* Zig `arg` for an unsigned integer constant. Returns false after emitting a diagnostic; callers pass an index below args_len. *>
@@ -357,7 +350,7 @@ fn bool? Wip.arg_u32(&self, parser::Parser* p, Parsed attr, usz index, uint* out
 		}
 		if (arg.val.is_int(p.comp))
 		{
-			self.emit_at(p, attr, argument_token(p, attr, arg), attribute_diagnostics::AttrDiag.ARG_INT_OUT_OF_RANGE, int_value_text(p, arg))!;
+			self.emit_at(p, attr, argument_token(p, attr, arg), Diagnostic.ARG_INT_OUT_OF_RANGE, int_value_text(p, arg))!;
 			return false;
 		}
 	}
@@ -459,7 +452,7 @@ fn bool? Wip.arg_enum(&self, parser::Parser* p, Parsed attr, usz index, String[]
 			return true;
 		}
 	}
-	self.emit_at(p, attr, argument_token(p, attr, arg), attribute_diagnostics::AttrDiag.UNKNOWN_ENUM, choice_list(choices, true))!;
+	self.emit_at(p, attr, argument_token(p, attr, arg), Diagnostic.UNKNOWN_ENUM, choice_list(choices, true))!;
 	return false;
 }
 
@@ -470,8 +463,8 @@ fn bool target_matches(parser::Parser* p, TargetKind target, tree::Node node, ty
 	if (target == TargetKind.VARIABLE) return node.kind == tree::NodeKind.VARIABLE;
 	if (target == TargetKind.LABEL) return node.kind == tree::NodeKind.LABELED_STMT || node.kind == tree::NodeKind.DEFAULT_STMT || node.kind == tree::NodeKind.CASE_STMT;
 	if (target == TargetKind.PARAM) return node.kind == tree::NodeKind.PARAM;
-	if (target == TargetKind.TAG) return node_is_tag(node.kind);
-	if (target == TargetKind.FIELD) return node_is_field(node.kind);
+	if (target == TargetKind.TAG) return node.kind.props.tag_decl;
+	if (target == TargetKind.FIELD) return node.kind.props.field_decl;
 	if (target == TargetKind.TYPEDEF) return node.kind == tree::NodeKind.TYPEDEF;
 	if (target == TargetKind.LOCAL_VARIABLE || target == TargetKind.GLOBAL_VARIABLE)
 	{
@@ -514,8 +507,8 @@ fn void? Wip.incompatible(&self, parser::Parser* p, Parsed attr, attribute::Attr
 			continue;
 		}
 		Parsed prior = { .name = prev.name, .syntax = prev.syntax, .tok = prev.tok };
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.INCOMPATIBLE_ATTR, (AttrName){ prior })!;
-		self.emit(p, { .name = prev.name, .tok = prev.tok }, attribute_diagnostics::AttrDiag.CONFLICTING_ATTRIBUTE)!;
+		self.emit(p, attr, Diagnostic.INCOMPATIBLE_ATTR, (AttrName){ prior })!;
+		self.emit(p, { .name = prev.name, .tok = prev.tok }, Diagnostic.CONFLICTING_ATTRIBUTE)!;
 		self.applied.remove_at((sz)i);
 	}
 }
@@ -570,7 +563,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION_TYPE })!) continue;
 						if (self.arg_count(p, attr, 0)!) continue;
 						value.tag = attribute::AttributeTag.REPRODUCIBLE; apply = true;
-					case FALLTHROUGH: self.emit(p, attr, attribute_diagnostics::AttrDiag.STMT_ATTR_ON_DECL)!;
+					case FALLTHROUGH: self.emit(p, attr, Diagnostic.STMT_ATTR_ON_DECL)!;
 				}
 			case GNU:
 				switch (attr.name.gnu)
@@ -588,7 +581,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case WARN_UNUSED_RESULT: self.apply_warn_unused_result(p, attr, decl, qt)!; continue;
 					case NORETURN: self.apply_noreturn(p, attr, decl, qt)!; continue;
 					case UNUSED: self.apply_unused(p, attr, decl, qt)!; continue;
-					case FALLTHROUGH: self.emit(p, attr, attribute_diagnostics::AttrDiag.STMT_ATTR_ON_DECL)!;
+					case FALLTHROUGH: self.emit(p, attr, Diagnostic.STMT_ATTR_ON_DECL)!;
 					case WEAK:
 						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE })!) continue;
 						value.tag = attribute::AttributeTag.WEAK; apply = !self.arg_count(p, attr, 0)!;
@@ -605,7 +598,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 							apply = true;
 						}
 					case DESIGNATED_INIT:
-						if (node.kind != tree::NodeKind.STRUCT_DECL) { self.emit(p, attr, attribute_diagnostics::AttrDiag.DESIGNATED_INIT_INVALID)!; continue; }
+						if (node.kind != tree::NodeKind.STRUCT_DECL) { self.emit(p, attr, Diagnostic.DESIGNATED_INIT_INVALID)!; continue; }
 						if (self.arg_count(p, attr, 0)!) return;
 						value.tag = attribute::AttributeTag.DESIGNATED_INIT; apply = true;
 					case ALIGNED: self.apply_alignment(p, attr, qt, node, false)!;
@@ -624,7 +617,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case VISIBILITY: self.apply_visibility(p, attr, decl, qt)!; continue;
 					case ALWAYS_INLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
 					case GNU_INLINE: self.apply_gnu_inline(p, attr, decl, qt)!; continue;
-					default: self.emit(p, attr, attribute_diagnostics::AttrDiag.UNIMPLEMENTED)!;
+					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 				}
 			case CLANG:
 				switch (attr.name.clang)
@@ -647,7 +640,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						if (self.arg_count(p, attr, 0)!) continue;
 						qt = self.apply_calling_convention(p, i, qt, true)!;
 					case ALWAYS_INLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
-					default: self.emit(p, attr, attribute_diagnostics::AttrDiag.UNIMPLEMENTED)!;
+					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 				}
 			case DECLSPEC:
 				switch (attr.name.declspec)
@@ -658,7 +651,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case ALLOCATE: self.apply_section(p, attr, decl, qt)!; continue;
 					case SELECTANY:
 						value.tag = attribute::AttributeTag.SELECTANY; apply = !self.arg_count(p, attr, 0)!;
-					default: self.emit(p, attr, attribute_diagnostics::AttrDiag.UNIMPLEMENTED)!;
+					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 				}
 			case KEYWORD:
 				switch (attr.name.keyword)
@@ -670,7 +663,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case _ALIGNAS: case ALIGNAS: self.apply_alignment(p, attr, qt, node, true)!;
 					case NORETURN: self.apply_noreturn(p, attr, decl, qt)!; continue;
 					case __FORCEINLINE: case _FORCEINLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
-					default: self.emit(p, attr, attribute_diagnostics::AttrDiag.UNIMPLEMENTED)!;
+					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 				}
 			case RISCV:
 				switch (attr.name.riscv)
@@ -680,7 +673,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						if (self.arg_count(p, attr, 0)!) continue;
 						qt = self.apply_calling_convention(p, i, qt, true)!;
 				}
-			case ARO: case MSVC: self.emit(p, attr, attribute_diagnostics::AttrDiag.UNIMPLEMENTED)!;
+			case ARO: case MSVC: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 		}
 		if (apply) self.add_applied(p, attr, value);
 	}
@@ -698,12 +691,12 @@ fn void? Wip.apply_nonnull(&self, parser::Parser* p, Parsed attr, type_store::No
 	{
 		if (attr.args_len != 0)
 		{
-			self.emit(p, attr, attribute_diagnostics::AttrDiag.NONNULL_PARAM_ARGS)!;
+			self.emit(p, attr, Diagnostic.NONNULL_PARAM_ARGS)!;
 			return;
 		}
 		if (!qt.is_pointer(p.comp))
 		{
-			self.emit(p, attr, attribute_diagnostics::AttrDiag.NONNULL_POINTER_ONLY)!;
+			self.emit(p, attr, Diagnostic.NONNULL_POINTER_ONLY)!;
 			return;
 		}
 		self.add_applied(p, attr, { .tag = attribute::AttributeTag.NONNULL, .nonnull = {} });
@@ -730,14 +723,14 @@ fn void? Wip.apply_nonnull(&self, parser::Parser* p, Parsed attr, type_store::No
 		Parsed arg_attr = attr; arg_attr.tok = arg_tok;
 		if (position == 0 || position > func.params.len)
 		{
-			self.emit(p, arg_attr, attribute_diagnostics::AttrDiag.PARAM_OUT_OF_BOUNDS, (long)(i + 1))!;
+			self.emit(p, arg_attr, Diagnostic.PARAM_OUT_OF_BOUNDS, (long)(i + 1))!;
 			return;
 		}
 		type_store::QualType arg_qt = func.params[(usz)(position - 1)].qt;
 		if (arg_qt.is_invalid()) continue;
 		if (!arg_qt.is_pointer(p.comp))
 		{
-			self.emit(p, arg_attr, attribute_diagnostics::AttrDiag.NONNULL_POINTER_ONLY)!;
+			self.emit(p, arg_attr, Diagnostic.NONNULL_POINTER_ONLY)!;
 			continue;
 		}
 		positions[(sz)positions_len] = position;
@@ -751,19 +744,19 @@ fn void? Wip.apply_transparent_union(&self, parser::Parser* p, Parsed attr, type
 	if (qt.is_invalid()) return;
 	if (node.kind == tree::NodeKind.UNION_FORWARD_DECL)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.TRANSPARENT_UNION_FORWARD_DECL)!;
+		self.emit(p, attr, Diagnostic.TRANSPARENT_UNION_FORWARD_DECL)!;
 		return;
 	}
 	if (node.kind != tree::NodeKind.UNION_DECL)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.TRANSPARENT_UNION_WRONG_TYPE)!;
+		self.emit(p, attr, Diagnostic.TRANSPARENT_UNION_WRONG_TYPE)!;
 		return;
 	}
 	if (self.arg_count(p, attr, 0)!) return;
 	type_store::NodeIndex[] fields = node.container_decl.fields;
 	if (fields.len == 0)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.TRANSPARENT_UNION_ONE_FIELD)!;
+		self.emit(p, attr, Diagnostic.TRANSPARENT_UNION_ONE_FIELD)!;
 		return;
 	}
 	bool has_first_size = false;
@@ -784,8 +777,8 @@ fn void? Wip.apply_transparent_union(&self, parser::Parser* p, Parsed attr, type
 
 			tokens::TokenIndex field_tok = field.tok(&p.tree);
 			Parsed field_attr = attr; field_attr.tok = field_tok;
-			self.emit(p, field_attr, attribute_diagnostics::AttrDiag.TRANSPARENT_UNION_SIZE, p.tree.tok_slice(field_tok), (ulong)field_size)!;
-			self.emit(p, { .name = attr.name, .tok = fields[0].tok(&p.tree) }, attribute_diagnostics::AttrDiag.TRANSPARENT_UNION_SIZE_NOTE, (ulong)first_size)!;
+			self.emit(p, field_attr, Diagnostic.TRANSPARENT_UNION_SIZE, p.tree.tok_slice(field_tok), (ulong)field_size)!;
+			self.emit(p, { .name = attr.name, .tok = fields[0].tok(&p.tree) }, Diagnostic.TRANSPARENT_UNION_SIZE_NOTE, (ulong)first_size)!;
 			return;
 		}
 	}
@@ -802,7 +795,7 @@ fn void? Wip.apply_visibility(&self, parser::Parser* p, Parsed attr, type_store:
 	attribute::Visibility kind = choice == 0 || choice == 2 ? attribute::Visibility.HIDDEN : choice == 1 ? attribute::Visibility.DEFAULT : attribute::Visibility.PROTECTED;
 	if (kind == attribute::Visibility.PROTECTED && !p.comp.target.has_protected_visibility())
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.VISIBILITY_PROTECTED_INVALID)!;
+		self.emit(p, attr, Diagnostic.VISIBILITY_PROTECTED_INVALID)!;
 		kind = attribute::Visibility.DEFAULT;
 	}
 	for (uint i = 0; i < (uint)self.applied.len(); i++)
@@ -815,8 +808,8 @@ fn void? Wip.apply_visibility(&self, parser::Parser* p, Parsed attr, type_store:
 			self.applied.remove_at((sz)i);
 			break;
 		}
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.INCOMPATIBLE_VISIBILITY)!;
-		self.emit(p, { .name = prev.name, .tok = prev.tok }, attribute_diagnostics::AttrDiag.PREVIOUS_ATTRIBUTE)!;
+		self.emit(p, attr, Diagnostic.INCOMPATIBLE_VISIBILITY)!;
+		self.emit(p, { .name = prev.name, .tok = prev.tok }, Diagnostic.PREVIOUS_ATTRIBUTE)!;
 		return;
 	}
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.VISIBILITY, .visibility = kind });
@@ -828,7 +821,7 @@ fn void? Wip.apply_noreturn(&self, parser::Parser* p, Parsed attr, type_store::N
 	if (self.arg_count(p, attr, 0)!) return;
 	if (attr.name.ns == attribute::AttrNamespace.STANDARD && attr.name.standard == attribute::AttrStandard._NORETURN)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.DEPRECATED_NORETURN)!;
+		self.emit(p, attr, Diagnostic.DEPRECATED_NORETURN)!;
 	}
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.NORETURN });
 }
@@ -844,20 +837,20 @@ fn void? Wip.apply_cleanup(&self, parser::Parser* p, Parsed attr, type_store::No
 	String function_name = p.tree.tok_slice(decl_ref.name_tok);
 	if (decl_node.kind != tree::NodeKind.FUNCTION)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CLEANUP_NON_FUNCTION, function_name)!;
+		self.emit(p, attr, Diagnostic.CLEANUP_NON_FUNCTION, function_name)!;
 		return;
 	}
 	type_store::Func func = decl_node.function.qt.get_func(p.comp)!!;
 	if (func.params.len != 1)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CLEANUP_ONE_ARG, function_name)!;
+		self.emit(p, attr, Diagnostic.CLEANUP_ONE_ARG, function_name)!;
 		return;
 	}
 	type_store::QualType expected_qt = p.comp.type_store.put(type_store::type_pointer(qt));
 	type_store::QualType actual_qt = func.params[0].qt;
 	if (!actual_qt.eql(expected_qt, p.comp))
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CLEANUP_ARG_TY, function_name, p.fmt_qt(actual_qt), p.fmt_qt(expected_qt))!;
+		self.emit(p, attr, Diagnostic.CLEANUP_ARG_TY, function_name, p.fmt_qt(actual_qt), p.fmt_qt(expected_qt))!;
 		return;
 	}
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.CLEANUP, .cleanup = { .function = decl_ref.decl } });
@@ -872,8 +865,8 @@ fn void? Wip.apply_always_inline(&self, parser::Parser* p, Parsed attr, type_sto
 		attribute::Attribute prev = p.tree.attr_map.get(ref);
 		if (prev.args.tag == attribute::AttributeTag.OPTNONE)
 		{
-			self.emit(p, attr, attribute_diagnostics::AttrDiag.IGNORED_ATTRIBUTE)!;
-			self.emit(p, { .name = prev.name, .tok = prev.tok }, attribute_diagnostics::AttrDiag.CONFLICTING_ATTRIBUTE)!;
+			self.emit(p, attr, Diagnostic.IGNORED_ATTRIBUTE)!;
+			self.emit(p, { .name = prev.name, .tok = prev.tok }, Diagnostic.CONFLICTING_ATTRIBUTE)!;
 			return;
 		}
 		if (prev.args.tag == attribute::AttributeTag.ALWAYS_INLINE) return;
@@ -887,7 +880,7 @@ fn void? Wip.apply_gnu_inline(&self, parser::Parser* p, Parsed attr, type_store:
 	if (self.arg_count(p, attr, 0)!) return;
 	if (!decl.get(&p.tree).function.is_inline)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.GNU_INLINE_NON_INLINE)!;
+		self.emit(p, attr, Diagnostic.GNU_INLINE_NON_INLINE)!;
 		return;
 	}
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.GNU_INLINE });
@@ -904,8 +897,8 @@ fn void? Wip.apply_section(&self, parser::Parser* p, Parsed attr, type_store::No
 		attribute::Attribute prev = p.tree.attr_map.get(ref);
 		if (prev.args.tag != attribute::AttributeTag.SECTION) continue;
 		if (prev.args.section == section_name) return;
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CONFLICTING_SECTION_NAME)!;
-		self.emit(p, { .name = prev.name, .tok = prev.tok }, attribute_diagnostics::AttrDiag.CONFLICTING_ATTRIBUTE)!;
+		self.emit(p, attr, Diagnostic.CONFLICTING_SECTION_NAME)!;
+		self.emit(p, { .name = prev.name, .tok = prev.tok }, Diagnostic.CONFLICTING_ATTRIBUTE)!;
 		return;
 	}
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.SECTION, .section = section_name });
@@ -943,7 +936,7 @@ fn void? Wip.apply_warn_unused_result(&self, parser::Parser* p, Parsed attr, typ
 	{
 		if (func.return_type.is(p.comp, type_store::TypeTag.VOID))
 		{
-			self.emit(p, attr, attribute_diagnostics::AttrDiag.WARN_UNUSED_RESULT_VOID)!;
+			self.emit(p, attr, Diagnostic.WARN_UNUSED_RESULT_VOID)!;
 			return;
 		}
 	}
@@ -974,8 +967,8 @@ fn void? Wip.check_linkage_attrs(&self, parser::Parser* p, type_store::NodeIndex
 		attribute::Attribute attr = p.tree.attr_map.get(ref);
 		bool invalid_weak = attr.args.tag == attribute::AttributeTag.WEAK && internal_linkage;
 		bool invalid_selectany = attr.args.tag == attribute::AttributeTag.SELECTANY && (internal_linkage || node.kind == tree::NodeKind.FUNCTION);
-		if (invalid_weak) { if (!bad_weak) self.emit(p, { .name = attr.name, .syntax = attr.syntax, .tok = attr.tok }, attribute_diagnostics::AttrDiag.INVALID_WEAK)!; bad_weak = true; continue; }
-		if (invalid_selectany) { if (!bad_selectany) self.emit(p, { .name = attr.name, .syntax = attr.syntax, .tok = attr.tok }, attribute_diagnostics::AttrDiag.INVALID_SELECTANY)!; bad_selectany = true; continue; }
+		if (invalid_weak) { if (!bad_weak) self.emit(p, { .name = attr.name, .syntax = attr.syntax, .tok = attr.tok }, Diagnostic.INVALID_WEAK)!; bad_weak = true; continue; }
+		if (invalid_selectany) { if (!bad_selectany) self.emit(p, { .name = attr.name, .syntax = attr.syntax, .tok = attr.tok }, Diagnostic.INVALID_SELECTANY)!; bad_selectany = true; continue; }
 		self.applied[(sz)kept] = ref;
 		kept++;
 	}
@@ -1012,7 +1005,7 @@ fn void? Wip.apply_alignment(&self, parser::Parser* p, Parsed attr, type_store::
 			if (!self.arg_u32(p, attr, 0, &v)!) return;
 			if (v == 0 || (v & (v - 1)) != 0)
 			{
-				self.emit(p, attr, attribute_diagnostics::AttrDiag.NON_POW2_ALIGN)!;
+				self.emit(p, attr, Diagnostic.NON_POW2_ALIGN)!;
 				return;
 			}
 			alignment = v;
@@ -1021,23 +1014,23 @@ fn void? Wip.apply_alignment(&self, parser::Parser* p, Parsed attr, type_store::
 	}
 	if (alignas)
 	{
-		if (node.kind == tree::NodeKind.PARAM) { self.emit(p, attr, attribute_diagnostics::AttrDiag.ALIGNAS_ON_PARAM)!; return; }
-		if (node.kind == tree::NodeKind.VARIABLE && node.variable.storage_class == tree::VariableStorageClass.REGISTER) { self.emit(p, attr, attribute_diagnostics::AttrDiag.ALIGNAS_ON_REGISTER)!; return; }
-		if (node.kind == tree::NodeKind.RECORD_FIELD && !node.record_field.bit_width.is_null()) { self.emit(p, attr, attribute_diagnostics::AttrDiag.ALIGNAS_BITFIELD)!; return; }
-		if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.RECORD_FIELD && !node_is_tag(node.kind)) { self.emit(p, attr, attribute_diagnostics::AttrDiag.ALIGNAS_ON_FUNC)!; return; }
+		if (node.kind == tree::NodeKind.PARAM) { self.emit(p, attr, Diagnostic.ALIGNAS_ON_PARAM)!; return; }
+		if (node.kind == tree::NodeKind.VARIABLE && node.variable.storage_class == tree::VariableStorageClass.REGISTER) { self.emit(p, attr, Diagnostic.ALIGNAS_ON_REGISTER)!; return; }
+		if (node.kind == tree::NodeKind.RECORD_FIELD && !node.record_field.bit_width.is_null()) { self.emit(p, attr, Diagnostic.ALIGNAS_BITFIELD)!; return; }
+		if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.RECORD_FIELD && !node.kind.props.tag_decl) { self.emit(p, attr, Diagnostic.ALIGNAS_ON_FUNC)!; return; }
 	}
-	else if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.TYPEDEF && !node_is_tag(node.kind) && !node_is_field(node.kind) && node.kind != tree::NodeKind.PARAM)
+	else if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.TYPEDEF && !node.kind.props.tag_decl && !node.kind.props.field_decl && node.kind != tree::NodeKind.PARAM)
 	{
 		self.invalid_target(p, attr, "functions, variables, typedefs, tags, parameters, and fields")!;
 		return;
 	}
 	if (has_alignment && alignas && alignment < qt.alignof(p.comp))
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.MINIMUM_ALIGNMENT, (long)qt.alignof(p.comp))!;
+		self.emit(p, attr, Diagnostic.MINIMUM_ALIGNMENT, (long)qt.alignof(p.comp))!;
 	}
 	if (p.comp.langopts.emulate == MSVC && (node.kind == tree::NodeKind.ENUM_DECL || node.kind == tree::NodeKind.ENUM_FORWARD_DECL))
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.MSVC_ENUM_ALIGN_IGNORED)!;
+		self.emit(p, attr, Diagnostic.MSVC_ENUM_ALIGN_IGNORED)!;
 		return;
 	}
 	self.add_alignment_to_type_map(p, node, qt, has_alignment, alignment);
@@ -1073,14 +1066,14 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 				case POINTER:
 					if (updated.pointer.nullability != type_store::Nullability.DEFAULT && updated.pointer.nullability != new_nullability)
 					{
-						self.emit(p, attr, attribute_diagnostics::AttrDiag.CONFLICTING_NULLABILITY, new_nullability.str, updated.pointer.nullability.str)!;
+						self.emit(p, attr, Diagnostic.CONFLICTING_NULLABILITY, new_nullability.str, updated.pointer.nullability.str)!;
 						continue;
 					}
 					updated.pointer.nullability = new_nullability;
 				case BLOCK:
 					if (updated.block.nullability != type_store::Nullability.DEFAULT && updated.block.nullability != new_nullability)
 					{
-						self.emit(p, attr, attribute_diagnostics::AttrDiag.CONFLICTING_NULLABILITY, new_nullability.str, updated.block.nullability.str)!;
+						self.emit(p, attr, Diagnostic.CONFLICTING_NULLABILITY, new_nullability.str, updated.block.nullability.str)!;
 						continue;
 					}
 					updated.block.nullability = new_nullability;
@@ -1091,7 +1084,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 						self.attrs[(sz)i].used_as_type_attr = false;
 						continue;
 					}
-					self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_NULLABILITY, p.fmt_qt(result))!;
+					self.emit(p, attr, Diagnostic.INVALID_NULLABILITY, p.fmt_qt(result))!;
 					continue;
 			}
 			result = p.comp.type_store.put(updated);
@@ -1105,7 +1098,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 			if (result.is_auto())
 			{
 				self.attrs[(sz)i].used_as_type_attr = false;
-				self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_VEC_ELEM_TY, p.fmt_qt(result))!;
+				self.emit(p, attr, Diagnostic.INVALID_VEC_ELEM_TY, p.fmt_qt(result))!;
 				return parser::PARSING_FAILED~;
 			}
 			// Zig requires scalar kind int or float exactly: BOOL, ENUM and complex kinds are rejected. Clang silently ignores vector_size on an incomplete enum (normal return, attribute stays used).
@@ -1117,7 +1110,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 					if (p.comp.langopts.emulate == lang_opts::Compiler.CLANG && enum_ty.enum_ty.incomplete) continue;
 				}
 				self.attrs[(sz)i].used_as_type_attr = false;
-				self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_VEC_ELEM_TY, p.fmt_qt(result))!;
+				self.emit(p, attr, Diagnostic.INVALID_VEC_ELEM_TY, p.fmt_qt(result))!;
 				return parser::PARSING_FAILED~;
 			}
 			if (try bit_int_ty = result.get(p.comp, type_store::TypeTag.BIT_INT))
@@ -1126,13 +1119,13 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 				if (bits < 8)
 				{
 					self.attrs[(sz)i].used_as_type_attr = false;
-					self.emit(p, attr, attribute_diagnostics::AttrDiag.BIT_INT_VEC_TOO_SMALL)!;
+					self.emit(p, attr, Diagnostic.BIT_INT_VEC_TOO_SMALL)!;
 					return parser::PARSING_FAILED~;
 				}
 				if ((bits & (bits - 1)) != 0)
 				{
 					self.attrs[(sz)i].used_as_type_attr = false;
-					self.emit(p, attr, attribute_diagnostics::AttrDiag.BIT_INT_VEC_NOT_POW2)!;
+					self.emit(p, attr, Diagnostic.BIT_INT_VEC_NOT_POW2)!;
 					return parser::PARSING_FAILED~;
 				}
 			}
@@ -1141,7 +1134,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 			uint elem_size = (uint)result.sizeof(p.comp);
 			if (bytes == 0 || elem_size == 0 || bytes % elem_size != 0)
 			{
-				self.emit(p, attr, attribute_diagnostics::AttrDiag.VEC_SIZE_NOT_MULTIPLE)!;
+				self.emit(p, attr, Diagnostic.VEC_SIZE_NOT_MULTIPLE)!;
 				continue;
 			}
 			result = p.comp.type_store.put(type_store::type_vector(result, bytes / elem_size));
@@ -1162,7 +1155,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 		}
 		else if ((attr.name.ns == attribute::AttrNamespace.GNU && (attr.name.gnu == attribute::AttrGnu.REGPARM || attr.name.gnu == attribute::AttrGnu.RISCV_RVV_VECTOR_BITS)) || (attr.name.ns == attribute::AttrNamespace.CLANG && (attr.name.clang == attribute::AttrClang.ADDRESS_SPACE || attr.name.clang == attribute::AttrClang.ARM_SVE_VECTOR_BITS || attr.name.clang == attribute::AttrClang.EXT_VECTOR_TYPE || attr.name.clang == attribute::AttrClang.MATRIX_TYPE || attr.name.clang == attribute::AttrClang.NODEREF) || (attr.name.ns == attribute::AttrNamespace.KEYWORD && (attr.name.keyword == attribute::AttrKeyword.PTR32 || attr.name.keyword == attribute::AttrKeyword.PTR64 || attr.name.keyword == attribute::AttrKeyword.SPTR || attr.name.keyword == attribute::AttrKeyword.UPTR))))
 		{
-			self.emit(p, attr, attribute_diagnostics::AttrDiag.UNIMPLEMENTED)!;
+			self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 			self.attrs[(sz)i].used_as_type_attr = true;
 		}
 		else if ((attr.name.ns == attribute::AttrNamespace.CLANG && (attr.name.clang == attribute::AttrClang.AARCH64_SVE_PCS || attr.name.clang == attribute::AttrClang.AARCH64_VECTOR_PCS || attr.name.clang == attribute::AttrClang.RISCV_VECTOR_CC || attr.name.clang == attribute::AttrClang.RISCV_VLS_CC || attr.name.clang == attribute::AttrClang.VECTORCALL)) || (attr.name.ns == attribute::AttrNamespace.RISCV && (attr.name.riscv == attribute::AttrRiscv.VECTOR_CC || attr.name.riscv == attribute::AttrRiscv.VLS_CC)))
@@ -1236,7 +1229,7 @@ fn type_store::QualType? Wip.apply_neon_vector(&self, parser::Parser* p, Parsed 
 	if (self.arg_count(p, attr, 1)!) return qt;
 	if (qt.is_auto())
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_VEC_ELEM_TY, p.fmt_qt(qt))!;
+		self.emit(p, attr, Diagnostic.INVALID_VEC_ELEM_TY, p.fmt_qt(qt))!;
 		return parser::PARSING_FAILED~;
 	}
 	bool is_aarch64 = p.comp.target.cpu.arch.is_aarch64();
@@ -1279,7 +1272,7 @@ fn type_store::QualType? Wip.apply_neon_vector(&self, parser::Parser* p, Parsed 
 	}
 	if (!valid_elem_ty)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_VEC_ELEM_TY, p.fmt_qt(qt))!;
+		self.emit(p, attr, Diagnostic.INVALID_VEC_ELEM_TY, p.fmt_qt(qt))!;
 		return qt;
 	}
 	uint vec_len = 0;
@@ -1287,7 +1280,7 @@ fn type_store::QualType? Wip.apply_neon_vector(&self, parser::Parser* p, Parsed 
 	ulong vec_bits = qt.bit_sizeof(p.comp) * (ulong)vec_len;
 	if (vec_bits != 64 && vec_bits != 128)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_NEON_VEC_SIZE)!;
+		self.emit(p, attr, Diagnostic.INVALID_NEON_VEC_SIZE)!;
 		return qt;
 	}
 	return p.comp.type_store.put(type_store::type_vector(qt, vec_len, kind));
@@ -1344,7 +1337,7 @@ fn type_store::QualType? Wip.apply_calling_convention(&self, parser::Parser* p, 
 		if (cur.is_invalid()) return qt;
 		if (cur.is_auto())
 		{
-			self.emit(p, attr, attribute_diagnostics::AttrDiag.CALLCONV_NON_FUNC, p.fmt_qt(qt))!;
+			self.emit(p, attr, Diagnostic.CALLCONV_NON_FUNC, p.fmt_qt(qt))!;
 			return qt;
 		}
 		if (cur.index == type_store::IDX_DECLARATOR_COMBINE)
@@ -1359,7 +1352,7 @@ fn type_store::QualType? Wip.apply_calling_convention(&self, parser::Parser* p, 
 	type_store::QualType func_qt = base.qt;
 	if (base.ty.tag != type_store::TypeTag.FUNC)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CALLCONV_NON_FUNC, p.fmt_qt(qt))!;
+		self.emit(p, attr, Diagnostic.CALLCONV_NON_FUNC, p.fmt_qt(qt))!;
 		return qt;
 	}
 	type_store::CallingConvention cc = type_store::CallingConvention.DEFAULT;
@@ -1415,13 +1408,13 @@ fn type_store::QualType? Wip.apply_calling_convention(&self, parser::Parser* p, 
 	}
 	if (!calling_convention_supported(&p.comp.target, cc))
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CALLCONV_NOT_SUPPORTED)!;
+		self.emit(p, attr, Diagnostic.CALLCONV_NOT_SUPPORTED)!;
 		return qt;
 	}
 	type_store::Type func_ty = base.ty;
 	if (func_ty.func.cc != type_store::CallingConvention.DEFAULT && func_ty.func.cc != cc)
 	{
-		self.emit(p, attr, attribute_diagnostics::AttrDiag.CALLCONV_INCOMPATIBLE, cc.name, func_ty.func.cc.name)!;
+		self.emit(p, attr, Diagnostic.CALLCONV_INCOMPATIBLE, cc.name, func_ty.func.cc.name)!;
 		return qt;
 	}
 	func_ty.func.cc = cc;
@@ -1444,14 +1437,14 @@ fn void? Wip.apply_stmt_attrs(&self, parser::Parser* p, type_store::NodeIndex st
 		if (fallthrough)
 		{
 			if (self.arg_count(p, attr, 0)!) continue;
-			if (node.kind != tree::NodeKind.NULL_STMT) { self.emit(p, attr, attribute_diagnostics::AttrDiag.FALLTHROUGH_NON_EMPTY)!; continue; }
-			if (!in_switch) { self.emit(p, attr, attribute_diagnostics::AttrDiag.FALLTHROUGH_OUTSIDE_SWITCH)!; continue; }
+			if (node.kind != tree::NodeKind.NULL_STMT) { self.emit(p, attr, Diagnostic.FALLTHROUGH_NON_EMPTY)!; continue; }
+			if (!in_switch) { self.emit(p, attr, Diagnostic.FALLTHROUGH_OUTSIDE_SWITCH)!; continue; }
 			for (usz token_i = (usz)p.tok_i; token_i < p.tree.tokens.len; token_i++)
 			{
 				tokenizer::TokenId id = p.tree.tokens[token_i].id;
 				if (id == tokenizer::TokenId.KEYWORD_CASE || id == tokenizer::TokenId.KEYWORD_DEFAULT || id == tokenizer::TokenId.EOF) break;
 				if (id == tokenizer::TokenId.R_BRACE || id == tokenizer::TokenId.SEMICOLON) continue;
-				self.emit(p, attr, attribute_diagnostics::AttrDiag.FALLTHROUGH_NOT_BEFORE_CASE)!;
+				self.emit(p, attr, Diagnostic.FALLTHROUGH_NOT_BEFORE_CASE)!;
 				break;
 			}
 			self.add_applied(p, attr, { .tag = attribute::AttributeTag.FALLTHROUGH });
@@ -1469,7 +1462,7 @@ fn void? Wip.apply_stmt_attrs(&self, parser::Parser* p, type_store::NodeIndex st
 			if (self.arg_count(p, attr, 0)!) continue;
 			self.add_applied(p, attr, { .tag = attribute::AttributeTag.UNUSED });
 		}
-		else { self.emit(p, attr, attribute_diagnostics::AttrDiag.INVALID_STMT_ATTR)!; }
+		else { self.emit(p, attr, Diagnostic.INVALID_STMT_ATTR)!; }
 	}
 	self.commit(p, stmt);
 }

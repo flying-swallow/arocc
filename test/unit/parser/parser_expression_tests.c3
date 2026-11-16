@@ -3,7 +3,7 @@
 // are part of the expression engine under test.
 module parser_expression_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_diagnostics, aro::parser_expression, aro::parser_postfix, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
 import aro::parser_frontend;
@@ -387,7 +387,7 @@ fn parser::TypeNameProbe? expression_type_name_probe_diagnosed_failure(void* con
 {
 	tokens::TokenIndex probe_tok = p.tok_i;
 	p.advance();
-	p.emit_parser_diag(parser_diagnostics::ParserDiag.TODO, "diagnosed probe failure", probe_tok)!;
+	Diagnostic.TODO.@emit(p, probe_tok, "diagnosed probe failure")!;
 	return parser::PARSING_FAILED~;
 }
 
@@ -529,7 +529,7 @@ fn void parser_owned_type_name_probe_restores_only_nonmatches_and_propagates_fau
 	else { assert(false, "a diagnosed type-name probe failure must propagate"); }
 	assert(f.parser.tok_i == 3 && f.parser.is_at(tokenizer::TokenId.R_PAREN),
 		"a diagnosed probe failure must preserve its consumed cursor");
-	assert(has_expression_diagnostic(&f, "diagnosed probe failure"));
+	assert(has_expression_diagnostic(&f, "TODO: diagnosed probe failure"));
 
 	f.free();
 	f.init("sizeof(int)\n");

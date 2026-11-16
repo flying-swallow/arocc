@@ -1,4 +1,4 @@
-// Tests for src/float_print.c3 that depend on other plan 10 stage-1 agents:
+// Tests for src/primitive_float_print.c3 that depend on other plan 10 stage-1 agents:
 //   - print_float / print_complex for f16, f32, f80, f128 (and cf16/cf32/cf80/
 //     cf128) need PrimitiveValue.cast (10.3 `conversions`, built on 10.2's
 //     to_f128/from_f128) and, for the f16/f32/cf32 scaling, PrimitiveValue.mul/div at
@@ -42,14 +42,14 @@ fn PrimitiveValue raw(PrimitiveType tag, ulong hi, ulong lo) => primitive_value:
 fn String fmt_float(PrimitiveValue f)
 {
 	DString w = dstring::temp();
-	primitive_value::print_float(f, &w);
+	primitive_value::print_float(f, &w)!!;
 	return w.str_view();
 }
 
 fn String fmt_complex(PrimitiveValue c)
 {
 	DString w = dstring::temp();
-	primitive_value::print_complex(c, &w);
+	primitive_value::print_complex(c, &w)!!;
 	return w.str_view();
 }
 

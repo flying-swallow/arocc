@@ -4,7 +4,7 @@
 // expressions use a separate callback for their compound-statement body.
 module aro::parser_postfix;
 import aro::primitive_value;
-import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::parser_diagnostics;
+import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::compilation, aro::lang_opts;
 import aro::string_interner, aro::bigint;
 import aro::builtins, aro::builtin_defs::common;
@@ -24,12 +24,12 @@ fn bool is_unpromoted_builtin_callee(parser::Parser* p, type_store::NodeIndex ca
 	if (try expanded = p.comp.builtins.find(name))
 	{
 		return expanded.tag == common::TAG___BUILTIN_ADD_OVERFLOW ||
-			expanded.tag == common::TAG___BUILTIN_SUB_OVERFLOW ||
-			expanded.tag == common::TAG___BUILTIN_MUL_OVERFLOW ||
-			expanded.tag == common::TAG___BUILTIN_COMPLEX ||
-			expanded.tag == common::TAG___BUILTIN_ISINF ||
-			expanded.tag == common::TAG___BUILTIN_ISINF_SIGN ||
-			expanded.tag == common::TAG___BUILTIN_ISNAN;
+		expanded.tag == common::TAG___BUILTIN_SUB_OVERFLOW ||
+		expanded.tag == common::TAG___BUILTIN_MUL_OVERFLOW ||
+		expanded.tag == common::TAG___BUILTIN_COMPLEX ||
+		expanded.tag == common::TAG___BUILTIN_ISINF ||
+		expanded.tag == common::TAG___BUILTIN_ISINF_SIGN ||
+		expanded.tag == common::TAG___BUILTIN_ISNAN;
 	}
 	return false;
 }
@@ -83,14 +83,20 @@ struct PostfixParser
 fn parser_result::Result? PostfixParser.primary(&self, bool eval)
 {
 	parser::IExpressionParts g = self.parts;
-	if (!g || !&g.parse_primary) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	if (!g || !& g.parse_primary)
+	{
+		self.parser.grammar_unavailable()!; return PARSING_FAILED~;
+	}
 	return g.parse_primary(self.parser, eval);
 }
 
 fn parser_result::Result? PostfixParser.nested(&self, tokens::Precedence min_prec, bool eval)
 {
 	parser::IExpressionParts g = self.parts;
-	if (!g || !&g.parse_nested) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	if (!g || !& g.parse_nested)
+	{
+		self.parser.grammar_unavailable()!; return PARSING_FAILED~;
+	}
 	return g.parse_nested(self.parser, min_prec, eval);
 }
 
@@ -127,7 +133,7 @@ fn parser_result::Result? CallbackParts.parse_primary(&self, parser::Parser* p, 
 fn parser_result::Result? CallbackParts.parse_nested(&self, parser::Parser* p, tokens::Precedence min_prec, bool eval) @dynamic
 {
 	if (!self.nested) return parser::HOOK_ABSENT~;
-	return self.nested(self.expression_context ? self.expression_context : self.context, p, min_prec, eval);
+	return self.nested(self.expression_context ? self.expression_context: self.context, p, min_prec, eval);
 }
 
 fn parser_result::Result? CallbackParts.parse_compound_literal(&self, parser::Parser* p, tokens::TokenIndex opening_tok,
@@ -150,14 +156,17 @@ fn parser_result::Result? PostfixParser.parse_compound_literal(&self, tokens::To
 {
 	parser::Parser* p = self.parser;
 	parser::InitContext context = p.init_context;
-	if (storage == tree::CompoundLiteralStorageClass.STATIC || thread_local || !p.function_context.active) { context = parser::InitContext.STATIC; }
+	if (storage == tree::CompoundLiteralStorageClass.STATIC || thread_local || !p.function_context.active)
+	{
+		context = parser::InitContext.STATIC;
+	}
 	parser_result::Result initializer = p.parse_initializer_with_context(qt, context, eval)!;
 	type_store::NodeIndex literal = p.compound_literal_node(l_paren, qt, initializer.node, storage, thread_local);
 	// A scalar compound literal has its initializer's constant value: the braced
 	// scalar keeps the value on its converted node. Array, record, complex and
 	// vector literals never carry a scalar value.
 	bool scalar = !qt.is(p.comp, type_store::TypeTag.ARRAY) && !qt.is(p.comp, type_store::TypeTag.VECTOR) &&
-		!qt.is(p.comp, type_store::TypeTag.COMPLEX) && !@ok(qt.get_record(p.comp));
+	!qt.is(p.comp, type_store::TypeTag.COMPLEX) && !@ok(qt.get_record(p.comp));
 	if (scalar)
 	{
 		if (try saved = p.tree.value_of(initializer.node))
@@ -188,7 +197,7 @@ fn void? PostfixParser.expect(&self, tokenizer::TokenId id)
    declarations are abandoned with the malformed expression, so their tree
    attributes and attribute-map entries must be removed together. *>
 fn void PostfixParser.restore_statement_expression_state(&self, usz scope_depth, bool extension_suppressed,
-	usz attribute_count, usz attribute_extra_count, list::List{AttributeDeclSpanCheckpoint}* saved_decl_attrs)
+	usz attribute_count, usz attribute_extra_count, list::List{AttributeDeclSpanCheckpoint} * saved_decl_attrs)
 {
 	parser::Parser* p = self.parser;
 	if (p.symbols_initialized)
@@ -214,11 +223,10 @@ fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens
 	tokens::TokenIndex l_brace, bool eval)
 {
 	parser::Parser* p = self.parser;
-	p.err(parser_diagnostics::ParserDiag.GNU_STATEMENT_EXPRESSION, l_brace)!;
+	Diagnostic.GNU_STATEMENT_EXPRESSION.@emit(p, l_brace)!;
 	if (!p.function_context.active)
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.STMT_EXPR_NOT_ALLOWED_FILE_SCOPE,
-			"statement expression not allowed at file scope", l_brace)!;
+		Diagnostic.STMT_EXPR_NOT_ALLOWED_FILE_SCOPE.@emit(p, l_brace)!;
 		return PARSING_FAILED~;
 	}
 
@@ -231,7 +239,11 @@ fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens
 	defer saved_decl_attrs.free();
 	foreach (entry : p.tree.attr_map.decl_attrs.iter())
 	{
-		saved_decl_attrs.push({ .node = entry.key, .index = entry.value.index, .len = entry.value.len });
+		saved_decl_attrs.push(
+		{
+			.node = entry.key, .index = entry.value.index, .len = entry.value.len
+		}
+		);
 	}
 	bool completed = false;
 	defer if (!completed) self.restore_statement_expression_state(saved_scope_depth,
@@ -241,9 +253,13 @@ fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens
 	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
 	completed = true;
 
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.STMT_EXPR, .unary = {
-		.qt = body.qt, .operand = body.body, .op_tok = l_brace,
-	} });
+	type_store::NodeIndex node = p.tree.add_node(
+		{
+			.kind = tree::NodeKind.STMT_EXPR, .unary = {
+				.qt = body.qt, .operand = body.body, .op_tok = l_brace,
+			}
+		}
+	);
 	return { .node = node, .qt = body.qt, .val = value::NONE };
 }
 
@@ -269,7 +285,7 @@ fn void? promote_call_argument(parser_result::Result* arg, parser::Parser* p, to
 		if (!promoted.eql(arg.qt, p.comp)) arg.cast_to_int(p, promoted, tok)!;
 	}
 	else if (arg.qt.scalar_kind(p.comp) == type_store::ScalarKind.FLOAT &&
-		arg.qt.float_rank(p.comp) < type_store::DOUBLE.float_rank(p.comp))
+	arg.qt.float_rank(p.comp) < type_store::DOUBLE.float_rank(p.comp))
 	{
 		arg.cast_to_float(p, type_store::DOUBLE, tok)!;
 	}
@@ -308,21 +324,21 @@ fn bool? check_postfix_update_operand(parser::Parser* p, parser_result::Result o
 	type_store::ScalarKind scalar_kind = operand.qt.scalar_kind(p.comp);
 	if (scalar_kind == type_store::ScalarKind.VOID_POINTER)
 	{
-		p.err(parser_diagnostics::ParserDiag.GNU_POINTER_ARITH, op_tok)!;
+		Diagnostic.GNU_POINTER_ARITH.@emit(p, op_tok)!;
 	}
 	if (scalar_kind == type_store::ScalarKind.NONE)
 	{
-		p.err(parser_diagnostics::ParserDiag.INVALID_ARGUMENT_UN, op_tok, p.fmt_qt(operand.qt))!;
+		Diagnostic.INVALID_ARGUMENT_UN.@emit(p, op_tok, p.fmt_qt(operand.qt))!;
 	}
 	if (!scalar_kind.is_real)
 	{
-		p.err(parser_diagnostics::ParserDiag.COMPLEX_PREFIX_POSTFIX_OP, op_tok, p.fmt_qt(operand.qt))!;
+		Diagnostic.COMPLEX_PREFIX_POSTFIX_OP.@emit(p, op_tok, p.fmt_qt(operand.qt))!;
 	}
 
 	bool is_const;
 	if (!p.tree.is_lval_extra(operand.node, &is_const) || is_const || operand.qt.is_const)
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.NOT_ASSIGNABLE, "expression is not assignable", op_tok)!;
+		Diagnostic.NOT_ASSIGNABLE.@emit(p, op_tok)!;
 		return false;
 	}
 
@@ -332,8 +348,7 @@ fn bool? check_postfix_update_operand(parser::Parser* p, parser_result::Result o
 		if (p.comp.langopts.bounds_safety == lang_opts::BoundsSafety.CLANG &&
 			pointer.pointer.bounds == type_store::PointerBounds.SINGLE)
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.POINTER_ARITH_SINGLE,
-				"pointer arithmetic on single pointer is out of bounds; consider adding '__counted_by'", op_tok)!;
+			Diagnostic.POINTER_ARITH_SINGLE.@emit(p, op_tok)!;
 			return false;
 		}
 
@@ -341,12 +356,12 @@ fn bool? check_postfix_update_operand(parser::Parser* p, parser_result::Result o
 		if (pointee.is(p.comp, type_store::TypeTag.VOID)) return true;
 		if (pointee.is(p.comp, type_store::TypeTag.FUNC))
 		{
-			p.err(parser_diagnostics::ParserDiag.INVALID_ARGUMENT_UN, op_tok, p.fmt_qt(operand.qt))!;
+			Diagnostic.INVALID_ARGUMENT_UN.@emit(p, op_tok, p.fmt_qt(operand.qt))!;
 			return false;
 		}
 		if (pointee.has_incomplete_size(p.comp))
 		{
-			p.err(parser_diagnostics::ParserDiag.PTR_ARITHMETIC_INCOMPLETE, op_tok, p.fmt_qt(pointee))!;
+			Diagnostic.PTR_ARITHMETIC_INCOMPLETE.@emit(p, op_tok, p.fmt_qt(pointee))!;
 			return false;
 		}
 		return true;
@@ -363,9 +378,13 @@ fn void make_postfix_update(parser::Parser* p, parser_result::Result* operand,
 {
 	operand.save_value(p);
 	operand.qt = operand.qt.non_atomic(p.comp).unqualified();
-	operand.node = p.tree.add_node({ .kind = kind, .unary = {
-		.qt = operand.qt, .operand = operand.node, .op_tok = op_tok,
-	} });
+	operand.node = p.tree.add_node(
+		{
+			.kind = kind, .unary = {
+				.qt = operand.qt, .operand = operand.node, .op_tok = op_tok,
+			}
+		}
+	);
 }
 
 <*
@@ -395,7 +414,7 @@ fn void? check_subscript_bounds(parser::Parser* p, parser_result::Result index, 
 					{
 						if (!index.val.is_zero(p.comp))
 						{
-							p.err(parser_diagnostics::ParserDiag.OLD_STYLE_FLEXIBLE_STRUCT, bracket, p.fmt_value(index.val, index.qt))!;
+							Diagnostic.OLD_STYLE_FLEXIBLE_STRUCT.@emit(p, bracket, p.fmt_value(index.val, index.qt))!;
 						}
 						return;
 					}
@@ -407,16 +426,16 @@ fn void? check_subscript_bounds(parser::Parser* p, parser_result::Result index, 
 		{
 			if (index_int >= len)
 			{
-				p.err(parser_diagnostics::ParserDiag.ARRAY_AFTER, bracket, p.fmt_value(index.val, index.qt))!;
+				Diagnostic.ARRAY_AFTER.@emit(p, bracket, p.fmt_value(index.val, index.qt))!;
 			}
 		}
 		else if (value::compare(index.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
 		{
-			p.err(parser_diagnostics::ParserDiag.ARRAY_BEFORE, bracket, p.fmt_value(index.val, index.qt))!;
+			Diagnostic.ARRAY_BEFORE.@emit(p, bracket, p.fmt_value(index.val, index.qt))!;
 		}
 		else if (index_int >= len)
 		{
-			p.err(parser_diagnostics::ParserDiag.ARRAY_AFTER, bracket, p.fmt_value(index.val, index.qt))!;
+			Diagnostic.ARRAY_AFTER.@emit(p, bracket, p.fmt_value(index.val, index.qt))!;
 		}
 	}
 }
@@ -436,7 +455,7 @@ fn void? check_single_subscript(parser::Parser* p, parser_result::Result base, p
 	{
 		if (pointer.pointer.bounds != type_store::PointerBounds.SINGLE) return;
 		if (index.val.is_zero(p.comp)) return;
-		p.err(parser_diagnostics::ParserDiag.SINGLE_REQUIRES_ZERO_INDEX, bracket)!;
+		Diagnostic.SINGLE_REQUIRES_ZERO_INDEX.@emit(p, bracket)!;
 	}
 }
 
@@ -470,7 +489,7 @@ fn parser_result::Result? PostfixParser.array_subscript(&self, parser_result::Re
 		}
 		else
 		{
-			p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket)!;
+			Diagnostic.INVALID_INDEX.@emit(p, bracket)!;
 		}
 	}
 	else if (try index_ty = index.qt.get(p.comp, type_store::TypeTag.POINTER))
@@ -484,7 +503,7 @@ fn parser_result::Result? PostfixParser.array_subscript(&self, parser_result::Re
 		}
 		else
 		{
-			p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket)!;
+			Diagnostic.INVALID_INDEX.@emit(p, bracket)!;
 		}
 		// Integer on the left, pointer on the right: the pointer becomes the base.
 		parser_result::Result swap_tmp = ptr;
@@ -500,12 +519,12 @@ fn parser_result::Result? PostfixParser.array_subscript(&self, parser_result::Re
 		has_element = true;
 		if (!index.qt.is_real_int(p.comp))
 		{
-			p.err(parser_diagnostics::ParserDiag.INVALID_INDEX, bracket)!;
+			Diagnostic.INVALID_INDEX.@emit(p, bracket)!;
 		}
 	}
 	else if (!index.qt.is_invalid() && !ptr.qt.is_invalid())
 	{
-		p.err(parser_diagnostics::ParserDiag.INVALID_SUBSCRIPT, bracket)!;
+		Diagnostic.INVALID_SUBSCRIPT.@emit(p, bracket)!;
 	}
 
 	// C integer promotion of a valid integer index, after roles are known so both operand
@@ -513,21 +532,25 @@ fn parser_result::Result? PostfixParser.array_subscript(&self, parser_result::Re
 	if (has_element && index.qt.is_real_int(p.comp)) index.usual_unary_conversion(p, bracket)!;
 
 	if (has_element && !ptr.qt.is_invalid() && !ptr.qt.is(p.comp, type_store::TypeTag.VOID) &&
-		ptr.qt.has_incomplete_size(p.comp))
+	ptr.qt.has_incomplete_size(p.comp))
 	{
-		p.err(parser_diagnostics::ParserDiag.PTR_ARITHMETIC_INCOMPLETE, bracket, p.fmt_qt(ptr.qt))!;
+		Diagnostic.PTR_ARITHMETIC_INCOMPLETE.@emit(p, bracket, p.fmt_qt(ptr.qt))!;
 		ptr.qt = type_store::INVALID;
 	}
 
 	// Fold `"literal"[k]` from the operands before decay (string_subscript_value).
 	value::Value subscript_val = swapped ? string_subscript_value(p, index_before, array_before)
-		: string_subscript_value(p, array_before, index_before);
+	: string_subscript_value(p, array_before, index_before);
 
 	ptr.save_value(p);
 	index.save_value(p);
-	ptr.node = p.tree.add_node({ .kind = tree::NodeKind.ARRAY_ACCESS_EXPR, .array_access = {
-		.l_bracket_tok = bracket, .qt = ptr.qt, .base = ptr.node, .index = index.node,
-	} });
+	ptr.node = p.tree.add_node(
+		{
+			.kind = tree::NodeKind.ARRAY_ACCESS_EXPR, .array_access = {
+				.l_bracket_tok = bracket, .qt = ptr.qt, .base = ptr.node, .index = index.node,
+			}
+		}
+	);
 	ptr.val = subscript_val;
 	if (!subscript_val.is_none()) p.tree.set_value(ptr.node, subscript_val);
 	return ptr;
@@ -596,19 +619,27 @@ fn parser_result::Result? field_access_extra(parser::Parser* p, type_store::Node
 			if (try nested_record = field.qt.get_record(p.comp))
 			{
 				if (!nested_record.has_field(p.comp, ctx.target_name)) continue;
-				type_store::NodeIndex inner = p.tree.add_node({ .kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
-					.member_access = { .qt = field_qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i } });
+				type_store::NodeIndex inner = p.tree.add_node(
+					{
+						.kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
+						.member_access = { .qt = field_qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i }
+				}
+				);
 				return field_access_extra(p, inner, nested_record, field_qt, false, ctx);
 			}
 		}
 		if (ctx.target_name == field.name)
 		{
-			type_store::NodeIndex node = p.tree.add_node({ .kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
-				.member_access = { .qt = field_qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i } });
+			type_store::NodeIndex node = p.tree.add_node(
+				{
+					.kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
+					.member_access = { .qt = field_qt, .base = base, .access_tok = ctx.access_tok, .member_index = (uint)i }
+			}
+			);
 			return { .node = node, .qt = field_qt, .val = value::NONE };
 		}
 	}
-	p.err(parser_diagnostics::ParserDiag.NO_SUCH_MEMBER, ctx.name_tok, p.tree.tok_slice(ctx.name_tok), p.fmt_qt(ctx.base_qt))!;
+	Diagnostic.NO_SUCH_MEMBER.@emit(p, ctx.name_tok, p.tree.tok_slice(ctx.name_tok), p.fmt_qt(ctx.base_qt))!;
 	return PARSING_FAILED~;
 }
 
@@ -639,8 +670,12 @@ fn parser_result::Result? PostfixParser.field_access(&self, parser_result::Resul
 	parser::Parser* p = self.parser;
 	if (lhs.qt.is_invalid())
 	{
-		type_store::NodeIndex node = p.tree.add_node({ .kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
-			.member_access = { .qt = type_store::INVALID, .base = lhs.node, .access_tok = access_tok, .member_index = 0xFFFF_FFFF } });
+		type_store::NodeIndex node = p.tree.add_node(
+			{
+				.kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,
+				.member_access = { .qt = type_store::INVALID, .base = lhs.node, .access_tok = access_tok, .member_index = 0xFFFF_FFFF }
+			}
+		);
 		return { .node = node, .qt = type_store::INVALID, .val = value::NONE };
 	}
 
@@ -655,31 +690,31 @@ fn parser_result::Result? PostfixParser.field_access(&self, parser_result::Resul
 	}
 	else
 	{
-		p.err(parser_diagnostics::ParserDiag.EXPECTED_RECORD_TY, name_tok, p.fmt_qt(expr_qt))!;
+		Diagnostic.EXPECTED_RECORD_TY.@emit(p, name_tok, p.fmt_qt(expr_qt))!;
 		return PARSING_FAILED~;
 	}
 	if (!record.has_layout)
 	{
 		// Invalid use of an incomplete type is reported where the type was named.
 		if (!is_ptr) return PARSING_FAILED~;
-		p.err(parser_diagnostics::ParserDiag.DEREF_INCOMPLETE_TY_PTR, name_tok - 2, p.fmt_qt(expr_base_qt))!;
+		Diagnostic.DEREF_INCOMPLETE_TY_PTR.@emit(p, name_tok - 2, p.fmt_qt(expr_base_qt))!;
 		return PARSING_FAILED~;
 	}
 	if (expr_qt != lhs.qt)
 	{
-		p.err(parser_diagnostics::ParserDiag.MEMBER_EXPR_ATOMIC, name_tok, p.fmt_qt(lhs.qt))!;
+		Diagnostic.MEMBER_EXPR_ATOMIC.@emit(p, name_tok, p.fmt_qt(lhs.qt))!;
 	}
 	if (expr_base_qt != record_qt)
 	{
-		p.err(parser_diagnostics::ParserDiag.MEMBER_EXPR_ATOMIC, name_tok, p.fmt_qt(expr_base_qt))!;
+		Diagnostic.MEMBER_EXPR_ATOMIC.@emit(p, name_tok, p.fmt_qt(expr_base_qt))!;
 	}
 	if (is_arrow && !is_ptr)
 	{
-		p.err(parser_diagnostics::ParserDiag.MEMBER_EXPR_NOT_PTR, name_tok, p.fmt_qt(expr_qt))!;
+		Diagnostic.MEMBER_EXPR_NOT_PTR.@emit(p, name_tok, p.fmt_qt(expr_qt))!;
 	}
 	if (!is_arrow && is_ptr)
 	{
-		p.err(parser_diagnostics::ParserDiag.MEMBER_EXPR_PTR, name_tok, p.fmt_qt(expr_qt))!;
+		Diagnostic.MEMBER_EXPR_PTR.@emit(p, name_tok, p.fmt_qt(expr_qt))!;
 	}
 
 	MemberLookup ctx = {
@@ -690,7 +725,7 @@ fn parser_result::Result? PostfixParser.field_access(&self, parser_result::Resul
 	};
 	if (member_match_count(p.comp, record, ctx.target_name) > 1)
 	{
-		p.err(parser_diagnostics::ParserDiag.AMBIGUOUS_MEMBER, name_tok, p.tree.tok_slice(name_tok))!;
+		Diagnostic.AMBIGUOUS_MEMBER.@emit(p, name_tok, p.tree.tok_slice(name_tok))!;
 		return PARSING_FAILED~;
 	}
 	parser_result::Result maybe_member = field_access_extra(p, lhs.node, record, record_qt, is_arrow, &ctx)!;
@@ -734,7 +769,11 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			if (lhs.qt.is_invalid())
 			{
 				lhs.val = value::NONE;
-				lhs.node = p.tree.add_node({ .kind = kind, .unary = { .qt = lhs.qt, .operand = lhs.node, .op_tok = op_tok } });
+				lhs.node = p.tree.add_node(
+				{
+					.kind = kind, .unary = { .qt = lhs.qt, .operand = lhs.node, .op_tok = op_tok }
+				}
+				);
 				continue;
 			}
 			if (!(check_postfix_update_operand(p, lhs, op_tok)!)) return PARSING_FAILED~;
@@ -775,11 +814,17 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			{
 				if (!function_qt.is(p.comp, type_store::TypeTag.FUNC))
 				{
-					p.err(parser_diagnostics::ParserDiag.NOT_CALLABLE, l_paren, p.fmt_qt(lhs.qt))!;
+					Diagnostic.NOT_CALLABLE.@emit(p, l_paren, p.fmt_qt(lhs.qt))!;
 					return PARSING_FAILED~;
 				}
-				if (try resolved_fn = function_qt.get_func(p.comp)) { call_fn = resolved_fn; }
-				else { return PARSING_FAILED~; }
+				if (try resolved_fn = function_qt.get_func(p.comp))
+				{
+					call_fn = resolved_fn;
+				}
+				else
+				{
+					return PARSING_FAILED~;
+				}
 				typed_params_len = (uint)call_fn.params.len;
 				func_kind = call_fn.kind;
 			}
@@ -803,7 +848,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 							.active = true,
 							.variadic = func_kind != type_store::FuncKind.NORMAL,
 							.typed = arg_index < typed_params_len,
-						} : {};
+						}: {};
 						defer p.va_arg_pack_call = old_pack_context;
 						maybe_arg = self.nested(tokens::PREC_ASSIGN, eval);
 					}
@@ -837,9 +882,9 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 						}
 						else if (!arg.coerce_scalar(p, param.qt, param_tok, parser_result::CoercionContext.ARGUMENT)!)
 						{
-							p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_ARG, param_tok,
+							Diagnostic.INCOMPATIBLE_ARG.@emit(p, param_tok,
 								p.fmt_qt(arg.qt), p.fmt_qt(param.qt))!;
-							if (param.name_tok != (type_store::TokenIndex)0) p.err(parser_diagnostics::ParserDiag.PARAMETER_HERE, (tokens::TokenIndex)param.name_tok)!;
+							if (param.name_tok != (type_store::TokenIndex)0) Diagnostic.PARAMETER_HERE.@emit(p, (tokens::TokenIndex)param.name_tok)!;
 						}
 					}
 					else if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid())
@@ -850,7 +895,7 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 					arg.save_value(p);
 					args.push(arg.node);
 					if (!self.at(tokenizer::TokenId.COMMA)) break;
-					if (is_va_arg_pack) p.err(parser_diagnostics::ParserDiag.VA_PACK_NON_FINAL_ARG, pack_tok)!;
+					if (is_va_arg_pack) Diagnostic.VA_PACK_NON_FINAL_ARG.@emit(p, pack_tok)!;
 					p.advance();
 					arg_index++;
 				}
@@ -878,13 +923,13 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 				if (func_kind == type_store::FuncKind.NORMAL && (usz)args.len() != (usz)typed_params_len)
 				{
 					tokens::TokenIndex tok = (usz)args.len() < (usz)typed_params_len ? r_paren : first_after;
-					p.err(parser_diagnostics::ParserDiag.EXPECTED_ARGUMENTS, tok,
+					Diagnostic.EXPECTED_ARGUMENTS.@emit(p, tok,
 						typed_params_len, (uint)args.len())!;
 					args_ok = false;
 				}
 				else if (func_kind == type_store::FuncKind.VARIADIC && (usz)args.len() < (usz)typed_params_len)
 				{
-					p.err(parser_diagnostics::ParserDiag.EXPECTED_AT_LEAST_ARGUMENTS, r_paren,
+					Diagnostic.EXPECTED_AT_LEAST_ARGUMENTS.@emit(p, r_paren,
 						typed_params_len, (uint)args.len())!;
 					args_ok = false;
 				}
@@ -892,11 +937,11 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 				{
 					if (typed_params_len == 0)
 					{
-						p.err(parser_diagnostics::ParserDiag.PASSING_ARGS_TO_KR, first_after)!;
+						Diagnostic.PASSING_ARGS_TO_KR.@emit(p, first_after)!;
 					}
 					else
 					{
-						p.err(parser_diagnostics::ParserDiag.EXPECTED_ARGUMENTS_OLD, first_after,
+						Diagnostic.EXPECTED_ARGUMENTS_OLD.@emit(p, first_after,
 							typed_params_len, (uint)args.len())!;
 					}
 				}
@@ -916,15 +961,23 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 			}
 			if (builtin_node.kind == tree::NodeKind.BUILTIN_REF)
 			{
-				type_store::NodeIndex builtin_call_node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
-					.builtin_tok = builtin_node.builtin_ref.name_tok, .qt = return_qt, .args = args.array_view(),
-				} });
+				type_store::NodeIndex builtin_call_node = p.tree.add_node(
+					{
+						.kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
+							.builtin_tok = builtin_node.builtin_ref.name_tok, .qt = return_qt, .args = args.array_view(),
+					}
+				}
+				);
 				lhs.init(builtin_call_node, return_qt);
 				continue;
 			}
-			type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.CALL_EXPR, .call = {
-				.l_paren_tok = l_paren, .qt = return_qt, .callee = func.node, .args = args.array_view(),
-			} });
+			type_store::NodeIndex node = p.tree.add_node(
+				{
+					.kind = tree::NodeKind.CALL_EXPR, .call = {
+						.l_paren_tok = l_paren, .qt = return_qt, .callee = func.node, .args = args.array_view(),
+				}
+			}
+			);
 			lhs.init(node, return_qt);
 			continue;
 		}

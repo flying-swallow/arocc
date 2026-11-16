@@ -36,8 +36,8 @@ fn target::Target tgt(String triple)
 	return t;
 }
 
-<* Run the body with a compilation (named types initialized) and a MacroWriter for `triple`; checks nothing leaks. *>
-macro @with_comp(String triple; @body(compilation::Compilation* comp, MacroWriter* w))
+<* Run the body with a compilation (named types initialized) and a DString for `triple`; checks nothing leaks. *>
+macro @with_comp(String triple; @body(compilation::Compilation* comp, DString* w))
 {
 	TrackingAllocator ta;
 	ta.init(mem);
@@ -48,7 +48,7 @@ macro @with_comp(String triple; @body(compilation::Compilation* comp, MacroWrite
 		comp.target = tgt(triple);
 		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
-		MacroWriter w;
+		DString w;
 		w.init(&ta);
 		@body(&comp, &w);
 		w.free();
@@ -101,11 +101,11 @@ fn String lines_with_prefix(String text, String prefix)
 
 fn void builtin_macros_default_hosted() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
 		// [source] writeBuiltinMacros; default standard is gnu17 -> 201710L.
-		test::eq(w.written(),
+		test::eq(w.str_view(),
 			"#define __STDC__ 1\n"
 			"#define __STDC_HOSTED__ 1\n"
 			"#define __STDC_UTF_16__ 1\n"
@@ -119,61 +119,61 @@ fn void builtin_macros_default_hosted() @test
 
 fn void builtin_macros_std_versions() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] predefined macros.c (-std=c99): __STDC_VERSION__ == 199901
 		comp.langopts.set_standard("c99")!!;
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		expect_line(w.written(), "#define __STDC_VERSION__ 199901L");
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		expect_line(w.str_view(), "#define __STDC_VERSION__ 199901L");
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] c23 defines.c (-std=c23): __STDC_VERSION__ == 202311L
 		comp.langopts.set_standard("c23")!!;
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		expect_line(w.written(), "#define __STDC_VERSION__ 202311L");
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		expect_line(w.str_view(), "#define __STDC_VERSION__ 202311L");
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [source] c89 has no __STDC_VERSION__ (StdCVersionMacro returns null).
 		comp.langopts.set_standard("c89")!!;
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		test::eq(w.written().contains("__STDC_VERSION__"), false);
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		test::eq(w.str_view().contains("__STDC_VERSION__"), false);
 	};
 }
 
 fn void builtin_macros_emulation_and_os() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [source] no __STDC__ when emulating MSVC.
 		comp.langopts.set_emulated_compiler(MSVC);
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		test::eq(w.written().contains("__STDC__ 1"), false);
-		expect_line(w.written(), "#define __STDC_HOSTED__ 1");
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		test::eq(w.str_view().contains("__STDC__ 1"), false);
+		expect_line(w.str_view(), "#define __STDC_HOSTED__ 1");
 	};
-	@with_comp("x86_64-freestanding-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-freestanding-none"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		expect_line(w.written(), "#define __STDC_HOSTED__ 0");
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		expect_line(w.str_view(), "#define __STDC_HOSTED__ 0");
 	};
-	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		expect_line(w.written(), "#define __STDC_NO_THREADS__ 1");
-		test::eq(w.written().contains("__STDC_NO_COMPLEX__"), false);
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		expect_line(w.str_view(), "#define __STDC_NO_THREADS__ 1");
+		test::eq(w.str_view().contains("__STDC_NO_COMPLEX__"), false);
 	};
-	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, DString* w)
 	{
 		// before C11 there are no thread/complex availability macros
 		comp.langopts.set_standard("c99")!!;
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		test::eq(w.written().contains("__STDC_NO_THREADS__"), false);
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		test::eq(w.str_view().contains("__STDC_NO_THREADS__"), false);
 	};
-	@with_comp("x86_64-ps4-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-ps4-none"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w);
-		String s = lines_with_prefix(w.written(), "#define __STDC_NO_");
+		predefined_macros::write_builtin_macros(comp, NO_SYSTEM_DEFINES, w)!!;
+		String s = lines_with_prefix(w.str_view(), "#define __STDC_NO_");
 		test::eq(s, "#define __STDC_NO_THREADS__ 1\n#define __STDC_NO_COMPLEX__ 1\n");
 	};
 }
@@ -183,12 +183,12 @@ fn void builtin_macros_emulation_and_os() @test
 
 fn void compiler_defines_default() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] gnuc version default gcc.c / default.c (emulate no|gcc): 7.1.0
 		// [source] the rest of the head of generateSystemDefines.
-		predefined_macros::write_compiler_defines(comp, w);
-		test::eq(w.written(),
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		test::eq(w.str_view(),
 			"#define __GNUC__ 7\n"
 			"#define __GNUC_MINOR__ 1\n"
 			"#define __GNUC_PATCHLEVEL__ 0\n"
@@ -203,56 +203,56 @@ fn void compiler_defines_default() @test
 
 fn void compiler_defines_emulation() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] gnuc version default clang.c: 4.2.1
 		comp.langopts.set_emulated_compiler(CLANG);
-		predefined_macros::write_compiler_defines(comp, w);
-		expect_line(w.written(), "#define __GNUC__ 4");
-		expect_line(w.written(), "#define __GNUC_MINOR__ 2");
-		expect_line(w.written(), "#define __GNUC_PATCHLEVEL__ 1");
-		expect_line(w.written(), "#define __ARO_EMULATE__ __ARO_EMULATE_CLANG__");
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		expect_line(w.str_view(), "#define __GNUC__ 4");
+		expect_line(w.str_view(), "#define __GNUC_MINOR__ 2");
+		expect_line(w.str_view(), "#define __GNUC_PATCHLEVEL__ 1");
+		expect_line(w.str_view(), "#define __ARO_EMULATE__ __ARO_EMULATE_CLANG__");
 	};
-	@with_comp("x86_64-windows-msvc"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-windows-msvc"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] gnuc version default msvc.c: no __GNUC__ macros
 		comp.langopts.set_emulated_compiler(MSVC);
-		predefined_macros::write_compiler_defines(comp, w);
-		test::eq(w.written().contains("__GNUC"), false);
-		expect_line(w.written(), "#define __ARO_EMULATE__ __ARO_EMULATE_MSVC__");
-		expect_line(w.written(), "#define _MSC_VER 1933");
-		expect_line(w.written(), "#define _MSC_FULL_VER 193300000");
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		test::eq(w.str_view().contains("__GNUC"), false);
+		expect_line(w.str_view(), "#define __ARO_EMULATE__ __ARO_EMULATE_MSVC__");
+		expect_line(w.str_view(), "#define _MSC_VER 1933");
+		expect_line(w.str_view(), "#define _MSC_FULL_VER 193300000");
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] gnuc version override.c (-fgnuc-version=5.3.42)
 		comp.langopts.has_gnuc_version = true;
 		comp.langopts.gnuc_version = 5 * 10_000 + 3 * 100 + 42;
-		predefined_macros::write_compiler_defines(comp, w);
-		expect_line(w.written(), "#define __GNUC__ 5");
-		expect_line(w.written(), "#define __GNUC_MINOR__ 3");
-		expect_line(w.written(), "#define __GNUC_PATCHLEVEL__ 42");
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		expect_line(w.str_view(), "#define __GNUC__ 5");
+		expect_line(w.str_view(), "#define __GNUC_MINOR__ 3");
+		expect_line(w.str_view(), "#define __GNUC_PATCHLEVEL__ 42");
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [fixture] gnuc version empty.c (-fgnuc-version= -> 0): no __GNUC__ macros
 		comp.langopts.has_gnuc_version = true;
 		comp.langopts.gnuc_version = 0;
-		predefined_macros::write_compiler_defines(comp, w);
-		test::eq(w.written().contains("__GNUC"), false);
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		test::eq(w.str_view().contains("__GNUC"), false);
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		comp.code_gen_options.optimization_level = S;
-		predefined_macros::write_compiler_defines(comp, w);
-		test::eq(w.written().ends_with("#define __building_module(x) 0\n#define __OPTIMIZE__ 1\n#define __OPTIMIZE_SIZE__ 1\n"), true);
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		test::eq(w.str_view().ends_with("#define __building_module(x) 0\n#define __OPTIMIZE__ 1\n#define __OPTIMIZE_SIZE__ 1\n"), true);
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		comp.code_gen_options.optimization_level = FAST;
-		predefined_macros::write_compiler_defines(comp, w);
-		expect_line(w.written(), "#define __OPTIMIZE__ 1");
-		test::eq(w.written().contains("__OPTIMIZE_SIZE__"), false);
+		predefined_macros::write_compiler_defines(comp, w)!!;
+		expect_line(w.str_view(), "#define __OPTIMIZE__ 1");
+		test::eq(w.str_view().contains("__OPTIMIZE_SIZE__"), false);
 	};
 }
 
@@ -265,11 +265,11 @@ fn void float_macros_single() @test
 	ta.init(mem);
 	defer ta.free();
 	{
-		MacroWriter w;
+		DString w;
 		w.init(&ta);
 		// [source] generateFloatMacros, IEEESingle column.
-		predefined_macros::generate_float_macros(&w, "FLT", IEEE_SINGLE, "F");
-		test::eq(w.written(),
+		predefined_macros::generate_float_macros(&w, "FLT", IEEE_SINGLE, "F")!!;
+		test::eq(w.str_view(),
 			"#define __FLT_DENORM_MIN__ 1.40129846e-45F\n"
 			"#define __FLT_HAS_DENORM__\n"
 			"#define __FLT_DIG__ 6\n"
@@ -293,18 +293,18 @@ fn void float_macros_all_semantics() @test
 {
 	@pool()
 	{
-		MacroWriter w;
+		DString w;
 		w.init(tmem);
-		predefined_macros::generate_float_macros(&w, "FLT16", IEEE_HALF, "F16");
-		String s = w.written();
+		predefined_macros::generate_float_macros(&w, "FLT16", IEEE_HALF, "F16")!!;
+		String s = w.str_view();
 		expect_line(s, "#define __FLT16_DENORM_MIN__ 5.9604644775390625e-8F16");
 		expect_line(s, "#define __FLT16_MAX__ 6.5504e+4F16");
 		expect_line(s, "#define __FLT16_MIN_EXP__ (-13)");
 		expect_line(s, "#define __FLT16_MANT_DIG__ 11");
 
-		w.init(tmem);
-		predefined_macros::generate_float_macros(&w, "DBL", IEEE_DOUBLE, "");
-		s = w.written();
+		w.clear();
+		predefined_macros::generate_float_macros(&w, "DBL", IEEE_DOUBLE, "")!!;
+		s = w.str_view();
 		expect_line(s, "#define __DBL_DENORM_MIN__ 4.9406564584124654e-324");
 		expect_line(s, "#define __DBL_EPSILON__ 2.2204460492503131e-16");
 		expect_line(s, "#define __DBL_MAX__ 1.7976931348623157e+308");
@@ -312,9 +312,9 @@ fn void float_macros_all_semantics() @test
 		expect_line(s, "#define __DBL_MIN_10_EXP__ (-307)");
 		expect_line(s, "#define __DBL_DECIMAL_DIG__ 17");
 
-		w.init(tmem);
-		predefined_macros::generate_float_macros(&w, "LDBL", X87_EXTENDED_DOUBLE, "L");
-		s = w.written();
+		w.clear();
+		predefined_macros::generate_float_macros(&w, "LDBL", X87_EXTENDED_DOUBLE, "L")!!;
+		s = w.str_view();
 		expect_line(s, "#define __LDBL_DENORM_MIN__ 3.64519953188247460253e-4951L");
 		expect_line(s, "#define __LDBL_MAX__ 1.18973149535723176502e+4932L");
 		expect_line(s, "#define __LDBL_MIN__ 3.36210314311209350626e-4932L");
@@ -322,17 +322,17 @@ fn void float_macros_all_semantics() @test
 		expect_line(s, "#define __LDBL_DIG__ 18");
 		expect_line(s, "#define __LDBL_MIN_EXP__ (-16381)");
 
-		w.init(tmem);
-		predefined_macros::generate_float_macros(&w, "LDBL", IBM_EXTENDED_DOUBLE, "L");
-		s = w.written();
+		w.clear();
+		predefined_macros::generate_float_macros(&w, "LDBL", IBM_EXTENDED_DOUBLE, "L")!!;
+		s = w.str_view();
 		expect_line(s, "#define __LDBL_EPSILON__ 4.94065645841246544176568792868221e-324L");
 		expect_line(s, "#define __LDBL_MANT_DIG__ 106");
 		expect_line(s, "#define __LDBL_MIN_10_EXP__ (-291)");
 		expect_line(s, "#define __LDBL_MIN_EXP__ (-968)");
 
-		w.init(tmem);
-		predefined_macros::generate_float_macros(&w, "LDBL", IEEE_QUAD, "L");
-		s = w.written();
+		w.clear();
+		predefined_macros::generate_float_macros(&w, "LDBL", IEEE_QUAD, "L")!!;
+		s = w.str_view();
 		expect_line(s, "#define __LDBL_DENORM_MIN__ 6.47517511943802511092443895822764655e-4966L");
 		expect_line(s, "#define __LDBL_EPSILON__ 1.92592994438723585305597794258492732e-34L");
 		expect_line(s, "#define __LDBL_MAX__ 1.18973149535723176508575932662800702e+4932L");
@@ -347,25 +347,25 @@ fn void float_macros_all_semantics() @test
 
 fn void int_helpers() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [source] generateIntMax/Min/Width/SizeofType/Fmt/IntLiteralMacros
-		predefined_macros::generate_int_max(comp, w, "SCHAR", type_store::SCHAR);
-		predefined_macros::generate_int_max(comp, w, "U8", type_store::UCHAR);
-		predefined_macros::generate_int_max(comp, w, "U16", type_store::USHORT);
-		predefined_macros::generate_int_max(comp, w, "U32", type_store::UINT);
-		predefined_macros::generate_int_max(comp, w, "LL", type_store::LONG_LONG);
-		predefined_macros::generate_int_max(comp, w, "ULL", type_store::ULONG_LONG);
-		predefined_macros::generate_int_min(comp, w, "INT", type_store::INT);
-		predefined_macros::generate_int_min(comp, w, "UL", type_store::ULONG);
-		predefined_macros::generate_int_width(comp, w, "BOOL", type_store::BOOL);
-		predefined_macros::generate_sizeof_type(comp, w, "__SIZEOF_POINTER__", type_store::VOID_POINTER);
-		predefined_macros::generate_fmt(comp, "__UINT32", w, type_store::UINT);
-		predefined_macros::generate_fmt(comp, "__INT8", w, type_store::SCHAR);
-		predefined_macros::generate_int_literal_macros(comp, "__INT32", w, type_store::INT);
-		predefined_macros::generate_int_literal_macros(comp, "__UINT64", w, type_store::ULONG);
-		predefined_macros::generate_type_macro(comp, w, "__X_TYPE__", type_store::ULONG_LONG);
-		test::eq(w.written(),
+		predefined_macros::generate_int_max(comp, w, "SCHAR", type_store::SCHAR)!!;
+		predefined_macros::generate_int_max(comp, w, "U8", type_store::UCHAR)!!;
+		predefined_macros::generate_int_max(comp, w, "U16", type_store::USHORT)!!;
+		predefined_macros::generate_int_max(comp, w, "U32", type_store::UINT)!!;
+		predefined_macros::generate_int_max(comp, w, "LL", type_store::LONG_LONG)!!;
+		predefined_macros::generate_int_max(comp, w, "ULL", type_store::ULONG_LONG)!!;
+		predefined_macros::generate_int_min(comp, w, "INT", type_store::INT)!!;
+		predefined_macros::generate_int_min(comp, w, "UL", type_store::ULONG)!!;
+		predefined_macros::generate_int_width(comp, w, "BOOL", type_store::BOOL)!!;
+		predefined_macros::generate_sizeof_type(comp, w, "__SIZEOF_POINTER__", type_store::VOID_POINTER)!!;
+		predefined_macros::generate_fmt(comp, "__UINT32", w, type_store::UINT)!!;
+		predefined_macros::generate_fmt(comp, "__INT8", w, type_store::SCHAR)!!;
+		predefined_macros::generate_int_literal_macros(comp, "__INT32", w, type_store::INT)!!;
+		predefined_macros::generate_int_literal_macros(comp, "__UINT64", w, type_store::ULONG)!!;
+		predefined_macros::generate_type_macro(comp, w, "__X_TYPE__", type_store::ULONG_LONG)!!;
+		test::eq(w.str_view(),
 			"#define __SCHAR_MAX__ 127\n"
 			"#define __U8_MAX__ 255\n"
 			"#define __U16_MAX__ 65535\n"
@@ -392,13 +392,13 @@ fn void int_helpers() @test
 
 fn void int128_max() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		// [source] generateIntWidth for a 128-bit type. (generateIntMax on a
 		// 128-bit type reaches intValueSuffix's `else => unreachable` in Zig,
 		// and Zig never calls it that way.)
-		predefined_macros::generate_int_width(comp, w, "INT128", type_store::INT128);
-		test::eq(w.written(), "#define __INT128_WIDTH__ 128\n");
+		predefined_macros::generate_int_width(comp, w, "INT128", type_store::INT128)!!;
+		test::eq(w.str_view(), "#define __INT128_WIDTH__ 128\n");
 	};
 }
 
@@ -407,10 +407,10 @@ fn void int128_max() @test
 
 fn void common_defines_x86_64_linux() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		// [source] layout / endian / object format / atomics
 		test::eq(s.starts_with("#define _LP64 1\n#define __LP64__ 1\n#define __FLOAT128__ 1\n"
 			"#define __ORDER_LITTLE_ENDIAN__ 1234\n#define __ORDER_BIG_ENDIAN__ 4321\n#define __ORDER_PDP_ENDIAN__ 3412\n"
@@ -546,33 +546,33 @@ fn void common_defines_x86_64_linux() @test
 
 fn void common_defines_options() @test
 {
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		comp.code_gen_options.pic_level = TWO;
 		comp.code_gen_options.is_pie = true;
 		comp.langopts.blocks = true;
 		comp.langopts.set_fp_eval_method(EXTENDED);
 		comp.langopts.set_standard("c23")!!;
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		expect_line(s, "#define __ATOMIC_CHAR8_T_LOCK_FREE 1");
 		test::eq(s.ends_with("#define __FLT_EVAL_METHOD__ 2\n#define __FLT_RADIX__ 2\n#define __DECIMAL_DIG__ __LDBL_DECIMAL_DIG__\n"
 			"#define __pic__ 2\n#define __PIC__ 2\n#define __pie__ 2\n#define __PIE__ 2\n#define __BLOCKS__ 1\n"), true);
 	};
-	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
 		comp.code_gen_options.pic_level = ONE;
-		predefined_macros::write_common_defines(comp, w);
-		test::eq(w.written().ends_with("#define __pic__ 1\n#define __PIC__ 1\n"), true);
+		predefined_macros::write_common_defines(comp, w)!!;
+		test::eq(w.str_view().ends_with("#define __pic__ 1\n#define __PIC__ 1\n"), true);
 	};
 }
 
 fn void common_defines_other_targets() @test
 {
-	@with_comp("i386-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("i386-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		test::eq(s.starts_with("#define _ILP32 1\n#define __ILP32__ 1\n#define __FLOAT128__ 1\n"), true);
 		expect_no_line(s, "#define __SIZEOF_INT128__ 16");
 		expect_line(s, "#define __INT64_TYPE__ long long");
@@ -580,10 +580,10 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __SIZE_TYPE__ unsigned int");
 		expect_line(s, "#define __SIZEOF_LONG_DOUBLE__ 10");
 	};
-	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		expect_line(s, "#define __MACH__ 1");
 		expect_no_line(s, "#define __ELF__ 1");
 		expect_no_line(s, "#define __FLOAT128__ 1");
@@ -594,10 +594,10 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __UINT_FAST64_TYPE__ unsigned long long");
 		expect_line(s, "#define __INT_LEAST64_MAX__ 9223372036854775807LL");
 	};
-	@with_comp("aarch64-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("aarch64-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		expect_line(s, "#define __CHAR_UNSIGNED__ 1");
 		expect_line(s, "#define __WCHAR_UNSIGNED__ 1");
 		expect_line(s, "#define __FLOAT128__ 1");
@@ -605,25 +605,25 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __LDBL_MANT_DIG__ 113");
 		expect_line(s, "#define __FLT16_MANT_DIG__ 11");
 	};
-	@with_comp("powerpc64le-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("powerpc64le-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		expect_line(s, "#define __LDBL_MANT_DIG__ 106");
 		expect_no_line(s, "#define __FLT16_MANT_DIG__ 11");
 	};
-	@with_comp("powerpc-linux-gnu"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("powerpc-linux-gnu"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		expect_line(s, "#define __BYTE_ORDER__ __ORDER_BIG_ENDIAN__");
 		expect_line(s, "#define __BIG_ENDIAN__ 1");
 		expect_no_line(s, "#define __LITTLE_ENDIAN__ 1");
 	};
-	@with_comp("avr-freestanding-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("avr-freestanding-none"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
-		String s = w.written();
+		predefined_macros::write_common_defines(comp, w)!!;
+		String s = w.str_view();
 		// [fixture] avr 24-bit int.c: __INT24_MAX__ == 8388607L etc.
 		test::eq(lines_with_prefix(s, "#define __INT24_"),
 			"#define __INT24_MAX__ 8388607L\n#define __INT24_MIN__ (-__INT24_MAX__-1)\n");
@@ -637,11 +637,11 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __INT16_TYPE__ int");
 		expect_line(s, "#define __DBL_MANT_DIG__ 24");
 	};
-	@with_comp("msp430-freestanding-none"; compilation::Compilation* comp, MacroWriter* w)
+	@with_comp("msp430-freestanding-none"; compilation::Compilation* comp, DString* w)
 	{
-		predefined_macros::write_common_defines(comp, w);
+		predefined_macros::write_common_defines(comp, w)!!;
 		// [fixture] msp430 builtin types.c: sizeof(long double) == 8
-		expect_line(w.written(), "#define __SIZEOF_LONG_DOUBLE__ 8");
-		expect_line(w.written(), "#define __SIG_ATOMIC_MAX__ 2147483647L");
+		expect_line(w.str_view(), "#define __SIZEOF_LONG_DOUBLE__ 8");
+		expect_line(w.str_view(), "#define __SIG_ATOMIC_MAX__ 2147483647L");
 	};
 }

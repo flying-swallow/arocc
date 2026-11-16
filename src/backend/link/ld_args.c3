@@ -124,7 +124,7 @@ fn void reset_plan(LinkPlan* plan)
 <* @return? MALFORMED_LD_ARGS *>
 fn void? malformed_ld_args(Diagnostics* d, String reason)
 {
-	@link_err(d, LinkDiag.MALFORMED_LD_ARGS, reason)!;
+	@link_err(d, Diagnostic.MALFORMED_LD_ARGS, reason)!;
 	return MALFORMED_LD_ARGS~;
 }
 
@@ -137,7 +137,7 @@ fn void? missing_ld_value(Diagnostics* d, String flag)
 fn void? unsupported_ld_arg(LinkPlan* plan, Diagnostics* d, String arg)
 {
 	plan.unsupported_arg = arg;
-	@link_err(d, LinkDiag.UNSUPPORTED_LD_ARG, arg)!;
+	@link_err(d, Diagnostic.UNSUPPORTED_LD_ARG, arg)!;
 	return UNSUPPORTED_LD_ARG~;
 }
 

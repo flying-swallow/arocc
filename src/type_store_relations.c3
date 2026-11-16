@@ -440,7 +440,11 @@ fn String QualType.int_value_suffix(self, Compilation* comp)
 		case UINT: return "U";
 		case ULONG: return "UL";
 		case ULONG_LONG: return "ULL";
-		default: unreachable("TODO");
+		// No C literal suffix exists for these widths.
+		case INT24:
+		case INT128: return "";
+		case UINT24:
+		case UINT128: return "U";
 	}
 }
 

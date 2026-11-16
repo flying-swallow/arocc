@@ -2,13 +2,6 @@
 module aro::pragmas::message;
 import aro::pragma, aro::preprocessor, aro::tokens, aro::tokenizer, aro::diagnostics, aro::source;
 
-<* Zig Pragma/message.zig diagnostics, emitted through the duck-typed `Preprocessor.err`. *>
-enum MessageDiag : ushort (String fmt, diagnostics::MessageKind kind, diagnostics::DiagMeta meta)
-{
-	PRAGMA_MESSAGE { "#pragma message: %s", NOTE, {} },
-	PRAGMA_REQUIRES_STRING_LITERAL { "pragma %s requires string literal", ERROR, {} },
-}
-
 <* Zig pragmas/message.zig. Stateless, so one shared instance serves every registry. *>
 struct MessagePragma (pragma::IPragma)
 {
@@ -65,14 +58,14 @@ fn pragma::PragmaResult MessagePragma.preprocessor_handler(&self, preprocessor::
 	if (opens != closes) { invalid = true; }
 	if (invalid)
 	{
-		if (catch pp.err(diag_tok, MessageDiag.PRAGMA_REQUIRES_STRING_LITERAL, "message")) return pragma::PragmaResult.FATAL;
+		if (catch pp.err(diag_tok, Diagnostic.PRAGMA_REQUIRES_STRING_LITERAL, "message")) return pragma::PragmaResult.FATAL;
 		return pragma::PragmaResult.HANDLED;
 	}
 
 	source::Location loc = name_tok.loc;
 	source::Location[] expansion_locs = pp.expansion_slice(start_idx);
 	if (expansion_locs.len != 0) loc = expansion_locs[expansion_locs.len - 1];
-	String text = string::tformat(MessageDiag.PRAGMA_MESSAGE.fmt, pasted.str_view());
-	if (catch pp.diagnostics.add(diagnostics::@message_at(MessageDiag.PRAGMA_MESSAGE, text, loc.expand(pp.comp)))) return pragma::PragmaResult.FATAL;
+	String text = string::tformat(Diagnostic.PRAGMA_MESSAGE.fmt, pasted.str_view());
+	if (catch pp.diagnostics.add(diagnostics::@message_at(Diagnostic.PRAGMA_MESSAGE, text, loc.expand(pp.comp)))) return pragma::PragmaResult.FATAL;
 	return pragma::PragmaResult.HANDLED;
 }

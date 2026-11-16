@@ -532,7 +532,7 @@ fn void implicit_integer_conversion_diagnostic_uses_expanded_token_location() @t
 
 			// Zig addWithLocation (src/aro/Diagnostics.zig:478-523) emits the primary at the outer
 			// expansion site, one "expanded from here" note per inner expansion, and a final note at
-			// the token's own location because ParserDiag.emit sets note_msg_loc (diagnostics.c3:711-716).
+			// the token's own location because Diagnostic.emit_at passes note_msg_loc = true.
 			assert(diags.messages.len() == 3);
 			assert(diags.messages[0].has_location);
 			test::eq(diags.messages[0].location.path, "conversion.c");

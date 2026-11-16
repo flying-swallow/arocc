@@ -50,8 +50,7 @@ fn void end_to_end() @test
 	{
 		NumberValue v = tok(comp, "18446744073709550592");
 		assert(v.qt == type_store::INT128);
-		check(v.diags.len, 1);
-		assert(v.diags.items[0] == IMPLICITLY_UNSIGNED_LITERAL);
+		assert(v.diags == (NumberDiags){ .implicitly_unsigned_literal = true });
 	};
 	@with_comp("x86_64-linux-gnu"; Compilation* comp, Diagnostics* d)
 	{

@@ -30,11 +30,6 @@ struct ProcessOutcome
 	fault fault_value;
 }
 
-fn void? add_exec_fatal(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
-{
-	@pool() { return d.add({ .kind = FATAL_ERROR, .text = string::tformat(fmt, ...args) }); };
-}
-
 <*
  Text for a fault from a spawn, wait, or argument step. Ports Zig's
  Driver.errorDescription (src/aro/Driver.zig 1194-1215). Zig's `@errorName`
@@ -312,15 +307,15 @@ fn void? report_outcome(Allocator a, Diagnostics* d, ExecTool tool, ProcessOutco
 	bool is_assembler = tool == ExecTool.ASSEMBLER;
 	switch (outcome.kind)
 	{
-		case SPAWN_FAILED: return add_exec_fatal(a, d, "unable to spawn linker: %s", error_description(outcome.fault_value));
-		case WAIT_FAILED: return add_exec_fatal(a, d, "error waiting for linker: %s", error_description(outcome.fault_value));
+		case SPAWN_FAILED: return d.add({ .kind = FATAL_ERROR, .text = string::tformat("unable to spawn linker: %s", error_description(outcome.fault_value)) });
+		case WAIT_FAILED: return d.add({ .kind = FATAL_ERROR, .text = string::tformat("error waiting for linker: %s", error_description(outcome.fault_value)) });
 		case SIGNALED:
-			return add_exec_fatal(a, d, is_assembler ? "assembler crashed" : "linker crashed");
+			return d.add({ .kind = FATAL_ERROR, .text = is_assembler ? "assembler crashed" : "linker crashed" });
 		case CRASHED:
-			return add_exec_fatal(a, d, is_assembler ? "assembler crashed" : "linker crashed");
+			return d.add({ .kind = FATAL_ERROR, .text = is_assembler ? "assembler crashed" : "linker crashed" });
 		case EXITED:
 			if (outcome.value == 0) return;
-			return add_exec_fatal(a, d, is_assembler ? "assembler exited with an error code" : "linker exited with an error code");
+			return d.add({ .kind = FATAL_ERROR, .text = is_assembler ? "assembler exited with an error code" : "linker exited with an error code" });
 	}
 }
 
@@ -449,7 +444,7 @@ fn void? invoke_linker_impl(Toolchain* tc, Diagnostics* d, String output_name,
 		// INVALID_LINKER_PATH: the toolchain already reported a FATAL. Return the fault so
 		// the driver exits 1, without adding a second message.
 		if (path_fault == toolchain::INVALID_LINKER_PATH) return path_fault~;
-		return add_exec_fatal(tc.a, d, "unable to resolve linker: %s", error_description(path_fault));
+		return d.add({ .kind = FATAL_ERROR, .text = string::tformat("unable to resolve linker: %s", error_description(path_fault)) });
 	}
 
 	List{String} argv;
@@ -466,13 +461,13 @@ fn void? invoke_linker_impl(Toolchain* tc, Diagnostics* d, String output_name,
 	// UNSUPPORTED_LINKER_TARGET: the toolchain already emitted FATAL "This toolchain does not support linking yet".
 	// Return the fault so the driver exits 1, without adding a second message.
 	if (args_fault == toolchain::UNSUPPORTED_LINKER_TARGET) return args_fault~;
-	if (args_fault) return add_exec_fatal(tc.a, d, "unable to build linker args: %s", error_description(args_fault));
+	if (args_fault) return d.add({ .kind = FATAL_ERROR, .text = string::tformat("unable to build linker args: %s", error_description(args_fault)) });
 
 	String[] args = argv.array_view();
 	if (verbose_args)
 	{
 		fault dump_fault = @catch(dump_linker_args(args));
-		if (dump_fault) return add_exec_fatal(tc.a, d, "unable to dump linker args: %s", error_description(dump_fault));
+		if (dump_fault) return d.add({ .kind = FATAL_ERROR, .text = string::tformat("unable to dump linker args: %s", error_description(dump_fault)) });
 	}
 	return execute(tc.a, d, ExecTool.LINKER, args, service, tc.env.path);
 }

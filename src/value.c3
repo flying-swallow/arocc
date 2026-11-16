@@ -30,7 +30,7 @@ module aro::value;
 import aro::primitive_value;
 import aro::compilation, aro::value_interner, aro::bigint, aro::type_store, aro::lang_opts;
 import aro::text_literal_semantics;
-import std::core::dstring;
+import std::core::dstring, std::io;
 
 <* Zig `null` from toInt: none, not an int, or does not fit. *>
 excuse NO_INT;
@@ -780,24 +780,24 @@ struct NestedPrint
  (text_literal_semantics::print_string, quoted).
  @require !self.is_none()
 *>
-fn bool Value.print(self, QualType qt, Compilation* comp, DString* w, NestedPrint* nested = null)
+fn bool? Value.print(self, QualType qt, Compilation* comp, OutStream w, NestedPrint* nested = null)
 {
 	if (qt.is(comp, BOOL))
 	{
-		w.append_string(self.is_zero(comp) ? "false" : "true");
+		w.write(self.is_zero(comp) ? "false" : "true")!;
 		return false;
 	}
 	PrimitiveValue key = comp.interner.get(self.ref());
 	switch (key.tag.kind)
 	{
 		case INT:
-			w.appendf("%s", key);
+			io::fprintf(w, "%s", key)!;
 			return false;
 		case FLOAT:
-			primitive_value::print_float(key, w);
+			primitive_value::print_float(key, w)!;
 			return false;
 		case COMPLEX:
-			primitive_value::print_complex(key, w);
+			primitive_value::print_complex(key, w)!;
 			return false;
 		case NOT_NUMBER:
 			break;
@@ -805,12 +805,12 @@ fn bool Value.print(self, QualType qt, Compilation* comp, DString* w, NestedPrin
 	switch (key.tag)
 	{
 		case NULL:
-			w.append_string("nullptr_t");
+			w.write("nullptr_t")!;
 		case POINTER:
 			if (nested) *nested = { .node = key.pointer.node, .offset = from_ref(key.pointer.offset) };
 			return true;
 		case BYTES:
-			text_literal_semantics::print_string(key.bytes, qt, comp, w);
+			text_literal_semantics::print_string(key.bytes, qt, comp, w)!;
 		default:
 			unreachable("Value.print of a non-value key");
 	}
@@ -818,13 +818,13 @@ fn bool Value.print(self, QualType qt, Compilation* comp, DString* w, NestedPrin
 }
 
 <* Value.printPointer: "&" ++ base, then the offset (in ptrdiff_t) unless it is zero. *>
-fn void print_pointer(Value offset, String base, Compilation* comp, DString* w)
+fn void? print_pointer(Value offset, String base, Compilation* comp, OutStream w)
 {
-	w.append_char('&');
-	w.append_string(base);
+	w.write_byte('&')!;
+	w.write(base)!;
 	if (!offset.is_zero(comp))
 	{
-		bool nested = offset.print(comp.type_store.ptrdiff, comp, w);
+		bool nested = offset.print(comp.type_store.ptrdiff, comp, w)!;
 		assert(!nested);
 	}
 }

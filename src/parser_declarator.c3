@@ -2,7 +2,7 @@
 // parameter declarations remain owner callbacks; this module composes the
 // declarator operators around a caller-supplied base type.
 module aro::parser_declarator;
-import aro::bigint, aro::parser, aro::parser_diagnostics, aro::parser_result, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
+import aro::bigint, aro::parser, aro::diagnostics, aro::parser_result, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
 import aro::tree, aro::symbol_stack, aro::string_interner, aro::lang_opts;
 import std::collections::list;
 
@@ -176,7 +176,7 @@ fn type_store::QualType? DeclaratorParser.array_suffix(&self, type_store::QualTy
 	{
 		if (has_static_bound)
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_EXPR, "expected expression", p.tok_i)!;
+			Diagnostic.EXPECTED_EXPR.@emit(p, p.tok_i)!;
 			return PARSING_FAILED~;
 		}
 		p.advance();
@@ -186,7 +186,7 @@ fn type_store::QualType? DeclaratorParser.array_suffix(&self, type_store::QualTy
 	{
 		if (has_static_bound)
 		{
-			p.err(parser_diagnostics::ParserDiag.INVALID_STATIC_STAR, static_tok)!;
+			Diagnostic.INVALID_STATIC_STAR.@emit(p, static_tok)!;
 		}
 		p.advance();
 		if (catch p.expect_closing(tokenizer::TokenId.R_BRACKET, opener)) return PARSING_FAILED~;
@@ -197,19 +197,19 @@ fn type_store::QualType? DeclaratorParser.array_suffix(&self, type_store::QualTy
 	parser_result::Result bound = p.assign_expr_with_folding(true, parser::ConstDeclFoldingMode.GNU_VLA_FOLDING_EXTENSION)!;
 	if (!bound.qt.is_invalid() && !bound.qt.is_real_int(p.comp))
 	{
-		p.err(parser_diagnostics::ParserDiag.ARRAY_SIZE_NON_INT, bound_tok, p.fmt_qt(bound.qt))!;
+		Diagnostic.ARRAY_SIZE_NON_INT.@emit(p, bound_tok, p.fmt_qt(bound.qt))!;
 		return PARSING_FAILED~;
 	}
 	if (catch p.expect_closing(tokenizer::TokenId.R_BRACKET, opener)) return PARSING_FAILED~;
 
 	if (bound.val.is_none())
 	{
-		p.err(parser_diagnostics::ParserDiag.VLA, opener)!;
+		Diagnostic.VLA.@emit(p, opener)!;
 		return p.comp.type_store.put(type_store::type_vla(elem, bound.node));
 	}
 	if (value::compare(bound.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
 	{
-		p.err(parser_diagnostics::ParserDiag.NEGATIVE_ARRAY_SIZE, opener)!;
+		Diagnostic.NEGATIVE_ARRAY_SIZE.@emit(p, opener)!;
 		return PARSING_FAILED~;
 	}
 	ulong len = bound.val.to_u64(p.comp) ?? ulong::max;
@@ -279,7 +279,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 	if (self.at(tokenizer::TokenId.ELLIPSIS))
 	{
 		tokens::TokenIndex ellipsis = p.tok_i;
-		p.err(parser_diagnostics::ParserDiag.PARAM_BEFORE_VAR_ARGS, ellipsis)!;
+		Diagnostic.PARAM_BEFORE_VAR_ARGS.@emit(p, ellipsis)!;
 		p.advance();
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		return p.comp.type_store.put(type_store::type_func(ret, type_store::FuncKind.VARIADIC, {}));
@@ -303,7 +303,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 			// An identifier-list entry cannot follow a typed parameter in the same list.
 			if (typed_param)
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_PARAM_DECL, param_start)!;
+				Diagnostic.EXPECTED_PARAM_DECL.@emit(p, param_start)!;
 				return PARSING_FAILED~;
 			}
 			identifier_list = true;
@@ -320,7 +320,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 			// A typed parameter cannot follow identifier-list entries.
 			if (identifier_list)
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_IDENTIFIER, param_start)!;
+				Diagnostic.EXPECTED_IDENTIFIER.@emit(p, param_start)!;
 				return PARSING_FAILED~;
 			}
 			// Preserve C23's deprecated K&R spelling as metadata while letting
@@ -347,16 +347,16 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 					}
 					if (!self.at(tokenizer::TokenId.R_PAREN))
 					{
-						p.err(parser_diagnostics::ParserDiag.VOID_ONLY_PARAM, p.tok_i)!;
+						Diagnostic.VOID_ONLY_PARAM.@emit(p, p.tok_i)!;
 					}
 					if (param.qt.is_qualified())
 					{
-						p.err(parser_diagnostics::ParserDiag.VOID_PARAM_QUALIFIED, p.tok_i)!;
+						Diagnostic.VOID_PARAM_QUALIFIED.@emit(p, p.tok_i)!;
 					}
 				}
 				else
 				{
-					p.err(parser_diagnostics::ParserDiag.VOID_MUST_BE_FIRST_PARAM, p.tok_i)!;
+					Diagnostic.VOID_MUST_BE_FIRST_PARAM.@emit(p, p.tok_i)!;
 				}
 				return PARSING_FAILED~;
 			}
@@ -369,7 +369,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 		{
 			if (identifier_list)
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_IDENTIFIER, p.tok_i)!;
+				Diagnostic.EXPECTED_IDENTIFIER.@emit(p, p.tok_i)!;
 				return PARSING_FAILED~;
 			}
 			variadic = true;
@@ -535,7 +535,7 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 
 			if (elem_qt.has_incomplete_size(p.comp))
 			{
-				p.err(parser_diagnostics::ParserDiag.ARRAY_INCOMPLETE_ELEM, source_tok, p.fmt_qt(elem_qt))!;
+				Diagnostic.ARRAY_INCOMPLETE_ELEM.@emit(p, source_tok, p.fmt_qt(elem_qt))!;
 				return NESTED_INVALID;
 			}
 			if (ty.array.len.kind == type_store::ArrayLenKind.FIXED || ty.array.len.kind == type_store::ArrayLenKind.STATIC)
@@ -544,24 +544,24 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 				if (elem_size == 0) elem_size = 1;
 				if (ty.array.len.len > p.comp.max_array_bytes() / elem_size)
 				{
-					p.err(parser_diagnostics::ParserDiag.ARRAY_TOO_LARGE, source_tok)!;
+					Diagnostic.ARRAY_TOO_LARGE.@emit(p, source_tok)!;
 					return NESTED_INVALID;
 				}
 			}
 			if (elem_qt.is(p.comp, type_store::TypeTag.FUNC))
 			{
-				p.err(parser_diagnostics::ParserDiag.ARRAY_FUNC_ELEM, source_tok)!;
+				Diagnostic.ARRAY_FUNC_ELEM.@emit(p, source_tok)!;
 				return NESTED_INVALID;
 			}
 			if (try elem_array = elem_qt.get(p.comp, type_store::TypeTag.ARRAY))
 			{
 				if (elem_array.array.len.kind == type_store::ArrayLenKind.STATIC)
 				{
-					p.err(parser_diagnostics::ParserDiag.STATIC_NON_OUTERMOST_ARRAY, source_tok)!;
+					Diagnostic.STATIC_NON_OUTERMOST_ARRAY.@emit(p, source_tok)!;
 				}
 				if (elem_qt.is_qualified() && elem_qt.get_type(p.comp).tag != type_store::TypeTag.TYPEDEF)
 				{
-					p.err(parser_diagnostics::ParserDiag.QUALIFIER_NON_OUTERMOST_ARRAY, source_tok)!;
+					Diagnostic.QUALIFIER_NON_OUTERMOST_ARRAY.@emit(p, source_tok)!;
 				}
 			}
 			else if (p.comp.langopts.emulate != lang_opts::Compiler.MSVC)
@@ -571,7 +571,7 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 					ulong elem_align = elem_qt.alignof(p.comp);
 					if (elem_align != 0 && elem_size % elem_align != 0)
 					{
-						p.err(parser_diagnostics::ParserDiag.ARRAY_ELEM_SIZE_NOT_MULTIPLE, source_tok,
+						Diagnostic.ARRAY_ELEM_SIZE_NOT_MULTIPLE.@emit(p, source_tok,
 							p.fmt_qt(elem_qt), elem_size, elem_align)!;
 						return NESTED_INVALID;
 					}
@@ -583,10 +583,10 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 			ValidationResult child_res = self.validate_extra(ret_qt, source_tok)!;
 			if (child_res != NORMAL) return child_res;
 
-			if (ret_qt.is(p.comp, type_store::TypeTag.ARRAY)) p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_ARRAY, source_tok)!;
-			if (ret_qt.is(p.comp, type_store::TypeTag.FUNC)) p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_FUNC, source_tok)!;
-			if (ret_qt.is_const) p.err(parser_diagnostics::ParserDiag.QUAL_ON_RET_TYPE, source_tok, "const")!;
-			if (ret_qt.is_volatile) p.err(parser_diagnostics::ParserDiag.QUAL_ON_RET_TYPE, source_tok, "volatile")!;
+			if (ret_qt.is(p.comp, type_store::TypeTag.ARRAY)) Diagnostic.FUNC_CANNOT_RETURN_ARRAY.@emit(p, source_tok)!;
+			if (ret_qt.is(p.comp, type_store::TypeTag.FUNC)) Diagnostic.FUNC_CANNOT_RETURN_FUNC.@emit(p, source_tok)!;
+			if (ret_qt.is_const) Diagnostic.QUAL_ON_RET_TYPE.@emit(p, source_tok, "const")!;
+			if (ret_qt.is_volatile) Diagnostic.QUAL_ON_RET_TYPE.@emit(p, source_tok, "volatile")!;
 			bool c23 = p.comp.langopts.standard.at_least(C23);
 			type_store::QualType return_qt = c23 ? ret_qt.non_atomic(p.comp).unqualified() : ret_qt;
 			if (try float_type = return_qt.get(p.comp, type_store::TypeTag.FLOAT))
@@ -594,7 +594,7 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 				if (float_type.float_ty == type_store::TypeFloat.FP16 &&
 					!(p.comp.langopts.allow_half_args_and_returns || p.comp.target.has_half_precision_float_abi()))
 				{
-					p.err(parser_diagnostics::ParserDiag.SUGGEST_POINTER_FOR_INVALID_FP16, source_tok, "function return value")!;
+					Diagnostic.SUGGEST_POINTER_FOR_INVALID_FP16.@emit(p, source_tok, "function return value")!;
 				}
 			}
 			// C23 function types return the unqualified, non-atomic type (6.7.7.4p4).
@@ -606,7 +606,7 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 			if (child_res != NORMAL) return child_res;
 			if (!func_qt.is(p.comp, type_store::TypeTag.FUNC))
 			{
-				p.err(parser_diagnostics::ParserDiag.BLOCK_TO_NON_FUNCTION, source_tok)!;
+				Diagnostic.BLOCK_TO_NON_FUNCTION.@emit(p, source_tok)!;
 				return NESTED_INVALID;
 			}
 			return NORMAL;
@@ -623,7 +623,7 @@ fn ParsedDeclarator? DeclaratorParser.parse_declarator(&self, type_store::QualTy
 	DeclaratorShape shape = self.parse_shape(marker, allow_abstract)!;
 	if (!allow_abstract && !shape.has_name)
 	{
-		self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_IDENT_OR_L_PAREN, shape.after_pointers_tok)!;
+		Diagnostic.EXPECTED_IDENT_OR_L_PAREN.@emit(self.parser, shape.after_pointers_tok)!;
 		return PARSING_FAILED~;
 	}
 	type_store::QualType composed = self.splice(shape.qt, base);

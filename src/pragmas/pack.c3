@@ -9,7 +9,7 @@ import aro::pragma, aro::parser, aro::tokens, aro::compilation, aro::number_lite
 import std::core::mem::alloc, std::core::string;
 import std::collections::list;
 
-enum Diagnostic : char
+enum PackDiag : char
 {
 	LPAREN,
 	RPAREN,
@@ -35,7 +35,7 @@ interface IParserAdapter
 	<* Use the compiler's ordinary pp-number parser. Return false only after it
 	   has emitted its number-token diagnostic. *>
 	fn bool parse_integer(uint index, ulong* value);
-	fn void diagnose(uint index, Diagnostic kind, ulong value);
+	fn void diagnose(uint index, PackDiag kind, ulong value);
 }
 
 <* A natural alignment is represented by `has_value == false`. *>
@@ -122,7 +122,7 @@ fn bool PackState.pop(&self)
 fn bool is_token(IParserAdapter parser, uint index, tokenizer::TokenId id)
 	=> index < parser.token_count() && parser.token_id(index) == id;
 
-fn void report(IParserAdapter parser, uint index, Diagnostic kind, ulong value = 0)
+fn void report(IParserAdapter parser, uint index, PackDiag kind, ulong value = 0)
 {
 	parser.diagnose(index, kind, value);
 }
@@ -132,14 +132,14 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 {
 	if (!is_token(parser, lparen_index, tokenizer::TokenId.L_PAREN))
 	{
-		report(parser, lparen_index, Diagnostic.LPAREN);
+		report(parser, lparen_index, PackDiag.LPAREN);
 		return { .ok = false, .next_index = lparen_index };
 	}
 
 	uint index = lparen_index + 1;
 	if (index >= parser.token_count())
 	{
-		report(parser, index, Diagnostic.RPAREN);
+		report(parser, index, PackDiag.RPAREN);
 		return { .ok = false, .next_index = index };
 	}
 
@@ -152,12 +152,12 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 		if (action == "show")
 		{
 			ulong value = self.current.has_value ? self.current.value : 8;
-			report(parser, action_index, Diagnostic.SHOW, value);
+			report(parser, action_index, PackDiag.SHOW, value);
 			return { .ok = true, .next_index = index };
 		}
 		if (action != "push" && action != "pop")
 		{
-			report(parser, action_index, Diagnostic.UNKNOWN_ACTION);
+			report(parser, action_index, PackDiag.UNKNOWN_ACTION);
 			return { .ok = false, .next_index = action_index };
 		}
 
@@ -170,7 +170,7 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 			index++;
 			if (index >= parser.token_count())
 			{
-				report(parser, index, Diagnostic.INTEGER_OR_IDENTIFIER);
+				report(parser, index, PackDiag.INTEGER_OR_IDENTIFIER);
 				return { .ok = false, .next_index = index };
 			}
 			id = parser.token_id(index);
@@ -190,7 +190,7 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 					index++;
 					if (!is_token(parser, index, tokenizer::TokenId.PP_NUM))
 					{
-						report(parser, index, Diagnostic.INTEGER_OR_IDENTIFIER);
+						report(parser, index, PackDiag.INTEGER_OR_IDENTIFIER);
 						return { .ok = false, .next_index = index };
 					}
 					if (!read_pack_value(parser, index, &new_value)) return { .ok = false, .next_index = index };
@@ -200,7 +200,7 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 			}
 			else
 			{
-				report(parser, index, Diagnostic.INTEGER_OR_IDENTIFIER);
+				report(parser, index, PackDiag.INTEGER_OR_IDENTIFIER);
 				return { .ok = false, .next_index = index };
 			}
 		}
@@ -214,11 +214,11 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 			bool popped = has_label ? self.pop_named(label) : self.pop();
 			if (has_new_value)
 			{
-				report(parser, action_index, Diagnostic.UNDEFINED_POP);
+				report(parser, action_index, PackDiag.UNDEFINED_POP);
 			}
 			else if (!popped)
 			{
-				report(parser, action_index, Diagnostic.EMPTY_STACK);
+				report(parser, action_index, PackDiag.EMPTY_STACK);
 				return { .ok = false, .next_index = index };
 			}
 		}
@@ -246,7 +246,7 @@ fn HandleResult finish(IParserAdapter parser, uint index)
 {
 	if (!is_token(parser, index, tokenizer::TokenId.R_PAREN))
 	{
-		report(parser, index, Diagnostic.RPAREN);
+		report(parser, index, PackDiag.RPAREN);
 		return { .ok = false, .next_index = index };
 	}
 	return { .ok = true, .next_index = index + 1 };
@@ -258,7 +258,7 @@ fn bool read_pack_value(IParserAdapter parser, uint index, char* out)
 	if (!parser.parse_integer(index, &value)) return false;
 	if (value != 1 && value != 2 && value != 4 && value != 8 && value != 16)
 	{
-		report(parser, index, Diagnostic.INTEGER);
+		report(parser, index, PackDiag.INTEGER);
 		return false;
 	}
 	*out = (char)value;
@@ -301,7 +301,7 @@ fn bool TreeParserAdapter.parse_integer(&self, uint index, ulong* out) @dynamic
 	return true;
 }
 
-fn void TreeParserAdapter.diagnose(&self, uint index, Diagnostic kind, ulong value) @dynamic
+fn void TreeParserAdapter.diagnose(&self, uint index, PackDiag kind, ulong value) @dynamic
 {
 	parser::Parser* p = self.p;
 	String message = "invalid #pragma pack directive";
@@ -318,7 +318,7 @@ fn void TreeParserAdapter.diagnose(&self, uint index, Diagnostic kind, ulong val
 		case EMPTY_STACK: message = "#pragma pack(pop, ...) failed: stack empty";
 	}
 	if ((usz)index >= p.tree.tokens.len) return;
-	bool has_opt = kind != Diagnostic.SHOW && kind != Diagnostic.UNDEFINED_POP;
+	bool has_opt = kind != PackDiag.SHOW && kind != PackDiag.UNDEFINED_POP;
 	diagnostics::Message msg = { .kind = WARNING, .text = message, .has_opt = has_opt, .opt = opt,
 		.has_location = true, .location = p.tree.tokens[(usz)index].loc.expand(p.comp) };
 	if (catch p.diagnostics.add_with_location(p.comp, msg, p.pp.expansion_slice((tokens::TokenIndex)index), true)) return;

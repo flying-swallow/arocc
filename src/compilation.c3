@@ -11,16 +11,6 @@ excuse FILE_TOO_BIG;
 <* Zig `error.FatalError` (Compilation.Error): a fatal error has occurred and compilation has stopped. *>
 excuse FATAL_ERROR;
 
-<*
- Zig `Compilation.Diagnostic`. `fmt` is C3 printf syntax.
-*>
-enum CompDiag : ushort(String fmt, MessageKind kind, DiagMeta meta)
-{
-	BACKSLASH_NEWLINE_ESCAPE { "backslash and newline separated by space", WARNING, { .has_opt = true, .opt = Option.BACKSLASH_NEWLINE_ESCAPE } },
-	MS_SEARCH_RULE { "#include resolved using non-portable Microsoft search rules as: %s", WARNING, { .has_opt = true, .opt = Option.MICROSOFT_INCLUDE, .extension = true } },
-	CTRL_Z_EOF { "treating Ctrl-Z as end-of-file is a Microsoft extension", OFF, { .has_opt = true, .opt = Option.MICROSOFT_END_OF_FILE, .extension = true } },
-}
-
 struct Compilation
 {
 	Allocator gpa;
@@ -475,14 +465,14 @@ fn void? Compilation.add_newline_escape_error(&self, String path, char[] buf, ui
 		.splice_locs = splice_locs,
 	};
 	ExpandedLocation loc = tmp_source.line_col(
-	{
-		.id = source::UNUSED_ID, .byte_offset = byte_offset, .line = line
-	}
+		{
+			.id = source::UNUSED_ID, .byte_offset = byte_offset, .line = line
+		}
 	);
 	if (loc.line.len) loc.line = loc.line[:loc.line.len - 1];
 	loc.width += 1;
 	loc.col += 1;
-	self.diagnostics.add(diagnostics::@message_at(CompDiag.BACKSLASH_NEWLINE_ESCAPE, CompDiag.BACKSLASH_NEWLINE_ESCAPE.fmt, loc))!;
+	self.diagnostics.add(diagnostics::@message_at(Diagnostic.BACKSLASH_NEWLINE_ESCAPE, Diagnostic.BACKSLASH_NEWLINE_ESCAPE.fmt, loc))!;
 }
 
 <*

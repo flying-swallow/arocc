@@ -5,14 +5,37 @@ import std::collections::list;
 import aro::compilation;
 import aro::lang_opts;
 
-enum ParseAction : char { CONTINUE, HELP, VERSION }
-enum PicRequest : char { DEFAULT, PIC, PIC_LARGE, PIE, PIE_LARGE, NO_PIC }
-enum ParseEffectKind : char { DEFINE, UNDEFINE }
-enum WarningMode : char { WARNING, OFF, ERROR }
-struct ParseEffect { ParseEffectKind kind; String value; }
+enum ParseAction : char
+{
+	CONTINUE, HELP, VERSION
+}
+
+enum PicRequest : char
+{
+	DEFAULT, PIC, PIC_LARGE, PIE, PIE_LARGE, NO_PIC
+}
+
+enum ParseEffectKind : char
+{
+	DEFINE, UNDEFINE
+}
+
+enum WarningMode : char
+{
+	WARNING, OFF, ERROR
+}
+
+struct ParseEffect
+{
+	ParseEffectKind kind; String value;
+}
+
 <* A named warning-policy change. Entries stay in argv order so later setup
  can replay source-style -W options with their command-line precedence. *>
-struct WarningPolicy { String name; WarningMode mode; }
+struct WarningPolicy
+{
+	String name; WarningMode mode;
+}
 
 struct DriverOptions
 {

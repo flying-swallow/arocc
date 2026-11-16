@@ -4,7 +4,10 @@
 module aro::dep_file;
 import std::collections::list;
 
-enum Format : char { MAKE, NMAKE }
+enum Format : char
+{
+	MAKE, NMAKE
+}
 
 struct DepFile
 {

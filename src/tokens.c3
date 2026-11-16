@@ -187,6 +187,6 @@ fn void? TokenWithExpansionLocs.check_ms_eof(self, Source src, Compilation* comp
 	if (src.buf.len > self.loc.byte_offset && src.buf[self.loc.byte_offset] == 0x1A)
 	{
 		ExpandedLocation loc = src.line_col({ .id = src.id, .byte_offset = self.loc.byte_offset, .line = self.loc.line });
-		comp.diagnostics.add(diagnostics::@message_at(compilation::CompDiag.CTRL_Z_EOF, compilation::CompDiag.CTRL_Z_EOF.fmt, loc))!;
+		comp.diagnostics.add(diagnostics::@message_at(Diagnostic.CTRL_Z_EOF, Diagnostic.CTRL_Z_EOF.fmt, loc))!;
 	}
 }

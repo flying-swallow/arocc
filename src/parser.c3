@@ -3,7 +3,7 @@
 // IParserHandler; this module owns token/tree context, recovery, diagnostics
 // and teardown.
 module aro::parser;
-import aro::compilation, aro::diagnostics, aro::preprocessor, aro::source, aro::tokens, aro::tokenizer, aro::tree, aro::parser_diagnostics, aro::type_store, aro::value, aro::value_interner, aro::symbol_stack, aro::string_interner, aro::pragma, aro::parser_result, aro::attribute;
+import aro::compilation, aro::diagnostics, aro::preprocessor, aro::source, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::value, aro::value_interner, aro::symbol_stack, aro::string_interner, aro::pragma, aro::parser_result, aro::attribute;
 import std::collections::list, std::collections::map, std::core::dstring, std::io;
 
 excuse PARSING_FAILED;
@@ -80,18 +80,18 @@ interface IAddressOfLabel
 }
 
 <*
- Expression productions a sub-grammar (builtins, ...) borrows from its owner.
- Both methods are optional; a missing method or a HOOK_ABSENT fault means the
- owner does not provide that production.
+ Expression productions a sub-grammar (builtins, initializers, statements)
+ borrows from its owner. `expression` is optional; a missing method or a
+ HOOK_ABSENT fault means the owner does not provide it.
 *>
 interface IExpressionGrammar
 {
 	<* Zig `expr`: a full expression, including the comma operator. *>
 	fn parser_result::Result? expression(Parser* p, bool eval) @optional;
 	<* Zig `assignExpr`. *>
-	fn parser_result::Result? assignment_expression(Parser* p, bool eval) @optional;
+	fn parser_result::Result? assignment_expression(Parser* p, bool eval);
 	<* Zig `integerConstExpr` with the given const-declaration folding mode. *>
-	fn parser_result::Result? integer_constant_expression(Parser* p, ConstDeclFoldingMode mode, bool eval) @optional;
+	fn parser_result::Result? integer_constant_expression(Parser* p, ConstDeclFoldingMode mode, bool eval);
 }
 
 <*
@@ -178,7 +178,7 @@ struct VaArgPackCallContext
 }
 
 <* A parser borrows its preprocessor and token storage; it owns its tree and symbol scopes. *>
-struct Parser (symbol_stack::ISymbolHandler)
+struct Parser (IQueryable)
 {
 	preprocessor::Preprocessor* pp;
 	Compilation* comp;
@@ -228,31 +228,23 @@ fn bool? Parser.check_va_pack_function(&self, tokens::TokenIndex builtin_tok, St
 	FunctionContext context = self.function_context;
 	if (!context.active)
 	{
-		self.emit_va_pack_function_diag(parser_diagnostics::ParserDiag.VA_FUNC_NOT_IN_FUNC,
-			builtin_name, builtin_tok)!;
+		Diagnostic.VA_FUNC_NOT_IN_FUNC.@emit(self, builtin_tok, builtin_name)!;
 		return false;
 	}
 	if (!context.variadic || context.named_param_count == 0)
 	{
-		self.emit_va_pack_function_diag(parser_diagnostics::ParserDiag.VA_FUNC_FIXED_ARGS,
-			builtin_name, builtin_tok)!;
+		Diagnostic.VA_FUNC_FIXED_ARGS.@emit(self, builtin_tok, builtin_name)!;
 		return false;
 	}
 	if (!self.tree.attr_map.has_attribute(context.declaration, attribute::AttributeTag.ALWAYS_INLINE) &&
 	!self.tree.attr_map.has_attribute(context.declaration, attribute::AttributeTag.GNU_INLINE))
 	{
-		self.emit_va_pack_function_diag(parser_diagnostics::ParserDiag.VA_FUNC_NOT_ALWAYS_INLINE,
-			builtin_name, builtin_tok)!;
+		Diagnostic.VA_FUNC_NOT_ALWAYS_INLINE.@emit(self, builtin_tok, builtin_name)!;
 		return false;
 	}
 	return true;
 }
 
-fn void? Parser.emit_va_pack_function_diag(&self, parser_diagnostics::ParserDiag diag,
-	String builtin_name, tokens::TokenIndex builtin_tok)
-{
-	return self.err_dyn(diag, builtin_tok, builtin_name);
-}
 
 <* Current call argument state for a va_arg_pack builtin. *>
 fn VaArgPackCallContext Parser.va_arg_pack_call_context(self) => self.va_arg_pack_call;
@@ -301,7 +293,7 @@ fn parser_result::Result? Parser.parse_initializer(&self, type_store::QualType t
 		if (array.array.len.kind == type_store::ArrayLenKind.VARIABLE ||
 			array.array.len.kind == type_store::ArrayLenKind.UNSPECIFIED_VARIABLE)
 		{
-			self.err(parser_diagnostics::ParserDiag.VLA_INIT, initializer_tok)!;
+			Diagnostic.VLA_INIT.@emit(self, initializer_tok)!;
 		}
 	}
 	parser_result::Result result = self.initializer_parser.parse(target, eval)!;
@@ -370,9 +362,9 @@ fn value::Value Parser.referenced_integer_constant(&self, value::Value decl_valu
 	switch (self.const_decl_folding)
 	{
 		case GNU_FOLDING_EXTENSION:
-			if (is_integer_constant) self.err(parser_diagnostics::ParserDiag.CONST_DECL_FOLDED, name_tok)!!;
+			if (is_integer_constant) Diagnostic.CONST_DECL_FOLDED.@emit(self, name_tok)!!;
 		case GNU_VLA_FOLDING_EXTENSION:
-			if (is_integer_constant) self.err(parser_diagnostics::ParserDiag.CONST_DECL_FOLDED_VLA, name_tok)!!;
+			if (is_integer_constant) Diagnostic.CONST_DECL_FOLDED_VLA.@emit(self, name_tok)!!;
 		case NO_CONST_DECL_FOLDING:
 			if (!is_enumeration) return value::NONE;
 		case FOLD_CONST_DECLS: {}
@@ -478,26 +470,21 @@ fn void? Parser.expect_closing(&self, tokenizer::TokenId id, tokens::TokenIndex 
 	fault f = @catch(self.expected_token_diag(id));
 	if ((usz)opener < self.tree.tokens.len)
 	{
-		parser_diagnostics::ParserDiag note;
 		if (id == tokenizer::TokenId.R_PAREN)
 		{
-			note = parser_diagnostics::ParserDiag.TO_MATCH_PAREN;
+			Diagnostic.TO_MATCH_PAREN.@emit(self, opener)!;
 		}
 		else if (id == tokenizer::TokenId.R_BRACE)
 		{
-			note = parser_diagnostics::ParserDiag.TO_MATCH_BRACE;
+			Diagnostic.TO_MATCH_BRACE.@emit(self, opener)!;
 		}
 		else if (id == tokenizer::TokenId.R_BRACKET)
 		{
-			note = parser_diagnostics::ParserDiag.TO_MATCH_BRACKET;
+			Diagnostic.TO_MATCH_BRACKET.@emit(self, opener)!;
 		}
 		else if (f)
 		{
 			return f~;
-		}
-		if (id == tokenizer::TokenId.R_PAREN || id == tokenizer::TokenId.R_BRACE || id == tokenizer::TokenId.R_BRACKET)
-		{
-			self.err_dyn(note, opener)!;
 		}
 	}
 	if (f) return f~;
@@ -509,22 +496,19 @@ fn void? Parser.expected_token_diag(&self, tokenizer::TokenId expected)
 	String expected_text = expected.symbol();
 	if (self.at_eof())
 	{
-		DString buf; buf.init(tmem); buf.appendf("expected '%s' before end of file", expected_text);
-		self.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_EOF, buf.str_view(), self.diag_index())!;
+		Diagnostic.EXPECTED_EOF.@emit(self, self.diag_index(), expected_text)!;
 		return PARSING_FAILED~;
 	}
 	tokens::TokenIndex tok_i = self.tok_i;
 	tokenizer::TokenId actual = self.tree.tokens[(usz)tok_i].id;
-	DString buf; buf.init(tmem);
 	if (actual == tokenizer::TokenId.INVALID)
 	{
-		buf.appendf("expected '%s', found invalid bytes", expected_text);
+		Diagnostic.EXPECTED_INVALID.@emit(self, tok_i, expected_text)!;
 	}
 	else
 	{
-		buf.appendf("expected '%s', found '%s'", expected_text, actual.symbol());
+		Diagnostic.EXPECTED_TOKEN.@emit(self, tok_i, expected_text, actual.symbol())!;
 	}
-	self.emit_parser_diag(actual == tokenizer::TokenId.INVALID ? parser_diagnostics::ParserDiag.EXPECTED_INVALID : parser_diagnostics::ParserDiag.EXPECTED_TOKEN, buf.str_view(), tok_i)!;
 	return PARSING_FAILED~;
 }
 
@@ -535,44 +519,45 @@ fn tokens::TokenIndex Parser.diag_index(self)
 	return 0;
 }
 
-<*
- Report `diag` with already formatted `text` at `tok_i`. Prefer `Parser.err`,
- which formats `diag.fmt` with compile-time checked arguments.
- @require text.len > 0 : "empty diagnostic text: route templates and arguments through Parser.err"
-*>
-fn void? Parser.emit_parser_diag(&self, parser_diagnostics::ParserDiag diag, String text, tokens::TokenIndex tok_i)
+<* What a token-based diagnostic producer (the Parser) exposes to `Diagnostic.emit`. *>
+interface IQueryable
 {
-	// Release-build safety net: empty text falls back to the static template when
-	// that template has no placeholder. Debug builds reject empty text via @require.
-	String final_text = text;
-	if (text == "" && !diag.fmt.contains("%")) final_text = diag.fmt;
-	if ((usz)tok_i >= self.tree.tokens.len)
-	{
-		if (!diag.should_emit(&self.comp.langopts, self.extension_suppressed)) return;
-		return self.diagnostics.add(diagnostics::@message(diag, final_text));
-	}
-	tokens::TreeToken tok = self.tree.tokens[(usz)tok_i];
-	return diag.emit(self.comp, &self.comp.langopts, self.extension_suppressed, final_text, tok.loc.expand(self.comp), self.pp.expansion_slice(tok_i));
+	fn Compilation* query_comp();
+	<* Zig `extension_suppressed`: an `__extension__` is in effect. *>
+	fn bool query_extension_suppressed();
+	<* Expanded location and macro expansion locs of `tok`; false when `tok` is past the token list. *>
+	fn bool query_token_location(tokens::TokenIndex tok, ExpandedLocation* loc, Location[]* expansion_locs);
+}
+
+fn Compilation* Parser.query_comp(&self) @dynamic => self.comp;
+fn bool Parser.query_extension_suppressed(&self) @dynamic => self.extension_suppressed;
+
+fn bool Parser.query_token_location(&self, tokens::TokenIndex tok, ExpandedLocation* loc, Location[]* expansion_locs) @dynamic
+{
+	if ((usz)tok >= self.tree.tokens.len) return false;
+	*loc = self.tree.tokens[(usz)tok].loc.expand(self.comp);
+	*expansion_locs = self.pp.expansion_slice(tok);
+	return true;
 }
 
 <* Zig `formatQualType`: the quoted type plus its vector/aka suffix (auto types end after the name). *>
 fn void Parser.write_qual_type(&self, DString* w, type_store::QualType qt)
 {
 	w.append_char('\'');
-	qt.print(self.comp, w);
+	qt.print(self.comp, w)!!;
 	w.append_char('\'');
 
 	if (qt.is_auto()) return;
 	if (try vec = qt.get(self.comp, type_store::TypeTag.VECTOR))
 	{
 		w.appendf(" (vector of %d '", vec.vector.len);
-		vec.vector.elem.print_desugared(self.comp, w);
+		vec.vector.elem.print_desugared(self.comp, w)!!;
 		w.append_string("' values)");
 	}
 	else if (qt.should_desugar(self.comp))
 	{
 		w.append_string(" (aka '");
-		qt.print_desugared(self.comp, w);
+		qt.print_desugared(self.comp, w)!!;
 		w.append_string("')");
 	}
 }
@@ -595,10 +580,10 @@ fn void Parser.write_value(&self, DString* w, value::Value val, type_store::Qual
 	else
 	{
 		value::NestedPrint nested;
-		if (val.print(qt, self.comp, w, &nested))
+		if (val.print(qt, self.comp, w, &nested)!!)
 		{
 			type_store::NodeIndex pointer_node = (type_store::NodeIndex)nested.node;
-			value::print_pointer(nested.offset, self.tree.tok_slice(pointer_node.tok(&self.tree)), self.comp, w);
+			value::print_pointer(nested.offset, self.tree.tok_slice(pointer_node.tok(&self.tree)), self.comp, w)!!;
 		}
 	}
 }
@@ -640,35 +625,6 @@ fn sz? ValueArg.to_format(&self, Formatter* f) @dynamic
 fn QtArg Parser.fmt_qt(&self, type_store::QualType qt) => { .p = self, .qt = qt };
 fn ValueArg Parser.fmt_value(&self, value::Value val, type_store::QualType qt) => { .p = self, .val = val, .qt = qt };
 fn ValueArg Parser.fmt_result(&self, parser_result::Result res) => { .p = self, .val = res.val, .qt = res.qt };
-
-<* True when `diag` passes the extension/version gates and is not OFF. *>
-fn bool Parser.diag_enabled(&self, parser_diagnostics::ParserDiag diag)
-{
-	if (!diag.should_emit(&self.comp.langopts, self.extension_suppressed)) return false;
-	return self.diagnostics.@enabled(diag);
-}
-
-<*
- Zig `Parser.err`: format `$diag` with the varargs and report it at `tok`.
- `$diag.fmt` is a constant here, so `string::tformat`'s `@format` makes c3c
- check the argument count and types at every call site. Disabled diagnostics
- return before any formatting.
-*>
-macro void? Parser.err(&self, parser_diagnostics::ParserDiag $diag, tokens::TokenIndex tok, ...)
-{
-	if (!self.diag_enabled($diag)) return;
-	return self.emit_parser_diag($diag, string::tformat($diag.fmt, ...$vaarg), tok);
-}
-
-<*
- `Parser.err` for a diagnostic chosen at runtime. The format string is not
- constant, so arguments are not checked at compile time; prefer `err`.
-*>
-fn void? Parser.err_dyn(&self, parser_diagnostics::ParserDiag diag, tokens::TokenIndex tok, args...)
-{
-	if (!self.diag_enabled(diag)) return;
-	return self.emit_parser_diag(diag, string::tformat(diag.fmt, ...args), tok);
-}
 
 <* Advance one token without reading beyond the preprocessor's token buffer. *>
 fn void Parser.advance(&self)
@@ -848,11 +804,11 @@ fn void? Parser.grammar_unavailable(&self)
 {
 	if (self.tok_end == 0)
 	{
-		return self.diagnostics.add(diagnostics::@message(parser_diagnostics::ParserDiag.GRAMMAR_UNAVAILABLE, parser_diagnostics::ParserDiag.GRAMMAR_UNAVAILABLE.fmt));
+		return self.diagnostics.add(diagnostics::@message(Diagnostic.GRAMMAR_UNAVAILABLE, Diagnostic.GRAMMAR_UNAVAILABLE.fmt));
 	}
 	tokens::TokenIndex diag_tok = self.tok_i < self.tok_end ? self.tok_i : self.tok_end - 1;
 	ExpandedLocation expanded = self.tree.tokens[(usz)diag_tok].loc.expand(self.comp);
-	Message m = diagnostics::@message_at(parser_diagnostics::ParserDiag.GRAMMAR_UNAVAILABLE, parser_diagnostics::ParserDiag.GRAMMAR_UNAVAILABLE.fmt, expanded);
+	Message m = diagnostics::@message_at(Diagnostic.GRAMMAR_UNAVAILABLE, Diagnostic.GRAMMAR_UNAVAILABLE.fmt, expanded);
 	return self.diagnostics.add_with_location(self.comp, m, self.pp.expansion_slice(diag_tok), true);
 }
 
@@ -1045,10 +1001,10 @@ fn void? Parser.diagnose_unused_locals(&self)
 		String name = self.tree.tok_slice(name_tok);
 		switch (node.kind)
 		{
-			case VARIABLE: self.err(parser_diagnostics::ParserDiag.UNUSED_VARIABLE, name_tok, name)!;
-			case PARAM: self.err(parser_diagnostics::ParserDiag.UNUSED_PARAM, name_tok, name)!;
-			case TYPEDEF: self.err(parser_diagnostics::ParserDiag.UNUSED_TYPEDEF, name_tok, name)!;
-			case LABELED_STMT: self.err(parser_diagnostics::ParserDiag.UNUSED_LABEL, name_tok, name)!;
+			case VARIABLE: Diagnostic.UNUSED_VARIABLE.@emit(self, name_tok, name)!;
+			case PARAM: Diagnostic.UNUSED_PARAM.@emit(self, name_tok, name)!;
+			case TYPEDEF: Diagnostic.UNUSED_TYPEDEF.@emit(self, name_tok, name)!;
+			case LABELED_STMT: Diagnostic.UNUSED_LABEL.@emit(self, name_tok, name)!;
 			default: unreachable("tracked unused local has no diagnostic");
 		}
 	}

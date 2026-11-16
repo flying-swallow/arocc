@@ -258,8 +258,7 @@ fn void? Ir.write_value(&self, value_interner::InternerRef val, Terminal term)
 		case F64:
 		case F80:
 		case F128:
-			DString number; number.init(self.allocator); defer number.free();
-			primitive_value::print_float(key, &number); io::write_all(term.writer, number.str_view())!;
+			primitive_value::print_float(key, term.writer)!;
 		case BYTES: self.write_escaped_bytes(key.bytes, term)!;
 		default: unreachable();
 	}

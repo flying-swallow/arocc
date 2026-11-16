@@ -1,6 +1,6 @@
 // Data-driven tests: every vector in test/unit/float_values/*.txt (format and
 // provenance in that directory's README.md) is checked against the plan 10 port
-// (primitive_float.c3, float_soft_*.c3, float_print.c3, annex_g.c3) through the
+// (primitive_float.c3, primitive_float_soft_*.c3, primitive_float_print.c3, annex_g.c3) through the
 // public Value API where one exists (value.c3's add/sub/mul/div/float_cast/
 // int_to_float/float_to_int/print/complex_conj, primitive_value::compare), and
 // through the PrimitiveValue primitives otherwise (from_u64/from_i64, bigIntToFloat,
@@ -222,7 +222,7 @@ fn String show_complex_value(Compilation* comp, Value v, PrimitiveType t)
 fn String print_value(Compilation* comp, Value v, QualType qt)
 {
 	DString w = dstring::temp();
-	bool nested = v.print(qt, comp, &w);
+	bool nested = v.print(qt, comp, &w)!!;
 	assert(!nested);
 	return string::tformat("\"%s\"", w.str_view());
 }
@@ -343,7 +343,7 @@ fn String? VectorRun.compute(&self, String[] f)
 		case "format_f64":
 			if (f.len != 2) return BAD_VECTOR~;
 			DString w = dstring::temp();
-			primitive_value::format_f64_decimal((ulong)parse_hex128(f[1])!, &w);
+			primitive_value::format_f64_decimal((ulong)parse_hex128(f[1])!, &w)!!;
 			return string::tformat("\"%s\"", w.str_view());
 		case "print":
 			if (f.len != 3) return BAD_VECTOR~;

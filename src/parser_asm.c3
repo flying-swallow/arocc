@@ -1,7 +1,7 @@
 // GNU inline assembly statement grammar, separated from Parser's statement
 // dispatcher. Expression and adjacent-string parsing remain caller supplied.
 module aro::parser_asm;
-import aro::parser, aro::parser_result, aro::parser_primary, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::parser_diagnostics, aro::value;
+import aro::parser, aro::parser_result, aro::parser_primary, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::diagnostics, aro::value;
 import std::collections::list;
 
 excuse PARSING_FAILED;
@@ -43,12 +43,12 @@ fn type_store::NodeIndex? AsmParser.parse_string(&self)
 	}
 	if (id == tokenizer::TokenId.STRING_LITERAL_UTF_16 || id == tokenizer::TokenId.STRING_LITERAL_UTF_8 || id == tokenizer::TokenId.STRING_LITERAL_UTF_32)
 	{
-		self.parser.err(parser_diagnostics::ParserDiag.INVALID_ASM_STR, self.parser.tok_i, "unicode")!;
+		Diagnostic.INVALID_ASM_STR.@emit(self.parser, self.parser.tok_i, "unicode")!;
 		return PARSING_FAILED~;
 	}
 	if (id == tokenizer::TokenId.STRING_LITERAL_WIDE)
 	{
-		self.parser.err(parser_diagnostics::ParserDiag.INVALID_ASM_STR, self.parser.tok_i, "wide")!;
+		Diagnostic.INVALID_ASM_STR.@emit(self.parser, self.parser.tok_i, "wide")!;
 		return PARSING_FAILED~;
 	}
 	if (!self.asm_string) return default_asm_string(self.context, self.parser);
@@ -86,7 +86,7 @@ fn tree::AsmOperand? AsmParser.parse_operand(&self, bool output)
 	parser_result::Result result = self.expression(self.context, p, true)!;
 	if (output && !p.tree.is_lval(result.node))
 	{
-		p.err(parser_diagnostics::ParserDiag.INVALID_ASM_OUTPUT, lparen + 1)!;
+		Diagnostic.INVALID_ASM_OUTPUT.@emit(p, lparen + 1)!;
 	}
 	else if (!output)
 	{
@@ -114,7 +114,7 @@ fn tokens::TokenIndex? parse_asm_prefix(parser::Parser* p, AsmKind kind, tree::G
 	tokens::TokenIndex asm_tok = p.tok_i;
 	if (p.tree.tokens[(usz)asm_tok].id == tokenizer::TokenId.KEYWORD_ASM)
 	{
-		p.err(parser_diagnostics::ParserDiag.EXTENSION_TOKEN_USED, asm_tok)!;
+		Diagnostic.EXTENSION_TOKEN_USED.@emit(p, asm_tok)!;
 	}
 	p.advance();
 	*quals = {};
@@ -125,26 +125,26 @@ fn tokens::TokenIndex? parse_asm_prefix(parser::Parser* p, AsmKind kind, tree::G
 		if (id.canonical() == KEYWORD_VOLATILE)
 		{
 			name = "volatile";
-			if (quals.is_volatile) p.err(parser_diagnostics::ParserDiag.DUPLICATE_ASM_QUAL, p.tok_i, name)!;
+			if (quals.is_volatile) Diagnostic.DUPLICATE_ASM_QUAL.@emit(p, p.tok_i, name)!;
 			quals.is_volatile = true;
 		}
 		else if (id.canonical() == KEYWORD_INLINE)
 		{
 			name = "inline";
-			if (quals.is_inline) p.err(parser_diagnostics::ParserDiag.DUPLICATE_ASM_QUAL, p.tok_i, name)!;
+			if (quals.is_inline) Diagnostic.DUPLICATE_ASM_QUAL.@emit(p, p.tok_i, name)!;
 			quals.is_inline = true;
 		}
 		else if (id == tokenizer::TokenId.KEYWORD_GOTO)
 		{
 			name = "goto";
-			if (quals.is_goto) p.err(parser_diagnostics::ParserDiag.DUPLICATE_ASM_QUAL, p.tok_i, name)!;
+			if (quals.is_goto) Diagnostic.DUPLICATE_ASM_QUAL.@emit(p, p.tok_i, name)!;
 			quals.is_goto = true;
 		}
 		else
 		{
 			break;
 		}
-		if (kind != AsmKind.STMT) p.err(parser_diagnostics::ParserDiag.MEANINGLESS_ASM_QUAL, p.tok_i, name)!;
+		if (kind != AsmKind.STMT) Diagnostic.MEANINGLESS_ASM_QUAL.@emit(p, p.tok_i, name)!;
 		p.advance();
 	}
 	if (!p.is_at(tokenizer::TokenId.L_PAREN))
@@ -171,17 +171,17 @@ fn parser_result::Result? parse_asm_string(parser::Parser* p)
 			case STRING_LITERAL_UTF_16:
 			case STRING_LITERAL_UTF_8:
 			case STRING_LITERAL_UTF_32:
-				p.err(parser_diagnostics::ParserDiag.INVALID_ASM_STR, p.tok_i, "unicode")!;
+				Diagnostic.INVALID_ASM_STR.@emit(p, p.tok_i, "unicode")!;
 				return PARSING_FAILED~;
 			case STRING_LITERAL_WIDE:
-				p.err(parser_diagnostics::ParserDiag.INVALID_ASM_STR, p.tok_i, "wide")!;
+				Diagnostic.INVALID_ASM_STR.@emit(p, p.tok_i, "wide")!;
 				return PARSING_FAILED~;
 			default: {}
 		}
 	}
 	if (i == p.tok_i)
 	{
-		p.err(parser_diagnostics::ParserDiag.EXPECTED_STR_LITERAL_IN, p.tok_i, "asm")!;
+		Diagnostic.EXPECTED_STR_LITERAL_IN.@emit(p, p.tok_i, "asm")!;
 		return PARSING_FAILED~;
 	}
 	parser_primary::PrimaryParser primary = { .parser = p };
@@ -198,7 +198,7 @@ fn type_store::NodeIndex? default_asm_string(void* context, parser::Parser* p)
 fn void? check_asm_str(parser::Parser* p, value::Value asm_str, tokens::TokenIndex tok)
 {
 	if (p.comp.langopts.gnu_asm) return;
-	if (asm_str.to_bytes(p.comp).len > 1) p.err(parser_diagnostics::ParserDiag.GNU_ASM_DISABLED, tok)!;
+	if (asm_str.to_bytes(p.comp).len > 1) Diagnostic.GNU_ASM_DISABLED.@emit(p, tok)!;
 }
 
 <*

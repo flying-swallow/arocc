@@ -66,7 +66,7 @@ fn void check_float_bits(Compilation* comp, Value v, PrimitiveType tag, uint128 
 fn void check_print(Compilation* comp, Value v, QualType qt, String want)
 {
 	DString w = dstring::temp();
-	bool nested = v.print(qt, comp, &w);
+	bool nested = v.print(qt, comp, &w)!!;
 	assert(!nested);
 	if (w.str_view() != want)
 	{
@@ -226,12 +226,12 @@ fn void value_print() @test
 		Value p = value::pointer({ .node = 7, .offset = value::int_i64(8, comp).ref() }, comp);
 		DString w = dstring::temp();
 		NestedPrint nested;
-		assert(p.print(type_store::INT_POINTER, comp, &w, &nested));
+		assert(p.print(type_store::INT_POINTER, comp, &w, &nested)!!);
 		check(nested.node, 7);
-		value::print_pointer(nested.offset, "x", comp, &w);
+		value::print_pointer(nested.offset, "x", comp, &w)!!;
 		assert(w.str_view() == "&x8");
 		w = dstring::temp();
-		value::print_pointer(value::ZERO, "y", comp, &w);
+		value::print_pointer(value::ZERO, "y", comp, &w)!!;
 		assert(w.str_view() == "&y");
 	};
 }

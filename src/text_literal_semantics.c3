@@ -8,7 +8,7 @@
 // Decoding diagnostics (escapes, UCNs, encodings, multichar) are emitted by
 // text_literal::TextLiteralParser itself. Parser-level diagnostics
 // (unsupported_str_cat, empty / unterminated char literal) are *returned* as
-// TextSemanticsDiag ids, because Zig reports them through Parser.err at a
+// Diagnostic ids, because Zig reports them through Parser.err at a
 // specific token.
 //
 // Deviations from Zig:
@@ -31,15 +31,7 @@
 module aro::text_literal_semantics;
 import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::type_store, aro::tokenizer;
 import aro::value, aro::value_interner, aro::text_literal;
-import std::collections::list;
-
-<* A parser-level literal diagnostic (Zig `Parser.Diagnostic`), reported by the caller at the given token. None takes arguments. *>
-enum TextSemanticsDiag : char (String fmt, MessageKind kind, DiagMeta meta)
-{
-	UNSUPPORTED_STR_CAT { "unsupported string literal concatenation", ERROR, {} },
-	EMPTY_CHAR_LITERAL_ERROR { "empty character constant", ERROR, {} },
-	UNTERMINATED_CHAR_LITERAL_ERROR { "missing terminating ' character", ERROR, {} },
-}
+import std::collections::list, std::io;
 
 // ---------------------------------------------------------------------------
 // Character literals
@@ -53,7 +45,7 @@ struct CharLiteral
 	Value val;
 	<* EMPTY_CHAR_LITERAL / UNTERMINATED_CHAR_LITERAL tokens: report `diag` at the token. *>
 	bool has_diag;
-	TextSemanticsDiag diag;
+	Diagnostic diag;
 }
 
 <*
@@ -79,7 +71,7 @@ fn CharLiteral? char_literal(Compilation* comp, TokenId id, String token_bytes, 
 			.qt = type_store::INT,
 			.val = value::ZERO,
 			.has_diag = true,
-			.diag = id == EMPTY_CHAR_LITERAL ? TextSemanticsDiag.EMPTY_CHAR_LITERAL_ERROR : TextSemanticsDiag.UNTERMINATED_CHAR_LITERAL_ERROR,
+			.diag = id == EMPTY_CHAR_LITERAL ? Diagnostic.EMPTY_CHAR_LITERAL_ERROR : Diagnostic.UNTERMINATED_CHAR_LITERAL_ERROR,
 		};
 	}
 	TextLiteralKind? classified = text_literal::classify(id, CHAR_LITERAL);
@@ -283,9 +275,9 @@ enum PrintStringStyle : char
  Integrator hookup in value.c3 Value.print, `case BYTES:`
    text_literal_semantics::print_string(key.bytes, qt, comp, w);
 *>
-fn void print_string(char[] bytes, QualType qt, Compilation* comp, DString* w, PrintStringStyle style = QUOTED)
+fn void? print_string(char[] bytes, QualType qt, Compilation* comp, OutStream w, PrintStringStyle style = QUOTED)
 {
-	if (style == QUOTED) w.append_char('"');
+	if (style == QUOTED) w.write_byte('"')!;
 
 	ulong size = qt.child_type(comp).sizeof(comp);
 	assert(size == 1 || size == 2 || size == 4, "string element size must be 1, 2 or 4");
@@ -294,7 +286,7 @@ fn void print_string(char[] bytes, QualType qt, Compilation* comp, DString* w, P
 	switch (size)
 	{
 		case 1:
-			string_escape(without_null, w);
+			string_escape(without_null, w)!;
 		case 2:
 			sz i = 0;
 			while (i < without_null.len)
@@ -308,20 +300,20 @@ fn void print_string(char[] bytes, QualType qt, Compilation* comp, DString* w, P
 					if (second >= 0xDC00 && second <= 0xDFFF)
 					{
 						i += 2;
-						print_codepoint(w, 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00));
+						print_codepoint(w, 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00))!;
 					}
 					else
 					{
-						w.appendf("\\x%x", first);
+						io::fprintf(w, "\\x%x", first)!;
 					}
 				}
 				else if (is_surrogate)
 				{
-					w.appendf("\\x%x", first);
+					io::fprintf(w, "\\x%x", first)!;
 				}
 				else
 				{
-					print_codepoint(w, first);
+					print_codepoint(w, first)!;
 				}
 			}
 		case 4:
@@ -331,18 +323,18 @@ fn void print_string(char[] bytes, QualType qt, Compilation* comp, DString* w, P
 					(uint)without_null[n + 2] << 16 | (uint)without_null[n + 3] << 24;
 				if (item <= 0x10FFFF && !(item >= 0xD800 && item <= 0xDFFF))
 				{
-					print_codepoint(w, item);
+					print_codepoint(w, item)!;
 				}
 				else
 				{
-					w.appendf("\\x%x", item);
+					io::fprintf(w, "\\x%x", item)!;
 				}
 			}
 		default:
 			unreachable();
 	}
 
-	if (style == QUOTED) w.append_char('"');
+	if (style == QUOTED) w.write_byte('"')!;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,34 +441,34 @@ fn uint utf8_decode_valid(String s, sz* i) @private
 fn uint load_u16(char[] b, sz i) @private => (uint)b[i] | (uint)b[i + 1] << 8;
 
 <* Zig `{u}`: the codepoint as UTF-8, or U+FFFD for a surrogate / out-of-range value. *>
-fn void print_codepoint(DString* w, uint c) @private
+fn void? print_codepoint(OutStream w, uint c) @private
 {
 	if (c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) c = 0xFFFD;
 	char[4] enc;
 	sz n = utf8_encode(c, &enc);
-	w.append_bytes(enc[:n]);
+	w.write(enc[:n])!;
 }
 
 <* Zig std.zig.stringEscape. *>
-fn void string_escape(char[] bytes, DString* w) @private
+fn void? string_escape(char[] bytes, OutStream w) @private
 {
 	foreach (b : bytes)
 	{
 		switch (b)
 		{
-			case '\n': w.append_string("\\n");
-			case '\r': w.append_string("\\r");
-			case '\t': w.append_string("\\t");
-			case '\\': w.append_string("\\\\");
-			case '"': w.append_string("\\\"");
+			case '\n': w.write("\\n")!;
+			case '\r': w.write("\\r")!;
+			case '\t': w.write("\\t")!;
+			case '\\': w.write("\\\\")!;
+			case '"': w.write("\\\"")!;
 			default:
 				if (b >= 0x20 && b <= 0x7E)
 				{
-					w.append_char(b); // includes '\'', written unescaped like Zig
+					w.write_byte(b)!; // includes '\'', written unescaped like Zig
 				}
 				else
 				{
-					w.appendf("\\x%02x", b);
+					io::fprintf(w, "\\x%02x", b)!;
 				}
 		}
 	}

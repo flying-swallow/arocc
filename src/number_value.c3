@@ -14,8 +14,8 @@
 //
 // Diagnostics: Zig reports these through `Parser.err(tok_i, ...)`, which
 // first drops extension diagnostics inside `__extension__` and then reports at
-// the token. So they are *returned* in Zig emission order as NumberValueDiag
-// ids; the caller (C parser, pragma handler, preprocessor) reports them (the
+// the token. So they are *returned* as NumberDiags flags, which
+// NumberDiags.@each walks in Zig emission order; the caller (C parser, pragma handler, preprocessor) reports them (the
 // enum carries its fmt/kind/meta, so it can be passed to any emit macro). The syntax diagnostics of number_literal are
 // emitted by NumberLiteralParser itself, before any of these.
 //
@@ -37,40 +37,25 @@ import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::typ
 import aro::value, aro::value_interner, aro::bigint;
 import aro::number_literal, aro::text_literal;
 
-<*
- A diagnostic produced by value conversion, reported by the caller at the
- literal token. None takes arguments. Texts match Zig's `Parser.Diagnostic`
- and `Preprocessor.Diagnostic` entries of the same names.
-*>
-enum NumberValueDiag : char (String fmt, MessageKind kind, DiagMeta meta)
+<* Diagnostics a numeric literal value can raise; reported in field order (= Zig emission order). *>
+bitstruct NumberDiags : char
 {
-	INT_LITERAL_TOO_BIG { "integer literal is too large to be represented in any integer type", ERROR, {} },
-	IMPLICITLY_UNSIGNED_LITERAL { "integer literal is too large to be represented in a signed integer type, interpreting as unsigned", WARNING, { .has_opt = true, .opt = Option.IMPLICITLY_UNSIGNED_LITERAL, .extension = true } },
-	GNU_IMAGINARY_CONSTANT { "imaginary constants are a GNU extension", OFF, { .has_opt = true, .opt = Option.GNU_IMAGINARY_CONSTANT, .extension = true } },
-	// Zig `Preprocessor.Diagnostic.float_literal_in_expr` (pp `#if` only).
-	FLOAT_LITERAL_IN_EXPR { "floating point literal in preprocessor expression", ERROR, {} },
-	// C3-only (no Zig counterpart): std.fmt.parseFloat rejects a hex float without
-	// significand digits (`0x.p1`) that number_literal accepted; Zig's
-	// `catch unreachable` is a safety panic there. Same text as clang.
-	HEX_FLOAT_NO_SIGNIFICAND { "hexadecimal floating constant requires a significand", ERROR, {} },
+	bool int_literal_too_big : 0;
+	bool implicitly_unsigned_literal : 1;
+	bool hex_float_no_significand : 2;
+	bool float_literal_in_expr : 3;
+	bool gnu_imaginary_constant : 4;
 }
 
-<* Up to two diagnostics in Zig emission order (a value diagnostic, then GNU_IMAGINARY_CONSTANT). *>
-struct NumberValueDiags
+<* Run `@body` with each set flag's Diagnostic as a compile-time constant, in emission order. *>
+macro void NumberDiags.@each(self; @body($diag))
 {
-	NumberValueDiag[2] items;
-	uint len;
+	if (self.int_literal_too_big) @body(Diagnostic.INT_LITERAL_TOO_BIG);
+	if (self.implicitly_unsigned_literal) @body(Diagnostic.IMPLICITLY_UNSIGNED_LITERAL);
+	if (self.hex_float_no_significand) @body(Diagnostic.HEX_FLOAT_NO_SIGNIFICAND);
+	if (self.float_literal_in_expr) @body(Diagnostic.FLOAT_LITERAL_IN_EXPR);
+	if (self.gnu_imaginary_constant) @body(Diagnostic.GNU_IMAGINARY_CONSTANT);
 }
-
-<* Append `d`. *>
-fn void NumberValueDiags.push(&self, NumberValueDiag d)
-{
-	assert(self.len < 2);
-	self.items[self.len++] = d;
-}
-
-<* The recorded diagnostics. *>
-fn NumberValueDiag[] NumberValueDiags.slice(&self) => self.items[:self.len];
 
 // ---------------------------------------------------------------------------
 // Results
@@ -94,7 +79,7 @@ struct NumberValue
 	Value literal_val;
 	<* Zig wraps the literal in an `imaginary_literal` unary node. *>
 	bool is_imaginary;
-	NumberValueDiags diags;
+	NumberDiags diags;
 }
 
 <* The `#if` value of a pp-number (Zig Preprocessor/Parser.zig primaryExpr `.pp_num`). *>
@@ -107,7 +92,7 @@ struct PpNumberValue
 	ulong unsigned;
 	<* valid when is_signed *>
 	long signed;
-	NumberValueDiags diags;
+	NumberDiags diags;
 }
 
 <* Zig's shared digit loop (fixedSizeInt and pp primaryExpr). *>
@@ -145,7 +130,7 @@ fn NumberValue? parse_number_token(Compilation* comp, String literal, Location l
 
 <*
  Zig `Parser.parseInt`: base = prefix.base; bit_int if suffix.is_bit_int()
- else fixed_size_int. Then if imaginary: push GNU_IMAGINARY_CONSTANT,
+ else fixed_size_int. Then if imaginary: flag GNU_IMAGINARY_CONSTANT,
  qt = qt.to_complex(comp), val = value::NONE, is_imaginary = true.
 *>
 fn NumberValue parse_int(Compilation* comp, Prefix prefix, String bytes, Suffix suffix)
@@ -162,7 +147,7 @@ fn NumberValue parse_int(Compilation* comp, Prefix prefix, String bytes, Suffix 
 	}
 	if (suffix.is_imaginary())
 	{
-		res.diags.push(GNU_IMAGINARY_CONSTANT);
+		res.diags.gnu_imaginary_constant = true;
 		res.qt = res.qt.to_complex(comp);
 		res.val = value::NONE;
 		res.is_imaginary = true;
@@ -171,9 +156,9 @@ fn NumberValue parse_int(Compilation* comp, Prefix prefix, String bytes, Suffix 
 }
 
 <*
- Zig `Parser.fixedSizeInt`. accumulate_u64(bytes, base). Overflow: push
+ Zig `Parser.fixedSizeInt`. accumulate_u64(bytes, base). Overflow: flag
  INT_LITERAL_TOO_BIG, qt = ULONG_LONG, val = the wrapped u64; done.
- Signed suffix and base 10 and val > max_int(type_store.intmax): push
+ Signed suffix and base 10 and val > max_int(type_store.intmax): flag
  IMPLICITLY_UNSIGNED_LITERAL. suffix_qt = int_suffix_type(suffix). MSVC
  suffix: qt = suffix_qt and val is int_cast to it (no diagnostic). Otherwise
  the first candidate (unsigned suffix: UINT, ULONG, ULONG_LONG; base 10: INT,
@@ -190,7 +175,7 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 	Value val = value::int_u64(digits.val, comp);
 	if (digits.overflow)
 	{
-		res.diags.push(INT_LITERAL_TOO_BIG);
+		res.diags.int_literal_too_big = true;
 		res.qt = type_store::ULONG_LONG;
 		res.literal_qt = res.qt;
 		res.val = val;
@@ -206,7 +191,7 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 		QualType intmax = comp.type_store.intmax;
 		if (intmax.is_invalid()) intmax = type_store::int_kind_qt(comp.target.int_max_type());
 		Value max_intmax = value::max_int(intmax, comp);
-		if (value::compare(val, GT, max_intmax, comp)) res.diags.push(IMPLICITLY_UNSIGNED_LITERAL);
+		if (value::compare(val, GT, max_intmax, comp)) res.diags.implicitly_unsigned_literal = true;
 	}
 
 	QualType suffix_qt = int_suffix_type(comp, suffix);
@@ -299,10 +284,10 @@ fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix
  Zig `Parser.parseFloat`: qt = float_suffix_type(suffix); strip '\''
  separators; primitive_value::parse_f128; on failure (only `0x.p1`-style hex
  floats without significand digits, where Zig's `catch unreachable` panics)
- push the C3-only HEX_FLOAT_NO_SIGNIFICAND error and use +0.0;
+ flag the C3-only HEX_FLOAT_NO_SIGNIFICAND error and use +0.0;
  cast to the PrimitiveType of qt.bit_sizeof (16 -> F16 — also for __bf16, as in
  Zig —, 32, 64, 80, 128; decimal floats use the binary width too); intern.
- Imaginary: push GNU_IMAGINARY_CONSTANT, qt = to_complex, val = complex
+ Imaginary: flag GNU_IMAGINARY_CONSTANT, qt = to_complex, val = complex
  {+0.0, x} at the same width, is_imaginary = true, literal_val = NONE (see
  the file header).
 *>
@@ -321,7 +306,7 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 	else
 	{
 		// Zig: `catch unreachable` (safety panic). Defined result instead.
-		res.diags.push(HEX_FLOAT_NO_SIGNIFICAND);
+		res.diags.hex_float_no_significand = true;
 	}
 
 	PrimitiveType tag = value::width_of(qt, comp);
@@ -334,7 +319,7 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 	res.literal_val = val;
 	if (suffix.is_imaginary())
 	{
-		res.diags.push(GNU_IMAGINARY_CONSTANT);
+		res.diags.gnu_imaginary_constant = true;
 		res.qt = qt.to_complex(comp);
 		PrimitiveValue re = primitive_value::zero(tag);
 		res.val = value::intern(comp, primitive_value::complex_key(re, f));
@@ -480,8 +465,8 @@ fn DigitsValue accumulate_u64(String bytes, char base)
 <*
  Zig Preprocessor/Parser.zig primaryExpr `.pp_num` after a successful
  NumberLiteralParser.parse. Float or imaginary: FLOAT_LITERAL_IN_EXPR and
- `rejected` (the caller reports it and returns null, Zig). Otherwise accumulate_u64(bytes, prefix.base); overflow -> push
- INT_LITERAL_TOO_BIG; val > i64 max -> (signed suffix and base 10 -> push
+ `rejected` (the caller reports it and returns null, Zig). Otherwise accumulate_u64(bytes, prefix.base); overflow -> flag
+ INT_LITERAL_TOO_BIG; val > i64 max -> (signed suffix and base 10 -> flag
  IMPLICITLY_UNSIGNED_LITERAL) and unsigned val; else signed if the suffix is
  a signed integer suffix, unsigned otherwise.
 *>
@@ -490,17 +475,17 @@ fn PpNumberValue pp_int_value(NumberLiteralResult parsed)
 	PpNumberValue res;
 	if (parsed.is_float || parsed.suffix.is_imaginary())
 	{
-		res.diags.push(FLOAT_LITERAL_IN_EXPR);
+		res.diags.float_literal_in_expr = true;
 		res.rejected = true;
 		return res;
 	}
 	char base = parsed.prefix.base;
 	DigitsValue digits = accumulate_u64(parsed.bytes, base);
-	if (digits.overflow) res.diags.push(INT_LITERAL_TOO_BIG);
+	if (digits.overflow) res.diags.int_literal_too_big = true;
 	bool is_signed = parsed.suffix.is_signed_integer();
 	if (digits.val > (ulong)long::max)
 	{
-		if (is_signed && base == 10) res.diags.push(IMPLICITLY_UNSIGNED_LITERAL);
+		if (is_signed && base == 10) res.diags.implicitly_unsigned_literal = true;
 		res.unsigned = digits.val;
 		return res;
 	}

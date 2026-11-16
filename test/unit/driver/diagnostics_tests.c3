@@ -599,12 +599,12 @@ fn void templates() @test
 {
 	@pool()
 	{
-		check(string::tformat(compilation::CompDiag.MS_SEARCH_RULE.fmt, "dir/a.h"),
+		check(string::tformat(Diagnostic.MS_SEARCH_RULE.fmt, "dir/a.h"),
 			"#include resolved using non-portable Microsoft search rules as: dir/a.h");
 		check(string::tformat(TestDiag.PLAIN.fmt, "x", -3, ulong::max), "x has -3 of 18446744073709551615 bits");
 	};
 	// A phase-specific enum value builds a Message like Zig's Diagnostic constants.
-	Message m = diagnostics::@message(compilation::CompDiag.CTRL_Z_EOF, compilation::CompDiag.CTRL_Z_EOF.fmt);
+	Message m = diagnostics::@message(Diagnostic.CTRL_Z_EOF, Diagnostic.CTRL_Z_EOF.fmt);
 	assert(m.extension && m.kind == OFF && m.opt == MICROSOFT_END_OF_FILE && !m.has_location);
 	check(m.text, "treating Ctrl-Z as end-of-file is a Microsoft extension");
 	// Any enum with fmt/kind/meta works, also a runtime value with a different meta type.

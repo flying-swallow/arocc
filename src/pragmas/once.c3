@@ -1,6 +1,6 @@
 // #pragma once handler for the shared compilation pragma registry.
 module aro::pragmas::once;
-import aro::pragma, aro::preprocessor, aro::source, aro::tokens, aro::tokenizer, aro::compilation;
+import aro::pragma, aro::preprocessor, aro::source, aro::tokens, aro::tokenizer, aro::compilation, aro::diagnostics;
 import std::collections::map;
 import std::core::mem::alloc, std::core::mem::allocators;
 
@@ -63,12 +63,12 @@ fn pragma::PragmaResult Once.preprocessor_handler(&self, preprocessor::Preproces
 	// their dedicated diagnostics, then scope the source mark to the parse cycle.
 	if ((sz)start_idx + 1 >= pp.tokens.len() || pp.tokens[(sz)start_idx + 1].id != tokenizer::TokenId.NL)
 	{
-		if (catch pp.err(diag_tok, preprocessor::PpDiag.EXTRA_TOKENS_DIRECTIVE_END)) return pragma::PragmaResult.FATAL;
+		if (catch pp.err(diag_tok, Diagnostic.EXTRA_TOKENS_DIRECTIVE_END)) return pragma::PragmaResult.FATAL;
 		return pragma::PragmaResult.HANDLED;
 	}
 	if (pp.include_depth == 0)
 	{
-		if (catch pp.err(diag_tok, preprocessor::PpDiag.PRAGMA_ONCE_IN_MAIN_FILE)) return pragma::PragmaResult.FATAL;
+		if (catch pp.err(diag_tok, Diagnostic.PRAGMA_ONCE_IN_MAIN_FILE)) return pragma::PragmaResult.FATAL;
 		return pragma::PragmaResult.HANDLED;
 	}
 	if (self.mark(name_tok.loc.id, pp.preprocess_count)) return pragma::PragmaResult.STOP_PREPROCESSING;

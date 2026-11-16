@@ -72,16 +72,16 @@ fn void target_os_macros_match_fixtures()
 		comp.init(mem);
 		defer comp.free();
 		set_target(&comp, c.triple);
-		MacroWriter w;
+		DString w;
 		w.init(mem);
 		defer w.free();
-		predefined_macros::write_target_os_macros(&comp, &w);
+		predefined_macros::write_target_os_macros(&comp, &w)!!;
 
 		DString exp;
 		exp.init(mem);
 		defer exp.free();
 		foreach (i, name : TARGET_OS_NAMES) exp.appendf("#define %s %c\n", name, c.values[i]);
-		test::eq(w.written(), exp.str_view());
+		test::eq(w.str_view(), exp.str_view());
 	}
 }
 
@@ -95,21 +95,21 @@ fn void target_os_unix_bsds_and_illumos()
 		comp.init(mem);
 		defer comp.free();
 		set_target(&comp, triple);
-		MacroWriter w;
+		DString w;
 		w.init(mem);
 		defer w.free();
-		predefined_macros::write_target_os_macros(&comp, &w);
-		test::eq(w.written().contains("#define TARGET_OS_UNIX 1\n"), true);
+		predefined_macros::write_target_os_macros(&comp, &w)!!;
+		test::eq(w.str_view().contains("#define TARGET_OS_UNIX 1\n"), true);
 	}
 	Compilation comp;
 	comp.init(mem);
 	defer comp.free();
 	set_target(&comp, "x86_64-dragonfly");
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_target_os_macros(&comp, &w);
-	test::eq(w.written().contains("#define TARGET_OS_UNIX 0\n"), true);
+	predefined_macros::write_target_os_macros(&comp, &w)!!;
+	test::eq(w.str_view().contains("#define TARGET_OS_UNIX 0\n"), true);
 }
 
 fn void windows_msvc()
@@ -118,18 +118,18 @@ fn void windows_msvc()
 	comp.init(mem);
 	defer comp.free();
 	set_target(&comp, "x86_64-windows-msvc");
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_windows_os_defines(&comp, &w, false);
-	test::eq(w.written(), "#define _WIN32 1\n#define _WIN64 1\n");
+	predefined_macros::write_windows_os_defines(&comp, &w, false)!!;
+	test::eq(w.str_view(), "#define _WIN32 1\n#define _WIN64 1\n");
 
-	MacroWriter w32;
+	DString w32;
 	w32.init(mem);
 	defer w32.free();
 	set_target(&comp, "x86-windows-msvc");
-	predefined_macros::write_windows_os_defines(&comp, &w32, true);
-	test::eq(w32.written(), "#define _WIN32 1\n");
+	predefined_macros::write_windows_os_defines(&comp, &w32, true)!!;
+	test::eq(w32.str_view(), "#define _WIN32 1\n");
 }
 
 fn void windows_mingw64()
@@ -140,11 +140,11 @@ fn void windows_mingw64()
 	set_target(&comp, "x86_64-windows-gnu");
 	comp.langopts.declspec_attrs = false;
 	comp.langopts.ms_extensions = false;
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_windows_os_defines(&comp, &w, false);
-	test::eq(w.written(),
+	predefined_macros::write_windows_os_defines(&comp, &w, false)!!;
+	test::eq(w.str_view(),
 		"#define _WIN32 1\n#define _WIN64 1\n"
 		"#define __WIN32 1\n#define __WIN32__ 1\n"
 		"#define __WINNT 1\n#define __WINNT__ 1\n"
@@ -164,11 +164,11 @@ fn void windows_mingw32_gnu_mode_and_ms_extensions()
 	defer comp.free();
 	set_target(&comp, "x86-windows-gnu");
 	comp.langopts.set_ms_extensions(true); // sets declspec_attrs and ms_extensions
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_windows_os_defines(&comp, &w, true);
-	test::eq(w.written(),
+	predefined_macros::write_windows_os_defines(&comp, &w, true)!!;
+	test::eq(w.str_view(),
 		"#define _WIN32 1\n"
 		"#define WIN32 1\n#define __WIN32 1\n#define __WIN32__ 1\n"
 		"#define WINNT 1\n#define __WINNT 1\n#define __WINNT__ 1\n"
@@ -184,11 +184,11 @@ fn void windows_declspec_without_ms_extensions()
 	set_target(&comp, "x86_64-windows-gnu");
 	comp.langopts.declspec_attrs = true;
 	comp.langopts.ms_extensions = false;
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_windows_os_defines(&comp, &w, false);
-	String s = w.written();
+	predefined_macros::write_windows_os_defines(&comp, &w, false)!!;
+	String s = w.str_view();
 	test::eq(s.contains("#define __declspec __declspec\n#define _cdecl __attribute__((__cdecl__))\n"), true);
 }
 
@@ -201,10 +201,10 @@ fn void darwin_versions()
 	// macOS before 10.10: one digit each for minor/patch (clamped to 9).
 	set_target(&comp, "x86_64-macos");
 	comp.target.os.min = { 10, 9, 5 };
-	MacroWriter w;
+	DString w;
 	w.init(mem);
-	predefined_macros::write_darwin_os_defines(&comp, &w);
-	test::eq(w.written(),
+	predefined_macros::write_darwin_os_defines(&comp, &w)!!;
+	test::eq(w.str_view(),
 		"#define __APPLE__ 1\n#define __APPLE_CC__ 6000\n"
 		"#define __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ 1095\n"
 		"#define __ENVIRONMENT_OS_VERSION_MIN_REQUIRED__ 1095\n");
@@ -212,29 +212,29 @@ fn void darwin_versions()
 
 	comp.target.os.min = { 10, 4, 11 };
 	w.init(mem);
-	predefined_macros::write_darwin_os_defines(&comp, &w);
-	test::eq(w.written().contains("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ 1049\n"), true);
+	predefined_macros::write_darwin_os_defines(&comp, &w)!!;
+	test::eq(w.str_view().contains("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ 1049\n"), true);
 	w.free();
 
 	// macOS 10.10 and later: two zero-padded digits each, clamped to 99.
 	comp.target.os.min = { 10, 13, 6 };
 	w.init(mem);
-	predefined_macros::write_darwin_os_defines(&comp, &w);
-	test::eq(w.written().contains("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ 101306\n"), true);
+	predefined_macros::write_darwin_os_defines(&comp, &w)!!;
+	test::eq(w.str_view().contains("__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ 101306\n"), true);
 	w.free();
 
 	comp.target.os.min = { 13, 0, 0 };
 	w.init(mem);
-	predefined_macros::write_darwin_os_defines(&comp, &w);
-	test::eq(w.written().contains("__ENVIRONMENT_OS_VERSION_MIN_REQUIRED__ 130000\n"), true);
+	predefined_macros::write_darwin_os_defines(&comp, &w)!!;
+	test::eq(w.str_view().contains("__ENVIRONMENT_OS_VERSION_MIN_REQUIRED__ 130000\n"), true);
 	w.free();
 
 	comp.target.os.min = { 9, 150, 100 };
 	w.init(mem);
 	set_target(&comp, "aarch64-ios");
 	comp.target.os.min = { 9, 150, 100 };
-	predefined_macros::write_darwin_os_defines(&comp, &w);
-	test::eq(w.written(),
+	predefined_macros::write_darwin_os_defines(&comp, &w)!!;
+	test::eq(w.str_view(),
 		"#define __APPLE__ 1\n#define __APPLE_CC__ 6000\n"
 		"#define __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ 099999\n"
 		"#define __ENVIRONMENT_OS_VERSION_MIN_REQUIRED__ 099999\n");
@@ -260,14 +260,14 @@ fn void darwin_platform_defines()
 		defer comp.free();
 		set_target(&comp, triple);
 		comp.target.os.min = { 17, 2, 1 };
-		MacroWriter w;
+		DString w;
 		w.init(mem);
 		defer w.free();
-		predefined_macros::write_darwin_os_defines(&comp, &w);
+		predefined_macros::write_darwin_os_defines(&comp, &w)!!;
 		String head = "#define __APPLE__ 1\n#define __APPLE_CC__ 6000\n";
 		String tail = "#define __ENVIRONMENT_OS_VERSION_MIN_REQUIRED__ 170201\n";
 		String exp = defines[i].len ? string::tformat("%s#define %s 170201\n%s", head, defines[i], tail) : string::tformat("%s%s", head, tail);
-		test::eq(w.written(), exp);
+		test::eq(w.str_view(), exp);
 	}
 }
 
@@ -279,10 +279,10 @@ fn void x86_64_linux_baseline()
 	// target_cpu.c3 model x86_64: 64bit cmov cx8 fxsr mmx nopl sse2 x87 (+ sse via deps).
 	set_target(&comp, "x86_64-linux-gnu", "x86_64");
 	comp.langopts.emulate = CLANG;
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_x86_defines(&comp, &w, false);
+	predefined_macros::write_x86_defines(&comp, &w, false)!!;
 	String exp = string::tformat("%s%s%s",
 		"#define __code_model_small__ 1\n"
 		"#define __amd64__ 1\n#define __amd64 1\n#define __x86_64__ 1\n#define __x86_64 1\n",
@@ -290,7 +290,7 @@ fn void x86_64_linux_baseline()
 		"#define __FXSR__ 1\n#define __SSE2__ 1\n#define __SSE__ 1\n#define __SSE_MATH__ 1\n#define __MMX__ 1\n"
 		"#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1\n"
 		"#define __SIZEOF_FLOAT128__ 16\n");
-	test::eq(w.written(), exp);
+	test::eq(w.str_view(), exp);
 }
 
 fn void x86_64_v3_feature_order()
@@ -300,10 +300,10 @@ fn void x86_64_v3_feature_order()
 	defer comp.free();
 	set_target(&comp, "x86_64-linux-gnu", "x86_64_v3");
 	comp.cmodel = KERNEL;
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_x86_defines(&comp, &w, true);
+	predefined_macros::write_x86_defines(&comp, &w, true)!!;
 	// Features walked in Zig table order; cx8 and cx16 both give _SWAP_8 (sic).
 	String exp = string::tformat("%s%s%s",
 		"#define __code_model_kernel__ 1\n"
@@ -317,7 +317,7 @@ fn void x86_64_v3_feature_order()
 		"#define __SSE3__ 1\n#define __SSE2__ 1\n#define __SSE__ 1\n#define __SSE_MATH__ 1\n#define __MMX__ 1\n"
 		"#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1\n#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1\n"
 		"#define __SIZEOF_FLOAT128__ 16\n");
-	test::eq(w.written(), exp);
+	test::eq(w.str_view(), exp);
 }
 
 fn void x86_windows_msvc_m_ix86()
@@ -334,11 +334,11 @@ fn void x86_windows_msvc_m_ix86()
 		set_target(&comp, "x86-windows-msvc", cpu);
 		comp.langopts.ms_extensions = true;
 		comp.langopts.emulate = MSVC;
-		MacroWriter w;
+		DString w;
 		w.init(mem);
 		defer w.free();
-		predefined_macros::write_x86_defines(&comp, &w, false);
-		String s = w.written();
+		predefined_macros::write_x86_defines(&comp, &w, false)!!;
+		String s = w.str_view();
 		String head = string::tformat("#define __code_model_small__ 1\n#define __i386 1\n#define __i386__ 1\n#define _M_IX86 %s\n%s", ix86[i], SEG);
 		test::eq(s.starts_with(head), true);
 		test::eq(s.contains(string::tformat("#define _M_IX86_FP %s\n", fp[i])), true);
@@ -352,11 +352,11 @@ fn void x86_windows_msvc_m_ix86()
 	defer comp.free();
 	set_target(&comp, "x86-windows-msvc", "i686+sse");
 	comp.langopts.ms_extensions = true;
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_x86_defines(&comp, &w, false);
-	test::eq(w.written().contains("#define _M_IX86_FP 1\n"), true);
+	predefined_macros::write_x86_defines(&comp, &w, false)!!;
+	test::eq(w.str_view().contains("#define _M_IX86_FP 1\n"), true);
 }
 
 fn void x86_linux_gnu_mode()
@@ -366,17 +366,17 @@ fn void x86_linux_gnu_mode()
 	defer comp.free();
 	set_target(&comp, "x86-linux-gnu", "i386");
 	comp.langopts.emulate = CLANG;
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_x86_defines(&comp, &w, true);
+	predefined_macros::write_x86_defines(&comp, &w, true)!!;
 	// i386 model: x87 only. No _M_IX86 (not msvc), no _M_IX86_FP (no ms_extensions),
 	// __LAHF_SAHF__ because emulate == clang on x86, no cx8.
 	String exp = string::tformat("%s%s%s",
 		"#define __code_model_small__ 1\n#define i386 1\n#define __i386 1\n#define __i386__ 1\n",
 		SEG,
 		"#define __LAHF_SAHF__ 1\n#define __SIZEOF_FLOAT128__ 16\n");
-	test::eq(w.written(), exp);
+	test::eq(w.str_view(), exp);
 }
 
 fn void x86_64_msvc_and_apx()
@@ -385,11 +385,11 @@ fn void x86_64_msvc_and_apx()
 	comp.init(mem);
 	defer comp.free();
 	set_target(&comp, "x86_64-windows-msvc", "x86_64+egpr+push2pop2+ppx+ndd+ccmp+nf+cf+zu+avx10_1+avx512vl");
-	MacroWriter w;
+	DString w;
 	w.init(mem);
 	defer w.free();
-	predefined_macros::write_x86_defines(&comp, &w, false);
-	String s = w.written();
+	predefined_macros::write_x86_defines(&comp, &w, false)!!;
+	String s = w.str_view();
 	test::eq(s.starts_with("#define __code_model_small__ 1\n#define __amd64__ 1\n#define __amd64 1\n"
 		"#define __x86_64__ 1\n#define __x86_64 1\n#define _M_X64 100\n#define _M_AMD64 100\n"), true);
 	test::eq(s.contains("#define __AVX10_1__ 1\n#define __AVX10_1_512__ 1\n"), true);
@@ -401,11 +401,11 @@ fn void x86_64_msvc_and_apx()
 
 	// One APX feature missing -> no __APX_F__.
 	set_target(&comp, "x86_64-windows-msvc", "x86_64+egpr+push2pop2+ppx+ndd+ccmp+nf+cf");
-	MacroWriter w2;
+	DString w2;
 	w2.init(mem);
 	defer w2.free();
-	predefined_macros::write_x86_defines(&comp, &w2, false);
-	test::eq(w2.written().contains("__APX_F__"), false);
+	predefined_macros::write_x86_defines(&comp, &w2, false)!!;
+	test::eq(w2.str_view().contains("__APX_F__"), false);
 }
 
 fn void feature_table_shape()
@@ -426,13 +426,13 @@ fn void no_leaks()
 		Compilation comp;
 		comp.init(&ta);
 		set_target(&comp, "x86_64-windows-gnu");
-		MacroWriter w;
+		DString w;
 		w.init(&ta);
-		predefined_macros::write_target_os_macros(&comp, &w);
-		predefined_macros::write_windows_os_defines(&comp, &w, true);
-		predefined_macros::write_x86_defines(&comp, &w, true);
+		predefined_macros::write_target_os_macros(&comp, &w)!!;
+		predefined_macros::write_windows_os_defines(&comp, &w, true)!!;
+		predefined_macros::write_x86_defines(&comp, &w, true)!!;
 		set_target(&comp, "x86_64-macos");
-		predefined_macros::write_darwin_os_defines(&comp, &w);
+		predefined_macros::write_darwin_os_defines(&comp, &w)!!;
 		w.free();
 		comp.free();
 	}

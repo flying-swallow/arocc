@@ -45,19 +45,19 @@ fn void ascii_format() @test
 {
 	@pool()
 	{
-		test::eq(fmt_ascii(number_literal::NumberLiteralDiag.INVALID_BINARY_DIGIT.fmt, '9'),
+		test::eq(fmt_ascii(Diagnostic.INVALID_BINARY_DIGIT.fmt, '9'),
 			"invalid digit '9' in binary constant");
-		test::eq(fmt_ascii(text_literal::TextLiteralDiag.MISSING_HEX_ESCAPE.fmt, 'x'),
+		test::eq(fmt_ascii(Diagnostic.MISSING_HEX_ESCAPE.fmt, 'x'),
 			"\\x used with no following hex digits");
 		// Non-printable: "x" + two lowercase hex digits.
-		test::eq(fmt_ascii(text_literal::TextLiteralDiag.UNKNOWN_ESCAPE_SEQUENCE.fmt, 0x1F),
+		test::eq(fmt_ascii(Diagnostic.UNKNOWN_ESCAPE_SEQUENCE.fmt, 0x1F),
 			"unknown escape sequence '\\x1f'");
 		test::eq(fmt_ascii("<%s>", 0x7F), "<x7f>");
 		// A non-ASCII byte (text_literal builds Ascii directly there) also prints as hex.
 		test::eq(fmt_byte("<%s>", 0xE9), "<xe9>");
-		test::eq(string::tformat(number_literal::NumberLiteralDiag.INVALID_INT_SUFFIX.fmt, "qq"),
+		test::eq(string::tformat(Diagnostic.INVALID_INT_SUFFIX.fmt, "qq"),
 			"invalid suffix 'qq' on integer constant");
-		test::eq(number_literal::NumberLiteralDiag.EXPONENT_HAS_NO_DIGITS.fmt, "exponent has no digits");
+		test::eq(Diagnostic.EXPONENT_HAS_NO_DIGITS.fmt, "exponent has no digits");
 	};
 }
 
@@ -87,9 +87,9 @@ fn void emit_and_parser_defaults() @test
 		Source src = comp.add_source_from_buffer("lit.c", "int x = 0b2;\n")!!;
 		Location loc = { .id = src.id, .byte_offset = 8, .line = 1 };
 		NumberLiteralParser p = { .comp = comp, .literal = "0b2", .loc = loc };
-		p.err(number_literal::NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii('2'))!!;
+		p.err(Diagnostic.INVALID_BINARY_DIGIT, text_literal::ascii('2'))!!;
 		// OFF by default: dropped.
-		p.err(number_literal::NumberLiteralDiag.C23_BINARY)!!;
+		p.err(Diagnostic.C23_BINARY)!!;
 		check(d.messages.len(), 1);
 		test::eq(d.messages[0].text, "invalid digit '2' in binary constant");
 		assert(d.messages[0].effective_kind == ERROR);
@@ -104,15 +104,16 @@ fn void emit_and_parser_defaults() @test
 
 fn void diag_tables() @test
 {
-	test::eq(NumberValueDiag.INT_LITERAL_TOO_BIG.fmt,
+	test::eq(Diagnostic.INT_LITERAL_TOO_BIG.fmt,
 		"integer literal is too large to be represented in any integer type");
-	assert(NumberValueDiag.GNU_IMAGINARY_CONSTANT.kind == OFF);
-	assert(NumberValueDiag.IMPLICITLY_UNSIGNED_LITERAL.meta.extension);
-	test::eq(TextSemanticsDiag.UNSUPPORTED_STR_CAT.fmt, "unsupported string literal concatenation");
-	test::eq(TextSemanticsDiag.UNTERMINATED_CHAR_LITERAL_ERROR.fmt, "missing terminating ' character");
-	NumberValueDiags ds;
-	ds.push(IMPLICITLY_UNSIGNED_LITERAL);
-	ds.push(GNU_IMAGINARY_CONSTANT);
-	check(ds.slice().len, 2);
-	assert(ds.slice()[1] == GNU_IMAGINARY_CONSTANT);
+	assert(Diagnostic.GNU_IMAGINARY_CONSTANT.kind == OFF);
+	assert(Diagnostic.IMPLICITLY_UNSIGNED_LITERAL.meta.extension);
+	test::eq(Diagnostic.UNSUPPORTED_STR_CAT.fmt, "unsupported string literal concatenation");
+	test::eq(Diagnostic.UNTERMINATED_CHAR_LITERAL_ERROR.fmt, "missing terminating ' character");
+	NumberDiags ds = { .gnu_imaginary_constant = true, .implicitly_unsigned_literal = true };
+	Diagnostic[5] got;
+	usz n;
+	ds.@each(; $diag) { got[n++] = $diag; };
+	check(n, 2);
+	assert(got[0] == IMPLICITLY_UNSIGNED_LITERAL && got[1] == GNU_IMAGINARY_CONSTANT);
 }

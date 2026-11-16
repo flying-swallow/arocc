@@ -31,7 +31,7 @@
 //     negative default NaN; f128 compiler-rt positive default NaN and `a - NaN`
 //     flips the NaN's sign, see primitive_float.c3).
 //
-// Because the PrimitiveValue arithmetic (float_soft_narrow.c3, float_soft_wide.c3) was
+// Because the PrimitiveValue arithmetic (primitive_float_soft_narrow.c3, primitive_float_soft_wide.c3) was
 // still a stage-0 stub when this file was written, the target is tagged
 // "manual"; the integrator should drop the tag once 10.1/10.2 have landed.
 module annex_g_tests;

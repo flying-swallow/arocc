@@ -17,6 +17,7 @@
 // rows, duplicates kept). No Zig executable was run.
 module aro::predefined_macros;
 import aro::compilation, aro::target, aro::lang_opts, aro::code_gen_options;
+import std::io;
 
 <*
  Target OS macros, transcribed from LLVM TargetOSMacros.def (only called
@@ -31,35 +32,35 @@ import aro::compilation, aro::target, aro::lang_opts, aro::code_gen_options;
  TARGET_OS_UIKITFORMAC (maccatalyst), TARGET_OS_UEFI (uefi).
  OWNER: 14.1.
 *>
-fn void write_target_os_macros(Compilation* comp, MacroWriter* w)
+fn void? write_target_os_macros(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
 	OsTag os = t.os.tag;
 	// Windows
-	w.define_bool("TARGET_OS_WIN32", os == WINDOWS);
-	w.define_bool("TARGET_OS_WINDOWS", os == WINDOWS);
+	define_bool(w, "TARGET_OS_WIN32", os == WINDOWS)!;
+	define_bool(w, "TARGET_OS_WINDOWS", os == WINDOWS)!;
 	// Linux
-	w.define_bool("TARGET_OS_LINUX", os == LINUX);
+	define_bool(w, "TARGET_OS_LINUX", os == LINUX)!;
 	// Unix
-	w.define_bool("TARGET_OS_UNIX", os == FREEBSD || os == OPENBSD || os == NETBSD || os == ILLUMOS);
+	define_bool(w, "TARGET_OS_UNIX", os == FREEBSD || os == OPENBSD || os == NETBSD || os == ILLUMOS)!;
 	// Apple Targets
-	w.define_bool("TARGET_OS_MAC", os.is_darwin());
-	w.define_bool("TARGET_OS_OSX", os == MACOS);
-	w.define_bool("TARGET_OS_IPHONE", os == IOS || os == TVOS || os == WATCHOS);
-	w.define_bool("TARGET_OS_IOS", os == IOS);
-	w.define_bool("TARGET_OS_TV", os == TVOS);
-	w.define_bool("TARGET_OS_WATCH", os == WATCHOS);
-	w.define_bool("TARGET_OS_VISION", os == VISIONOS);
-	w.define_bool("TARGET_OS_DRIVERKIT", os == DRIVERKIT);
-	w.define_bool("TARGET_OS_MACCATALYST", os == MACCATALYST);
-	w.define_bool("TARGET_OS_SIMULATOR", t.abi == SIMULATOR);
+	define_bool(w, "TARGET_OS_MAC", os.is_darwin())!;
+	define_bool(w, "TARGET_OS_OSX", os == MACOS)!;
+	define_bool(w, "TARGET_OS_IPHONE", os == IOS || os == TVOS || os == WATCHOS)!;
+	define_bool(w, "TARGET_OS_IOS", os == IOS)!;
+	define_bool(w, "TARGET_OS_TV", os == TVOS)!;
+	define_bool(w, "TARGET_OS_WATCH", os == WATCHOS)!;
+	define_bool(w, "TARGET_OS_VISION", os == VISIONOS)!;
+	define_bool(w, "TARGET_OS_DRIVERKIT", os == DRIVERKIT)!;
+	define_bool(w, "TARGET_OS_MACCATALYST", os == MACCATALYST)!;
+	define_bool(w, "TARGET_OS_SIMULATOR", t.abi == SIMULATOR)!;
 	bool embedded_os = os == IOS || os == TVOS || os == VISIONOS || os == WATCHOS;
-	w.define_bool("TARGET_OS_EMBEDDED", embedded_os && t.abi != SIMULATOR);
-	w.define_bool("TARGET_OS_NANO", os == WATCHOS);
-	w.define_bool("TARGET_IPHONE_SIMULATOR", t.abi == SIMULATOR);
-	w.define_bool("TARGET_OS_UIKITFORMAC", os == MACCATALYST);
+	define_bool(w, "TARGET_OS_EMBEDDED", embedded_os && t.abi != SIMULATOR)!;
+	define_bool(w, "TARGET_OS_NANO", os == WATCHOS)!;
+	define_bool(w, "TARGET_IPHONE_SIMULATOR", t.abi == SIMULATOR)!;
+	define_bool(w, "TARGET_OS_UIKITFORMAC", os == MACCATALYST)!;
 	// UEFI
-	w.define_bool("TARGET_OS_UEFI", os == UEFI);
+	define_bool(w, "TARGET_OS_UEFI", os == UEFI)!;
 }
 
 <*
@@ -72,28 +73,28 @@ fn void write_target_os_macros(Compilation* comp, MacroWriter* w)
  `__attribute__((__<kw>__))`.
  OWNER: 14.1.
 *>
-fn void write_windows_os_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
+fn void? write_windows_os_defines(Compilation* comp, OutStream w, bool is_gnu)
 {
 	Target* t = &comp.target;
 	ushort ptr_width = t.ptr_bit_width();
-	w.define("_WIN32");
-	if (ptr_width == 64) w.define("_WIN64");
+	define(w, "_WIN32")!;
+	if (ptr_width == 64) define(w, "_WIN64")!;
 
 	if (t.abi.is_gnu())
 	{
-		w.define_std("WIN32", is_gnu);
-		w.define_std("WINNT", is_gnu);
+		define_std(w, "WIN32", is_gnu)!;
+		define_std(w, "WINNT", is_gnu)!;
 		if (ptr_width == 64)
 		{
-			w.define_std("WIN64", is_gnu);
-			w.define("__MINGW64__");
+			define_std(w, "WIN64", is_gnu)!;
+			define(w, "__MINGW64__")!;
 		}
 		else
 		{
-			w.define("_X86_");
+			define(w, "_X86_")!;
 		}
-		w.define("__MSVCRT__");
-		w.define("__MINGW32__");
+		define(w, "__MSVCRT__")!;
+		define(w, "__MINGW32__")!;
 	}
 
 	if (t.abi.is_gnu())
@@ -102,19 +103,19 @@ fn void write_windows_os_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
 		// Like Clang we make the define no op if -fdeclspec is enabled.
 		if (comp.langopts.declspec_attrs)
 		{
-			w.write("#define __declspec __declspec\n");
+			w.write("#define __declspec __declspec\n")!;
 		}
 		else
 		{
-			w.write("#define __declspec(a) __attribute__((a))\n");
+			w.write("#define __declspec(a) __attribute__((a))\n")!;
 		}
 		if (!comp.langopts.ms_extensions)
 		{
 			// Provide aliases for the calling convention keywords.
 			foreach (keyword : CALLING_CONVENTION_KEYWORDS)
 			{
-				w.printf("#define _%s __attribute__((__%s__))\n", keyword, keyword);
-				w.printf("#define __%s __attribute__((__%s__))\n", keyword, keyword);
+				io::fprintf(w, "#define _%s __attribute__((__%s__))\n", keyword, keyword)!;
+				io::fprintf(w, "#define __%s __attribute__((__%s__))\n", keyword, keyword)!;
 			}
 		}
 	}
@@ -130,11 +131,11 @@ fn void write_windows_os_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
  else "{major:0>2}{min(minor,99):0>2}{min(patch,99):0>2}".
  OWNER: 14.1.
 *>
-fn void write_darwin_os_defines(Compilation* comp, MacroWriter* w)
+fn void? write_darwin_os_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
-	w.define("__APPLE__");
-	w.write("#define __APPLE_CC__ 6000\n");
+	define(w, "__APPLE__")!;
+	w.write("#define __APPLE_CC__ 6000\n")!;
 
 	SemVer version = t.os.min;
 	ulong minor;
@@ -171,11 +172,11 @@ fn void write_darwin_os_defines(Compilation* comp, MacroWriter* w)
 		if (!name.len) continue;
 		if (short_form)
 		{
-			w.printf("#define %s %d%d%d\n", name, version.major, minor, patch);
+			io::fprintf(w, "#define %s %d%d%d\n", name, version.major, minor, patch)!;
 		}
 		else
 		{
-			w.printf("#define %s %02d%02d%02d\n", name, version.major, minor, patch);
+			io::fprintf(w, "#define %s %02d%02d%02d\n", name, version.major, minor, patch)!;
 		}
 	}
 }
@@ -194,24 +195,24 @@ fn void write_darwin_os_defines(Compilation* comp, MacroWriter* w)
  (sic, Zig writes _8 twice); "__SIZEOF_FLOAT128__ 16" if has_float128.
  OWNER: 14.1.
 *>
-fn void write_x86_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
+fn void? write_x86_defines(Compilation* comp, OutStream w, bool is_gnu)
 {
 	Target* t = &comp.target;
-	w.printf("#define __code_model_%s__ 1\n", comp.cmodel.macro_name());
+	io::fprintf(w, "#define __code_model_%s__ 1\n", comp.cmodel.macro_name())!;
 
 	bool is_msvc_windows = t.os.tag == WINDOWS && t.abi == MSVC;
 	if (t.cpu.arch == X86_64)
 	{
-		w.define("__amd64__");
-		w.define("__amd64");
-		w.define("__x86_64__");
-		w.define("__x86_64");
+		define(w, "__amd64__")!;
+		define(w, "__amd64")!;
+		define(w, "__x86_64__")!;
+		define(w, "__x86_64")!;
 
-		if (is_msvc_windows) w.write("#define _M_X64 100\n#define _M_AMD64 100\n");
+		if (is_msvc_windows) w.write("#define _M_X64 100\n#define _M_AMD64 100\n")!;
 	}
 	else
 	{
-		w.define_std("i386", is_gnu);
+		define_std(w, "i386", is_gnu)!;
 
 		if (is_msvc_windows)
 		{
@@ -223,21 +224,21 @@ fn void write_x86_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
 				case I586: level = 500;
 				default: level = 600;
 			}
-			w.define_int("_M_IX86", level);
+			define_int(w, "_M_IX86", level)!;
 		}
 	}
-	w.define("__SEG_GS");
-	w.define("__SEG_FS");
-	w.write("#define __seg_gs __attribute__((address_space(256)))\n#define __seg_fs __attribute__((address_space(257)))\n");
+	define(w, "__SEG_GS")!;
+	define(w, "__SEG_FS")!;
+	w.write("#define __seg_gs __attribute__((address_space(256)))\n#define __seg_fs __attribute__((address_space(257)))\n")!;
 
 	if (t.cpu.has(X86_SAHF) || (comp.langopts.emulate == CLANG && t.cpu.arch == X86))
 	{
-		w.define("__LAHF_SAHF__");
+		define(w, "__LAHF_SAHF__")!;
 	}
 
 	foreach (fm : X86_FEATURE_MACROS)
 	{
-		if (t.cpu.has(fm.feature)) w.define(fm.macro_name);
+		if (t.cpu.has(fm.feature)) define(w, fm.macro_name)!;
 	}
 
 	if (comp.langopts.ms_extensions && t.cpu.arch == X86)
@@ -251,18 +252,18 @@ fn void write_x86_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
 		{
 			level = "1";
 		}
-		w.define_value("_M_IX86_FP", level);
+		define_value(w, "_M_IX86_FP", level)!;
 	}
 
-	if (t.cpu.has_all(&APX_F_FEATURES)) w.define("__APX_F__");
+	if (t.cpu.has_all(&APX_F_FEATURES)) define(w, "__APX_F__")!;
 
 	// Zig keeps __APX_INLINE_ASM_USE_GPR32__ (egpr + inline_asm_use_gpr32) commented out.
 
-	if (t.cpu.has(X86_CX8)) w.define("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+	if (t.cpu.has(X86_CX8)) define(w, "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8")!;
 	// sic: Zig defines _8 (not _16) again for cx16.
-	if (t.cpu.has(X86_CX16) && t.cpu.arch == X86_64) w.define("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+	if (t.cpu.has(X86_CX16) && t.cpu.arch == X86_64) define(w, "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8")!;
 
-	if (t.has_float128()) w.write("#define __SIZEOF_FLOAT128__ 16\n");
+	if (t.has_float128()) w.write("#define __SIZEOF_FLOAT128__ 16\n")!;
 }
 
 // ---------------------------------------------------------------------------

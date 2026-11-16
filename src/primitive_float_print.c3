@@ -3,13 +3,13 @@
 // The Value-level compare / isInf / isNan / isInfSign are in value_float.c3.
 //
 // Contract:
-//   - No native floats (only float_soft_narrow.c3 may use them): work on PrimitiveValue
+//   - No native floats (only primitive_float_soft_narrow.c3 may use them): work on PrimitiveValue
 //     bits and the dispatching PrimitiveValue.mul/div/cast.
 //   - Output is appended to a DString, like type_print.c3.
 //   - print_float / print_complex need PrimitiveValue.cast for every width except
 //     f64, and PrimitiveValue.mul / div at F64 for the f16 / f32 / cf32 scaling.
 module aro::primitive_value;
-import aro::bigint, std::core::dstring;
+import aro::bigint, std::core::dstring, std::io;
 
 // =============================================================================
 // Comparisons and predicates
@@ -333,13 +333,13 @@ fn RyuDecimal ryu_f64_to_decimal(ulong bits)
  (the longest output, the smallest subnormal, needs 2 + 324 + 1 bytes), so the
  "(float)" BufferTooSmall fallback can never happen here.
 *>
-fn void format_f64_decimal(ulong bits, DString* w)
+fn void? format_f64_decimal(ulong bits, OutStream w)
 {
 	RyuDecimal d = ryu_f64_to_decimal(bits);
-	if (d.sign) w.append_char('-');
+	if (d.sign) w.write_byte('-')!;
 	if (d.exponent == RYU_SPECIAL_EXPONENT)
 	{
-		w.append_string(d.mantissa != 0 ? "nan" : "inf");
+		w.write(d.mantissa != 0 ? "nan" : "inf")!;
 		return;
 	}
 
@@ -360,22 +360,22 @@ fn void format_f64_decimal(ulong bits, DString* w)
 	if (dp_offset <= 0)
 	{
 		// 0.000001234
-		w.append_string("0.");
-		w.append_char_repeat('0', (sz)-dp_offset);
-		w.append_bytes(ds);
+		w.write("0.")!;
+		for (sz z = 0; z < (sz)-dp_offset; z++) w.write_byte('0')!;
+		w.write(ds)!;
 	}
 	else if (dp_offset >= olength)
 	{
 		// 123456000
-		w.append_bytes(ds);
-		w.append_char_repeat('0', (sz)(dp_offset - olength));
+		w.write(ds)!;
+		for (sz z = 0; z < (sz)(dp_offset - olength); z++) w.write_byte('0')!;
 	}
 	else
 	{
 		// 12345.6789
-		w.append_bytes(ds[:dp_offset]);
-		w.append_char('.');
-		w.append_bytes(ds[dp_offset..]);
+		w.write(ds[:dp_offset])!;
+		w.write_byte('.')!;
+		w.write(ds[dp_offset..])!;
 	}
 }
 
@@ -453,9 +453,9 @@ fn ulong print_bits(PrimitiveValue f, bool scale_narrow)
  rounded); Zig @round rounds to an integer, halfway cases away from zero (a
  bit-level helper in this file). Printing goes through format_f64_decimal.
 *>
-fn void print_float(PrimitiveValue f, DString* w)
+fn void? print_float(PrimitiveValue f, OutStream w)
 {
-	format_f64_decimal(print_bits(f, true), w);
+	format_f64_decimal(print_bits(f, true), w)!;
 }
 
 <*
@@ -463,12 +463,12 @@ fn void print_float(PrimitiveValue f, DString* w)
  imaginary part prints as "1 + -2i"). cf32 parts are rounded like f32 above;
  every other width (cf16 included - no 1000 scaling) is plain (f64)x.
 *>
-fn void print_complex(PrimitiveValue c, DString* w)
+fn void? print_complex(PrimitiveValue c, OutStream w)
 {
 	PrimitiveValue[2] parts = c.parts();
 	bool scale = c.tag == CF32;
-	format_f64_decimal(print_bits(parts[0], scale), w);
-	w.append_string(" + ");
-	format_f64_decimal(print_bits(parts[1], scale), w);
-	w.append_char('i');
+	format_f64_decimal(print_bits(parts[0], scale), w)!;
+	w.write(" + ")!;
+	format_f64_decimal(print_bits(parts[1], scale), w)!;
+	w.write_byte('i')!;
 }

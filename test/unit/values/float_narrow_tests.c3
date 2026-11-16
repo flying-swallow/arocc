@@ -1,4 +1,4 @@
-// Tests for src/float_soft_narrow.c3 (plan 10, agent 10.1 `narrow-float`):
+// Tests for src/primitive_float_soft_narrow.c3 (plan 10, agent 10.1 `narrow-float`):
 // f16/f32/f64 + - * / and the width-generic PrimitiveValue.ilogb / scalbn / max.
 //
 // Provenance of expected values:

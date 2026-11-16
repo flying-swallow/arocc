@@ -3,7 +3,7 @@
 // module records borrowed token ranges for each argument without consuming
 // their meaning prematurely.
 module aro::parser_attribute;
-import aro::attribute, aro::parser, aro::parser_diagnostics, aro::tokenizer, aro::tokens;
+import aro::attribute, aro::parser, aro::diagnostics, aro::tokenizer, aro::tokens;
 import std::collections::list;
 import std::core::dstring;
 
@@ -98,25 +98,6 @@ fn tokens::TokenIndex? parser::Parser.parse_attribute_identifier(&self)
 	return result;
 }
 
-<* Emit the same unknown-name diagnostics used by the Zig attribute grammar. *>
-fn void? parser::Parser.report_unknown_attribute(&self, attribute::AttributeSyntax syntax, bool has_vendor, String vendor, String name, tokens::TokenIndex tok)
-{
-	if (syntax == attribute::AttributeSyntax.DECLSPEC)
-	{
-		DString msg; msg.init(tmem);
-		msg.appendf("__declspec attribute '%s' is not supported", name);
-		return self.emit_parser_diag(parser_diagnostics::ParserDiag.DECLSPEC_ATTR_NOT_SUPPORTED, msg.str_view(), tok);
-	}
-	DString msg; msg.init(tmem);
-	if (has_vendor)
-	{
-		msg.appendf("unknown attribute '%s::%s' ignored", vendor, name);
-		return self.emit_parser_diag(parser_diagnostics::ParserDiag.UNKNOWN_NAMESPACED_ATTRIBUTE, msg.str_view(), tok);
-	}
-	msg.appendf("unknown attribute '%s' ignored", name);
-	return self.emit_parser_diag(parser_diagnostics::ParserDiag.UNKNOWN_ATTRIBUTE, msg.str_view(), tok);
-}
-
 <*
  Consume the current attribute name, optional C23 namespace, and optional
  parenthesized argument list. Arguments are divided only at top-level commas;
@@ -157,9 +138,17 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 		parsed.has_name = true;
 		parsed.name = found;
 	}
+	else if (syntax == attribute::AttributeSyntax.DECLSPEC)
+	{
+		Diagnostic.DECLSPEC_ATTR_NOT_SUPPORTED.@emit(self, first_tok, name_text)!;
+	}
+	else if (has_vendor)
+	{
+		Diagnostic.UNKNOWN_NAMESPACED_ATTRIBUTE.@emit(self, first_tok, vendor, name_text)!;
+	}
 	else
 	{
-		self.report_unknown_attribute(syntax, has_vendor, vendor, name_text, first_tok)!;
+		Diagnostic.UNKNOWN_ATTRIBUTE.@emit(self, first_tok, name_text)!;
 	}
 
 	if (@ok(self.eat(tokenizer::TokenId.L_PAREN)))
@@ -277,7 +266,7 @@ fn bool? parser::Parser.parse_c23_attribute_specifier(&self, AttributeBuffer* ou
 	self.advance();
 	tokens::TokenIndex inner = self.tok_i;
 	self.advance();
-	self.emit_parser_diag(parser_diagnostics::ParserDiag.C23_ATTRIBUTE, "[[]] attributes are a C23 extension", outer)!;
+	Diagnostic.C23_ATTRIBUTE.@emit(self, outer)!;
 	self.parse_attribute_list(attribute::AttributeSyntax.STANDARD, tokenizer::TokenId.R_BRACKET, inner, out)!;
 	self.expect_closing(tokenizer::TokenId.R_BRACKET, outer)!;
 	committed = true;

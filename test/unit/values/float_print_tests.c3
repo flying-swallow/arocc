@@ -1,4 +1,4 @@
-// Tests for src/float_print.c3 that need no other plan 10 stage-1 code:
+// Tests for src/primitive_float_print.c3 that need no other plan 10 stage-1 code:
 // PrimitiveValue.compare, the Value-level isInf/isNan/isInfSign, the Zig `{d}`
 // formatter for f64 (format_f64_decimal), the @round helper and the f64 / cf64
 // arms of Value.print. The f16/f32/f80/f128 print arms and the Value-level
@@ -9,7 +9,7 @@
 // - "zig 0.17.0 run": printed by standalone programs run with
 //   /home/user/tools/zig/ziglang/zig (0.17.0) on x86_64-linux, Debug mode
 //   (Backend64_TablesFull). The same `{d}` program built -OReleaseSmall
-//   (Backend64_TablesSmall, the tables float_print.c3 uses) printed
+//   (Backend64_TablesSmall, the tables primitive_float_print.c3 uses) printed
 //   byte-identical output for all 360 vectors below.
 // - "fixture <name>": value dumps / diagnostics in test/cases/<name>.c.
 // - "source-derived": IEEE 754 ordering rules and std.math.compare, by hand.
@@ -47,21 +47,21 @@ macro @with_comp(; @body(Compilation* comp))
 fn String fmt_f64(ulong bits)
 {
 	DString w = dstring::temp();
-	primitive_value::format_f64_decimal(bits, &w);
+	primitive_value::format_f64_decimal(bits, &w)!!;
 	return w.str_view();
 }
 
 fn String fmt_float(PrimitiveValue f)
 {
 	DString w = dstring::temp();
-	primitive_value::print_float(f, &w);
+	primitive_value::print_float(f, &w)!!;
 	return w.str_view();
 }
 
 fn String fmt_complex(PrimitiveValue c)
 {
 	DString w = dstring::temp();
-	primitive_value::print_complex(c, &w);
+	primitive_value::print_complex(c, &w)!!;
 	return w.str_view();
 }
 
@@ -477,7 +477,7 @@ fn void format_appends() @test
 	@pool()
 	{
 		DString w = dstring::temp("x=");
-		primitive_value::format_f64_decimal(0x3FF8_0000_0000_0000, &w);
+		primitive_value::format_f64_decimal(0x3FF8_0000_0000_0000, &w)!!;
 		test::eq(w.str_view(), "x=1.5");
 	};
 }

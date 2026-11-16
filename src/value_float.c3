@@ -5,8 +5,8 @@
 //
 // Layering: this file is the only place where a `Value` meets float semantics.
 // Each operation reads the key(s) from `comp.interner`, calls the pure bit-level
-// code in aro::primitive_value (primitive_float.c3, float_soft_*.c3,
-// float_print.c3) or aro::annex_g, and interns the result. Nothing in
+// code in aro::primitive_value (primitive_float.c3, primitive_float_soft_*.c3,
+// primitive_float_print.c3) or aro::annex_g, and interns the result. Nothing in
 // aro::primitive_value knows about `Value`, `Compilation` or `QualType`.
 //
 // Interning note (value_interner.c3): float +0.0 interns as REF_ZERO and float

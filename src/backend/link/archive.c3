@@ -66,14 +66,14 @@ fn bool is_thin_archive(char[] bytes)
 <* @return? MALFORMED_ARCHIVE *>
 fn void? malformed_archive(Diagnostics* d, String path, String reason)
 {
-	@link_err(d, LinkDiag.MALFORMED_ARCHIVE, path, reason)!;
+	@link_err(d, Diagnostic.MALFORMED_ARCHIVE, path, reason)!;
 	return MALFORMED_ARCHIVE~;
 }
 
 <* @return? UNSUPPORTED_ARCHIVE *>
 fn void? unsupported_archive(Diagnostics* d, String path, String reason)
 {
-	@link_err(d, LinkDiag.UNSUPPORTED_ARCHIVE, path, reason)!;
+	@link_err(d, Diagnostic.UNSUPPORTED_ARCHIVE, path, reason)!;
 	return UNSUPPORTED_ARCHIVE~;
 }
 

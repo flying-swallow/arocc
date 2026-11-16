@@ -54,14 +54,14 @@ struct ScriptToken
 <* @return? link::MALFORMED_SCRIPT *>
 fn void? malformed_script(Diagnostics* d, String path, uint line, String reason)
 {
-	@link_err(d, LinkDiag.MALFORMED_SCRIPT, path, (int)line, reason)!;
+	@link_err(d, Diagnostic.MALFORMED_SCRIPT, path, (int)line, reason)!;
 	return MALFORMED_SCRIPT~;
 }
 
 <* @return? link::UNSUPPORTED_SCRIPT *>
 fn void? unsupported_script(Diagnostics* d, String path, String command)
 {
-	@link_err(d, LinkDiag.UNSUPPORTED_SCRIPT, path, command)!;
+	@link_err(d, Diagnostic.UNSUPPORTED_SCRIPT, path, command)!;
 	return UNSUPPORTED_SCRIPT~;
 }
 

@@ -63,7 +63,7 @@ fn String pr(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.print(comp, &w);
+	qt.print(comp, &w)!!;
 	return w.str_view();
 }
 
@@ -71,7 +71,7 @@ fn String dmp(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.dump(comp, &w);
+	qt.dump(comp, &w)!!;
 	return w.str_view();
 }
 
@@ -79,7 +79,7 @@ fn String named(Compilation* comp, QualType qt, String name)
 {
 	DString w;
 	w.init(tmem);
-	qt.print_named(name, comp, &w);
+	qt.print_named(name, comp, &w)!!;
 	return w.str_view();
 }
 
@@ -87,7 +87,7 @@ fn String desugared(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.print_desugared(comp, &w);
+	qt.print_desugared(comp, &w)!!;
 	return w.str_view();
 }
 
@@ -475,6 +475,16 @@ fn void promotions_and_ranks() @test
 		test::eq(type_store::ULONG_LONG.int_value_suffix(comp), "ULL");
 		test::eq(type_store::USHORT.int_value_suffix(comp), "");
 		test::eq(type_store::UINT.int_value_suffix(comp), "U");
+		test::eq(type_store::SHORT.int_value_suffix(comp), "");
+		test::eq(type_store::INT.int_value_suffix(comp), "");
+		test::eq(type_store::LONG_LONG.int_value_suffix(comp), "LL");
+		test::eq(type_store::ULONG.int_value_suffix(comp), "UL");
+		test::eq(type_store::CHAR.int_value_suffix(comp), "");
+		test::eq(type_store::UCHAR.int_value_suffix(comp), "");
+		test::eq(type_store::INT128.int_value_suffix(comp), "");
+		test::eq(type_store::UINT128.int_value_suffix(comp), "U");
+		test::eq(type_store::INT24.int_value_suffix(comp), "");
+		test::eq(type_store::UINT24.int_value_suffix(comp), "U");
 		test::eq(type_store::SCHAR.format_modifier(comp), "hh");
 		test::eq(type_store::LONG_LONG.format_modifier(comp), "ll");
 	};
@@ -930,7 +940,7 @@ fn void long_type_name_survives_print_growth() @test
 		test::eq(qt.tprint(comp), "_Complex long double");
 		DString w;
 		w.init(tmem);
-		qt.print(comp, &w);
+		qt.print(comp, &w)!!;
 		test::eq(w.str_view(), "_Complex long double");
 	};
 }

@@ -1166,7 +1166,7 @@ fn void reversed_range_designator_is_an_error() @test
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
 
 		// Like other designator errors, an end before the start fails the initializer.
-		// No ParserDiag for an empty range exists yet; this test pins only the kind and count.
+		// No Diagnostic for an empty range exists yet; this test pins only the kind and count.
 		assert(@catch(p.parse_initializer(array_type)) == parser::PARSING_FAILED, "a range whose end precedes its start fails");
 		assert(d.messages.len() == 1, "one diagnostic for the empty range");
 		assert(d.messages[0].kind == diagnostics::MessageKind.ERROR);

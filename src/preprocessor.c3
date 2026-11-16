@@ -442,7 +442,7 @@ fn bool MacroTable.ordered_remove(&self, String name)
 
 <*
  Plan 14: Zig `comp.environment.sourceEpoch(io)` including the
- PpDiag.INVALID_SOURCE_EPOCH fallback to DEFAULT_SOURCE_EPOCH. Called by init
+ Diagnostic.INVALID_SOURCE_EPOCH fallback to DEFAULT_SOURCE_EPOCH. Called by init
  when InitOptions has no source epoch.
 *>
 alias SourceEpochFn = fn SourceEpoch? (void* ctx, Preprocessor* pp);
@@ -854,7 +854,7 @@ fn String Preprocessor.tree_token_slice(&self, TreeToken tok) => self.expanded_s
  temporarily stop suppressing system-header warnings for entries with
  `meta.show_in_system_headers`, and add at `loc` with the macro backtrace of
  `expansion_locs` (note_msg_loc = true). `$diag` is any diagnostic enum value
- (PpDiag, NumberValueDiag, a pragma's own enum, ...).
+ (Diagnostic, Diagnostic, a pragma's own enum, ...).
  @return? compilation::FATAL_ERROR
 *>
 macro void? Preprocessor.err_at(&self, Location loc, Location[] expansion_locs, $diag, ...)
@@ -864,21 +864,6 @@ macro void? Preprocessor.err_at(&self, Location loc, Location[] expansion_locs, 
 	{
 		String text = string::tformat($diag.fmt, ...$vaarg);
 		return self.add_diag(diagnostics::@message_at($diag, text, loc.expand(self.comp)), expansion_locs, $diag.meta.show_in_system_headers);
-	};
-}
-
-<*
- `err_at` for a PpDiag chosen at runtime. The format string is not constant,
- so arguments are not checked at compile time; prefer `err_at`.
- @return? compilation::FATAL_ERROR
-*>
-fn void? Preprocessor.err_dyn_at(&self, Location loc, Location[] expansion_locs, PpDiag diag, args...)
-{
-	if (!self.diagnostics.@enabled(diag)) return;
-	@pool()
-	{
-		String text = string::tformat(diag.fmt, ...args);
-		return self.add_diag(diagnostics::@message_at(diag, text, loc.expand(self.comp)), expansion_locs, diag.meta.show_in_system_headers);
 	};
 }
 
@@ -898,12 +883,6 @@ fn void? Preprocessor.add_diag(&self, Message m, Location[] expansion_locs, bool
 macro void? Preprocessor.err(&self, TokenWithExpansionLocs tok, $diag, ...)
 {
 	return self.err_at(tok.loc, tok.expansion_slice(), $diag, ...$vaarg);
-}
-
-<* `err` for a PpDiag chosen at runtime. @return? compilation::FATAL_ERROR *>
-fn void? Preprocessor.err_dyn(&self, TokenWithExpansionLocs tok, PpDiag diag, args...)
-{
-	return self.err_dyn_at(tok.loc, tok.expansion_slice(), diag, ...args);
 }
 
 <*
@@ -1206,7 +1185,7 @@ fn sz encode_utf8(uint c, char[4]* out)
 }
 
 <*
- Zig `unescapeUcn`. INCOMPLETE_UCN: warn PpDiag.INCOMPLETE_UCN, keep the token.
+ Zig `unescapeUcn`. INCOMPLETE_UCN: warn Diagnostic.INCOMPLETE_UCN, keep the token.
  EXTENDED_IDENTIFIER containing '\': decode it (UTF-8 kind, max 0x10FFFF, no
  encoding diagnostics) into generated_buf followed by '\n' and return a
  generated EXTENDED_IDENTIFIER made by make_generated_token from `tok`; the
@@ -1218,7 +1197,7 @@ fn TokenWithExpansionLocs? Preprocessor.unescape_ucn(&self, TokenWithExpansionLo
 	switch (tok.id)
 	{
 		case INCOMPLETE_UCN:
-			self.err(tok, PpDiag.INCOMPLETE_UCN)!;
+			self.err(tok, Diagnostic.INCOMPLETE_UCN)!;
 		case EXTENDED_IDENTIFIER:
 			String identifier = self.expanded_slice(tok);
 			if (!@ok(identifier.index_of_char('\\'))) break;
@@ -1333,7 +1312,7 @@ fn TokenWithExpansionLocs[] get_paste_args(TokenWithExpansionLocs[] args)
  Zig `findIncludeFilenameToken`: the header name of an #include. A '<' first
  token is re-read up to '>' on the same line (MACRO_STRING). A STRING_LITERAL or
  MACRO_STRING is taken as is; with null embed_args a non-newline token after it
- is PpDiag.EXTRA_TOKENS_DIRECTIVE_END. Anything else is read to the end of the
+ is Diagnostic.EXTRA_TOKENS_DIRECTIVE_END. Anything else is read to the end of the
  line, macro-expanded and rebuilt by reconstruct_include_string into a generated
  token. #include passes null embed_args; a non-null slice receives the trailing
  tokens and keeps top_expansion_buf alive (the #embed port).
@@ -1391,11 +1370,11 @@ fn TokenWithExpansionLocs? Preprocessor.find_include_filename_token(&self, RawTo
 			}
 			else if (tok.id == UNTERMINATED_COMMENT)
 			{
-				self.err_raw(tok, PpDiag.UNTERMINATED_COMMENT)!;
+				self.err_raw(tok, Diagnostic.UNTERMINATED_COMMENT)!;
 			}
 			else if (self.is_poisoned(tok))
 			{
-				self.err_raw(tok, PpDiag.POISONED_IDENTIFIER)!;
+				self.err_raw(tok, Diagnostic.POISONED_IDENTIFIER)!;
 			}
 			self.top_expansion_buf.push(tokens::from_raw(tok));
 			if (tok.id == EOF) break;
@@ -1419,7 +1398,7 @@ fn TokenWithExpansionLocs? Preprocessor.find_include_filename_token(&self, RawTo
 			if (nl.id != NL && nl.id != EOF)
 			{
 				skip_to_nl(tokenizer);
-				self.err_raw(nl, PpDiag.EXTRA_TOKENS_DIRECTIVE_END)!;
+				self.err_raw(nl, Diagnostic.EXTRA_TOKENS_DIRECTIVE_END)!;
 			}
 		}
 		return source_tok;
@@ -1440,7 +1419,7 @@ fn TokenWithExpansionLocs? Preprocessor.find_include_filename_token(&self, RawTo
 	foreach (tok : dummy_trailing_toks)
 	{
 		if (tok.id == MACRO_WS || tok.id == WHITESPACE || tok.id == EOF) continue;
-		self.err(tok, PpDiag.EXTRA_TOKENS_DIRECTIVE_END)!;
+		self.err(tok, Diagnostic.EXTRA_TOKENS_DIRECTIVE_END)!;
 		break;
 	}
 
@@ -1463,7 +1442,7 @@ fn Source? Preprocessor.find_include_source(&self, RawToken first, Tokenizer* to
 	String tok_slice = self.expanded_slice_extra(filename_tok, SINGLE_MACRO_WS);
 	if (tok_slice.len < 3)
 	{
-		self.err_raw(first, PpDiag.EMPTY_FILENAME)!;
+		self.err_raw(first, Diagnostic.EMPTY_FILENAME)!;
 		return INVALID_INCLUDE~;
 	}
 
@@ -1502,7 +1481,7 @@ fn void? Preprocessor.include(&self, Tokenizer* tokenizer, WhichInclude which)
 	defer self.include_depth--;
 	if (self.include_depth > MAX_INCLUDE_DEPTH)
 	{
-		self.err_raw(first, PpDiag.TOO_MANY_INCLUDES)!;
+		self.err_raw(first, Diagnostic.TOO_MANY_INCLUDES)!;
 		return STOP_PREPROCESSING~;
 	}
 
@@ -1645,7 +1624,7 @@ fn bool? EmbedArgIterator.param(&self, EmbedParam* out)
 	if (first.id == EOF) return false;
 	if (first.id != IDENTIFIER)
 	{
-		self.pp.err(first, PpDiag.EMBED_PARAM_IDENTIFIER)!;
+		self.pp.err(first, Diagnostic.EMBED_PARAM_IDENTIFIER)!;
 		*out = { .tag = INVALID };
 		return true;
 	}
@@ -1661,7 +1640,7 @@ fn bool? EmbedArgIterator.param(&self, EmbedParam* out)
 		name = self.next();
 		if (name.id != IDENTIFIER)
 		{
-			self.pp.err(name, PpDiag.EMBED_PARAM_IDENTIFIER)!;
+			self.pp.err(name, Diagnostic.EMBED_PARAM_IDENTIFIER)!;
 			*out = { .tag = INVALID };
 			return true;
 		}
@@ -1685,8 +1664,8 @@ fn bool? EmbedArgIterator.param(&self, EmbedParam* out)
 			}
 			if (tok.id == EOF)
 			{
-				self.pp.err(tok, PpDiag.CLOSING_PAREN)!;
-				self.pp.err(l_paren, PpDiag.TO_MATCH_PAREN)!;
+				self.pp.err(tok, Diagnostic.CLOSING_PAREN)!;
+				self.pp.err(l_paren, Diagnostic.TO_MATCH_PAREN)!;
 				*out = { .tag = INVALID };
 				return true;
 			}
@@ -1702,7 +1681,7 @@ fn bool? EmbedArgIterator.param(&self, EmbedParam* out)
 	}
 	if (!has_args)
 	{
-		self.pp.err(name, PpDiag.EMBED_PARAM_ARGS)!;
+		self.pp.err(name, Diagnostic.EMBED_PARAM_ARGS)!;
 		return false;
 	}
 
@@ -1761,7 +1740,7 @@ fn void? Preprocessor.embed(&self, Tokenizer* tokenizer)
 	String tok_slice = self.expanded_slice_extra(filename_tok, SINGLE_MACRO_WS);
 	if (tok_slice.len < 3)
 	{
-		self.err_raw(first, PpDiag.EMPTY_FILENAME)!;
+		self.err_raw(first, Diagnostic.EMPTY_FILENAME)!;
 		return;
 	}
 	String filename = tok_slice[1 : tok_slice.len - 2];
@@ -1787,7 +1766,7 @@ fn void? Preprocessor.embed(&self, Tokenizer* tokenizer)
 			case LIMIT:
 			{
 				EmbedArgRange range = param.limit;
-				if (seen_limit) self.err(range.tok, PpDiag.DUPLICATE_EMBED_PARAM, "limit")!;
+				if (seen_limit) self.err(range.tok, Diagnostic.DUPLICATE_EMBED_PARAM, "limit")!;
 				seen_limit = true;
 				PpExprParser parser = {
 					.pp = self,
@@ -1804,7 +1783,7 @@ fn void? Preprocessor.embed(&self, Tokenizer* tokenizer)
 				if (catch f = parsed_limit)
 				{
 					if (f != NOT_REPRESENTABLE) return f~;
-					self.err(range.tok, PpDiag.INVALID_EMBED_LIMIT)!;
+					self.err(range.tok, Diagnostic.INVALID_EMBED_LIMIT)!;
 					return;
 				}
 				limit = parsed_limit;
@@ -1812,21 +1791,21 @@ fn void? Preprocessor.embed(&self, Tokenizer* tokenizer)
 			case PREFIX:
 			{
 				EmbedArgRange range = param.prefix;
-				if (has_prefix) self.err(range.tok, PpDiag.DUPLICATE_EMBED_PARAM, "prefix")!;
+				if (has_prefix) self.err(range.tok, Diagnostic.DUPLICATE_EMBED_PARAM, "prefix")!;
 				has_prefix = true;
 				prefix = range;
 			}
 			case IF_EMPTY:
 			{
 				EmbedArgRange range = param.if_empty;
-				if (has_if_empty) self.err(range.tok, PpDiag.DUPLICATE_EMBED_PARAM, "if_empty")!;
+				if (has_if_empty) self.err(range.tok, Diagnostic.DUPLICATE_EMBED_PARAM, "if_empty")!;
 				has_if_empty = true;
 				if_empty = range;
 			}
 			case SUFFIX:
 			{
 				EmbedArgRange range = param.suffix;
-				if (has_suffix) self.err(range.tok, PpDiag.DUPLICATE_EMBED_PARAM, "suffix")!;
+				if (has_suffix) self.err(range.tok, Diagnostic.DUPLICATE_EMBED_PARAM, "suffix")!;
 				has_suffix = true;
 				suffix = range;
 			}
@@ -1840,7 +1819,7 @@ fn void? Preprocessor.embed(&self, Tokenizer* tokenizer)
 					String vendor_str = self.expanded_slice(unknown.vendor);
 					unknown_name = string::tformat("%s::%s", vendor_str, name_str);
 				}
-				self.err(unknown.name, PpDiag.UNKNOWN_EMBED_PARAM, unknown_name)!;
+				self.err(unknown.name, Diagnostic.UNKNOWN_EMBED_PARAM, unknown_name)!;
 				return;
 			}
 			case INVALID: return;
@@ -1985,5 +1964,5 @@ fn void? Preprocessor.eval_pragma(&self, TokenWithExpansionLocs name_tok, TokenI
 			case FATAL: return compilation::FATAL_ERROR~;
 		}
 	}
-	self.err(name_tok, PpDiag.UNKNOWN_PRAGMA)!;
+	self.err(name_tok, Diagnostic.UNKNOWN_PRAGMA)!;
 }

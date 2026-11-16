@@ -12,7 +12,7 @@
 // - `validPreprocessorExprStart` drops Zig's `.one` / `.zero`, which are not
 //   members of Token.Id (Zig never analyzed that function body).
 module aro::tokenizer;
-import aro::source, aro::lang_opts;
+import aro::source, aro::lang_opts, aro::tree;
 
 excuse NO_LEXEME;
 
@@ -441,6 +441,7 @@ fn void TokenId.simplify_macro_keyword_extra(&self, bool defined_to_identifier)
 	if (self.props.directive_keyword || (defined_to_identifier && *self == KEYWORD_DEFINED)) *self = IDENTIFIER;
 }
 
+
 fn void TokenId.simplify_macro_keyword(&self) => self.simplify_macro_keyword_extra(false);
 
 <*
@@ -474,6 +475,45 @@ fn bool TokenId.allows_digraphs(self, LangOpts langopts) => self.props.digraph &
 fn bool TokenId.can_open_gcc_asm_stmt(self) => self.props.asm_open;
 
 fn bool TokenId.is_string_literal(self) => self.props.string_literal;
+
+<* The expression node built for binary/assignment operator `self` (Zig `Parser.binExpr` tag). Only valid for tokens with a binary precedence. *>
+fn NodeKind TokenId.binary_kind(self)
+{
+	switch (self)
+	{
+		case COMMA: return NodeKind.COMMA_EXPR;
+		case PIPE_PIPE: return NodeKind.BOOL_OR_EXPR;
+		case AMPERSAND_AMPERSAND: return NodeKind.BOOL_AND_EXPR;
+		case PIPE: return NodeKind.BIT_OR_EXPR;
+		case CARET: return NodeKind.BIT_XOR_EXPR;
+		case AMPERSAND: return NodeKind.BIT_AND_EXPR;
+		case EQUAL_EQUAL: return NodeKind.EQUAL_EXPR;
+		case BANG_EQUAL: return NodeKind.NOT_EQUAL_EXPR;
+		case ANGLE_BRACKET_LEFT: return NodeKind.LESS_THAN_EXPR;
+		case ANGLE_BRACKET_LEFT_EQUAL: return NodeKind.LESS_THAN_EQUAL_EXPR;
+		case ANGLE_BRACKET_RIGHT: return NodeKind.GREATER_THAN_EXPR;
+		case ANGLE_BRACKET_RIGHT_EQUAL: return NodeKind.GREATER_THAN_EQUAL_EXPR;
+		case ANGLE_BRACKET_ANGLE_BRACKET_LEFT: return NodeKind.SHL_EXPR;
+		case ANGLE_BRACKET_ANGLE_BRACKET_RIGHT: return NodeKind.SHR_EXPR;
+		case PLUS: return NodeKind.ADD_EXPR;
+		case MINUS: return NodeKind.SUB_EXPR;
+		case ASTERISK: return NodeKind.MUL_EXPR;
+		case SLASH: return NodeKind.DIV_EXPR;
+		case PERCENT: return NodeKind.MOD_EXPR;
+		case EQUAL: return NodeKind.ASSIGN_EXPR;
+		case ASTERISK_EQUAL: return NodeKind.MUL_ASSIGN_EXPR;
+		case SLASH_EQUAL: return NodeKind.DIV_ASSIGN_EXPR;
+		case PERCENT_EQUAL: return NodeKind.MOD_ASSIGN_EXPR;
+		case PLUS_EQUAL: return NodeKind.ADD_ASSIGN_EXPR;
+		case MINUS_EQUAL: return NodeKind.SUB_ASSIGN_EXPR;
+		case ANGLE_BRACKET_ANGLE_BRACKET_LEFT_EQUAL: return NodeKind.SHL_ASSIGN_EXPR;
+		case ANGLE_BRACKET_ANGLE_BRACKET_RIGHT_EQUAL: return NodeKind.SHR_ASSIGN_EXPR;
+		case AMPERSAND_EQUAL: return NodeKind.BIT_AND_ASSIGN_EXPR;
+		case CARET_EQUAL: return NodeKind.BIT_XOR_ASSIGN_EXPR;
+		case PIPE_EQUAL: return NodeKind.BIT_OR_ASSIGN_EXPR;
+		default: unreachable("not a binary expression operator");
+	}
+}
 
 fn bool TokenId.is_char_literal(self) => self.props.char_literal;
 

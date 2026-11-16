@@ -75,9 +75,9 @@ struct CodeGen
 fn void? CodeGen.fail(&self, String text)
 {
 	self.comp.diagnostics.add(
-	{
-		.kind = diagnostics::MessageKind.FATAL_ERROR, .text = text
-	}
+		{
+			.kind = diagnostics::MessageKind.FATAL_ERROR, .text = text
+		}
 	)!;
 	return compilation::FATAL_ERROR~;
 }
@@ -168,9 +168,9 @@ fn String CodeGen.block_static_name(&self, type_store::NodeIndex node, String va
 	self.static_counter++;
 	String name = self.symbol_name(renamed.str_view(), true);
 	self.emitted_block_statics.push(
-	{
-		.node = node, .name = name
-	}
+		{
+			.node = node, .name = name
+		}
 	);
 	return name;
 }
@@ -195,9 +195,9 @@ fn String CodeGen.implicit_var_name(&self, type_store::NodeIndex node)
 	renamed.appendf("__func__.%s", self.current_fn);
 	String name = renamed.str_view();
 	self.implicit_vars.push(
-	{
-		.node = node, .name = name
-	}
+		{
+			.node = node, .name = name
+		}
 	);
 	return name;
 }
@@ -299,9 +299,9 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 			}
 			value_interner::InternerRef[] elems = self.record_elem_buf.array_view()[first_elem..];
 			value_interner::InternerRef record_type = self.builder.interner.put(
-			{
-				.tag = RECORD_TY, .record_ty = elems
-			}
+				{
+					.tag = RECORD_TY, .record_ty = elems
+				}
 			);
 			while ((usz)self.record_elem_buf.len() > first_elem) self.record_elem_buf.pop()!!;
 			self.record_cache.set(cache_key, record_type);
@@ -325,27 +325,27 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 			return self.gen_type(base.ty.enum_ty.tag);
 		case INT:
 			return self.builder.interner.put(
-			{
-				.tag = INT_TY, .ty_bits = base.ty.int_ty.bits(self.comp)
+				{
+					.tag = INT_TY, .ty_bits = base.ty.int_ty.bits(self.comp)
 			}
 			);
 		case BIT_INT:
 			return self.builder.interner.put(
-			{
-				.tag = INT_TY, .ty_bits = base.ty.bit_int.bits
-			}
+				{
+					.tag = INT_TY, .ty_bits = base.ty.bit_int.bits
+				}
 			);
 		case FLOAT:
 			return self.builder.interner.put(
-			{
-				.tag = FLOAT_TY, .ty_bits = base.ty.float_ty.bits(self.comp)
+				{
+					.tag = FLOAT_TY, .ty_bits = base.ty.float_ty.bits(self.comp)
 			}
 			);
 		case STORAGE_FLOAT:
 			return self.builder.interner.put(
-			{
-				.tag = INT_TY, .ty_bits = base.ty.storage_float.bits
-			}
+				{
+					.tag = INT_TY, .ty_bits = base.ty.storage_float.bits
+				}
 			);
 		case ARRAY:
 			value_interner::InternerRef elem = self.gen_type(base.ty.array.elem)!;
@@ -354,9 +354,9 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 			case FIXED:
 			case STATIC:
 				return self.builder.interner.put(
-				{
-					.tag = ARRAY_TY, .array_ty = { .len = base.ty.array.len.len, .child = elem }
-				}
+					{
+						.tag = ARRAY_TY, .array_ty = { .len = base.ty.array.len.len, .child = elem }
+					}
 				);
 			case VARIABLE:
 			case UNSPECIFIED_VARIABLE:
@@ -368,9 +368,9 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 		case VECTOR:
 			value_interner::InternerRef elem = self.gen_type(base.ty.vector.elem)!;
 			return self.builder.interner.put(
-			{
-				.tag = VECTOR_TY, .vector_ty = { .len = base.ty.vector.len, .child = elem }
-			}
+				{
+					.tag = VECTOR_TY, .vector_ty = { .len = base.ty.vector.len, .child = elem }
+				}
 			);
 		case NULLPTR_T:
 			self.fail("TODO lower nullptr_t")!;
@@ -405,9 +405,9 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		ir::Ref alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
 		self.builder.add_store(alloc, arg);
 		self.symbols.push(
-		{
-			.name = param.name, .value = alloc
-		}
+			{
+				.name = param.name, .value = alloc
+			}
 		);
 	}
 
@@ -466,9 +466,9 @@ fn void? CodeGen.add_branch(&self, ir::Ref cond, ir::Ref true_label, ir::Ref fal
 		if (false_label == self.bool_end_label)
 		{
 			self.phi_nodes.push(
-			{
-				.label = self.builder.current_label, .value = cond
-			}
+				{
+					.label = self.builder.current_label, .value = cond
+				}
 			);
 			return;
 		}
@@ -483,8 +483,8 @@ fn void? CodeGen.add_bool_phi(&self, bool value)
 {
 	ir::Ref constant = self.builder.add_constant(value::from_bool(value).ref(), value_interner::REF_I1);
 	self.phi_nodes.push(
-	{
-		.label = self.builder.current_label, .value = constant
-	}
+		{
+			.label = self.builder.current_label, .value = constant
+		}
 	);
 }

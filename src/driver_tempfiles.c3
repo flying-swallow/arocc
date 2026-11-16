@@ -111,7 +111,11 @@ fn String DriverTempFiles.remember_filename(&self, String prefix, String name, S
 	foreach (c : extension) bytes[offset++] = c;
 	bytes[length] = 0;
 	String path = (String)bytes[:length];
-	self.files.push({ .path = path, .remove_on_cleanup = remove_on_cleanup });
+	self.files.push(
+	{
+		.path = path, .remove_on_cleanup = remove_on_cleanup
+	}
+	);
 	return path;
 }
 

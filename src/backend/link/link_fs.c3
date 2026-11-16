@@ -106,7 +106,7 @@ fn char[]? LinkFs.read(&self, Diagnostics* d, String path)
 	char[]? loaded_opt = file::load(self.allocator, path);
 	if (catch loaded_opt)
 	{
-		@link_err(d, LinkDiag.CANNOT_OPEN, path)!;
+		@link_err(d, Diagnostic.CANNOT_OPEN, path)!;
 		return FILE_NOT_FOUND~;
 	}
 

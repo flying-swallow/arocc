@@ -21,8 +21,15 @@ excuse INVALID_ARGUMENT;
 excuse INVALID_TARGET;
 excuse CLI_INCLUDE_NOT_FOUND;
 
-struct ArgumentResult { ParseAction action; uint input_count; }
-struct PicPolicy { PicLevel level; bool is_pie; }
+struct ArgumentResult
+{
+	ParseAction action; uint input_count;
+}
+
+struct PicPolicy
+{
+	PicLevel level; bool is_pie;
+}
 
 struct WholeProgram
 {
@@ -100,85 +107,274 @@ fn bool parse_u32_decimal(String s, uint* out)
 fn void parse_warning_option(DriverOptions* opts, String arg)
 {
 	if (arg == "-Werror" || arg == "-Wno-error" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers") return;
-	if (arg.starts_with("-Werror=")) { opts.warning_policies.push({ .name = arg[8..], .mode = ERROR }); return; }
-	if (arg.starts_with("-Wno-error=")) { opts.warning_policies.push({ .name = arg[11..], .mode = WARNING }); return; }
-	if (arg.starts_with("-Wno-")) { opts.warning_policies.push({ .name = arg[5..], .mode = OFF }); return; }
-	opts.warning_policies.push({ .name = arg[2..], .mode = WARNING });
+	if (arg.starts_with("-Werror="))
+	{
+		opts.warning_policies.push(
+		{
+			.name = arg[8..], .mode = ERROR
+		}
+		); return;
+	}
+	if (arg.starts_with("-Wno-error="))
+	{
+		opts.warning_policies.push(
+		{
+			.name = arg[11..], .mode = WARNING
+		}
+		); return;
+	}
+	if (arg.starts_with("-Wno-"))
+	{
+		opts.warning_policies.push(
+		{
+			.name = arg[5..], .mode = OFF
+		}
+		); return;
+	}
+	opts.warning_policies.push(
+	{
+		.name = arg[2..], .mode = WARNING
+	}
+	);
 }
 
 <* Parse one bounded group of options to keep driver argument parsing shallow. *>
 fn bool? parse_frontend_flag_set_a(DriverOptions* opts, String arg, Diagnostics* sink)
 {
-	if (arg == "-E") { opts.only_preprocess = true; }
-	else if (arg == "-fsyntax-only") { opts.only_syntax = true; }
-	else if (arg == "-fno-syntax-only") { opts.only_syntax = false; }
-	else if (arg == "-c" || arg == "--compile") { opts.only_compile = true; }
-	else if (arg == "-S" || arg == "--assemble") { opts.only_preprocess_and_compile = true; }
-	else if (arg == "-P" || arg == "--no-line-commands") { opts.line_commands = false; }
-	else if (arg == "-fuse-line-directives") { opts.use_line_directives = true; }
-	else if (arg == "-fno-use-line-directives") { opts.use_line_directives = false; }
-	else if (arg == "-undef") { opts.no_system_defines = true; }
-	else if (arg == "-C" || arg == "--comments") { opts.preserve_comments = true; }
-	else if (arg == "-CC" || arg == "--comments-in-macros") { opts.preserve_comments = true; opts.preserve_comments_in_macros = true; }
-	else if (arg == "--verbose-ast") { opts.verbose_ast = true; }
-	else if (arg == "--verbose-pp") { opts.verbose_pp = true; }
-	else if (arg == "--verbose-ir") { opts.verbose_ir = true; }
-	else if (arg == "--verify-ir") { opts.verify_ir = true; }
-	else if (arg == "--x86-64-spill-all") { opts.x86_64_spill_all = true; }
-	else if (arg == "--verbose-linker-args") { opts.verbose_linker_args = true; }
-	else { return false; }
+	if (arg == "-E")
+	{
+		opts.only_preprocess = true;
+	}
+	else if (arg == "-fsyntax-only")
+	{
+		opts.only_syntax = true;
+	}
+	else if (arg == "-fno-syntax-only")
+	{
+		opts.only_syntax = false;
+	}
+	else if (arg == "-c" || arg == "--compile")
+	{
+		opts.only_compile = true;
+	}
+	else if (arg == "-S" || arg == "--assemble")
+	{
+		opts.only_preprocess_and_compile = true;
+	}
+	else if (arg == "-P" || arg == "--no-line-commands")
+	{
+		opts.line_commands = false;
+	}
+	else if (arg == "-fuse-line-directives")
+	{
+		opts.use_line_directives = true;
+	}
+	else if (arg == "-fno-use-line-directives")
+	{
+		opts.use_line_directives = false;
+	}
+	else if (arg == "-undef")
+	{
+		opts.no_system_defines = true;
+	}
+	else if (arg == "-C" || arg == "--comments")
+	{
+		opts.preserve_comments = true;
+	}
+	else if (arg == "-CC" || arg == "--comments-in-macros")
+	{
+		opts.preserve_comments = true; opts.preserve_comments_in_macros = true;
+	}
+	else if (arg == "--verbose-ast")
+	{
+		opts.verbose_ast = true;
+	}
+	else if (arg == "--verbose-pp")
+	{
+		opts.verbose_pp = true;
+	}
+	else if (arg == "--verbose-ir")
+	{
+		opts.verbose_ir = true;
+	}
+	else if (arg == "--verify-ir")
+	{
+		opts.verify_ir = true;
+	}
+	else if (arg == "--x86-64-spill-all")
+	{
+		opts.x86_64_spill_all = true;
+	}
+	else if (arg == "--verbose-linker-args")
+	{
+		opts.verbose_linker_args = true;
+	}
+	else
+	{
+		return false;
+	}
 	return true;
 }
+
 <* Parse one bounded group of options to keep driver argument parsing shallow. *>
 fn bool? parse_frontend_flag_set_b(DriverOptions* opts, String arg, Diagnostics* sink)
 {
-	if (arg == "-fapple-kext") { opts.apple_kext = true; }
-	else if (arg == "-fcommon") { opts.common = true; }
-	else if (arg == "-fno-common") { opts.common = false; }
-	else if (arg == "-fintegrated-as") { opts.integrated_as = true; }
-	else if (arg == "-fno-integrated-as") { opts.integrated_as = false; }
-	else if (arg == "-fwhole-program") { opts.whole_program = true; }
-	else if (arg == "-fno-whole-program") { opts.whole_program = false; }
-	else if (arg == "-fshort-enums") { opts.short_enums = true; opts.has_short_enums = true; }
-	else if (arg == "-fno-short-enums") { opts.short_enums = false; opts.has_short_enums = true; }
-	else if (arg == "-fms-extensions") { opts.ms_extensions = true; opts.has_ms_extensions = true; }
-	else if (arg == "-fno-ms-extensions") { opts.ms_extensions = false; opts.has_ms_extensions = true; }
-	else if (arg == "-fdeclspec") { opts.declspec_attrs = true; opts.has_declspec_attrs = true; }
-	else if (arg == "-fno-declspec") { opts.declspec_attrs = false; opts.has_declspec_attrs = true; }
-	else if (arg == "-fdollars-in-identifiers") { opts.dollars_in_identifiers = true; opts.has_dollars_in_identifiers = true; }
-	else if (arg == "-fno-dollars-in-identifiers") { opts.dollars_in_identifiers = false; opts.has_dollars_in_identifiers = true; }
-	else if (arg == "-fdigraphs") { opts.digraphs = true; opts.has_digraphs = true; }
-	else if (arg == "-fno-digraphs") { opts.digraphs = false; opts.has_digraphs = true; }
-	else if (arg == "-fgnu-inline-asm") { opts.gnu_asm = true; opts.has_gnu_asm = true; }
-	else if (arg == "-fno-gnu-inline-asm") { opts.gnu_asm = false; opts.has_gnu_asm = true; }
-	else if (arg == "-fexperimental-bounds-safety") { opts.bounds_safety = CLANG; opts.has_bounds_safety = true; }
-	else if (arg == "-fno-experimental-bounds-safety") { opts.bounds_safety = NONE; opts.has_bounds_safety = true; }
-	else if (arg == "-fchar8_t") { opts.char8_t_override = ON; opts.has_char8_t_override = true; }
-	else if (arg == "-fno-char8_t") { opts.char8_t_override = OFF; opts.has_char8_t_override = true; }
-	else if (arg == "-fnative-half-type") { opts.use_native_half_type = true; }
-	else if (arg == "-fnative-half-arguments-and-returns") { opts.allow_half_args_returns = true; }
-	else if (arg == "-fblocks") { opts.has_blocks = true; opts.blocks = true; }
-	else if (arg == "-fno-blocks") { opts.has_blocks = true; opts.blocks = false; }
-	else if (arg == "-pthread") { opts.pthread = true; }
-	else if (arg == "-fvisibility=default") { opts.visibility = DEFAULT; opts.has_visibility = true; }
-	else if (arg == "-fvisibility=hidden") { opts.visibility = HIDDEN; opts.has_visibility = true; }
-	else if (arg == "-fvisibility=protected") { opts.visibility = PROTECTED; opts.has_visibility = true; }
+	if (arg == "-fapple-kext")
+	{
+		opts.apple_kext = true;
+	}
+	else if (arg == "-fcommon")
+	{
+		opts.common = true;
+	}
+	else if (arg == "-fno-common")
+	{
+		opts.common = false;
+	}
+	else if (arg == "-fintegrated-as")
+	{
+		opts.integrated_as = true;
+	}
+	else if (arg == "-fno-integrated-as")
+	{
+		opts.integrated_as = false;
+	}
+	else if (arg == "-fwhole-program")
+	{
+		opts.whole_program = true;
+	}
+	else if (arg == "-fno-whole-program")
+	{
+		opts.whole_program = false;
+	}
+	else if (arg == "-fshort-enums")
+	{
+		opts.short_enums = true; opts.has_short_enums = true;
+	}
+	else if (arg == "-fno-short-enums")
+	{
+		opts.short_enums = false; opts.has_short_enums = true;
+	}
+	else if (arg == "-fms-extensions")
+	{
+		opts.ms_extensions = true; opts.has_ms_extensions = true;
+	}
+	else if (arg == "-fno-ms-extensions")
+	{
+		opts.ms_extensions = false; opts.has_ms_extensions = true;
+	}
+	else if (arg == "-fdeclspec")
+	{
+		opts.declspec_attrs = true; opts.has_declspec_attrs = true;
+	}
+	else if (arg == "-fno-declspec")
+	{
+		opts.declspec_attrs = false; opts.has_declspec_attrs = true;
+	}
+	else if (arg == "-fdollars-in-identifiers")
+	{
+		opts.dollars_in_identifiers = true; opts.has_dollars_in_identifiers = true;
+	}
+	else if (arg == "-fno-dollars-in-identifiers")
+	{
+		opts.dollars_in_identifiers = false; opts.has_dollars_in_identifiers = true;
+	}
+	else if (arg == "-fdigraphs")
+	{
+		opts.digraphs = true; opts.has_digraphs = true;
+	}
+	else if (arg == "-fno-digraphs")
+	{
+		opts.digraphs = false; opts.has_digraphs = true;
+	}
+	else if (arg == "-fgnu-inline-asm")
+	{
+		opts.gnu_asm = true; opts.has_gnu_asm = true;
+	}
+	else if (arg == "-fno-gnu-inline-asm")
+	{
+		opts.gnu_asm = false; opts.has_gnu_asm = true;
+	}
+	else if (arg == "-fexperimental-bounds-safety")
+	{
+		opts.bounds_safety = CLANG; opts.has_bounds_safety = true;
+	}
+	else if (arg == "-fno-experimental-bounds-safety")
+	{
+		opts.bounds_safety = NONE; opts.has_bounds_safety = true;
+	}
+	else if (arg == "-fchar8_t")
+	{
+		opts.char8_t_override = ON; opts.has_char8_t_override = true;
+	}
+	else if (arg == "-fno-char8_t")
+	{
+		opts.char8_t_override = OFF; opts.has_char8_t_override = true;
+	}
+	else if (arg == "-fnative-half-type")
+	{
+		opts.use_native_half_type = true;
+	}
+	else if (arg == "-fnative-half-arguments-and-returns")
+	{
+		opts.allow_half_args_returns = true;
+	}
+	else if (arg == "-fblocks")
+	{
+		opts.has_blocks = true; opts.blocks = true;
+	}
+	else if (arg == "-fno-blocks")
+	{
+		opts.has_blocks = true; opts.blocks = false;
+	}
+	else if (arg == "-pthread")
+	{
+		opts.pthread = true;
+	}
+	else if (arg == "-fvisibility=default")
+	{
+		opts.visibility = DEFAULT; opts.has_visibility = true;
+	}
+	else if (arg == "-fvisibility=hidden")
+	{
+		opts.visibility = HIDDEN; opts.has_visibility = true;
+	}
+	else if (arg == "-fvisibility=protected")
+	{
+		opts.visibility = PROTECTED; opts.has_visibility = true;
+	}
 	else if (arg.starts_with("-fvisibility="))
 	{
 		String value = arg[13..];
 		if (sink == null) return INVALID_ARGUMENT~;
 		add_driver_fatal(opts.a, sink, "unsupported value '%s'' in '%s'", value, arg)!;
 	}
-	else { return false; }
+	else
+	{
+		return false;
+	}
 	return true;
 }
+
 <* Parse one bounded group of options to keep driver argument parsing shallow. *>
 fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics* sink)
 {
-	if (arg == "-fsigned-char" || arg == "-fno-unsigned-char") { opts.char_signedness = SIGNED; opts.has_char_signedness = true; }
-	else if (arg == "-funsigned-char" || arg == "-fno-signed-char") { opts.char_signedness = UNSIGNED; opts.has_char_signedness = true; }
-	else if (arg == "-ffreestanding") { opts.hosted = false; opts.has_hosted = true; }
-	else if (arg == "-fhosted") { opts.hosted = true; opts.has_hosted = true; }
+	if (arg == "-fsigned-char" || arg == "-fno-unsigned-char")
+	{
+		opts.char_signedness = SIGNED; opts.has_char_signedness = true;
+	}
+	else if (arg == "-funsigned-char" || arg == "-fno-signed-char")
+	{
+		opts.char_signedness = UNSIGNED; opts.has_char_signedness = true;
+	}
+	else if (arg == "-ffreestanding")
+	{
+		opts.hosted = false; opts.has_hosted = true;
+	}
+	else if (arg == "-fhosted")
+	{
+		opts.hosted = true; opts.has_hosted = true;
+	}
 	else if (arg == "-fmacro-backtrace-limit=" || arg.starts_with("-fmacro-backtrace-limit="))
 	{
 		String value = arg[24..];
@@ -188,7 +384,10 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 			if (sink == null) return INVALID_ARGUMENT~;
 			add_driver_error(opts.a, sink, "-fmacro-backtrace-limit takes a number argument")!;
 		}
-		else { opts.macro_backtrace_limit = limit == 0 ? uint::max : limit; opts.has_macro_backtrace_limit = true; }
+		else
+		{
+			opts.macro_backtrace_limit = limit == 0 ? uint::max : limit; opts.has_macro_backtrace_limit = true;
+		}
 	}
 	else if (arg == "-fgnuc-version=" || arg.starts_with("-fgnuc-version="))
 	{
@@ -199,26 +398,47 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 			if (sink == null) return INVALID_ARGUMENT~;
 			add_driver_fatal(opts.a, sink, "invalid value '%s' in '-fgnuc-version=%s'", value, value)!;
 		}
-		else { opts.gnuc_version = value; opts.has_gnuc_version = true; }
+		else
+		{
+			opts.gnuc_version = value; opts.has_gnuc_version = true;
+		}
 	}
 	else if (arg.starts_with("-ffp-eval-method="))
 	{
 		String value = arg[17..];
-		if (value == "source") { opts.fp_eval_method = SOURCE; opts.has_fp_eval_method = true; }
-		else if (value == "double") { opts.fp_eval_method = DOUBLE; opts.has_fp_eval_method = true; }
-		else if (value == "extended") { opts.fp_eval_method = EXTENDED; opts.has_fp_eval_method = true; }
+		if (value == "source")
+		{
+			opts.fp_eval_method = SOURCE; opts.has_fp_eval_method = true;
+		}
+		else if (value == "double")
+		{
+			opts.fp_eval_method = DOUBLE; opts.has_fp_eval_method = true;
+		}
+		else if (value == "extended")
+		{
+			opts.fp_eval_method = EXTENDED; opts.has_fp_eval_method = true;
+		}
 		else
 		{
 			if (sink == null) return INVALID_ARGUMENT~;
-		add_driver_error(opts.a, sink, "unsupported argument '%s' to option '-ffp-eval-method='; expected 'source', 'double', or 'extended'", value)!;
+			add_driver_error(opts.a, sink, "unsupported argument '%s' to option '-ffp-eval-method='; expected 'source', 'double', or 'extended'", value)!;
 		}
 	}
 	else if (arg.starts_with("--emulate="))
 	{
 		String value = arg[10..];
-		if (value == "clang") { opts.emulate = CLANG; }
-		else if (value == "gcc") { opts.emulate = GCC; }
-		else if (value == "msvc") { opts.emulate = MSVC; }
+		if (value == "clang")
+		{
+			opts.emulate = CLANG;
+		}
+		else if (value == "gcc")
+		{
+			opts.emulate = GCC;
+		}
+		else if (value == "msvc")
+		{
+			opts.emulate = MSVC;
+		}
 		else
 		{
 			if (sink == null) return INVALID_ARGUMENT~;
@@ -226,22 +446,49 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 		}
 		if (value == "clang" || value == "gcc" || value == "msvc") opts.has_emulate = true;
 	}
-	else if (arg == "-fuse-ld=") { opts.has_use_linker = false; opts.use_linker = ""; }
-	else if (arg.starts_with("-fuse-ld=")) { opts.has_use_linker = true; opts.use_linker = arg[9..]; }
-	else if (arg.starts_with("--ld-path=")) { opts.has_linker_path = true; opts.linker_path = arg[10..]; }
+	else if (arg == "-fuse-ld=")
+	{
+		opts.has_use_linker = false; opts.use_linker = "";
+	}
+	else if (arg.starts_with("-fuse-ld="))
+	{
+		opts.has_use_linker = true; opts.use_linker = arg[9..];
+	}
+	else if (arg.starts_with("--ld-path="))
+	{
+		opts.has_linker_path = true; opts.linker_path = arg[10..];
+	}
 	else if (arg.starts_with("--rtlib="))
 	{
 		String value = arg[8..];
-		if (value == "compiler-rt" || value == "libgcc" || value == "platform") { opts.has_rtlib = true; opts.rtlib = value; }
-		else if (sink == null) { return INVALID_ARGUMENT~; }
-		else { add_driver_error(opts.a, sink, "invalid runtime library name '%s'", value)!; }
+		if (value == "compiler-rt" || value == "libgcc" || value == "platform")
+		{
+			opts.has_rtlib = true; opts.rtlib = value;
+		}
+		else if (sink == null)
+		{
+			return INVALID_ARGUMENT~;
+		}
+		else
+		{
+			add_driver_error(opts.a, sink, "invalid runtime library name '%s'", value)!;
+		}
 	}
 	else if (arg.starts_with("--unwindlib="))
 	{
 		String value = arg[12..];
-		if (value == "" || value == "none" || value == "platform" || value == "libunwind" || value == "libgcc") { opts.has_unwindlib = true; opts.unwindlib = value; }
-		else if (sink == null) { return INVALID_ARGUMENT~; }
-		else { add_driver_error(opts.a, sink, "invalid unwind library name  '%s'", value)!; }
+		if (value == "" || value == "none" || value == "platform" || value == "libunwind" || value == "libgcc")
+		{
+			opts.has_unwindlib = true; opts.unwindlib = value;
+		}
+		else if (sink == null)
+		{
+			return INVALID_ARGUMENT~;
+		}
+		else
+		{
+			add_driver_error(opts.a, sink, "invalid unwind library name  '%s'", value)!;
+		}
 	}
 	else if (arg.starts_with("-flto"))
 	{
@@ -250,58 +497,194 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 		{
 			if (sink != null) add_driver_warning(opts.a, sink, "lto not supported")!;
 		}
-		else if (sink == null) { return INVALID_ARGUMENT~; }
-		else { add_driver_fatal(opts.a, sink, "invalid lto mode: '%s'", arg)!; }
+		else if (sink == null)
+		{
+			return INVALID_ARGUMENT~;
+		}
+		else
+		{
+			add_driver_fatal(opts.a, sink, "invalid lto mode: '%s'", arg)!;
+		}
 	}
-	else if (arg == "-fno-lto" || arg == "-frandom-seed=" || arg.starts_with("-frandom-seed=")) { /* accepted, no effect */ }
-	else if (arg == "-mkernel") { opts.kernel = true; }
-	else if (arg == "-fropi") { opts.ropi = true; }
-	else if (arg == "-fno-ropi") { opts.ropi = false; }
-	else if (arg == "-frwpi") { opts.rwpi = true; }
-	else if (arg == "-fno-rwpi") { opts.rwpi = false; }
-	else if (arg == "-g") { opts.debug_format = "dwarf32"; opts.has_debug_format = true; }
-	else if (arg == "-g0") { opts.debug_format = "strip"; opts.has_debug_format = true; }
-	else if (arg == "-gcodeview") { opts.debug_format = "codeview"; opts.has_debug_format = true; }
-	else if (arg == "-gdwarf32") { opts.debug_format = "dwarf32"; opts.has_debug_format = true; }
-	else if (arg == "-gdwarf64") { opts.debug_format = "dwarf64"; opts.has_debug_format = true; }
+	else if (arg == "-fno-lto" || arg == "-frandom-seed=" || arg.starts_with("-frandom-seed="))
+	{
+		/* accepted, no effect */
+	}
+	else if (arg == "-mkernel")
+	{
+		opts.kernel = true;
+	}
+	else if (arg == "-fropi")
+	{
+		opts.ropi = true;
+	}
+	else if (arg == "-fno-ropi")
+	{
+		opts.ropi = false;
+	}
+	else if (arg == "-frwpi")
+	{
+		opts.rwpi = true;
+	}
+	else if (arg == "-fno-rwpi")
+	{
+		opts.rwpi = false;
+	}
+	else if (arg == "-g")
+	{
+		opts.debug_format = "dwarf32"; opts.has_debug_format = true;
+	}
+	else if (arg == "-g0")
+	{
+		opts.debug_format = "strip"; opts.has_debug_format = true;
+	}
+	else if (arg == "-gcodeview")
+	{
+		opts.debug_format = "codeview"; opts.has_debug_format = true;
+	}
+	else if (arg == "-gdwarf32")
+	{
+		opts.debug_format = "dwarf32"; opts.has_debug_format = true;
+	}
+	else if (arg == "-gdwarf64")
+	{
+		opts.debug_format = "dwarf64"; opts.has_debug_format = true;
+	}
 	else if (arg == "-gdwarf" || arg == "-gdwarf-2" || arg == "-gdwarf-3" || arg == "-gdwarf-4" || arg == "-gdwarf-5")
 	{
 		opts.debug_format = "dwarf32"; opts.has_debug_format = true;
-		if (arg == "-gdwarf-2") { opts.dwarf_version = 2; opts.has_dwarf_version = true; }
-		else if (arg == "-gdwarf-3") { opts.dwarf_version = 3; opts.has_dwarf_version = true; }
-		else if (arg == "-gdwarf-4") { opts.dwarf_version = 4; opts.has_dwarf_version = true; }
-		else if (arg == "-gdwarf-5") { opts.dwarf_version = 5; opts.has_dwarf_version = true; }
+		if (arg == "-gdwarf-2")
+		{
+			opts.dwarf_version = 2; opts.has_dwarf_version = true;
+		}
+		else if (arg == "-gdwarf-3")
+		{
+			opts.dwarf_version = 3; opts.has_dwarf_version = true;
+		}
+		else if (arg == "-gdwarf-4")
+		{
+			opts.dwarf_version = 4; opts.has_dwarf_version = true;
+		}
+		else if (arg == "-gdwarf-5")
+		{
+			opts.dwarf_version = 5; opts.has_dwarf_version = true;
+		}
 	}
-	else if (arg == "-nobuiltininc") { opts.nobuiltininc = true; }
-	else if (arg == "-nostdinc" || arg == "--no-standard-includes") { opts.nostdinc = true; }
-	else if (arg == "-nostdlibinc") { opts.nostdlibinc = true; }
-	else if (arg == "-nostdlib") { opts.no_standard_libraries = true; opts.nostdlib = true; }
-	else if (arg == "-nodefaultlibs") { opts.no_standard_libraries = true; opts.nodefaultlibs = true; }
-	else if (arg == "-nolibc") { opts.no_standard_libraries = true; opts.nolibc = true; }
-	else if (arg == "-nostartfiles") { opts.no_standard_libraries = true; opts.nostartfiles = true; }
-	else if (arg == "-shared") { opts.shared = true; }
-	else if (arg == "-shared-libgcc") { opts.shared_libgcc = true; }
-	else if (arg == "-static-libgcc") { opts.static_libgcc = true; }
-	else if (arg == "-static-pie") { opts.static_pie = true; }
-	else if (arg == "-static") { opts.static_link = true; }
-	else if (arg == "-pie") { opts.has_pie = true; opts.pie = true; }
-	else if (arg == "-no-pie" || arg == "-nopie") { opts.has_pie = true; opts.pie = false; }
-	else if (arg == "-r") { opts.relocatable = true; }
-	else if (arg == "-rdynamic") { opts.rdynamic = true; }
-	else if (arg == "-s") { opts.strip = true; }
-	else if (arg == "-Werror") { opts.warnings_as_errors = true; }
-	else if (arg == "-w") { opts.ignore_warnings = true; }
-	else if (arg == "-mdynamic-no-pic") { opts.dynamic_nopic = true; }
-	else if (arg == "-mabicalls") { opts.has_mabicalls = true; opts.mabicalls = true; }
-	else if (arg == "-mno-abicalls") { opts.has_mabicalls = true; opts.mabicalls = false; }
-	else if (arg == "-fpic") { opts.pic = PIC; opts.pic_arg = arg; }
-	else if (arg == "-fPIC") { opts.pic = PIC_LARGE; opts.pic_arg = arg; }
-	else if (arg == "-fpie") { opts.pic = PIE; opts.pic_arg = arg; }
-	else if (arg == "-fPIE") { opts.pic = PIE_LARGE; opts.pic_arg = arg; }
-	else if (arg == "-fno-pic" || arg == "-fno-PIC" || arg == "-fno-pie" || arg == "-fno-PIE") { opts.pic = NO_PIC; opts.pic_arg = arg; }
-	else { return false; }
+	else if (arg == "-nobuiltininc")
+	{
+		opts.nobuiltininc = true;
+	}
+	else if (arg == "-nostdinc" || arg == "--no-standard-includes")
+	{
+		opts.nostdinc = true;
+	}
+	else if (arg == "-nostdlibinc")
+	{
+		opts.nostdlibinc = true;
+	}
+	else if (arg == "-nostdlib")
+	{
+		opts.no_standard_libraries = true; opts.nostdlib = true;
+	}
+	else if (arg == "-nodefaultlibs")
+	{
+		opts.no_standard_libraries = true; opts.nodefaultlibs = true;
+	}
+	else if (arg == "-nolibc")
+	{
+		opts.no_standard_libraries = true; opts.nolibc = true;
+	}
+	else if (arg == "-nostartfiles")
+	{
+		opts.no_standard_libraries = true; opts.nostartfiles = true;
+	}
+	else if (arg == "-shared")
+	{
+		opts.shared = true;
+	}
+	else if (arg == "-shared-libgcc")
+	{
+		opts.shared_libgcc = true;
+	}
+	else if (arg == "-static-libgcc")
+	{
+		opts.static_libgcc = true;
+	}
+	else if (arg == "-static-pie")
+	{
+		opts.static_pie = true;
+	}
+	else if (arg == "-static")
+	{
+		opts.static_link = true;
+	}
+	else if (arg == "-pie")
+	{
+		opts.has_pie = true; opts.pie = true;
+	}
+	else if (arg == "-no-pie" || arg == "-nopie")
+	{
+		opts.has_pie = true; opts.pie = false;
+	}
+	else if (arg == "-r")
+	{
+		opts.relocatable = true;
+	}
+	else if (arg == "-rdynamic")
+	{
+		opts.rdynamic = true;
+	}
+	else if (arg == "-s")
+	{
+		opts.strip = true;
+	}
+	else if (arg == "-Werror")
+	{
+		opts.warnings_as_errors = true;
+	}
+	else if (arg == "-w")
+	{
+		opts.ignore_warnings = true;
+	}
+	else if (arg == "-mdynamic-no-pic")
+	{
+		opts.dynamic_nopic = true;
+	}
+	else if (arg == "-mabicalls")
+	{
+		opts.has_mabicalls = true; opts.mabicalls = true;
+	}
+	else if (arg == "-mno-abicalls")
+	{
+		opts.has_mabicalls = true; opts.mabicalls = false;
+	}
+	else if (arg == "-fpic")
+	{
+		opts.pic = PIC; opts.pic_arg = arg;
+	}
+	else if (arg == "-fPIC")
+	{
+		opts.pic = PIC_LARGE; opts.pic_arg = arg;
+	}
+	else if (arg == "-fpie")
+	{
+		opts.pic = PIE; opts.pic_arg = arg;
+	}
+	else if (arg == "-fPIE")
+	{
+		opts.pic = PIE_LARGE; opts.pic_arg = arg;
+	}
+	else if (arg == "-fno-pic" || arg == "-fno-PIC" || arg == "-fno-pie" || arg == "-fno-PIE")
+	{
+		opts.pic = NO_PIC; opts.pic_arg = arg;
+	}
+	else
+	{
+		return false;
+	}
 	return true;
 }
+
 <* Dispatch frontend and code-generation options to bounded option groups. *>
 fn bool? parse_frontend_flag(DriverOptions* opts, String arg, Diagnostics* sink)
 {
@@ -338,7 +721,10 @@ fn bool? parse_link_flag(DriverOptions* opts, String[] args, usz* i)
 			opts.owned_link_args.push(owned);
 			opts.link_objects.push(owned);
 		}
-		else { opts.link_objects.push(arg); }
+		else
+		{
+			opts.link_objects.push(arg);
+		}
 		return true;
 	}
 	return false;
@@ -362,9 +748,18 @@ fn bool is_link_input_path(String arg)
 		bool component_has_digit = false;
 		foreach (c : version)
 		{
-			if (c >= '0' && c <= '9') { component_has_digit = true; }
-			else if (c == '.' && component_has_digit) { component_has_digit = false; }
-			else { return false; }
+			if (c >= '0' && c <= '9')
+			{
+				component_has_digit = true;
+			}
+			else if (c == '.' && component_has_digit)
+			{
+				component_has_digit = false;
+			}
+			else
+			{
+				return false;
+			}
 		}
 		return component_has_digit;
 	}
@@ -384,54 +779,185 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 	while (i < args.len)
 	{
 		String arg = args[i];
-		if (arg == "--help" || arg == "-h") { opts.action = HELP; result.action = HELP; result.input_count = (uint)opts.inputs.len(); return result; }
-		if (arg == "--version") { opts.action = VERSION; result.action = VERSION; result.input_count = (uint)opts.inputs.len(); return result; }
-		if (parse_frontend_flag(opts, arg, sink)!) { i++; continue; }
-		if (parse_link_flag(opts, args, &i)!) { i++; continue; }
-		else if (arg.starts_with("-D")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.defines.push(v); opts.macro_effects.push({ .kind = DEFINE, .value = v }); }
-		else if (arg.starts_with("-U")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.undefs.push(v); opts.macro_effects.push({ .kind = UNDEFINE, .value = v }); }
-		else if (arg.starts_with("-I")) { String v = arg[2..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.includes.push({ .kind = NORMAL, .path = v }); }
-		else if (arg == "--embed-dir") { i++; if (i >= args.len) return MISSING_ARGUMENT~; opts.embed_dirs.push(args[i]); }
+		if (arg == "--help" || arg == "-h")
+		{
+			opts.action = HELP; result.action = HELP; result.input_count = (uint)opts.inputs.len(); return result;
+		}
+		if (arg == "--version")
+		{
+			opts.action = VERSION; result.action = VERSION; result.input_count = (uint)opts.inputs.len(); return result;
+		}
+		if (parse_frontend_flag(opts, arg, sink)!)
+		{
+			i++; continue;
+		}
+		if (parse_link_flag(opts, args, &i)!)
+		{
+			i++; continue;
+		}
+		else if (arg.starts_with("-D"))
+		{
+			String v = arg[2..]; if (v.len == 0)
+			{
+				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
+			}
+			opts.defines.push(v); opts.macro_effects.push(
+			{
+				.kind = DEFINE, .value = v
+			}
+			);
+		}
+		else if (arg.starts_with("-U"))
+		{
+			String v = arg[2..]; if (v.len == 0)
+			{
+				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
+			}
+			opts.undefs.push(v); opts.macro_effects.push(
+			{
+				.kind = UNDEFINE, .value = v
+			}
+			);
+		}
+		else if (arg.starts_with("-I"))
+		{
+			String v = arg[2..]; if (v.len == 0)
+			{
+				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
+			}
+			opts.includes.push(
+			{
+				.kind = NORMAL, .path = v
+			}
+			);
+		}
+		else if (arg == "--embed-dir")
+		{
+			i++; if (i >= args.len) return MISSING_ARGUMENT~; opts.embed_dirs.push(args[i]);
+		}
 		else if (arg == "-iquote" || arg == "-isystem" || arg == "-idirafter" || arg == "-F" || arg == "-iframework")
 		{
 			i++; if (i >= args.len) return MISSING_ARGUMENT~;
 			IncludeKind kind = arg == "-iquote" ? QUOTE : arg == "-isystem" ? SYSTEM : arg == "-idirafter" ? AFTER : arg == "-F" ? FRAMEWORK : SYSTEM_FRAMEWORK;
-			opts.includes.push({ .kind = kind, .path = args[i] });
+			opts.includes.push(
+			{
+				.kind = kind, .path = args[i]
+			}
+			);
 		}
 		else if (arg == "-o" || arg == "--sysroot" || arg == "-isysroot" || arg == "-resource-dir" || arg == "-mcpu" || arg == "-target" || arg == "--target" || arg == "-std" || arg == "-MF" || arg == "-darwin-target-variant-triple" || arg == "-rpath")
 		{
 			i++; if (i >= args.len) return MISSING_ARGUMENT~;
 			String v = args[i];
-			if (arg == "-o") { opts.output_name = v; opts.has_output_name = true; }
-			else if (arg == "--sysroot" || arg == "-isysroot") { opts.sysroot = v; opts.has_sysroot = true; }
-			else if (arg == "-resource-dir") { opts.resource_dir = v; opts.has_resource_dir = true; }
-			else if (arg == "-mcpu") { opts.cpu = v; opts.has_cpu = true; }
-			else if (arg == "-target" || arg == "--target") { opts.target_triple = v; opts.has_target_triple = true; opts.has_emulate = false; }
-			else if (arg == "-std") { opts.standard = v; opts.has_standard = true; }
-			else if (arg == "-MF") { opts.dependency_file = v; opts.has_dependency_file = true; }
-			else if (arg == "-darwin-target-variant-triple") { opts.darwin_variant_triple = v; opts.has_darwin_variant_triple = true; }
+			if (arg == "-o")
+			{
+				opts.output_name = v; opts.has_output_name = true;
+			}
+			else if (arg == "--sysroot" || arg == "-isysroot")
+			{
+				opts.sysroot = v; opts.has_sysroot = true;
+			}
+			else if (arg == "-resource-dir")
+			{
+				opts.resource_dir = v; opts.has_resource_dir = true;
+			}
+			else if (arg == "-mcpu")
+			{
+				opts.cpu = v; opts.has_cpu = true;
+			}
+			else if (arg == "-target" || arg == "--target")
+			{
+				opts.target_triple = v; opts.has_target_triple = true; opts.has_emulate = false;
+			}
+			else if (arg == "-std")
+			{
+				opts.standard = v; opts.has_standard = true;
+			}
+			else if (arg == "-MF")
+			{
+				opts.dependency_file = v; opts.has_dependency_file = true;
+			}
+			else if (arg == "-darwin-target-variant-triple")
+			{
+				opts.darwin_variant_triple = v; opts.has_darwin_variant_triple = true;
+			}
 		}
-		else if (arg.starts_with("--target=")) { opts.target_triple = arg[9..]; opts.has_target_triple = true; opts.has_emulate = false; }
-		else if (arg.starts_with("--embed-dir=")) { opts.embed_dirs.push(arg[12..]); }
-		else if (arg.starts_with("--sysroot=")) { opts.sysroot = arg[10..]; opts.has_sysroot = true; }
-		else if (arg.starts_with("--resource-dir=")) { opts.resource_dir = arg[15..]; opts.has_resource_dir = true; }
-		else if (arg.starts_with("-resource-dir=")) { opts.resource_dir = arg[14..]; opts.has_resource_dir = true; }
-		else if (arg.starts_with("-isysroot")) { opts.sysroot = arg[9..]; opts.has_sysroot = true; }
-		else if (arg == "-Wp,-v") { /* accepted; verbose search paths are not implemented */ }
-		else if (arg == "-Wno-error" || arg == "-Werror" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers" || arg == "-pedantic" || arg == "-pedantic-errors" || arg == "-fcaret-diagnostics" || arg == "-fno-caret-diagnostics" || arg == "-fcolor-diagnostics" || arg == "-fno-color-diagnostics") { /* applied by diagnostics setup */ }
-		else if (arg.starts_with("-mcpu=")) { opts.cpu = arg[6..]; opts.has_cpu = true; }
-		else if (arg.starts_with("-std=")) { opts.standard = arg[5..]; opts.has_standard = true; }
-		else if (arg.starts_with("--sysroot=")) { opts.sysroot = arg[10..]; opts.has_sysroot = true; }
-		else if (arg.starts_with("-O")) { String level = arg[2..]; if (level.len == 0) level = "1"; if (level != "0" && level != "1" && level != "2" && level != "3" && level != "s" && level != "z" && level != "g" && level != "fast") return INVALID_ARGUMENT~; opts.optimization = level; opts.has_optimization = true; }
-		else if (arg == "-M" || arg == "--dependencies") { opts.dependency_only = true; opts.ignore_warnings = true; opts.only_preprocess = true; }
-		else if (arg == "-MD" || arg == "--write-dependencies") { opts.write_dependencies = true; }
-		else if (arg == "-MV") { opts.dependency_nmake = true; }
-		else if (arg.starts_with("-MF")) { String v = arg[3..]; if (v.len == 0) { i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i]; } opts.dependency_file = v; opts.has_dependency_file = true; }
+		else if (arg.starts_with("--target="))
+		{
+			opts.target_triple = arg[9..]; opts.has_target_triple = true; opts.has_emulate = false;
+		}
+		else if (arg.starts_with("--embed-dir="))
+		{
+			opts.embed_dirs.push(arg[12..]);
+		}
+		else if (arg.starts_with("--sysroot="))
+		{
+			opts.sysroot = arg[10..]; opts.has_sysroot = true;
+		}
+		else if (arg.starts_with("--resource-dir="))
+		{
+			opts.resource_dir = arg[15..]; opts.has_resource_dir = true;
+		}
+		else if (arg.starts_with("-resource-dir="))
+		{
+			opts.resource_dir = arg[14..]; opts.has_resource_dir = true;
+		}
+		else if (arg.starts_with("-isysroot"))
+		{
+			opts.sysroot = arg[9..]; opts.has_sysroot = true;
+		}
+		else if (arg == "-Wp,-v")
+		{
+			/* accepted; verbose search paths are not implemented */
+		}
+		else if (arg == "-Wno-error" || arg == "-Werror" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers" || arg == "-pedantic" || arg == "-pedantic-errors" || arg == "-fcaret-diagnostics" || arg == "-fno-caret-diagnostics" || arg == "-fcolor-diagnostics" || arg == "-fno-color-diagnostics")
+		{
+			/* applied by diagnostics setup */
+		}
+		else if (arg.starts_with("-mcpu="))
+		{
+			opts.cpu = arg[6..]; opts.has_cpu = true;
+		}
+		else if (arg.starts_with("-std="))
+		{
+			opts.standard = arg[5..]; opts.has_standard = true;
+		}
+		else if (arg.starts_with("--sysroot="))
+		{
+			opts.sysroot = arg[10..]; opts.has_sysroot = true;
+		}
+		else if (arg.starts_with("-O"))
+		{
+			String level = arg[2..]; if (level.len == 0) level = "1"; if (level != "0" && level != "1" && level != "2" && level != "3" && level != "s" && level != "z" && level != "g" && level != "fast") return INVALID_ARGUMENT~; opts.optimization = level; opts.has_optimization = true;
+		}
+		else if (arg == "-M" || arg == "--dependencies")
+		{
+			opts.dependency_only = true; opts.ignore_warnings = true; opts.only_preprocess = true;
+		}
+		else if (arg == "-MD" || arg == "--write-dependencies")
+		{
+			opts.write_dependencies = true;
+		}
+		else if (arg == "-MV")
+		{
+			opts.dependency_nmake = true;
+		}
+		else if (arg.starts_with("-MF"))
+		{
+			String v = arg[3..]; if (v.len == 0)
+			{
+				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
+			}
+			opts.dependency_file = v; opts.has_dependency_file = true;
+		}
 		else if (arg.starts_with("-mcmodel="))
 		{
 			String model_name = arg[9..];
 			bool valid = false;
-			foreach (model : code_gen_options::CodeModel::values) if (model.name == model_name) { valid = true; break; }
+			foreach (model : code_gen_options::CodeModel::values) if (model.name == model_name)
+			{
+				valid = true; break;
+			}
 			if (!valid) return INVALID_ARGUMENT~;
 			opts.code_model = model_name; opts.has_code_model = true;
 		}
@@ -439,7 +965,10 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		{
 			parse_warning_option(opts, arg);
 		}
-		else if (arg == "-") { push_source_input(opts, arg); }
+		else if (arg == "-")
+		{
+			push_source_input(opts, arg);
+		}
 		else if (arg.starts_with("-f") || arg.starts_with("-m"))
 		{
 			if (sink == null) return INVALID_ARGUMENT~;
@@ -450,8 +979,14 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 			if (sink == null) return INVALID_ARGUMENT~;
 			add_driver_warning(opts.a, sink, "unknown argument '%s'", arg)!;
 		}
-		else if (is_link_input_path(arg)) { opts.link_objects.push(arg); }
-		else { push_source_input(opts, arg); }
+		else if (is_link_input_path(arg))
+		{
+			opts.link_objects.push(arg);
+		}
+		else
+		{
+			push_source_input(opts, arg);
+		}
 		i++;
 	}
 	result.input_count = (uint)opts.inputs.len();
@@ -491,9 +1026,18 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 		comp.langopts.set_emulated_compiler(compiler);
 		if (sink != null)
 		{
-			if (compiler == CLANG) { sink.set("clang", diagnostics::MessageKind.OFF)!; }
-			else if (compiler == GCC) { sink.set("gnu", diagnostics::MessageKind.OFF)!; }
-			else if (compiler == MSVC) { sink.set("microsoft", diagnostics::MessageKind.OFF)!; }
+			if (compiler == CLANG)
+			{
+				sink.set("clang", diagnostics::MessageKind.OFF)!;
+			}
+			else if (compiler == GCC)
+			{
+				sink.set("gnu", diagnostics::MessageKind.OFF)!;
+			}
+			else if (compiler == MSVC)
+			{
+				sink.set("microsoft", diagnostics::MessageKind.OFF)!;
+			}
 		}
 	}
 	comp.langopts.preserve_comments = opts.preserve_comments;
@@ -508,7 +1052,10 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 	comp.langopts.use_native_half_type = opts.use_native_half_type;
 	comp.langopts.allow_half_args_and_returns = opts.allow_half_args_returns;
 	if (opts.has_blocks) comp.langopts.blocks = opts.blocks;
-	if ((comp.langopts.emulate == CLANG || comp.langopts.emulate == NO) && comp.target.os.tag.is_darwin()) { comp.langopts.blocks = comp.langopts.blocks || comp.target.is_blocks_supported(); }
+	if ((comp.langopts.emulate == CLANG || comp.langopts.emulate == NO) && comp.target.os.tag.is_darwin())
+	{
+		comp.langopts.blocks = comp.langopts.blocks || comp.target.is_blocks_supported();
+	}
 	comp.langopts.pthread = opts.pthread;
 	if (opts.has_char_signedness) comp.langopts.set_char_signedness(opts.char_signedness);
 	if (opts.has_fp_eval_method) comp.langopts.set_fp_eval_method(opts.fp_eval_method);
@@ -541,14 +1088,26 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 	if (opts.has_code_model)
 	{
 		bool found = false;
-		foreach (model : code_gen_options::CodeModel::values) if (model.name == opts.code_model) { comp.cmodel = model; found = true; break; }
+		foreach (model : code_gen_options::CodeModel::values) if (model.name == opts.code_model)
+		{
+			comp.cmodel = model; found = true; break;
+		}
 		if (!found) return INVALID_ARGUMENT~;
 	}
 	if (opts.has_debug_format)
 	{
-		if (opts.debug_format == "strip") { comp.code_gen_options.debug = { .kind = STRIP }; }
-		else if (opts.debug_format == "codeview") { comp.code_gen_options.debug = { .kind = CODE_VIEW }; }
-		else { comp.code_gen_options.debug = { .kind = DWARF, .dwarf = opts.debug_format == "dwarf64" ? FORMAT64 : FORMAT32 }; }
+		if (opts.debug_format == "strip")
+		{
+			comp.code_gen_options.debug = { .kind = STRIP };
+		}
+		else if (opts.debug_format == "codeview")
+		{
+			comp.code_gen_options.debug = { .kind = CODE_VIEW };
+		}
+		else
+		{
+			comp.code_gen_options.debug = { .kind = DWARF, .dwarf = opts.debug_format == "dwarf64" ? FORMAT64 : FORMAT32 };
+		}
 	}
 	if (opts.has_dwarf_version) comp.code_gen_options.dwarf_version = (DwarfVersion)opts.dwarf_version;
 	PicPolicy pic = pic_policy(opts, comp.target, sink)!;
@@ -592,28 +1151,38 @@ fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null
 	String linker = opts.has_use_linker ? opts.use_linker : system_defaults::LINKER;
 	bool bfd = string_ieq(linker, "bfd");
 	bool pie_default = t.is_pie_default() == YES ||
-		(t.is_pie_default() == DEPENDS_ON_LINKER && bfd && t.cpu.arch == X86_64);
+	(t.is_pie_default() == DEPENDS_ON_LINKER && bfd && t.cpu.arch == X86_64);
 	bool pic_default = t.is_pic_default() == YES ||
-		(t.is_pic_default() == DEPENDS_ON_LINKER && (bfd
-			? t.cpu.arch == X86_64
-			: t.cpu.arch == X86_64 || t.cpu.arch == AARCH64));
+	(t.is_pic_default() == DEPENDS_ON_LINKER && (bfd
+		? t.cpu.arch == X86_64
+		: t.cpu.arch == X86_64 || t.cpu.arch == AARCH64));
 	bool forced = t.is_pic_default_forced() == YES ||
-		(t.is_pic_default_forced() == DEPENDS_ON_LINKER && (bfd
-			? t.cpu.arch == X86_64
-			: t.cpu.arch == X86_64 || t.cpu.arch == AARCH64));
+	(t.is_pic_default_forced() == DEPENDS_ON_LINKER && (bfd
+		? t.cpu.arch == X86_64
+		: t.cpu.arch == X86_64 || t.cpu.arch == AARCH64));
 	bool pie = pie_default;
 	bool pic = pie || pic_default;
-	if (opts.static_link && t.ofmt == MACHO) { pic = false; pie = false; }
+	if (opts.static_link && t.ofmt == MACHO)
+	{
+		pic = false; pie = false;
+	}
 	bool level_two = pic;
 
 	if (t.abi.is_android())
 	{
 		switch (t.cpu.arch)
 		{
-			case ARM: case ARMEB: case THUMB: case THUMBEB:
+			case ARM:
+			case ARMEB:
+			case THUMB:
+			case THUMBEB:
 			case AARCH64:
-			case MIPS: case MIPSEL: case MIPS64: case MIPS64EL: pic = true;
-			case X86: case X86_64: pic = true; level_two = true;
+			case MIPS:
+			case MIPSEL:
+			case MIPS64:
+			case MIPS64EL: pic = true;
+			case X86:
+			case X86_64: pic = true; level_two = true;
 			default: break;
 		}
 	}
@@ -622,9 +1191,14 @@ fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null
 	{
 		switch (t.cpu.arch)
 		{
-			case ARM: case AARCH64:
-			case MIPS64: case MIPS64EL: case X86: case X86_64: level_two = false;
-			case POWERPC: case SPARC64: level_two = true;
+			case ARM:
+			case AARCH64:
+			case MIPS64:
+			case MIPS64EL:
+			case X86:
+			case X86_64: level_two = false;
+			case POWERPC:
+			case SPARC64: level_two = true;
 			default: break;
 		}
 	}
@@ -666,9 +1240,12 @@ fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null
 	}
 
 	bool kernel_abi_os = t.os.tag == WATCHOS || t.os.tag == DRIVERKIT
-		|| (t.os.tag == IOS && t.os.is_at_least_or_false(IOS, { 6, 0, 0 }))
-		|| (t.os.tag == MACCATALYST && t.os.is_at_least_or_false(MACCATALYST, { 6, 0, 0 }));
-	if ((opts.kernel || opts.apple_kext) && kernel_abi_os) { pic = false; pie = false; }
+	|| (t.os.tag == IOS && t.os.is_at_least_or_false(IOS, { 6, 0, 0 }))
+	|| (t.os.tag == MACCATALYST && t.os.is_at_least_or_false(MACCATALYST, { 6, 0, 0 }));
+	if ((opts.kernel || opts.apple_kext) && kernel_abi_os)
+	{
+		pic = false; pie = false;
+	}
 	if ((opts.kernel || opts.apple_kext) && t.os.tag == IOS && !t.os.is_at_least_or_false(IOS, { 6, 0, 0 })) level_two = false;
 
 	if (opts.dynamic_nopic)
@@ -738,21 +1315,42 @@ fn preprocessor::DumpMode FrontendOptions.dump_mode(&self)
 
 fn void? add_driver_error(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	@pool() { return d.add({ .kind = ERROR, .text = string::tformat(fmt, ...args) }); };
+	@pool()
+	{
+		return d.add(
+		{
+			.kind = ERROR, .text = string::tformat(fmt, ...args)
+		}
+		);
+	};
 }
 
 fn void? add_driver_fatal(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	@pool() { return d.add({ .kind = FATAL_ERROR, .text = string::tformat(fmt, ...args) }); };
+	@pool()
+	{
+		return d.add(
+		{
+			.kind = FATAL_ERROR, .text = string::tformat(fmt, ...args)
+		}
+		);
+	};
 }
 
 fn void? add_driver_warning(Allocator a, Diagnostics* d, String fmt, args...) @format(2)
 {
-	@pool() { return d.add({ .kind = WARNING, .text = string::tformat(fmt, ...args) }); };
+	@pool()
+	{
+		return d.add(
+		{
+			.kind = WARNING, .text = string::tformat(fmt, ...args)
+		}
+		);
+	};
 }
 
 <* Split driver-only switches from the shared option parser. *>
-fn void? filter_frontend_args(String[] args, List{String}* filtered, FrontendOptions* extra)
+fn void? filter_frontend_args(String[] args, List{String} * filtered, FrontendOptions* extra)
 {
 	if (args.len == 0) return INVALID_ARGUMENT~;
 	filtered.push(args[0]);
@@ -764,17 +1362,47 @@ fn void? filter_frontend_args(String[] args, List{String}* filtered, FrontendOpt
 		{
 			i++;
 			if (i >= args.len) return MISSING_ARGUMENT~;
-			if (arg == "-include") { extra.implicit_includes.push(args[i]); }
-			else { extra.imacros.push(args[i]); }
+			if (arg == "-include")
+			{
+				extra.implicit_includes.push(args[i]);
+			}
+			else
+			{
+				extra.imacros.push(args[i]);
+			}
 		}
-		else if (arg == "-dM") { extra.dump_m = true; }
-		else if (arg == "-dD") { extra.dump_d = true; }
-		else if (arg == "-dN") { extra.dump_n = true; }
-		else if (arg == "-fcolor-diagnostics") { extra.has_color = true; extra.color = true; }
-		else if (arg == "-fno-color-diagnostics") { extra.has_color = true; extra.color = false; }
-		else if (arg == "-fms-extensions") { extra.has_ms_extensions = true; extra.ms_extensions = true; filtered.push(arg); }
-		else if (arg == "-fno-ms-extensions") { extra.has_ms_extensions = true; extra.ms_extensions = false; filtered.push(arg); }
-		else { filtered.push(arg); }
+		else if (arg == "-dM")
+		{
+			extra.dump_m = true;
+		}
+		else if (arg == "-dD")
+		{
+			extra.dump_d = true;
+		}
+		else if (arg == "-dN")
+		{
+			extra.dump_n = true;
+		}
+		else if (arg == "-fcolor-diagnostics")
+		{
+			extra.has_color = true; extra.color = true;
+		}
+		else if (arg == "-fno-color-diagnostics")
+		{
+			extra.has_color = true; extra.color = false;
+		}
+		else if (arg == "-fms-extensions")
+		{
+			extra.has_ms_extensions = true; extra.ms_extensions = true; filtered.push(arg);
+		}
+		else if (arg == "-fno-ms-extensions")
+		{
+			extra.has_ms_extensions = true; extra.ms_extensions = false; filtered.push(arg);
+		}
+		else
+		{
+			filtered.push(arg);
+		}
 		i++;
 	}
 	return;
@@ -785,23 +1413,74 @@ fn void? apply_diagnostic_options(String[] args, Diagnostics* d)
 {
 	foreach (arg : args[1..])
 	{
-		if (arg == "-Werror") { d.state.error_warnings = true; }
-		else if (arg == "-Wno-error") { d.state.error_warnings = false; }
-		else if (arg == "-w") { d.state.ignore_warnings = true; }
-		else if (arg == "-Weverything") { d.state.enable_all_warnings = true; }
-		else if (arg == "-Wno-everything") { d.state.enable_all_warnings = false; }
-		else if (arg == "-Wfatal-errors") { d.state.fatal_errors = true; }
-		else if (arg == "-Wno-fatal-errors") { d.state.fatal_errors = false; }
-		else if (arg == "-fcaret-diagnostics") { d.details = true; }
-		else if (arg == "-fno-caret-diagnostics") { d.details = false; }
-		else if (arg == "-Wsystem-headers") { d.state.suppress_system_headers = false; }
-		else if (arg == "-Wno-system-headers") { d.state.suppress_system_headers = true; }
-		else if (arg == "-pedantic") { d.state.extensions = diagnostics::MessageKind.WARNING; }
-		else if (arg == "-pedantic-errors") { d.state.extensions = diagnostics::MessageKind.ERROR; }
-		else if (arg.starts_with("-Werror=")) { d.set(arg[8..], diagnostics::MessageKind.ERROR)!; }
-		else if (arg.starts_with("-Wno-error=")) { d.set(arg[11..], diagnostics::MessageKind.WARNING)!; }
-		else if (arg.starts_with("-Wno-")) { d.set(arg[5..], diagnostics::MessageKind.OFF)!; }
-		else if (arg.starts_with("-W")) { d.set(arg[2..], diagnostics::MessageKind.WARNING)!; }
+		if (arg == "-Werror")
+		{
+			d.state.error_warnings = true;
+		}
+		else if (arg == "-Wno-error")
+		{
+			d.state.error_warnings = false;
+		}
+		else if (arg == "-w")
+		{
+			d.state.ignore_warnings = true;
+		}
+		else if (arg == "-Weverything")
+		{
+			d.state.enable_all_warnings = true;
+		}
+		else if (arg == "-Wno-everything")
+		{
+			d.state.enable_all_warnings = false;
+		}
+		else if (arg == "-Wfatal-errors")
+		{
+			d.state.fatal_errors = true;
+		}
+		else if (arg == "-Wno-fatal-errors")
+		{
+			d.state.fatal_errors = false;
+		}
+		else if (arg == "-fcaret-diagnostics")
+		{
+			d.details = true;
+		}
+		else if (arg == "-fno-caret-diagnostics")
+		{
+			d.details = false;
+		}
+		else if (arg == "-Wsystem-headers")
+		{
+			d.state.suppress_system_headers = false;
+		}
+		else if (arg == "-Wno-system-headers")
+		{
+			d.state.suppress_system_headers = true;
+		}
+		else if (arg == "-pedantic")
+		{
+			d.state.extensions = diagnostics::MessageKind.WARNING;
+		}
+		else if (arg == "-pedantic-errors")
+		{
+			d.state.extensions = diagnostics::MessageKind.ERROR;
+		}
+		else if (arg.starts_with("-Werror="))
+		{
+			d.set(arg[8..], diagnostics::MessageKind.ERROR)!;
+		}
+		else if (arg.starts_with("-Wno-error="))
+		{
+			d.set(arg[11..], diagnostics::MessageKind.WARNING)!;
+		}
+		else if (arg.starts_with("-Wno-"))
+		{
+			d.set(arg[5..], diagnostics::MessageKind.OFF)!;
+		}
+		else if (arg.starts_with("-W"))
+		{
+			d.set(arg[2..], diagnostics::MessageKind.WARNING)!;
+		}
 	}
 	return;
 }
@@ -921,8 +1600,8 @@ fn String toolchain_fault_message(fault f)
 }
 
 fn bool? configure_toolchain(Compilation* comp, DriverOptions* opts,
-	toolchain::Options* tc_opts, toolchain::Toolchain* tc, List{IncludeDir}* all_includes,
-	List{String}* owned_include_paths, Diagnostics* sink)
+	toolchain::Options* tc_opts, toolchain::Toolchain* tc, List{IncludeDir} * all_includes,
+	List{String} * owned_include_paths, Diagnostics* sink)
 {
 	ParseEffect[] effects = apply_options(opts, comp, tc_opts, sink)!;
 	(void)effects;
@@ -941,13 +1620,19 @@ fn bool? configure_toolchain(Compilation* comp, DriverOptions* opts,
 	tc.init(comp.gpa, tc_env, *tc_opts);
 	tc.diagnostics = sink;
 	fault discover_fault = @catch(tc.discover());
-	if (discover_fault) { tc.free(); return discover_fault~; }
+	if (discover_fault)
+	{
+		tc.free(); return discover_fault~;
+	}
 	List{IncludeDir} system_includes;
 	system_includes.init(comp.gpa);
 	defer system_includes.free();
 	fault include_fault = @catch(tc.define_system_includes(&system_includes));
 	foreach (include : system_includes) owned_include_paths.push(include.path);
-	if (include_fault) { tc.free(); return include_fault~; }
+	if (include_fault)
+	{
+		tc.free(); return include_fault~;
+	}
 	foreach (include : opts.includes) all_includes.push(include);
 	foreach (include : system_includes) all_includes.push(include);
 	comp.set_include_dirs(all_includes.array_view());
@@ -962,9 +1647,18 @@ fn void print_diagnostics_stats(Diagnostics* d)
 	uint errors = d.errors;
 	String w_s = warnings == 1 ? "" : "s";
 	String e_s = errors == 1 ? "" : "s";
-	if (errors != 0 && warnings != 0) { io::eprintfn("%d warning%s and %d error%s generated.", warnings, w_s, errors, e_s); }
-	else if (warnings != 0) { io::eprintfn("%d warning%s generated.", warnings, w_s); }
-	else if (errors != 0) { io::eprintfn("%d error%s generated.", errors, e_s); }
+	if (errors != 0 && warnings != 0)
+	{
+		io::eprintfn("%d warning%s and %d error%s generated.", warnings, w_s, errors, e_s);
+	}
+	else if (warnings != 0)
+	{
+		io::eprintfn("%d warning%s generated.", warnings, w_s);
+	}
+	else if (errors != 0)
+	{
+		io::eprintfn("%d error%s generated.", errors, e_s);
+	}
 }
 
 fn bool? write_dependencies(Allocator a, DriverOptions* opts, Source source, dep_file::DepFile* dep)
@@ -979,7 +1673,7 @@ fn bool? write_dependencies(Allocator a, DriverOptions* opts, Source source, dep
 	}
 	else if (!opts.has_dependency_file && opts.write_dependencies)
 	{
-		String stem = file_stem(opts.has_output_name ? opts.output_name : source.path);
+		String stem = file_stem(opts.has_output_name ? opts.output_name: source.path);
 		DString name;
 		name.init(a);
 		defer name.free();
@@ -990,7 +1684,10 @@ fn bool? write_dependencies(Allocator a, DriverOptions* opts, Source source, dep
 	{
 		if (catch f = file::save(opts.output_name, output.str_view())) return f~;
 	}
-	else if (catch f = io::write_all(io::stdout(), output.str_view())) { return f~; }
+	else if (catch f = io::write_all(io::stdout(), output.str_view()))
+	{
+		return f~;
+	}
 	return true;
 }
 
@@ -1046,7 +1743,7 @@ fn void? invoke_linker(Compilation* comp, Diagnostics* d, toolchain::Toolchain* 
 
 fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
-	List{String}* link_objects, Source source, tree::Tree* ast,
+	List{String} * link_objects, Source source, tree::Tree* ast,
 	preprocessor::Preprocessor* pp, bool link_mode)
 {
 	if (comp.target.ofmt != target::ObjectFormat.ELF || comp.target.cpu.arch != target::Arch.X86_64)
@@ -1069,7 +1766,7 @@ fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* 
 	ir::Ir? ir_opt = codegen::gen_ir(ast, pp);
 	if (catch f = ir_opt)
 	{
-		if (f != compilation::FATAL_ERROR) (void)add_driver_fatal(comp.gpa, d, "unable to generate Ir: %s", f);
+		if (f != compilation::FATAL_ERROR)(void)add_driver_fatal(comp.gpa, d, "unable to generate Ir: %s", f);
 		return 1;
 	}
 	ir::Ir generated_ir = ir_opt;
@@ -1090,7 +1787,7 @@ fn bool dce_keeps_external_definitions(DriverOptions* opts, bool link_mode)
 }
 
 fn int emit_ir_object(Compilation* comp, Diagnostics* d, DriverOptions* opts,
-	List{String}* link_objects, String output_name, ir::Ir* generated_ir, bool link_mode,
+	List{String} * link_objects, String output_name, ir::Ir* generated_ir, bool link_mode,
 	ir::ErrorList* errors)
 {
 	object::Object*? object_opt = ir::render_object(generated_ir, comp.gpa, comp.target, errors, opts.x86_64_spill_all);
@@ -1130,13 +1827,13 @@ fn int emit_ir_object(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 
 fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
-	List{String}* link_objects, String output_name, ir::Ir* generated_ir, bool link_mode)
+	List{String} * link_objects, String output_name, ir::Ir* generated_ir, bool link_mode)
 {
 	ir::ErrorList errors;
 	errors.init(comp.gpa);
 	defer errors.free();
 	fault opt_fault = @catch(ir_opt::run(generated_ir,
-		{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
+			{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
 			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode) },
 		&errors));
 	if (opt_fault)
@@ -1187,7 +1884,7 @@ fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 *>
 fn int finish_assembly(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
-	List{String}* link_objects, String output_name, bool link_mode, String data, String text)
+	List{String} * link_objects, String output_name, bool link_mode, String data, String text)
 {
 	if (opts.only_preprocess_and_compile) return write_backend_output(comp, d, output_name, data, text);
 
@@ -1212,7 +1909,7 @@ fn bool merge_conflicts(ir::Decl* existing, ir::Decl* incoming)
 	if (existing.kind == ir::DeclKind.GLOBAL && incoming.kind == ir::DeclKind.GLOBAL)
 	{
 		return existing.is_definition() && incoming.is_definition() &&
-			!existing.global.tentative && !incoming.global.tentative;
+		!existing.global.tentative && !incoming.global.tentative;
 	}
 	if (existing.kind == ir::DeclKind.FUNCTION && incoming.kind == ir::DeclKind.FUNCTION)
 	{
@@ -1239,7 +1936,10 @@ fn GlobalMergeResult merge_global_declarations(ir::Decl* existing, ir::Decl* inc
 
 	bool existing_definition = existing.is_definition();
 	bool incoming_definition = incoming.is_definition();
-	if (!existing_definition && incoming_definition) { return GlobalMergeResult.REPLACE_EXISTING; }
+	if (!existing_definition && incoming_definition)
+	{
+		return GlobalMergeResult.REPLACE_EXISTING;
+	}
 	if (existing.global.tentative && incoming_definition && !incoming.global.tentative)
 	{
 		return GlobalMergeResult.REPLACE_EXISTING;
@@ -1259,7 +1959,7 @@ fn int merge_tu(Compilation* comp, Diagnostics* d, WholeProgram* wp,
 	ir::Ir? generated_opt = codegen::gen_ir(ast, pp, tu_id);
 	if (catch f = generated_opt)
 	{
-		if (f != compilation::FATAL_ERROR) (void)add_driver_fatal(comp.gpa, d, "unable to generate Ir: %s", f);
+		if (f != compilation::FATAL_ERROR)(void)add_driver_fatal(comp.gpa, d, "unable to generate Ir: %s", f);
 		return 1;
 	}
 	ir::Ir generated = generated_opt;
@@ -1315,7 +2015,7 @@ fn int merge_tu(Compilation* comp, Diagnostics* d, WholeProgram* wp,
 
 fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, FrontendOptions* extra,
 	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
-	List{String}* link_objects, bool link_mode,
+	List{String} * link_objects, bool link_mode,
 	Source main_source, Source builtin_source, Source command_line_source,
 	Source[] imacros, Source[] implicit_includes, WholeProgram* wp = null, int tu_id = -1)
 {
@@ -1367,7 +2067,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 	if (catch f = pp.preprocess_sources(sources))
 	{
 		comp.pragmas.after_parse(comp);
-		if (f != compilation::FATAL_ERROR) (void)add_driver_error(comp.gpa, d, "preprocessing failed: %s", f);
+		if (f != compilation::FATAL_ERROR)(void)add_driver_error(comp.gpa, d, "preprocessing failed: %s", f);
 		print_diagnostics_stats(d);
 		return 1;
 	}
@@ -1430,7 +2130,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 	tree::Tree? parsed = p.parse();
 	if (catch f = parsed)
 	{
-		if (f != compilation::FATAL_ERROR) (void)add_driver_error(comp.gpa, d, "parser failed: %s", f);
+		if (f != compilation::FATAL_ERROR)(void)add_driver_error(comp.gpa, d, "parser failed: %s", f);
 		print_diagnostics_stats(d);
 		return 1;
 	}
@@ -1462,7 +2162,7 @@ fn int run(Compilation* comp, Diagnostics* d, String[] args, String executable_d
 <* Merge user linker inputs and generated source objects at the argv positions
  recorded for each translation unit. *>
 fn void merge_link_inputs(String[] user, usz[] slots, String[] compiled, usz[] tu_end,
-	bool whole_program, List{String}* out)
+	bool whole_program, List{String} * out)
 {
 	if (whole_program)
 	{
@@ -1535,7 +2235,10 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	if (d.errors > errors_before_parse) return 1;
 	uint errors_before_run = d.errors;
 	diagnostics::State old_diagnostic_state = d.state;
-	defer { d.state = old_diagnostic_state; };
+	defer
+	{
+		d.state = old_diagnostic_state;
+	};
 	if (extra.has_color)
 	{
 		d.color = extra.color ? diagnostics::ColorOverride.FORCE_ON : diagnostics::ColorOverride.FORCE_OFF;
@@ -1560,7 +2263,7 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	}
 	if (!link_mode && opts.link_objects.len() != 0)
 	{
-		foreach (obj : opts.link_objects) (void)add_driver_error(comp.gpa, d,
+		foreach (obj : opts.link_objects)(void)add_driver_error(comp.gpa, d,
 			"%s: linker input file unused because linking not done", obj);
 	}
 
@@ -1595,7 +2298,10 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 			comp.environment.source_date_epoch = epoch;
 		}
 	}
-	defer { comp.environment.source_date_epoch = old_epoch; comp.environment.has_source_date_epoch = old_has_epoch; };
+	defer
+	{
+		comp.environment.source_date_epoch = old_epoch; comp.environment.has_source_date_epoch = old_has_epoch;
+	};
 
 	toolchain::Options tc_opts;
 	toolchain::Toolchain tc;
@@ -1606,7 +2312,10 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	List{String} owned_include_paths;
 	owned_include_paths.init(comp.gpa);
 	uint errors_before_configure = d.errors;
-	defer { foreach (p : owned_include_paths) alloc::free(comp.gpa, p.ptr); owned_include_paths.free(); };
+	defer
+	{
+		foreach (p : owned_include_paths) alloc::free(comp.gpa, p.ptr); owned_include_paths.free();
+	};
 	if (catch f = configure_toolchain(comp, &opts, &tc_opts, &tc, &all_includes, &owned_include_paths, d))
 	{
 		if (d.errors > errors_before_configure) return 1;
@@ -1665,8 +2374,14 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		Source? source_opt = load_cli_include(comp, path_arg);
 		if (catch f = source_opt)
 		{
-			if (f == CLI_INCLUDE_NOT_FOUND) { (void)add_driver_error(comp.gpa, d, "imacros file '%s' was not found", path_arg); }
-			else { (void)add_driver_error(comp.gpa, d, "unable to add imacros file '%s': %s", path_arg, f); }
+			if (f == CLI_INCLUDE_NOT_FOUND)
+			{
+				(void)add_driver_error(comp.gpa, d, "imacros file '%s' was not found", path_arg);
+			}
+			else
+			{
+				(void)add_driver_error(comp.gpa, d, "unable to add imacros file '%s': %s", path_arg, f);
+			}
 			return 1;
 		}
 		imacros.push(source_opt);
@@ -1679,8 +2394,14 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		Source? source_opt = load_cli_include(comp, path_arg);
 		if (catch f = source_opt)
 		{
-			if (f == CLI_INCLUDE_NOT_FOUND) { (void)add_driver_error(comp.gpa, d, "implicit include file '%s' was not found", path_arg); }
-			else { (void)add_driver_error(comp.gpa, d, "unable to add implicit include file '%s': %s", path_arg, f); }
+			if (f == CLI_INCLUDE_NOT_FOUND)
+			{
+				(void)add_driver_error(comp.gpa, d, "implicit include file '%s' was not found", path_arg);
+			}
+			else
+			{
+				(void)add_driver_error(comp.gpa, d, "unable to add implicit include file '%s': %s", path_arg, f);
+			}
 			return 1;
 		}
 		implicit_includes.push(source_opt);
@@ -1694,9 +2415,18 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		int this_tu_id = tu_id;
 		tu_id++;
 		char[]? input_bytes;
-		if (input_path == "-") { input_bytes = read_stdin(comp.gpa, stdin_file); }
-		else if (try existing = comp.find_source(input_path)) { input_bytes = existing.buf.copy(comp.gpa); }
-		else { input_bytes = file::load(comp.gpa, input_path); }
+		if (input_path == "-")
+		{
+			input_bytes = read_stdin(comp.gpa, stdin_file);
+		}
+		else if (try existing = comp.find_source(input_path))
+		{
+			input_bytes = existing.buf.copy(comp.gpa);
+		}
+		else
+		{
+			input_bytes = file::load(comp.gpa, input_path);
+		}
 		if (catch f = input_bytes)
 		{
 			(void)add_driver_error(comp.gpa, d, "unable to read input '%s': %s", input_path, f);
@@ -1717,7 +2447,7 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		int file_status = process_source(comp, d, &opts, &extra,
 			&tc, &temp_files, &compiled_objects, link_mode, source_opt, builtin_source,
 			command_line_source, imacros.array_view(), implicit_includes.array_view(),
-			whole_program ? &wp : null, this_tu_id);
+		whole_program ? &wp: null, this_tu_id);
 		tu_object_end.push((usz)compiled_objects.len());
 		if (file_status != 0) status = file_status;
 	}
@@ -1732,7 +2462,7 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 			return 1;
 		}
 		if (emit_ir_output(comp, d, &opts, &tc, &temp_files, &compiled_objects,
-			output_opt, &wp.program, link_mode) != 0) return 1;
+				output_opt, &wp.program, link_mode) != 0) return 1;
 	}
 	if (link_mode)
 	{
@@ -1740,7 +2470,7 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		merged_link_inputs.init(comp.gpa);
 		defer merged_link_inputs.free();
 		merge_link_inputs(opts.link_objects.array_view(), opts.input_link_slots.array_view(),
-			compiled_objects.array_view(), tu_object_end.array_view(), whole_program, &merged_link_inputs);
+		compiled_objects.array_view(), tu_object_end.array_view(), whole_program, &merged_link_inputs);
 		if (catch f = invoke_linker(comp, d, &tc, &opts, merged_link_inputs.array_view()))
 		{
 			(void)f;
@@ -1752,4 +2482,3 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	if (d.errors != errors_before_run) return 1;
 	return status;
 }
-

@@ -369,8 +369,8 @@ fn Source? compilation::Compilation.search_include(&self, String filename, Sourc
 				);
 				@pool()
 				{
-					String warning = string::tformat(compilation::CompDiag.MS_SEARCH_RULE.fmt, filename);
-					self.diagnostics.add(diagnostics::@message_at(compilation::CompDiag.MS_SEARCH_RULE, warning, loc))!;
+					String warning = string::tformat(Diagnostic.MS_SEARCH_RULE.fmt, filename);
+					self.diagnostics.add(diagnostics::@message_at(Diagnostic.MS_SEARCH_RULE, warning, loc))!;
 				};
 			}
 			return src;

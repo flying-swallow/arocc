@@ -10,7 +10,7 @@ fn void Tree.write(&self, NodeIndex index, DString* w)
 	switch (n.kind)
 	{
 		case CAST:
-			if (!n.cast.implicit) { w.append_char('('); n.cast.qt.print_desugared(self.comp, w); w.append_char(')'); }
+			if (!n.cast.implicit) { w.append_char('('); n.cast.qt.print_desugared(self.comp, w)!!; w.append_char(')'); }
 			self.write(n.cast.operand, w);
 		case PAREN_EXPR: w.append_char('('); self.write(n.unary.operand, w); w.append_char(')');
 		case COMMA_EXPR:
@@ -70,7 +70,7 @@ fn void Tree.write(&self, NodeIndex index, DString* w)
 			w.append_string(self.tok_slice(n.literal.literal_tok));
 		case CHAR_LITERAL: w.append_string(self.tok_slice(n.char_literal.literal_tok));
 		case STRING_LITERAL_EXPR:
-			if (try string_value = self.value_of(index)) { string_value.print(n.char_literal.qt, self.comp, w); }
+			if (try string_value = self.value_of(index)) { string_value.print(n.char_literal.qt, self.comp, w)!!; }
 			else { w.append_string(self.tok_slice(n.char_literal.literal_tok)); }
 		case IMAGINARY_LITERAL: self.write(n.unary.operand, w);
 		case SIZEOF_EXPR:
@@ -78,7 +78,7 @@ fn void Tree.write(&self, NodeIndex index, DString* w)
 		case COUNTOF_EXPR:
 			w.append_string(self.tok_slice(n.type_info.op_tok));
 			if (!n.type_info.expr.is_null()) { w.append_char(' '); self.write(n.type_info.expr.unwrap(), w); }
-			else { w.append_char('('); n.type_info.operand_qt.print_desugared(self.comp, w); w.append_char(')'); }
+			else { w.append_char('('); n.type_info.operand_qt.print_desugared(self.comp, w)!!; w.append_char(')'); }
 		case DECL_REF_EXPR:
 		case ENUMERATION_REF: w.append_string(self.tok_slice(n.decl_ref.name_tok));
 		case BUILTIN_REF: w.append_string(self.tok_slice(n.builtin_ref.name_tok));
@@ -94,12 +94,12 @@ fn void Tree.write(&self, NodeIndex index, DString* w)
 			w.append_char(')');
 		case BUILTIN_TYPES_COMPATIBLE_P:
 			w.append_string(self.tok_slice(n.types_compatible.builtin_tok)); w.append_char('(');
-			n.types_compatible.lhs.print_desugared(self.comp, w); w.append_string(", "); n.types_compatible.rhs.print_desugared(self.comp, w); w.append_char(')');
+			n.types_compatible.lhs.print_desugared(self.comp, w)!!; w.append_string(", "); n.types_compatible.rhs.print_desugared(self.comp, w)!!; w.append_char(')');
 		case GENERIC_EXPR:
 			w.append_string(self.tok_slice(n.generic.generic_tok)); w.append_char('('); self.write(n.generic.controlling, w);
 			foreach (arg : n.generic.rest) { w.append_string(", "); self.write(arg, w); }
 			w.append_string(", "); self.write(n.generic.chosen, w); w.append_char(')');
-		case GENERIC_ASSOCIATION_EXPR: n.generic_association.association_qt.print_desugared(self.comp, w); w.append_string(": "); self.write(n.generic_association.expr, w);
+		case GENERIC_ASSOCIATION_EXPR: n.generic_association.association_qt.print_desugared(self.comp, w)!!; w.append_string(": "); self.write(n.generic_association.expr, w);
 		case GENERIC_DEFAULT_EXPR: w.append_string(self.tok_slice(n.generic_default.default_tok)); w.append_string(": "); self.write(n.generic_default.expr, w);
 		case BINARY_COND_EXPR:
 			self.write(n.conditional.cond, w); w.append_string(" ?: "); self.write(n.conditional.else_expr, w);
@@ -256,7 +256,7 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 		io::write_all(w, ": ")!;
 		if (n.kind == CAST) { term.set_color(diagnostics::Color.WHITE)!; io::fprintf(w, "(%s) ", n.cast.kind.name)!; }
 		term.set_color(diagnostics::Color.BRIGHT_MAGENTA)!;
-		w.write_byte('\'')!; DString type_text; type_text.init(tmem); qt.dump(self.comp, &type_text); io::write_all(w, type_text.str_view())!; w.write_byte('\'')!;
+		w.write_byte('\'')!; qt.dump(self.comp, w)!; w.write_byte('\'')!;
 	}
 	if (self.is_lval(index)) { set_bright_yellow(term)!; io::write_all(w, " lvalue")!; }
 	if (self.is_bitfield(index)) { set_bright_yellow(term)!; io::write_all(w, " bitfield")!; }
@@ -268,17 +268,16 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 	}
 	if (try value = self.value_of(index)) {
 		term.set_color(diagnostics::Color.BRIGHT_GREEN)!; io::write_all(w, " (value: ")!;
-		DString v; v.init(tmem);
 		NestedPrint nested;
-		if (value.print(index.qt(self), self.comp, &v, &nested)) {
+		if (value.print(index.qt(self), self.comp, w, &nested)!) {
 			if (((NodeIndex)nested.node).kind(self) == COMPOUND_LITERAL_EXPR) {
-				v.append_string("(compound literal) ");
-				nested.offset.print(self.comp.type_store.ptrdiff, self.comp, &v);
+				io::write_all(w, "(compound literal) ")!;
+				nested.offset.print(self.comp.type_store.ptrdiff, self.comp, w)!;
 			} else {
-				value::print_pointer(nested.offset, self.tok_slice(((NodeIndex)nested.node).tok(self)), self.comp, &v);
+				value::print_pointer(nested.offset, self.tok_slice(((NodeIndex)nested.node).tok(self)), self.comp, w)!;
 			}
 		}
-		io::write_all(w, v.str_view())!; w.write_byte(')')!;
+		w.write_byte(')')!;
 	}
 	if (n.kind == RETURN_STMT && n.return_stmt.operand == IMPLICIT && n.return_stmt.implicit_value) { set_bright_blue(term)!; io::write_all(w, " (value: 0)")!; }
 	w.write_byte('\n')!;
@@ -531,11 +530,9 @@ fn void? Tree.dump_asm_operands(&self, AsmOperand[] operands, uint level, Termin
 fn void? Tree.dump_value_node(&self, NodeIndex index, uint indent, Terminal term)
 {
 	if (try value = self.value_of(index)) {
-		DString rendered; rendered.init(tmem);
-		value.print(index.qt(self), self.comp, &rendered);
 		for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 		term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
-		io::write_all(term.writer, rendered.str_view())!;
+		value.print(index.qt(self), self.comp, term.writer)!;
 		term.writer.write_byte('\n')!;
 		term.set_color(diagnostics::Color.RESET)!;
 	}
@@ -544,12 +541,10 @@ fn void? Tree.dump_value_node(&self, NodeIndex index, uint indent, Terminal term
 fn void? Tree.dump_value_line(&self, NodeIndex index, uint indent, String label, Terminal term)
 {
 	if (try value = self.value_of(index)) {
-		DString rendered; rendered.init(tmem);
-		value.print(index.qt(self), self.comp, &rendered);
 		for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 		io::write_all(term.writer, label)!;
 		term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
-		io::write_all(term.writer, rendered.str_view())!;
+		value.print(index.qt(self), self.comp, term.writer)!;
 		term.writer.write_byte('\n')!;
 		term.set_color(diagnostics::Color.RESET)!;
 	}
@@ -648,8 +643,7 @@ fn void? dump_type_line(Terminal term, uint indent, String label, QualType qt, C
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
 	term.set_color(diagnostics::Color.BRIGHT_MAGENTA)!;
-	DString rendered; rendered.init(tmem); qt.dump(comp, &rendered);
-	io::write_all(term.writer, rendered.str_view())!;
+	qt.dump(comp, term.writer)!;
 	term.set_color(diagnostics::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }

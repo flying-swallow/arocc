@@ -15,7 +15,7 @@
 //       parser. Floats go through primitive_value::parse_f128 and PrimitiveValue.cast;
 //       integers through value (u64) / bigint (_BitInt). Parser-level
 //       diagnostics (int_literal_too_big, ...) are *returned* as
-//       NumberValueDiag ids, because the C parser filters them
+//       Diagnostic ids, because the C parser filters them
 //       (extension_suppressed) before reporting at the token.
 //   text_literal.c3    (11.3 `text-decoding`)
 //       TextLiteralKind (classify/concat/types/widths), the TextLiteralParser
@@ -27,7 +27,7 @@
 //       Parser.zig charLiteral/stringLiteral without the parser: a char token
 //       -> CharLiteral { qt, val }; a run of adjacent string tokens ->
 //       StringLiteral { kind, qt, val (interned bytes) }, with concatenation
-//       restrictions returned as TextSemanticsDiag ids.
+//       restrictions returned as Diagnostic ids.
 //
 // None of these needs a token list or AST: inputs are token bytes, TokenId,
 // Location and expansion locations plus the Compilation (langopts, target,
@@ -55,27 +55,6 @@ excuse INVALID_SUFFIX;
 
 // ---------------------------------------------------------------------------
 // Zig `number_literal.Parser.Diagnostic` constants (exact Zig text).
-
-<*
- Zig `number_literal.Parser.Diagnostic` (exact Zig text). `fmt` is C3 printf syntax; `{c}` arguments are `text_literal::Ascii` values.
-*>
-enum NumberLiteralDiag : ushort(String fmt, MessageKind kind, DiagMeta meta)
-{
-	INVALID_BINARY_DIGIT { "invalid digit '%s' in binary constant", ERROR, {} },
-	INVALID_OCTAL_DIGIT { "invalid digit '%s' in octal constant", ERROR, {} },
-	INVALID_INT_SUFFIX { "invalid suffix '%s' on integer constant", ERROR, {} },
-	INVALID_FLOAT_SUFFIX { "invalid suffix '%s' on floating constant", ERROR, {} },
-	HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT { "hexadecimal floating constant requires an exponent", ERROR, {} },
-	EXPONENT_HAS_NO_DIGITS { "exponent has no digits", ERROR, {} },
-	C23_BINARY { "binary integer literals are a C23 extension", OFF, { .has_opt = true, .opt = Option.C23_EXTENSIONS, .extension = true } },
-	// Zig text says "octal" although this is the binary-literal compat warning; kept verbatim.
-	PRE_C23_BINARY { "octal integer literals are incompatible with C standards before C23", OFF, { .has_opt = true, .opt = Option.PRE_C23_COMPAT } },
-	BITINT_SUFFIX { "'_BitInt' suffix for literals is a C23 extension", WARNING, { .has_opt = true, .opt = Option.C23_EXTENSIONS, .extension = true } },
-	PRE_C23_BITINT { "'_BitInt' suffix for literals is incompatible with C standards before C23", OFF, { .has_opt = true, .opt = Option.PRE_C23_COMPAT } },
-	C2Y_OCTAL { "octal integer literals are a C2y extension", OFF, { .has_opt = true, .opt = Option.C2Y_EXTENSIONS, .extension = true } },
-	PRE_C2Y_OCTAL { "octal integer literals are incompatible with C standards before C2y", OFF, { .has_opt = true, .opt = Option.PRE_C2Y_COMPAT } },
-	C2Y_DEPRECATED_OCTAL { "octal literals without a '0o' prefix are deprecated", WARNING, { .has_opt = true, .opt = Option.DEPRECATED_OCTAL_LITERALS } },
-}
 
 // ---------------------------------------------------------------------------
 // Prefix
@@ -482,14 +461,14 @@ struct NumberLiteralParser
  Zig `Parser.parse`. allow = langopts.allow_fixed_sized_int_suffixes();
  prefix = prefix_from_string(buf, allow); then getIntegerPart, getFracPart,
  getExponent; is_float = frac or exponent present; the rest must be a suffix
- of that kind (else NumberLiteralDiag.INVALID_FLOAT_SUFFIX / NumberLiteralDiag.INVALID_INT_SUFFIX with
- the suffix text); W/IW without float80_type -> NumberLiteralDiag.INVALID_FLOAT_SUFFIX.
- Float: HEX without exponent -> NumberLiteralDiag.HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT;
- bytes = buf minus suffix. Integer: BINARY before C23 -> NumberLiteralDiag.C23_BINARY
+ of that kind (else Diagnostic.INVALID_FLOAT_SUFFIX / Diagnostic.INVALID_INT_SUFFIX with
+ the suffix text); W/IW without float80_type -> Diagnostic.INVALID_FLOAT_SUFFIX.
+ Float: HEX without exponent -> Diagnostic.HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT;
+ bytes = buf minus suffix. Integer: BINARY before C23 -> Diagnostic.C23_BINARY
  (Zig `if (c23) pre_c23_binary else c23_binary` inside `!c23`, so always
- C23_BINARY); bit-int suffix -> C23 ? NumberLiteralDiag.PRE_C23_BITINT : NumberLiteralDiag.BITINT_SUFFIX;
- OCTAL: prefix_len 2 and buf[1] != '\'' -> C2y ? NumberLiteralDiag.PRE_C2Y_OCTAL :
- NumberLiteralDiag.C2Y_OCTAL, else if C2y -> NumberLiteralDiag.C2Y_DEPRECATED_OCTAL; bytes = int part.
+ C23_BINARY); bit-int suffix -> C23 ? Diagnostic.PRE_C23_BITINT : Diagnostic.BITINT_SUFFIX;
+ OCTAL: prefix_len 2 and buf[1] != '\'' -> C2y ? Diagnostic.PRE_C2Y_OCTAL :
+ Diagnostic.C2Y_OCTAL, else if C2y -> Diagnostic.C2Y_DEPRECATED_OCTAL; bytes = int part.
  getIntegerPart: '.' first -> ""; first digit not allowed -> BINARY/OCTAL
  invalid-digit (Ascii) or HEX invalid int suffix (whole rest); scan: '.'
  ends; p/P ends for HEX else invalid int suffix (from p); e/E: HEX continue,
@@ -498,7 +477,7 @@ struct NumberLiteralParser
  anything else ends. getFracPart: BINARY/OCTAL with '.' -> invalid int
  suffix; else '.' then digits/separators. getExponent: e/E (DECIMAL) or p/P
  (non-HEX -> invalid float suffix), optional sign at index 1, digits and
- separators; no digit -> NumberLiteralDiag.EXPONENT_HAS_NO_DIGITS.
+ separators; no digit -> Diagnostic.EXPONENT_HAS_NO_DIGITS.
  Every error returns text_literal::PARSING_FAILED after reporting.
  @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
@@ -525,17 +504,17 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 	{
 		if (is_float)
 		{
-			self.err(NumberLiteralDiag.INVALID_FLOAT_SUFFIX, suffix_str)!;
+			self.err(Diagnostic.INVALID_FLOAT_SUFFIX, suffix_str)!;
 		}
 		else
 		{
-			self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, suffix_str)!;
+			self.err(Diagnostic.INVALID_INT_SUFFIX, suffix_str)!;
 		}
 		return text_literal::PARSING_FAILED~;
 	}
 	if (suffix.is_float80() && @catch(self.comp.float80_type()))
 	{
-		self.err(NumberLiteralDiag.INVALID_FLOAT_SUFFIX, suffix_str)!;
+		self.err(Diagnostic.INVALID_FLOAT_SUFFIX, suffix_str)!;
 		return text_literal::PARSING_FAILED~;
 	}
 
@@ -544,7 +523,7 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 		assert(prefix == HEX || prefix == DECIMAL);
 		if (prefix == HEX && exponent.len == 0)
 		{
-			self.err(NumberLiteralDiag.HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT)!;
+			self.err(Diagnostic.HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT)!;
 			return text_literal::PARSING_FAILED~;
 		}
 		return { .bytes = buf[:buf.len - suffix_str.len], .is_float = true, .prefix = prefix, .suffix = suffix };
@@ -552,16 +531,16 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 
 	bool c23 = self.comp.langopts.standard.at_least(C23);
 	// Zig: `if (prefix == .binary and !c23) err(if (c23) pre_c23_binary else c23_binary)`.
-	if (prefix == BINARY && !c23) self.err(NumberLiteralDiag.C23_BINARY)!;
+	if (prefix == BINARY && !c23) self.err(Diagnostic.C23_BINARY)!;
 	if (suffix.is_bit_int())
 	{
 		if (c23)
 		{
-			self.err(NumberLiteralDiag.PRE_C23_BITINT)!;
+			self.err(Diagnostic.PRE_C23_BITINT)!;
 		}
 		else
 		{
-			self.err(NumberLiteralDiag.BITINT_SUFFIX)!;
+			self.err(Diagnostic.BITINT_SUFFIX)!;
 		}
 	}
 	if (prefix == OCTAL)
@@ -571,16 +550,16 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 		{
 			if (c2y)
 			{
-				self.err(NumberLiteralDiag.PRE_C2Y_OCTAL)!;
+				self.err(Diagnostic.PRE_C2Y_OCTAL)!;
 			}
 			else
 			{
-				self.err(NumberLiteralDiag.C2Y_OCTAL)!;
+				self.err(Diagnostic.C2Y_OCTAL)!;
 			}
 		}
 		else if (c2y)
 		{
-			self.err(NumberLiteralDiag.C2Y_DEPRECATED_OCTAL)!;
+			self.err(Diagnostic.C2Y_DEPRECATED_OCTAL)!;
 		}
 	}
 	return { .bytes = int_part, .is_float = false, .prefix = prefix, .suffix = suffix };
@@ -609,9 +588,9 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
 	{
 		switch (prefix)
 		{
-			case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(buf[0]))!;
-			case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(buf[0]))!;
-			case HEX: self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, buf)!;
+			case BINARY: self.err(Diagnostic.INVALID_BINARY_DIGIT, text_literal::ascii(buf[0]))!;
+			case OCTAL: self.err(Diagnostic.INVALID_OCTAL_DIGIT, text_literal::ascii(buf[0]))!;
+			case HEX: self.err(Diagnostic.INVALID_INT_SUFFIX, buf)!;
 			case DECIMAL: unreachable("decimal literal starts with a digit");
 		}
 		return text_literal::PARSING_FAILED~;
@@ -627,7 +606,7 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
 			case 'p':
 			case 'P':
 				if (prefix == HEX) return buf[:idx];
-				self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, buf[idx..])!;
+				self.err(Diagnostic.INVALID_INT_SUFFIX, buf[idx..])!;
 				return text_literal::PARSING_FAILED~;
 			case 'e':
 			case 'E':
@@ -635,8 +614,8 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
 				{
 				case HEX: continue;
 				case DECIMAL: return buf[:idx];
-				case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
-				case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
+				case BINARY: self.err(Diagnostic.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
+				case OCTAL: self.err(Diagnostic.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
 			}
 			return text_literal::PARSING_FAILED~;
 			case '0'..'9':
@@ -648,10 +627,10 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
 				{
 					switch (prefix)
 					{
-					case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
-					case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
+					case BINARY: self.err(Diagnostic.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
+					case OCTAL: self.err(Diagnostic.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
 					case DECIMAL:
-					case HEX: self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, buf[idx..])!;
+					case HEX: self.err(Diagnostic.INVALID_INT_SUFFIX, buf[idx..])!;
 				}
 				return text_literal::PARSING_FAILED~;
 			}
@@ -673,7 +652,7 @@ fn String? NumberLiteralParser.get_frac_part(&self, String buf, Prefix prefix)
 	if (buf.len == 0 || buf[0] != '.') return "";
 	if (prefix == BINARY || prefix == OCTAL)
 	{
-		self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, buf)!;
+		self.err(Diagnostic.INVALID_INT_SUFFIX, buf)!;
 		return text_literal::PARSING_FAILED~;
 	}
 	for (sz idx = 1; idx < buf.len; idx++)
@@ -702,7 +681,7 @@ fn String? NumberLiteralParser.get_exponent(&self, String buf, Prefix prefix)
 		case 'P':
 			if (prefix != HEX)
 			{
-				self.err(NumberLiteralDiag.INVALID_FLOAT_SUFFIX, buf)!;
+				self.err(Diagnostic.INVALID_FLOAT_SUFFIX, buf)!;
 				return text_literal::PARSING_FAILED~;
 			}
 		default:
@@ -720,7 +699,7 @@ fn String? NumberLiteralParser.get_exponent(&self, String buf, Prefix prefix)
 	String exponent = buf[:end];
 	if (!find_any(exponent, "0123456789"))
 	{
-		self.err(NumberLiteralDiag.EXPONENT_HAS_NO_DIGITS)!;
+		self.err(Diagnostic.EXPONENT_HAS_NO_DIGITS)!;
 		return text_literal::PARSING_FAILED~;
 	}
 	return exponent;

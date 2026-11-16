@@ -61,7 +61,7 @@ fn String dmp(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.dump(comp, &w);
+	qt.dump(comp, &w)!!;
 	return w.str_view();
 }
 

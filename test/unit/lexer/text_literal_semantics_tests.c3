@@ -1,6 +1,6 @@
 // Tests for text_literal_semantics that do not need the text_literal decoder
 // (plan 11.4): print_string (Zig Value.printString / std.zig.stringEscape),
-// the TextSemanticsDiag table and char_literal's empty / unterminated tokens.
+// the Diagnostic table and char_literal's empty / unterminated tokens.
 // The decoder-dependent paths are in text_literal_semantics_manual_tests.c3.
 // Expected values are source-derived from Value.zig printString,
 // std.zig.stringEscape, std.unicode and Parser.zig charLiteral; no Zig
@@ -44,7 +44,7 @@ fn String print(Compilation* comp, DString* out, QualType elem, char[] bytes, Pr
 	out.clear();
 	ulong elem_size = elem.sizeof(comp);
 	QualType arr = comp.type_store.put(type_store::type_array(elem, FIXED, (ulong)bytes.len / elem_size));
-	text_literal_semantics::print_string(bytes, arr, comp, out, style);
+	text_literal_semantics::print_string(bytes, arr, comp, out, style)!!;
 	return out.str_view();
 }
 
@@ -112,10 +112,10 @@ fn void print_string_utf32() @test
 
 fn void diag_templates() @test
 {
-	test::eq(TextSemanticsDiag.UNSUPPORTED_STR_CAT.fmt, "unsupported string literal concatenation");
-	test::eq(TextSemanticsDiag.EMPTY_CHAR_LITERAL_ERROR.fmt, "empty character constant");
-	test::eq(TextSemanticsDiag.UNTERMINATED_CHAR_LITERAL_ERROR.fmt, "missing terminating ' character");
-	assert(TextSemanticsDiag.UNSUPPORTED_STR_CAT.kind == ERROR);
+	test::eq(Diagnostic.UNSUPPORTED_STR_CAT.fmt, "unsupported string literal concatenation");
+	test::eq(Diagnostic.EMPTY_CHAR_LITERAL_ERROR.fmt, "empty character constant");
+	test::eq(Diagnostic.UNTERMINATED_CHAR_LITERAL_ERROR.fmt, "missing terminating ' character");
+	assert(Diagnostic.UNSUPPORTED_STR_CAT.kind == ERROR);
 }
 
 fn void char_literal_empty_and_unterminated() @test

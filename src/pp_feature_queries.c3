@@ -21,8 +21,8 @@
 //    vendor-qualified __has_c_attribute) goes through attribute_exists,
 //    which uses plan 16's aro::attribute namespaced tables (the Zig
 //    Attribute.Namespaced.fromString behavior).
-//  - _Pragma / __pragma: validation (PpDiag.PRAGMA_OPERATOR_STRING_LITERAL,
-//    and __pragma's empty-argument PpDiag.UNKNOWN_PRAGMA) is here; both paths
+//  - _Pragma / __pragma: validation (Diagnostic.PRAGMA_OPERATOR_STRING_LITERAL,
+//    and __pragma's empty-argument Diagnostic.UNKNOWN_PRAGMA) is here; both paths
 //    dispatch registered pragma handlers through pragma_operator and
 //    ms_pragma_operator.
 //
@@ -263,8 +263,8 @@ fn String? Preprocessor.paste_strings_unsafe(&self, TokenWithExpansionLocs[] tok
  expanded_slice_extra(PRESERVE_MACRO_WS) of the tokens into char_buf (with
  `embed_args` non-null, stop after a leading string literal or a '>' and
  store the remaining tokens there) and validate "<...>" / "\"...\"".
- Diagnosed failures (PpDiag.EXPECTED_FILENAME, PpDiag.CLOSING_PAREN,
- PpDiag.EMPTY_FILENAME, PpDiag.HEADER_STR_CLOSING + PpDiag.HEADER_STR_MATCH)
+ Diagnosed failures (Diagnostic.EXPECTED_FILENAME, Diagnostic.CLOSING_PAREN,
+ Diagnostic.EMPTY_FILENAME, Diagnostic.HEADER_STR_CLOSING + Diagnostic.HEADER_STR_MATCH)
  return "" (Zig null; a valid result is at least 3 bytes). The result is a
  view of char_buf past its restored length: copy or use it before the next
  char_buf write. Shared with plan 15 (#include / #embed).
@@ -274,7 +274,7 @@ fn String? Preprocessor.reconstruct_include_string(&self, TokenWithExpansionLocs
 {
 	if (param_toks.len == 0)
 	{
-		self.err(first, PpDiag.EXPECTED_FILENAME)!;
+		self.err(first, Diagnostic.EXPECTED_FILENAME)!;
 		return "";
 	}
 
@@ -290,13 +290,13 @@ fn String? Preprocessor.reconstruct_include_string(&self, TokenWithExpansionLocs
 
 	if (params.len == 0)
 	{
-		self.err(first, PpDiag.EXPECTED_FILENAME)!;
+		self.err(first, Diagnostic.EXPECTED_FILENAME)!;
 		return "";
 	}
 	// no string pasting
 	if (!embed_args && params[0].id == STRING_LITERAL && params.len > 1)
 	{
-		self.err(params[1], PpDiag.CLOSING_PAREN)!;
+		self.err(params[1], Diagnostic.CLOSING_PAREN)!;
 		return "";
 	}
 
@@ -319,10 +319,10 @@ fn String? Preprocessor.reconstruct_include_string(&self, TokenWithExpansionLocs
 	{
 		if (include_str.len == 0)
 		{
-			self.err(first, PpDiag.EXPECTED_FILENAME)!;
+			self.err(first, Diagnostic.EXPECTED_FILENAME)!;
 			return "";
 		}
-		self.err(params[0], PpDiag.EMPTY_FILENAME)!;
+		self.err(params[0], Diagnostic.EMPTY_FILENAME)!;
 		return "";
 	}
 
@@ -337,15 +337,15 @@ fn String? Preprocessor.reconstruct_include_string(&self, TokenWithExpansionLocs
 				sz pos = closing.loc.byte_offset;
 				while (pos < buf.len && buf[pos] != '\n') pos++;
 				closing.loc.byte_offset = (uint)pos;
-				self.err(closing, PpDiag.HEADER_STR_CLOSING)!;
-				self.err(params[0], PpDiag.HEADER_STR_MATCH)!;
+				self.err(closing, Diagnostic.HEADER_STR_CLOSING)!;
+				self.err(params[0], Diagnostic.HEADER_STR_MATCH)!;
 				return "";
 			}
 			return include_str;
 		case '"':
 			return include_str;
 		default:
-			self.err(params[0], PpDiag.EXPECTED_FILENAME)!;
+			self.err(params[0], Diagnostic.EXPECTED_FILENAME)!;
 			return "";
 	}
 }
@@ -376,22 +376,22 @@ fn bool is_has_builtin_special_case(String name) @local
  Zig `handleBuiltinMacro` for the identifier queries, __has_warning,
  __is_identifier and __has_include(_next):
  - identifier queries: exactly one macro identifier (MACRO_WS/COMMENT
-   skipped) else PpDiag.FEATURE_CHECK_REQUIRES_IDENTIFIER (at the offending
+   skipped) else Diagnostic.FEATURE_CHECK_REQUIRES_IDENTIFIER (at the offending
    token, or an EOF token at src_loc) and false. __has_attribute ->
    attribute_exists(attribute::AttributeSyntax.GNU); __has_declspec_attribute ->
    declspec_attrs && attribute_exists(attribute::AttributeSyntax.DECLSPEC); __has_builtin ->
    (emulate NO/CLANG and HAS_BUILTIN_SPECIAL_CASES); is_target_* -> the
    Compilation queries above.
- - __has_warning: paste_strings_unsafe (PpDiag.EXPECTED_STR_LITERAL_IN
-   "__has_warning"), must start with "-W" (PpDiag.MALFORMED_WARNING_CHECK),
+ - __has_warning: paste_strings_unsafe (Diagnostic.EXPECTED_STR_LITERAL_IN
+   "__has_warning"), must start with "-W" (Diagnostic.MALFORMED_WARNING_CHECK),
    then diagnostics::warning_exists(rest).
- - __is_identifier: one token (PpDiag.BUILTIN_MISSING_R_PAREN "builtin
+ - __is_identifier: one token (Diagnostic.BUILTIN_MISSING_R_PAREN "builtin
    feature-check macro"), true for IDENTIFIER / EXTENDED_IDENTIFIER.
- - __has_include(_next): outside EXPR PpDiag.PREPROCESSING_DIRECTIVE_ONLY
+ - __has_include(_next): outside EXPR Diagnostic.PREPROCESSING_DIRECTIVE_ONLY
    (kind name "has_include"/"has_include_next") at src_loc;
    reconstruct_include_string; quotes/angle type; FIRST lookup for
    __has_include or include_depth == 0 (the latter with
-   PpDiag.INCLUDE_NEXT_OUTSIDE_HEADER), else NEXT; answer =
+   Diagnostic.INCLUDE_NEXT_OUTSIDE_HEADER), else NEXT; answer =
    files.has_include(ctx, pp, filename, src_loc.id, type, which).
  @require param_toks.len > 0 || (builtin != HAS_WARNING && builtin != HAS_INCLUDE && builtin != HAS_INCLUDE_NEXT)
  @return? compilation::FATAL_ERROR, aro::UNSUPPORTED
@@ -442,7 +442,7 @@ fn bool? Preprocessor.handle_builtin_macro(&self, BuiltinFunc builtin, TokenWith
 			}
 			if (has_invalid)
 			{
-				self.err(invalid, PpDiag.FEATURE_CHECK_REQUIRES_IDENTIFIER)!;
+				self.err(invalid, Diagnostic.FEATURE_CHECK_REQUIRES_IDENTIFIER)!;
 				return false;
 			}
 
@@ -476,12 +476,12 @@ fn bool? Preprocessor.handle_builtin_macro(&self, BuiltinFunc builtin, TokenWith
 			if (catch f = actual_param)
 			{
 				if (f != EXPECTED_STRING_LITERAL) return f~;
-				self.err(param_toks[0], PpDiag.EXPECTED_STR_LITERAL_IN, "__has_warning")!;
+				self.err(param_toks[0], Diagnostic.EXPECTED_STR_LITERAL_IN, "__has_warning")!;
 				return false;
 			}
 			if (!actual_param.starts_with("-W"))
 			{
-				self.err(param_toks[0], PpDiag.MALFORMED_WARNING_CHECK, "__has_warning")!;
+				self.err(param_toks[0], Diagnostic.MALFORMED_WARNING_CHECK, "__has_warning")!;
 				return false;
 			}
 			return diagnostics::warning_exists(actual_param[2..]);
@@ -511,7 +511,7 @@ fn bool? Preprocessor.handle_builtin_macro(&self, BuiltinFunc builtin, TokenWith
 			}
 			if (has_invalid)
 			{
-				self.err(invalid, PpDiag.BUILTIN_MISSING_R_PAREN, "builtin feature-check macro")!;
+				self.err(invalid, Diagnostic.BUILTIN_MISSING_R_PAREN, "builtin feature-check macro")!;
 				return false;
 			}
 			return identifier.id.is_identifier();
@@ -519,7 +519,7 @@ fn bool? Preprocessor.handle_builtin_macro(&self, BuiltinFunc builtin, TokenWith
 		case HAS_INCLUDE_NEXT:
 			if (eval_ctx != EXPR)
 			{
-				self.err_loc(src_loc, PpDiag.PREPROCESSING_DIRECTIVE_ONLY, builtin_func_tag_name(builtin))!;
+				self.err_loc(src_loc, Diagnostic.PREPROCESSING_DIRECTIVE_ONLY, builtin_func_tag_name(builtin))!;
 			}
 			String include_str = self.reconstruct_include_string(param_toks, null, param_toks[0])!;
 			if (include_str.len == 0) return false;
@@ -529,7 +529,7 @@ fn bool? Preprocessor.handle_builtin_macro(&self, BuiltinFunc builtin, TokenWith
 			WhichInclude which = NEXT;
 			if (builtin == HAS_INCLUDE || self.include_depth == 0)
 			{
-				if (builtin == HAS_INCLUDE_NEXT) self.err_loc(src_loc, PpDiag.INCLUDE_NEXT_OUTSIDE_HEADER)!;
+				if (builtin == HAS_INCLUDE_NEXT) self.err_loc(src_loc, Diagnostic.INCLUDE_NEXT_OUTSIDE_HEADER)!;
 				which = FIRST;
 			}
 			return self.files.has_include(self.files.ctx, self, filename, src_loc.id, include_type, which);
@@ -577,7 +577,7 @@ fn String? Preprocessor.has_c_attribute_result(&self, TokenWithExpansionLocs mac
 	String not_found = "0\n";
 	if (arg.len == 0)
 	{
-		self.err(macro_tok, PpDiag.EXPECTED_ARGUMENTS, (long)(1), (long)(0))!;
+		self.err(macro_tok, Diagnostic.EXPECTED_ARGUMENTS, (long)(1), (long)(0))!;
 		return not_found;
 	}
 	bool has_invalid;
@@ -626,7 +626,7 @@ fn String? Preprocessor.has_c_attribute_result(&self, TokenWithExpansionLocs mac
 	}
 	if (has_invalid)
 	{
-		self.err(invalid, PpDiag.FEATURE_CHECK_REQUIRES_IDENTIFIER)!;
+		self.err(invalid, Diagnostic.FEATURE_CHECK_REQUIRES_IDENTIFIER)!;
 		return not_found;
 	}
 	if (has_vendor)
@@ -647,12 +647,12 @@ fn String? Preprocessor.has_embed_result(&self, TokenWithExpansionLocs macro_tok
 {
 	if (eval_ctx != EXPR)
 	{
-		self.err(macro_tok, PpDiag.PREPROCESSING_DIRECTIVE_ONLY, "has_embed")!;
+		self.err(macro_tok, Diagnostic.PREPROCESSING_DIRECTIVE_ONLY, "has_embed")!;
 	}
 	String not_found = "0\n";
 	if (arg.len == 0)
 	{
-		self.err(macro_tok, PpDiag.EXPECTED_ARGUMENTS, (long)(1), (long)(0))!;
+		self.err(macro_tok, Diagnostic.EXPECTED_ARGUMENTS, (long)(1), (long)(0))!;
 		return not_found;
 	}
 	TokenWithExpansionLocs[] embed_args = {};
@@ -692,7 +692,7 @@ fn String? Preprocessor.has_embed_result(&self, TokenWithExpansionLocs macro_tok
  `.macro_param_builtin_func` arm for `kind`, appending to `buf`; generated
  tokens use pp.make_generated_token(start, id, tokens::from_raw(raw)).
  - query kinds (see handle_builtin_macro): empty expanded_args[0] ->
-   PpDiag.EXPECTED_ARGUMENTS (1, 0) at macro_tok and false; one PP_NUM
+   Diagnostic.EXPECTED_ARGUMENTS (1, 0) at macro_tok and false; one PP_NUM
    "<0|1>\n".
  - __has_c_attribute: [vendor ::] identifier parsing exactly as Zig; vendor
    form -> attribute_exists(attribute::AttributeSyntax.STANDARD, vendor, attr) as
@@ -700,20 +700,20 @@ fn String? Preprocessor.has_embed_result(&self, TokenWithExpansionLocs macro_tok
    otherwise the C23 table (deprecated/fallthrough/maybe_unused 201904L,
    nodiscard 202003L, noreturn/_Noreturn 202202L, unsequenced/reproducible
    202207L) on attribute_normalize(name), else "0\n".
- - __has_embed: outside EXPR PpDiag.PREPROCESSING_DIRECTIVE_ONLY "has_embed"
+ - __has_embed: outside EXPR Diagnostic.PREPROCESSING_DIRECTIVE_ONLY "has_embed"
    at macro_tok; reconstruct_include_string with embed args;
    EmbedArgIterator.param, where unknown/invalid -> "0\n", then
    files.find_embed(..., arg[0].loc.id, type, 1): FILE_NOT_FOUND -> "0\n",
    else "1\n" if non-empty / "2\n" if empty (returned bytes are freed
    with comp.gpa). Known parameter arguments are parsed but not evaluated.
  - _Pragma: exactly one STRING_LITERAL (MACRO_WS/COMMENT skipped) else
-   PpDiag.PRAGMA_OPERATOR_STRING_LITERAL; when valid and eval_ctx !=
+   Diagnostic.PRAGMA_OPERATOR_STRING_LITERAL; when valid and eval_ctx !=
    NO_PRAGMA -> destringify and dispatch the registered pragma handler.
  - __identifier: one macro identifier becomes IDENTIFIER (a dupe is
-   pushed); PpDiag.BUILTIN_MISSING_R_PAREN "identifier",
-   PpDiag.CANNOT_CONVERT_TO_IDENTIFIER (token symbol), PpDiag.EXPECTED_IDENTIFIER
+   pushed); Diagnostic.BUILTIN_MISSING_R_PAREN "identifier",
+   Diagnostic.CANNOT_CONVERT_TO_IDENTIFIER (token symbol), Diagnostic.PP_EXPECTED_IDENTIFIER
    exactly as Zig.
- - __pragma: no arguments -> PpDiag.UNKNOWN_PRAGMA at macro_tok (as Zig
+ - __pragma: no arguments -> Diagnostic.UNKNOWN_PRAGMA at macro_tok (as Zig
    msPragmaOperator); otherwise add its generated pragma tokens and dispatch
    the registered handler immediately.
  @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, aro::UNSUPPORTED
@@ -741,7 +741,7 @@ fn void? builtin_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, Toke
 			bool result;
 			if (arg.len == 0)
 			{
-				pp.err(macro_tok, PpDiag.EXPECTED_ARGUMENTS, (long)(1), (long)(0))!;
+				pp.err(macro_tok, Diagnostic.EXPECTED_ARGUMENTS, (long)(1), (long)(0))!;
 			}
 			else
 			{
@@ -782,7 +782,7 @@ fn void? builtin_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, Toke
 			}
 			if (has_invalid)
 			{
-				pp.err(invalid, PpDiag.PRAGMA_OPERATOR_STRING_LITERAL)!;
+				pp.err(invalid, Diagnostic.PRAGMA_OPERATOR_STRING_LITERAL)!;
 			}
 			else if (eval_ctx != NO_PRAGMA)
 			{
@@ -797,7 +797,7 @@ fn void? builtin_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, Toke
 				if (tok.id == MACRO_WS || tok.id == COMMENT) continue;
 				if (has_ident)
 				{
-					pp.err(tok, PpDiag.BUILTIN_MISSING_R_PAREN, "identifier")!;
+					pp.err(tok, Diagnostic.BUILTIN_MISSING_R_PAREN, "identifier")!;
 					return;
 				}
 				if (tok.id.is_macro_identifier())
@@ -807,7 +807,7 @@ fn void? builtin_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, Toke
 				}
 				else
 				{
-					pp.err(tok, PpDiag.CANNOT_CONVERT_TO_IDENTIFIER, tok.id.symbol())!;
+					pp.err(tok, Diagnostic.CANNOT_CONVERT_TO_IDENTIFIER, tok.id.symbol())!;
 					return;
 				}
 			}
@@ -819,12 +819,12 @@ fn void? builtin_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, Toke
 			}
 			else
 			{
-				pp.err(macro_tok, PpDiag.EXPECTED_IDENTIFIER)!;
+				pp.err(macro_tok, Diagnostic.PP_EXPECTED_IDENTIFIER)!;
 			}
 		case MS_PRAGMA:
 			if (arg.len == 0)
 			{
-				pp.err(macro_tok, PpDiag.UNKNOWN_PRAGMA)!;
+				pp.err(macro_tok, Diagnostic.UNKNOWN_PRAGMA)!;
 				return;
 			}
 			pp.ms_pragma_operator(macro_tok, arg, buf)!;

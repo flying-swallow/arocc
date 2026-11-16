@@ -3,7 +3,7 @@
 // decimal}.zig, specialised to f128 (u128 mantissa). Pure bit-level code: the
 // only entry point is `parse_f128`; Parser.parseFloat is parse_f128 followed by
 // PrimitiveValue.cast to the literal's width (number_value.c3).
-// Uses f128_mul / f128_div (float_soft_wide.c3) for the fast path.
+// Uses f128_mul / f128_div (primitive_float_soft_wide.c3) for the fast path.
 module aro::primitive_value;
 
 <* Zig error.InvalidCharacter from std.fmt.parseFloat. *>

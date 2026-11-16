@@ -1,5 +1,5 @@
 // Tests for the plan 14 stage-0 contract code that is implemented (not
-// stubbed): MacroWriter and its define helpers, code_gen_options, the
+// stubbed): the OutStream define helpers, code_gen_options, the
 // Compilation clock/environment defaults, attribute_normalize and the new
 // target::Feature entries. Expected values are source-derived from
 // Compilation.zig, CodeGenOptions.zig and Attribute.zig; no Zig executable
@@ -13,40 +13,28 @@ macro check(left, right)
 	test::eq((long)left, (long)right);
 }
 
-fn void macro_writer_helpers() @test
+fn void define_helpers() @test
 {
 	TrackingAllocator ta;
 	ta.init(mem);
 	defer ta.free();
 	{
-		MacroWriter w;
+		DString w;
 		w.init(&ta);
-		w.define("__x86_64__");
-		w.define_std("linux", true);
-		w.define_std("unix", false);
-		w.define_bool("TARGET_OS_WIN32", false);
-		w.define_bool("TARGET_OS_LINUX", true);
-		w.define_value("__seg_gs", "__attribute__((address_space(256)))");
-		w.define_int("__FreeBSD__", 14);
-		w.printf("#define __%s_MIN_EXP__ (%d)\n", "FLT", -125);
-		w.write("#define __Aro__\n");
-		w.write_byte('\n');
+		predefined_macros::define(&w, "__x86_64__")!!;
+		predefined_macros::define_std(&w, "linux", true)!!;
+		predefined_macros::define_std(&w, "unix", false)!!;
+		predefined_macros::define_bool(&w, "TARGET_OS_WIN32", false)!!;
+		predefined_macros::define_bool(&w, "TARGET_OS_LINUX", true)!!;
+		predefined_macros::define_value(&w, "__seg_gs", "__attribute__((address_space(256)))")!!;
+		predefined_macros::define_int(&w, "__FreeBSD__", 14)!!;
 		String expected = "#define __x86_64__ 1\n"
 			"#define linux 1\n#define __linux 1\n#define __linux__ 1\n"
 			"#define __unix 1\n#define __unix__ 1\n"
 			"#define TARGET_OS_WIN32 0\n#define TARGET_OS_LINUX 1\n"
 			"#define __seg_gs __attribute__((address_space(256)))\n"
-			"#define __FreeBSD__ 14\n"
-			"#define __FLT_MIN_EXP__ (-125)\n"
-			"#define __Aro__\n\n";
-		test::eq(w.written(), expected);
-		check(w.len(), expected.len);
-
-		char[] owned = w.to_owned_buffer(&ta);
-		check(owned.len, expected.len);
-		check(owned.ptr[owned.len], 0);
-		test::eq((String)owned, expected);
-		alloc::free(&ta, owned.ptr);
+			"#define __FreeBSD__ 14\n";
+		test::eq(w.str_view(), expected);
 		w.free();
 	}
 	check(ta.allocation_count(), 0);

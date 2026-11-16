@@ -20,7 +20,7 @@
 //     of ldexp) and the @max builtin. They must not use native floats.
 //
 // All private helpers here are prefixed `narrow_` because the whole
-// aro::primitive_value module (primitive_float.c3, float_soft_wide.c3, ...) shares one
+// aro::primitive_value module (primitive_float.c3, primitive_float_soft_wide.c3, ...) shares one
 // namespace.
 module aro::primitive_value;
 
@@ -50,22 +50,40 @@ macro bool @narrow_f64_is_nan(ulong x) => (x & 0x7FFF_FFFF_FFFF_FFFF) > 0x7FF0_0
 <* NaN operand rule for f16: returns true and sets *out when a or b is NaN. *>
 fn bool narrow_f16_nan_operand(ushort a, ushort b, ushort* out) @inline
 {
-	if (@narrow_f16_is_nan(a)) { *out = a | 0x0200; return true; }
-	if (@narrow_f16_is_nan(b)) { *out = b | 0x0200; return true; }
+	if (@narrow_f16_is_nan(a))
+	{
+		*out = a | 0x0200; return true;
+	}
+	if (@narrow_f16_is_nan(b))
+	{
+		*out = b | 0x0200; return true;
+	}
 	return false;
 }
 
 fn bool narrow_f32_nan_operand(uint a, uint b, uint* out) @inline
 {
-	if (@narrow_f32_is_nan(a)) { *out = a | 0x0040_0000; return true; }
-	if (@narrow_f32_is_nan(b)) { *out = b | 0x0040_0000; return true; }
+	if (@narrow_f32_is_nan(a))
+	{
+		*out = a | 0x0040_0000; return true;
+	}
+	if (@narrow_f32_is_nan(b))
+	{
+		*out = b | 0x0040_0000; return true;
+	}
 	return false;
 }
 
 fn bool narrow_f64_nan_operand(ulong a, ulong b, ulong* out) @inline
 {
-	if (@narrow_f64_is_nan(a)) { *out = a | 0x0008_0000_0000_0000; return true; }
-	if (@narrow_f64_is_nan(b)) { *out = b | 0x0008_0000_0000_0000; return true; }
+	if (@narrow_f64_is_nan(a))
+	{
+		*out = a | 0x0008_0000_0000_0000; return true;
+	}
+	if (@narrow_f64_is_nan(b))
+	{
+		*out = b | 0x0008_0000_0000_0000; return true;
+	}
 	return false;
 }
 
@@ -233,14 +251,14 @@ fn int PrimitiveValue.ilogb(self)
 	int e = (int)(u >> significand_bits);
 	if (e == 0)
 	{
-		if (u == 0) return int::min; // fp_ilogb0
+		if (u == 0) return int::min;  // fp_ilogb0
 		// offset sign bit, exponent bits, and integer bit (if present) + bias
 		int offset = 1 + fmt.exp_bits + (fmt.explicit_int ? 1 : 0) - exponent_bias;
 		return offset - narrow_clz(u, fmt);
 	}
 	if (e == max_exponent)
 	{
-		return u > inf(self.tag).float_bits() ? int::min : int::max; // fp_ilogbnan
+		return u > inf(self.tag).float_bits() ? int::min : int::max;  // fp_ilogbnan
 	}
 	return e - exponent_bias;
 }
@@ -268,7 +286,7 @@ fn PrimitiveValue PrimitiveValue.scalbn(self, int n_in)
 	long exponent_bits = fmt.exp_bits;
 	long mantissa_bits = narrow_mantissa_bits(fmt);
 	long fractional_bits = fmt.frac_bits;
-	long max_biased_exponent = 2 * (long)fmt.bias; // 2 * floatExponentMax(T)
+	long max_biased_exponent = 2 * (long)fmt.bias;  // 2 * floatExponentMax(T)
 	uint128 mantissa_mask = ((uint128)1 << mantissa_bits) - 1;
 	uint128 repr = self.float_bits();
 	uint128 sign_bit = repr & self.tag.sign_mask();
@@ -356,7 +374,7 @@ fn bool narrow_less_than(PrimitiveValue a, PrimitiveValue b)
 fn PrimitiveValue PrimitiveValue.max(self, PrimitiveValue other)
 {
 	// No `?:` on PrimitiveValue values: see CONVENTIONS.md (c3c by-value aggregate ternary).
-	if (self.is_nan()) return other; // with two NaNs: the rhs, unchanged (observed)
+	if (self.is_nan()) return other;  // with two NaNs: the rhs, unchanged (observed)
 	if (other.is_nan()) return self;
 	if (self.is_zero() && other.is_zero())
 	{

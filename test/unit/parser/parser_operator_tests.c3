@@ -353,7 +353,7 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 			usz ptrdiff_bits = comp.type_store.ptrdiff.bit_sizeof(&comp);
 			long signed_pointer_offset = ptrdiff_bits == 64 ? (long)pointer_offset : (long)(pointer_offset - ((ulong)1 << ptrdiff_bits));
 			String pointer_base = p.tree.tok_slice(declaration.tok(&p.tree));
-			value::print_pointer(value::int_i64(signed_pointer_offset, &comp), pointer_base, &comp, &expected_message);
+			value::print_pointer(value::int_i64(signed_pointer_offset, &comp), pointer_base, &comp, &expected_message)!!;
 			ulong element_size = pointer_qt.child_type(&comp).sizeof_or_null(&comp) ?? 1;
 			ulong max_bits = comp.target.ptr_bit_width();
 			if (max_bits > 61) max_bits = 61;

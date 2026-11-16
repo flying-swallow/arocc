@@ -16,7 +16,7 @@
 // Zig source exactly; no Zig executable was run.
 module aro::predefined_macros;
 import aro::compilation, aro::target, aro::lang_opts, aro::code_gen_options, aro::type_store;
-import std::core::ascii;
+import std::core::ascii, std::io;
 
 <*
  Zig `RiscvFloatAbi`; printed as __riscv_float_abi_<name> (Zig `{t}`).
@@ -52,7 +52,7 @@ fn RiscvFloatAbi riscv_float_abi(Target* target)
  driverkit/visionos/watchos/hurd/linux/netbsd/openbsd/fuchsia; _MT for
  windows with abi MSVC; __EMSCRIPTEN_PTHREADS__ for emscripten.
 *>
-fn void write_pthread_defines(Compilation* comp, MacroWriter* w)
+fn void? write_pthread_defines(Compilation* comp, OutStream w)
 {
 	if (!comp.langopts.pthread) return;
 	Target* t = &comp.target;
@@ -69,11 +69,11 @@ fn void write_pthread_defines(Compilation* comp, MacroWriter* w)
 		case LINUX:
 		case NETBSD:
 		case OPENBSD:
-		case FUCHSIA: w.define("_REENTRANT");
+		case FUCHSIA: define(w, "_REENTRANT")!;
 		case WINDOWS:
 			// This matches clang where it is marked as a FIXME
-			if (t.abi == MSVC) w.define("_MT");
-		case EMSCRIPTEN: w.define("__EMSCRIPTEN_PTHREADS__");
+			if (t.abi == MSVC) define(w, "_MT")!;
+		case EMSCRIPTEN: define(w, "__EMSCRIPTEN_PTHREADS__")!;
 		default: break;
 	}
 }
@@ -86,35 +86,35 @@ fn void write_pthread_defines(Compilation* comp, MacroWriter* w)
  emscripten, serenity, switch (__SWITCH__), 3ds (__3DS__), gba, psp (__PSP__),
  psx (__psx__), vita (__vita__), wiiu (__WIIU__); else nothing.
 *>
-fn void write_other_os_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
+fn void? write_other_os_defines(Compilation* comp, OutStream w, bool is_gnu)
 {
 	Target* t = &comp.target;
 	switch (t.os.tag)
 	{
-		case LINUX: w.define_std("linux", is_gnu);
-		case UEFI: w.define("__UEFI__");
+		case LINUX: define_std(w, "linux", is_gnu)!;
+		case UEFI: define(w, "__UEFI__")!;
 		case FREEBSD:
 			ulong release = t.os.min.major;
 			ulong cc_version = release * 10_000 + 1;
-			w.printf("#define __FreeBSD__ %d\n#define __FreeBSD_cc_version %d\n", release, cc_version);
+			io::fprintf(w, "#define __FreeBSD__ %d\n#define __FreeBSD_cc_version %d\n", release, cc_version)!;
 		case PS4:
-		case PS5: w.write("#define __FreeBSD__ 9\n#define __FreeBSD_cc_version 900001\n");
-		case NETBSD: w.define("__NetBSD__");
-		case OPENBSD: w.define("__OpenBSD__");
-		case DRAGONFLY: w.define("__DragonFly__");
+		case PS5: w.write("#define __FreeBSD__ 9\n#define __FreeBSD_cc_version 900001\n")!;
+		case NETBSD: define(w, "__NetBSD__")!;
+		case OPENBSD: define(w, "__OpenBSD__")!;
+		case DRAGONFLY: define(w, "__DragonFly__")!;
 		case ILLUMOS:
-			w.define_std("sun", is_gnu);
-			w.define("__illumos__");
-		case WASI: w.define("__wasi__");
-		case EMSCRIPTEN: w.define("__EMSCRIPTEN__");
-		case SERENITY: w.define("__serenity__");
-		case SWITCH: w.define("__SWITCH__");
-		case THREEDS: w.define("__3DS__");
-		case GBA: w.define("__GBA__");
-		case PSP: w.define("__PSP__");
-		case PSX: w.define("__psx__");
-		case VITA: w.define("__vita__");
-		case WIIU: w.define("__WIIU__");
+			define_std(w, "sun", is_gnu)!;
+			define(w, "__illumos__")!;
+		case WASI: define(w, "__wasi__")!;
+		case EMSCRIPTEN: define(w, "__EMSCRIPTEN__")!;
+		case SERENITY: define(w, "__serenity__")!;
+		case SWITCH: define(w, "__SWITCH__")!;
+		case THREEDS: define(w, "__3DS__")!;
+		case GBA: define(w, "__GBA__")!;
+		case PSP: define(w, "__PSP__")!;
+		case PSX: define(w, "__psx__")!;
+		case VITA: define(w, "__vita__")!;
+		case WIIU: define(w, "__WIIU__")!;
 		default: break;
 	}
 }
@@ -123,7 +123,7 @@ fn void write_other_os_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
  define_std("unix") for freebsd/netbsd/openbsd/dragonfly/linux/haiku/hurd/
  illumos/emscripten/ps4/ps5; then __ANDROID__ if abi.is_android().
 *>
-fn void write_unix_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
+fn void? write_unix_defines(Compilation* comp, OutStream w, bool is_gnu)
 {
 	Target* t = &comp.target;
 	switch (t.os.tag)
@@ -138,10 +138,10 @@ fn void write_unix_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
 		case ILLUMOS:
 		case EMSCRIPTEN:
 		case PS4:
-		case PS5: w.define_std("unix", is_gnu);
+		case PS5: define_std(w, "unix", is_gnu)!;
 		default: break;
 	}
-	if (t.abi.is_android()) w.define("__ANDROID__");
+	if (t.abi.is_android()) define(w, "__ANDROID__")!;
 }
 
 <*
@@ -153,70 +153,70 @@ fn void write_unix_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
  default_mips_fp_mode, nan2008, abs2008, dsp revision, msa, nomadd4,
  _MIPS_SZPTR / _MIPS_SZINT / _MIPS_SZLONG and __mips_isa_rev.
 *>
-fn void write_mips_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
+fn void? write_mips_defines(Compilation* comp, OutStream w, bool is_gnu)
 {
 	Target* t = &comp.target;
-	w.define("__mips__");
-	w.define("_mips");
-	if (is_gnu) w.define("mips");
+	define(w, "__mips__")!;
+	define(w, "_mips")!;
+	if (is_gnu) define(w, "mips")!;
 	switch (t.cpu.arch)
 	{
 		case MIPS:
 		case MIPS64:
-			w.define("_MIPSEB");
-			w.define_std("MIPSEB", is_gnu);
+			define(w, "_MIPSEB")!;
+			define_std(w, "MIPSEB", is_gnu)!;
 		case MIPSEL:
 		case MIPS64EL:
-			w.define("_MIPSEL");
-			w.define_std("MIPSEL", is_gnu);
+			define(w, "_MIPSEL")!;
+			define_std(w, "MIPSEL", is_gnu)!;
 		default: unreachable();
 	}
 
 	switch (t.mips_abi())
 	{
 		case O32:
-			w.define("__mips_o32");
-			w.define("_ABIO32");
-			w.write("#define _MIPS_SIM _ABIO32\n");
-			w.write("#define __mips 32\n");
-			w.write("#define _MIPS_ISA _MIPS_ISA_MIPS32\n");
+			define(w, "__mips_o32")!;
+			define(w, "_ABIO32")!;
+			w.write("#define _MIPS_SIM _ABIO32\n")!;
+			w.write("#define __mips 32\n")!;
+			w.write("#define _MIPS_ISA _MIPS_ISA_MIPS32\n")!;
 		case N32:
-			w.define("__mips_n32");
-			w.write("#define _ABIN32 2\n");
-			w.write("#define _MIPS_SIM _ABIN32\n");
-			w.write("#define __mips 64\n");
-			w.define("__mips64");
-			w.define("__mips64__");
-			w.write("#define _MIPS_ISA _MIPS_ISA_MIPS64\n");
+			define(w, "__mips_n32")!;
+			w.write("#define _ABIN32 2\n")!;
+			w.write("#define _MIPS_SIM _ABIN32\n")!;
+			w.write("#define __mips 64\n")!;
+			define(w, "__mips64")!;
+			define(w, "__mips64__")!;
+			w.write("#define _MIPS_ISA _MIPS_ISA_MIPS64\n")!;
 		case N64:
-			w.define("__mips_n64");
-			w.write("#define _ABI64 3\n");
-			w.write("#define _MIPS_SIM _ABI64\n");
-			w.write("#define __mips 64\n");
-			w.define("__mips64");
-			w.define("__mips64__");
-			w.write("#define _MIPS_ISA _MIPS_ISA_MIPS64\n");
+			define(w, "__mips_n64")!;
+			w.write("#define _ABI64 3\n")!;
+			w.write("#define _MIPS_SIM _ABI64\n")!;
+			w.write("#define __mips 64\n")!;
+			define(w, "__mips64")!;
+			define(w, "__mips64__")!;
+			w.write("#define _MIPS_ISA _MIPS_ISA_MIPS64\n")!;
 	}
 	// Zig `llvm_name: ?[*:0]const u8`; an empty llvm_name is null here.
 	String name = t.cpu.model.llvm_name;
 	if (name.len)
 	{
-		w.printf("#define _MIPS_ARCH \"%s\"\n", name);
-		w.write("#define _MIPS_ARCH_");
-		foreach (c : name) w.write_byte(ascii::to_upper(c));
-		w.write(" 1\n");
+		io::fprintf(w, "#define _MIPS_ARCH \"%s\"\n", name)!;
+		w.write("#define _MIPS_ARCH_")!;
+		foreach (c : name) w.write_byte(ascii::to_upper(c))!;
+		w.write(" 1\n")!;
 	}
 
 	// Zig also has `!target.cpu.has(.mips, .noabicalls)` commented out.
 	if (comp.code_gen_options.pic_level != NONE)
 	{
-		w.define("__mips_abicalls");
-		if (t.os.tag.is_bsd()) w.define("__ABICALLS__");
+		define(w, "__mips_abicalls")!;
+		if (t.os.tag.is_bsd()) define(w, "__ABICALLS__")!;
 	}
 
 	// Zig: __mips_soft_float / __mips_hard_float are commented out.
 	bool single_only = t.cpu.has(MIPS_FPU_S) && !t.cpu.has(MIPS_FPU_D);
-	if (single_only) w.define("__mips_single_float");
+	if (single_only) define(w, "__mips_single_float")!;
 	{
 		MipsFpMode mode = t.default_mips_fp_mode();
 		int fpr;
@@ -226,39 +226,39 @@ fn void write_mips_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
 			case FP64: fpr = 64;
 			case FPXX: fpr = 0;
 		}
-		w.printf("#define __mips_fpr %d\n", fpr);
+		io::fprintf(w, "#define __mips_fpr %d\n", fpr)!;
 		int fpset = (mode == FP64 || single_only) ? 32 : 16;
-		w.printf("#define _MIPS_FPSET %d\n", fpset);
+		io::fprintf(w, "#define _MIPS_FPSET %d\n", fpset)!;
 		// Zig: `target.cpu.has(.mips, .nooddspreg) or` is commented out.
 		int spfpset = mode == FPXX ? 16 : 32;
-		w.printf("#define _MIPS_SPFPSET %d\n", spfpset);
+		io::fprintf(w, "#define _MIPS_SPFPSET %d\n", spfpset)!;
 	}
 	// Zig: __mips16 / __mips_micromips are commented out.
-	if (t.cpu.has(MIPS_NAN2008)) w.define("__mips_nan2008");
-	if (t.cpu.has(MIPS_ABS2008)) w.define("__mips_abs2008");
+	if (t.cpu.has(MIPS_NAN2008)) define(w, "__mips_nan2008")!;
+	if (t.cpu.has(MIPS_ABS2008)) define(w, "__mips_abs2008")!;
 	if (t.cpu.has(MIPS_DSPR3))
 	{
-		w.write("#define __mips_dsp_rev 3\n");
-		w.write("#define __mips_dsp 3\n");
-		w.define("__mips_dspr3");
+		w.write("#define __mips_dsp_rev 3\n")!;
+		w.write("#define __mips_dsp 3\n")!;
+		define(w, "__mips_dspr3")!;
 	}
 	else if (t.cpu.has(MIPS_DSPR2))
 	{
-		w.write("#define __mips_dsp_rev 2\n");
-		w.write("#define __mips_dsp 2\n");
-		w.define("__mips_dspr2");
+		w.write("#define __mips_dsp_rev 2\n")!;
+		w.write("#define __mips_dsp 2\n")!;
+		define(w, "__mips_dspr2")!;
 	}
 	else if (t.cpu.has(MIPS_DSP))
 	{
-		w.write("#define __mips_dsp_rev 1\n");
-		w.write("#define __mips_dsp 1\n");
+		w.write("#define __mips_dsp_rev 1\n")!;
+		w.write("#define __mips_dsp 1\n")!;
 	}
-	if (t.cpu.has(MIPS_MSA)) w.define("__mips_msa");
-	if (t.cpu.has(MIPS_NOMADD4)) w.define("__mips_no_madd4");
-	w.printf("#define _MIPS_SZPTR %d\n", t.ptr_bit_width());
-	w.printf("#define _MIPS_SZINT %d\n", t.c_type_bit_size(INT));
-	w.printf("#define _MIPS_SZLONG %d\n", t.c_type_bit_size(LONG));
-	w.printf("#define __mips_isa_rev %d\n", t.mips_isa_rev());
+	if (t.cpu.has(MIPS_MSA)) define(w, "__mips_msa")!;
+	if (t.cpu.has(MIPS_NOMADD4)) define(w, "__mips_no_madd4")!;
+	io::fprintf(w, "#define _MIPS_SZPTR %d\n", t.ptr_bit_width())!;
+	io::fprintf(w, "#define _MIPS_SZINT %d\n", t.c_type_bit_size(INT))!;
+	io::fprintf(w, "#define _MIPS_SZLONG %d\n", t.c_type_bit_size(LONG))!;
+	io::fprintf(w, "#define __mips_isa_rev %d\n", t.mips_isa_rev())!;
 }
 
 <*
@@ -267,31 +267,31 @@ fn void write_mips_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
  __ppc__ __ppc64__ __PPC__ __PPC64__ _ARCH_PPC _ARCH_PPC64; both end with
  "_CALL_ELF <ppc_elf_version>".
 *>
-fn void write_powerpc_defines(Compilation* comp, MacroWriter* w)
+fn void? write_powerpc_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
 	switch (t.cpu.arch)
 	{
 		case POWERPC:
 		case POWERPCLE:
-			w.define("__powerpc__");
-			w.define("__POWERPC__");
-			w.define("__ppc__");
-			w.define("__PPC__");
-			w.define("_ARCH_PPC");
+			define(w, "__powerpc__")!;
+			define(w, "__POWERPC__")!;
+			define(w, "__ppc__")!;
+			define(w, "__PPC__")!;
+			define(w, "_ARCH_PPC")!;
 		default:
-			w.define("__powerpc");
-			w.define("__powerpc__");
-			w.define("__powerpc64__");
-			w.define("__POWERPC__");
-			w.define("__ppc__");
-			w.define("__ppc64__");
-			w.define("__PPC__");
-			w.define("__PPC64__");
-			w.define("_ARCH_PPC");
-			w.define("_ARCH_PPC64");
+			define(w, "__powerpc")!;
+			define(w, "__powerpc__")!;
+			define(w, "__powerpc64__")!;
+			define(w, "__POWERPC__")!;
+			define(w, "__ppc__")!;
+			define(w, "__ppc64__")!;
+			define(w, "__PPC__")!;
+			define(w, "__PPC64__")!;
+			define(w, "_ARCH_PPC")!;
+			define(w, "_ARCH_PPC64")!;
 	}
-	w.printf("#define _CALL_ELF %d\n", t.ppc_elf_version());
+	io::fprintf(w, "#define _CALL_ELF %d\n", t.ppc_elf_version())!;
 }
 
 <*
@@ -299,24 +299,24 @@ fn void write_powerpc_defines(Compilation* comp, MacroWriter* w)
  __sparc64__, __sparc_v9__ (again), __sparcv9__. sparc: define_std sparc,
  __sparcv8 on illumos.
 *>
-fn void write_sparc_defines(Compilation* comp, MacroWriter* w, bool is_gnu)
+fn void? write_sparc_defines(Compilation* comp, OutStream w, bool is_gnu)
 {
 	Target* t = &comp.target;
-	w.define_std("sparc", is_gnu);
+	define_std(w, "sparc", is_gnu)!;
 	if (t.cpu.arch == SPARC64)
 	{
-		w.define("__sparc_v9__");
-		w.define("__arch64__");
+		define(w, "__sparc_v9__")!;
+		define(w, "__arch64__")!;
 		if (t.os.tag != ILLUMOS)
 		{
-			w.define("__sparc64__");
-			w.define("__sparc_v9__");
-			w.define("__sparcv9__");
+			define(w, "__sparc64__")!;
+			define(w, "__sparc_v9__")!;
+			define(w, "__sparcv9__")!;
 		}
 	}
 	else if (t.os.tag == ILLUMOS)
 	{
-		w.define("__sparcv8");
+		define(w, "__sparcv8")!;
 	}
 }
 
@@ -360,19 +360,19 @@ fn char arm_coproc_bits(Target* t) @local
  LDREX (langopts.has_arm_ldrex), UNALIGNED, endian, ROPI/RWPI, minimal enum
  size and __ARM_SIZEOF_WCHAR_T). Needs type_store::init_named_types (wchar).
 *>
-fn void write_arm_defines(Compilation* comp, MacroWriter* w)
+fn void? write_arm_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
 	Arch arch = t.cpu.arch;
-	w.define("__arm__");
-	w.define("__arm");
-	w.define("__ARM_32BIT_STATE");
-	w.define("__APCS_32__");
-	w.define("__VFP_FP__");
-	w.define("__ARM_FP16_ARGS");
-	w.define("__ARM_FP16_FORMAT_IEEE");
+	define(w, "__arm__")!;
+	define(w, "__arm")!;
+	define(w, "__ARM_32BIT_STATE")!;
+	define(w, "__APCS_32__")!;
+	define(w, "__VFP_FP__")!;
+	define(w, "__ARM_FP16_ARGS")!;
+	define(w, "__ARM_FP16_FORMAT_IEEE")!;
 
-	w.write("#define __ARM_ACLE 200\n");
+	w.write("#define __ARM_ACLE 200\n")!;
 
 	// __ARM_ARCH_ISA_THUMB is defined to 2 if the core supports the Thumb-2 ISA.
 	if (try v = t.arm_version())
@@ -380,26 +380,26 @@ fn void write_arm_defines(Compilation* comp, MacroWriter* w)
 		bool supports_thumb2 = v.string == "6T2" || (v.version >= 7 && v.string != "8M_BASE");
 		if (supports_thumb2)
 		{
-			w.write("#define __ARM_ARCH_ISA_THUMB 2\n");
+			w.write("#define __ARM_ARCH_ISA_THUMB 2\n")!;
 		}
 		else if (v.string.contains_char('T') || v.version >= 6)
 		{
-			w.write("#define __ARM_ARCH_ISA_THUMB 1\n");
+			w.write("#define __ARM_ARCH_ISA_THUMB 1\n")!;
 		}
 	}
 
 	bool mclass = t.cpu.has(ARM_MCLASS);
 	bool is_thumb = arch.is_thumb() || mclass;
-	if (t.cpu.has(ARM_THUMB2) || is_thumb) w.define("__thumb__");
+	if (t.cpu.has(ARM_THUMB2) || is_thumb) define(w, "__thumb__")!;
 	// ARM ISA means we are not M profile
-	if (!mclass) w.define("__ARM_ARCH_ISA_ARM");
+	if (!mclass) define(w, "__ARM_ARCH_ISA_ARM")!;
 
 	char arm_version = 6;
 	if (try v = t.arm_version())
 	{
 		arm_version = v.version;
-		w.printf("#define __ARM_ARCH_%s__ 1\n", v.string);
-		w.printf("#define __ARM_ARCH %d\n", v.version);
+		io::fprintf(w, "#define __ARM_ARCH_%s__ 1\n", v.string)!;
+		io::fprintf(w, "#define __ARM_ARCH %d\n", v.version)!;
 	}
 
 	char arm_profile = 0;
@@ -415,28 +415,28 @@ fn void write_arm_defines(Compilation* comp, MacroWriter* w)
 	{
 		arm_profile = 'M';
 	}
-	if (arm_profile) w.printf("#define __ARM_ARCH_PROFILE '%c'\n", arm_profile);
+	if (arm_profile) io::fprintf(w, "#define __ARM_ARCH_PROFILE '%c'\n", arm_profile)!;
 
-	if (arm_version == 5 || (arm_version == 6 && !mclass) || arm_version > 6) w.define("__ARM_FEATURE_CLZ");
+	if (arm_version == 5 || (arm_version == 6 && !mclass) || arm_version > 6) define(w, "__ARM_FEATURE_CLZ")!;
 
 	bool has_dsp = t.arm_has_dsp();
-	if (has_dsp) w.define("__ARM_FEATURE_DSP");
+	if (has_dsp) define(w, "__ARM_FEATURE_DSP")!;
 
 	if ((is_thumb && t.cpu.has(ARM_HWDIV)) || (!is_thumb && t.cpu.has(ARM_HWDIV_ARM)))
 	{
-		w.define("__ARM_FEATURE_IDIV");
-		w.define("__ARM_ARCH_EXT_IDIV__");
+		define(w, "__ARM_FEATURE_IDIV")!;
+		define(w, "__ARM_ARCH_EXT_IDIV__")!;
 	}
 	bool sat = false;
 	if ((arm_version == 6 && !mclass) || arm_version > 6)
 	{
-		w.define("__ARM_FEATURE_SAT");
+		define(w, "__ARM_FEATURE_SAT")!;
 		sat = true;
 	}
 
-	if (has_dsp || sat) w.define("__ARM_FEATURE_QBIT");
+	if (has_dsp || sat) define(w, "__ARM_FEATURE_QBIT")!;
 
-	if ((!mclass && arm_version >= 6) || (mclass && t.cpu.has(ARM_DSP))) w.define("__ARM_FEATURE_SIMD32");
+	if ((!mclass && arm_version >= 6) || (mclass && t.cpu.has(ARM_DSP))) define(w, "__ARM_FEATURE_SIMD32")!;
 
 	ArmFloatAbi float_abi = t.arm_float_abi();
 
@@ -485,59 +485,59 @@ fn void write_arm_defines(Compilation* comp, MacroWriter* w)
 	// clang: `FPUModeIsVFP`
 	bool fpu_is_vfp = fpu_vfp2 || fpu_vfp3 || fpu_vfp4 || fpu_neon || fpu_fp_armv8;
 
-	if (hw_fp != 0) w.printf("#define __ARM_FP 0x%x\n", hw_fp);
+	if (hw_fp != 0) io::fprintf(w, "#define __ARM_FP 0x%x\n", hw_fp)!;
 
-	if (arm_version >= 7 && fpu_vfp4) w.define("__ARM_FEATURE_FMA");
+	if (arm_version >= 7 && fpu_vfp4) define(w, "__ARM_FEATURE_FMA")!;
 
 	if (fpu_is_vfp)
 	{
-		if (fpu_vfp2) w.define("__ARM_VFPV2__");
-		if (fpu_vfp3) w.define("__ARM_VFPV3__");
-		if (fpu_vfp4) w.define("__ARM_VFPV4__");
-		if (fpu_fp_armv8) w.define("__ARM_FPV5__");
+		if (fpu_vfp2) define(w, "__ARM_VFPV2__")!;
+		if (fpu_vfp3) define(w, "__ARM_VFPV3__")!;
+		if (fpu_vfp4) define(w, "__ARM_VFPV4__")!;
+		if (fpu_fp_armv8) define(w, "__ARM_FPV5__")!;
 	}
 
 	if (fpu_neon && float_abi != SOFT && arm_version >= 7)
 	{
-		w.define("__ARM_NEON");
-		w.define("__ARM_NEON__");
+		define(w, "__ARM_NEON")!;
+		define(w, "__ARM_NEON__")!;
 		// Current AArch32 Neon implementations have no double-precision support
 		// even when VFP does.
 		char neon_fp = hw_fp & (char)~HWFP_DP;
-		w.printf("#define __ARM_NEON_FP 0x%x\n", neon_fp);
+		io::fprintf(w, "#define __ARM_NEON_FP 0x%x\n", neon_fp)!;
 	}
 
-	if (float_abi == HARD) w.define("__ARM_PCS_VFP");
+	if (float_abi == HARD) define(w, "__ARM_PCS_VFP")!;
 
-	if (float_abi == SOFT || (float_abi == SOFT_FP && !fpu_is_vfp)) w.define("__SOFTFP__");
+	if (float_abi == SOFT || (float_abi == SOFT_FP && !fpu_is_vfp)) define(w, "__SOFTFP__")!;
 
-	w.printf("#define __ARM_FEATURE_COPROC 0x%x\n", arm_coproc_bits(t));
+	io::fprintf(w, "#define __ARM_FEATURE_COPROC 0x%x\n", arm_coproc_bits(t))!;
 
-	if (arm_version >= 5 && arm_version <= 8 && t.os.tag != WINDOWS) w.define("__THUMB_INTERWORK__");
+	if (arm_version >= 5 && arm_version <= 8 && t.os.tag != WINDOWS) define(w, "__THUMB_INTERWORK__")!;
 
-	if (comp.langopts.has_arm_ldrex) w.printf("#define __ARM_FEATURE_LDREX 0x%x\n", (char)comp.langopts.arm_ldrex);
+	if (comp.langopts.has_arm_ldrex) io::fprintf(w, "#define __ARM_FEATURE_LDREX 0x%x\n", (char)comp.langopts.arm_ldrex)!;
 
-	if (!t.cpu.has(ARM_NO_UNALIGNED_ACCESS)) w.define("__ARM_FEATURE_UNALIGNED");
+	if (!t.cpu.has(ARM_NO_UNALIGNED_ACCESS)) define(w, "__ARM_FEATURE_UNALIGNED")!;
 
-	if (arch == ARM || arch == THUMB) w.define("__ARMEL__");
+	if (arch == ARM || arch == THUMB) define(w, "__ARMEL__")!;
 
 	if (arch == ARMEB || arch == THUMBEB)
 	{
-		w.define("__ARMEB__");
-		w.define("__ARM_BIG_ENDIAN");
+		define(w, "__ARMEB__")!;
+		define(w, "__ARM_BIG_ENDIAN")!;
 	}
-	if (comp.code_gen_options.is_ropi) w.define("__ARM_ROPI");
-	if (comp.code_gen_options.is_rwpi) w.define("__ARM_RWPI");
+	if (comp.code_gen_options.is_ropi) define(w, "__ARM_ROPI")!;
+	if (comp.code_gen_options.is_rwpi) define(w, "__ARM_RWPI")!;
 
-	write_arm_enum_and_wchar_size(comp, w);
+	write_arm_enum_and_wchar_size(comp, w)!;
 }
 
 <* The shared ARM/AArch64 tail: __ARM_SIZEOF_MINIMAL_ENUM and __ARM_SIZEOF_WCHAR_T. *>
-fn void write_arm_enum_and_wchar_size(Compilation* comp, MacroWriter* w) @local
+fn void? write_arm_enum_and_wchar_size(Compilation* comp, OutStream w) @local
 {
 	int min_enum_size = comp.langopts.short_enums ? 1 : 4;
-	w.printf("#define __ARM_SIZEOF_MINIMAL_ENUM %d\n", min_enum_size);
-	w.printf("#define __ARM_SIZEOF_WCHAR_T %d\n", comp.type_store.wchar.sizeof(comp));
+	io::fprintf(w, "#define __ARM_SIZEOF_MINIMAL_ENUM %d\n", min_enum_size)!;
+	io::fprintf(w, "#define __ARM_SIZEOF_WCHAR_T %d\n", comp.type_store.wchar.sizeof(comp))!;
 }
 
 struct Aarch64FeatureMacro
@@ -589,128 +589,128 @@ const Aarch64FeatureMacro[*] AARCH64_FEATURE_MACROS = {
  __ARM_FEATURE_<X> table in Zig order, minimal enum size and wchar size.
  Needs type_store::init_named_types (wchar).
 *>
-fn void write_aarch64_defines(Compilation* comp, MacroWriter* w)
+fn void? write_aarch64_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
-	w.define("__aarch64__");
-	w.define("__ARM_64BIT_STATE");
-	w.define("__ARM_ARCH_ISA_A64");
-	w.define("__ARM_FEATURE_CLZ");
-	w.define("__ARM_FEATURE_FMA");
-	if (comp.langopts.has_arm_ldrex) w.printf("#define __ARM_FEATURE_LDREX 0x%x\n", (char)comp.langopts.arm_ldrex);
-	w.define("__ARM_FEATURE_IDIV"); // As specified in ACLE
-	w.define("__ARM_FEATURE_DIV"); // For backwards compatibility
-	w.define("__ARM_STATE_ZA");
-	w.define("__ARM_STATE_ZT0");
-	w.write("#define __ARM_ALIGN_MAX_STACK_PWR 4\n");
-	w.define("__ARM_FEATURE_NUMERIC_MAXMIN");
-	w.define("__ARM_FEATURE_DIRECTED_ROUNDING");
+	define(w, "__aarch64__")!;
+	define(w, "__ARM_64BIT_STATE")!;
+	define(w, "__ARM_ARCH_ISA_A64")!;
+	define(w, "__ARM_FEATURE_CLZ")!;
+	define(w, "__ARM_FEATURE_FMA")!;
+	if (comp.langopts.has_arm_ldrex) io::fprintf(w, "#define __ARM_FEATURE_LDREX 0x%x\n", (char)comp.langopts.arm_ldrex)!;
+	define(w, "__ARM_FEATURE_IDIV")!; // As specified in ACLE
+	define(w, "__ARM_FEATURE_DIV")!; // For backwards compatibility
+	define(w, "__ARM_STATE_ZA")!;
+	define(w, "__ARM_STATE_ZT0")!;
+	w.write("#define __ARM_ALIGN_MAX_STACK_PWR 4\n")!;
+	define(w, "__ARM_FEATURE_NUMERIC_MAXMIN")!;
+	define(w, "__ARM_FEATURE_DIRECTED_ROUNDING")!;
 
-	w.write("#define __ARM_ACLE_VERSION(year,quarter,patch) (100 * (year) + 10 * (quarter) + (patch))\n");
+	w.write("#define __ARM_ACLE_VERSION(year,quarter,patch) (100 * (year) + 10 * (quarter) + (patch))\n")!;
 	int acle_version = (100 * 2024) + (10 * 2) + 0; // ACLE 2024.2
-	w.printf("#define __ARM_ACLE %d\n", acle_version);
+	io::fprintf(w, "#define __ARM_ACLE %d\n", acle_version)!;
 
 	int arm_version = t.cpu.has(AARCH64_V9A) ? 9 : 8;
 	char arm_profile = t.cpu.has(AARCH64_V8R) ? 'R' : 'A';
-	w.printf("#define __ARM_ARCH %d\n", arm_version);
-	w.printf("#define __ARM_ARCH_PROFILE '%c'\n", arm_profile);
+	io::fprintf(w, "#define __ARM_ARCH %d\n", arm_version)!;
+	io::fprintf(w, "#define __ARM_ARCH_PROFILE '%c'\n", arm_profile)!;
 
 	if (t.cpu.has(AARCH64_V8_3A))
 	{
-		w.define("__ARM_FEATURE_COMPLEX");
-		w.define("__ARM_FEATURE_JCVT");
+		define(w, "__ARM_FEATURE_COMPLEX")!;
+		define(w, "__ARM_FEATURE_JCVT")!;
 	}
 
 	if (t.cpu.arch == AARCH64)
 	{
-		w.define("__AARCH64EL__");
+		define(w, "__AARCH64EL__")!;
 	}
 	else
 	{
-		w.define("__AARCH64EB__");
-		w.define("__AARCH_BIG_ENDIAN");
-		w.define("__ARM_BIG_ENDIAN");
+		define(w, "__AARCH64EB__")!;
+		define(w, "__AARCH_BIG_ENDIAN")!;
+		define(w, "__ARM_BIG_ENDIAN")!;
 	}
 	if (t.os.tag.is_darwin())
 	{
-		w.define("__AARCH64_SIMD__");
+		define(w, "__AARCH64_SIMD__")!;
 		if (t.ptr_bit_width() == 32)
 		{
-			w.define("__ARM64_ARCH_8_32__");
+			define(w, "__ARM64_ARCH_8_32__")!;
 		}
 		else
 		{
-			w.define("__ARM64_ARCH_8__");
+			define(w, "__ARM64_ARCH_8__")!;
 		}
-		w.define("__ARM_NEON__");
-		w.define("__arm64");
-		w.define("__arm64__");
+		define(w, "__ARM_NEON__")!;
+		define(w, "__arm64")!;
+		define(w, "__arm64__")!;
 	}
-	if (t.os.tag == WINDOWS && t.abi == MSVC) w.write("#define _M_ARM64 1\n");
+	if (t.os.tag == WINDOWS && t.abi == MSVC) w.write("#define _M_ARM64 1\n")!;
 
-	w.write("#define __AARCH64_CMODEL_");
-	foreach (c : comp.cmodel.macro_name()) w.write_byte(ascii::to_upper(c));
-	w.write("__ 1\n");
+	w.write("#define __AARCH64_CMODEL_")!;
+	foreach (c : comp.cmodel.macro_name()) w.write_byte(ascii::to_upper(c))!;
+	w.write("__ 1\n")!;
 
-	if (t.cpu.has(AARCH64_FP_ARMV8)) w.write("#define __ARM_FP 0xE\n");
+	if (t.cpu.has(AARCH64_FP_ARMV8)) w.write("#define __ARM_FP 0xE\n")!;
 	if (t.cpu.has(AARCH64_NEON))
 	{
-		w.define("__ARM_NEON");
-		w.write("#define __ARM_NEON_FP 0xE\n");
+		define(w, "__ARM_NEON")!;
+		w.write("#define __ARM_NEON_FP 0xE\n")!;
 	}
 	if (t.cpu.has(AARCH64_BF16))
 	{
-		w.define("__ARM_FEATURE_BF16");
-		w.define("__ARM_FEATURE_BF16_VECTOR_ARITHMETIC");
-		w.define("__ARM_BF16_FORMAT_ALTERNATIVE");
-		w.define("__ARM_FEATURE_BF16_SCALAR_ARITHMETIC");
-		if (t.cpu.has(AARCH64_SVE)) w.define("__ARM_FEATURE_SVE_BF16");
+		define(w, "__ARM_FEATURE_BF16")!;
+		define(w, "__ARM_FEATURE_BF16_VECTOR_ARITHMETIC")!;
+		define(w, "__ARM_BF16_FORMAT_ALTERNATIVE")!;
+		define(w, "__ARM_FEATURE_BF16_SCALAR_ARITHMETIC")!;
+		if (t.cpu.has(AARCH64_SVE)) define(w, "__ARM_FEATURE_SVE_BF16")!;
 	}
-	if (t.cpu.has(AARCH64_SVE2) && t.cpu.has(AARCH64_SVE_AES)) w.define("__ARM_FEATURE_SVE2_AES");
-	if (t.cpu.has(AARCH64_SVE2) && t.cpu.has(AARCH64_SVE_BITPERM)) w.define("__ARM_FEATURE_SVE2_BITPERM");
+	if (t.cpu.has(AARCH64_SVE2) && t.cpu.has(AARCH64_SVE_AES)) define(w, "__ARM_FEATURE_SVE2_AES")!;
+	if (t.cpu.has(AARCH64_SVE2) && t.cpu.has(AARCH64_SVE_BITPERM)) define(w, "__ARM_FEATURE_SVE2_BITPERM")!;
 	if (t.cpu.has(AARCH64_SME))
 	{
-		w.define("__ARM_FEATURE_SME");
-		w.define("__ARM_FEATURE_LOCALLY_STREAMING");
+		define(w, "__ARM_FEATURE_SME")!;
+		define(w, "__ARM_FEATURE_LOCALLY_STREAMING")!;
 	}
 	// Zig: __HAVE_FUNCTION_MULTI_VERSIONING (fmv) is commented out.
 	if (t.cpu.has(AARCH64_SHA3))
 	{
-		w.define("__ARM_FEATURE_SHA3");
-		w.define("__ARM_FEATURE_SHA512");
+		define(w, "__ARM_FEATURE_SHA3")!;
+		define(w, "__ARM_FEATURE_SHA512")!;
 	}
 	if (t.cpu.has(AARCH64_SM4))
 	{
-		w.define("__ARM_FEATURE_SM3");
-		w.define("__ARM_FEATURE_SM4");
+		define(w, "__ARM_FEATURE_SM3")!;
+		define(w, "__ARM_FEATURE_SM4")!;
 	}
-	if (!t.cpu.has(AARCH64_NO_UNALIGNED_ACCESS)) w.define("__ARM_FEATURE_UNALIGNED");
-	if (t.cpu.has(AARCH64_NEON) && t.cpu.has(AARCH64_FULLFP16)) w.define("__ARM_FEATURE_FP16_VECTOR_ARITHMETIC");
+	if (!t.cpu.has(AARCH64_NO_UNALIGNED_ACCESS)) define(w, "__ARM_FEATURE_UNALIGNED")!;
+	if (t.cpu.has(AARCH64_NEON) && t.cpu.has(AARCH64_FULLFP16)) define(w, "__ARM_FEATURE_FP16_VECTOR_ARITHMETIC")!;
 	if (t.cpu.has(AARCH64_RCPC3))
 	{
-		w.write("#define __ARM_FEATURE_RCPC 3\n");
+		w.write("#define __ARM_FEATURE_RCPC 3\n")!;
 	}
 	else if (t.cpu.has(AARCH64_RCPC))
 	{
-		w.define("__ARM_FEATURE_RCPC");
+		define(w, "__ARM_FEATURE_RCPC")!;
 	}
 
 	foreach (fm : AARCH64_FEATURE_MACROS)
 	{
-		if (t.cpu.has(fm.feature)) w.printf("#define __ARM_FEATURE_%s 1\n", fm.name);
+		if (t.cpu.has(fm.feature)) io::fprintf(w, "#define __ARM_FEATURE_%s 1\n", fm.name)!;
 	}
-	write_arm_enum_and_wchar_size(comp, w);
+	write_arm_enum_and_wchar_size(comp, w)!;
 }
 
 <* msp430: MSP430, __MSP430__. arc: __arc__. *>
-fn void write_msp430_arc_defines(Compilation* comp, MacroWriter* w)
+fn void? write_msp430_arc_defines(Compilation* comp, OutStream w)
 {
 	switch (comp.target.cpu.arch)
 	{
 		case MSP430:
-			w.define("MSP430");
-			w.define("__MSP430__");
-		case ARC: w.define("__arc__");
+			define(w, "MSP430")!;
+			define(w, "__MSP430__")!;
+		case ARC: define(w, "__arc__")!;
 		default: break;
 	}
 }
@@ -720,65 +720,65 @@ fn void write_msp430_arc_defines(Compilation* comp, MacroWriter* w)
  then "#define __wasm_<feature name>__ 1" for every enabled wasm feature in
  Feature declaration order.
 *>
-fn void write_wasm_defines(Compilation* comp, MacroWriter* w)
+fn void? write_wasm_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
-	w.define("__wasm");
-	w.define("__wasm__");
+	define(w, "__wasm")!;
+	define(w, "__wasm__")!;
 	if (t.cpu.arch == WASM32)
 	{
-		w.define("__wasm32");
-		w.define("__wasm32__");
+		define(w, "__wasm32")!;
+		define(w, "__wasm32__")!;
 	}
 	else
 	{
-		w.define("__wasm64");
-		w.define("__wasm64__");
+		define(w, "__wasm64")!;
+		define(w, "__wasm64__")!;
 	}
 	foreach (f : Feature::values)
 	{
 		if (f.family != WASM || !t.cpu.has(f)) continue;
-		w.printf("#define __wasm_%s__ 1\n", f.name);
+		io::fprintf(w, "#define __wasm_%s__ 1\n", f.name)!;
 	}
 }
 
 <* s390x: __s390__, __s390x__, __zarch__, __HTM__ (te), __VX__ (vx). *>
-fn void write_s390x_defines(Compilation* comp, MacroWriter* w)
+fn void? write_s390x_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
-	w.define("__s390__");
-	w.define("__s390x__");
-	w.define("__zarch__");
-	if (t.cpu.has(S390X_TE)) w.define("__HTM__");
-	if (t.cpu.has(S390X_VX)) w.define("__VX__");
+	define(w, "__s390__")!;
+	define(w, "__s390x__")!;
+	define(w, "__zarch__")!;
+	if (t.cpu.has(S390X_TE)) define(w, "__HTM__")!;
+	if (t.cpu.has(S390X_VX)) define(w, "__VX__")!;
 }
 
 <*
  riscv*: __riscv, __riscv_xlen <ptr width>, __riscv_f/d/q 2002000,
  __riscv_flen 128/64/32 (q, d, f), __riscv_float_abi_<riscv_float_abi>.
 *>
-fn void write_riscv_defines(Compilation* comp, MacroWriter* w)
+fn void? write_riscv_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
-	w.define("__riscv");
-	w.printf("#define __riscv_xlen %d\n", t.ptr_bit_width());
+	define(w, "__riscv")!;
+	io::fprintf(w, "#define __riscv_xlen %d\n", t.ptr_bit_width())!;
 	bool has_f = t.cpu.has(RISCV_F);
 	bool has_d = t.cpu.has(RISCV_D);
 	bool has_q = t.cpu.has(RISCV_Q);
-	if (has_f) w.write("#define __riscv_f 2002000\n");
-	if (has_d) w.write("#define __riscv_d 2002000\n");
-	if (has_q) w.write("#define __riscv_q 2002000\n");
+	if (has_f) w.write("#define __riscv_f 2002000\n")!;
+	if (has_d) w.write("#define __riscv_d 2002000\n")!;
+	if (has_q) w.write("#define __riscv_q 2002000\n")!;
 	if (has_q)
 	{
-		w.write("#define __riscv_flen 128\n");
+		w.write("#define __riscv_flen 128\n")!;
 	}
 	else if (has_d)
 	{
-		w.write("#define __riscv_flen 64\n");
+		w.write("#define __riscv_flen 64\n")!;
 	}
 	else if (has_f)
 	{
-		w.write("#define __riscv_flen 32\n");
+		w.write("#define __riscv_flen 32\n")!;
 	}
-	w.printf("#define __riscv_float_abi_%s 1\n", riscv_float_abi(t).name);
+	io::fprintf(w, "#define __riscv_float_abi_%s 1\n", riscv_float_abi(t).name)!;
 }

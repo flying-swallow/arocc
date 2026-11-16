@@ -4,7 +4,7 @@
 module aro::parser_declaration;
 import aro::parser, aro::parser_statement, aro::parser_result, aro::parser_declarator, aro::parser_asm;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::symbol_stack;
-import aro::string_interner, aro::value, aro::parser_diagnostics, aro::bigint;
+import aro::string_interner, aro::value, aro::diagnostics, aro::bigint;
 import aro::lang_opts, aro::compilation, aro::value_interner;
 import aro::attribute;
 import aro::attribute_wip, aro::parser_attribute;
@@ -84,38 +84,22 @@ struct DeclaratorCallbackContext (parser_declarator::IDeclaratorGrammar)
 	attribute_wip::Wip* wip;
 }
 
-<* Format auto-declaration diagnostics before passing them to Parser.emit_parser_diag,
-   whose text argument is already the final message rather than a format argument. *>
 fn void? emit_deduced_type_not_allowed(parser::Parser* p, bool auto_type, String context, tokens::TokenIndex tok)
 {
-	DString message;
-	message.init(tmem);
-	String specifier = auto_type ? "'__auto_type'" : "'auto'";
-	message.appendf("%s not allowed in %s", specifier, context);
-	parser_diagnostics::ParserDiag diag = auto_type ?
-		parser_diagnostics::ParserDiag.AUTO_TYPE_NOT_ALLOWED : parser_diagnostics::ParserDiag.C23_AUTO_NOT_ALLOWED;
-	return p.emit_parser_diag(diag, message.str_view(), tok);
+	if (auto_type) return Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, tok, context);
+	return Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, tok, context);
 }
 
 fn void? emit_deduced_type_array(parser::Parser* p, bool auto_type, String name, tokens::TokenIndex tok)
 {
-	DString message;
-	message.init(tmem);
-	String specifier = auto_type ? "'__auto_type'" : "'auto'";
-	message.appendf("'%s' declared as array of %s", name, specifier);
-	parser_diagnostics::ParserDiag diag = auto_type ?
-		parser_diagnostics::ParserDiag.AUTO_TYPE_ARRAY : parser_diagnostics::ParserDiag.C23_AUTO_ARRAY;
-	return p.emit_parser_diag(diag, message.str_view(), tok);
+	if (auto_type) return Diagnostic.AUTO_TYPE_ARRAY.@emit(p, tok, name);
+	return Diagnostic.C23_AUTO_ARRAY.@emit(p, tok, name);
 }
 
 fn void? emit_deduced_type_requires_initializer(parser::Parser* p, bool auto_type, String name, tokens::TokenIndex tok)
 {
-	if (!auto_type)
-	{
-		return p.err(parser_diagnostics::ParserDiag.C23_AUTO_REQUIRES_INITIALIZER, tok);
-	}
-	String message = string::tformat("declaration of variable '%s' with deduced type requires an initializer", name);
-	return p.emit_parser_diag(parser_diagnostics::ParserDiag.AUTO_TYPE_REQUIRES_INITIALIZER, message, tok);
+	if (!auto_type) return Diagnostic.C23_AUTO_REQUIRES_INITIALIZER.@emit(p, tok);
+	return Diagnostic.AUTO_TYPE_REQUIRES_INITIALIZER.@emit(p, tok, name);
 }
 
 <* Parse a declaration initializer with the value rule selected from its
@@ -164,16 +148,21 @@ fn parser_result::Result? DeclarationParser.parse_auto_type_initializer(&self, p
 	bool init_list = p.is_at(tokenizer::TokenId.L_BRACE);
 	if (init_list)
 	{
-		parser_diagnostics::ParserDiag diag = auto_type ?
-			parser_diagnostics::ParserDiag.AUTO_TYPE_WITH_INIT_LIST : parser_diagnostics::ParserDiag.C23_AUTO_WITH_INIT_LIST;
-		p.err_dyn(diag, initializer_tok)!;
+		if (auto_type)
+		{
+			Diagnostic.AUTO_TYPE_WITH_INIT_LIST.@emit(p, initializer_tok)!;
+		}
+		else
+		{
+			Diagnostic.C23_AUTO_WITH_INIT_LIST.@emit(p, initializer_tok)!;
+		}
 	}
 
 	parser_result::Result initializer = p.parse_initializer_with_context(type_store::INVALID, context, eval)!;
 	if (init_list) return initializer;
 	if (p.tree.is_bitfield(initializer.node))
 	{
-		p.err(parser_diagnostics::ParserDiag.AUTO_TYPE_FROM_BITFIELD, initializer_tok)!;
+		Diagnostic.AUTO_TYPE_FROM_BITFIELD.@emit(p, initializer_tok)!;
 	}
 	initializer.lval_conversion(p);
 	return initializer;
@@ -485,15 +474,14 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		if (catch f = maybe_spec)
 		{
 			if (f != NO_DECL_SPEC) return f~;
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_RECORD_DECL,
-				"expected record declaration", member_start)!;
+			Diagnostic.EXPECTED_RECORD_DECL.@emit(p, member_start)!;
 			return PARSING_FAILED~;
 		}
 		DeclSpec spec = maybe_spec;
 		attribute_wip::State declarator_state = field_wip.state(false);
 		if (spec.storage_class != StorageClass.NONE || spec.thread_local || spec.constexpr_decl || spec.is_inline)
 		{
-			p.err(parser_diagnostics::ParserDiag.EXPECTED_RECORD_DECL, member_start)!;
+			Diagnostic.EXPECTED_RECORD_DECL.@emit(p, member_start)!;
 		}
 		if (spec.qt.is_auto())
 		{
@@ -510,7 +498,7 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 			// spelling both have a type specifier followed directly by ';'.
 			if (!spec.qt.is(p.comp, type_store::TypeTag.STRUCT) && !spec.qt.is(p.comp, type_store::TypeTag.UNION))
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_RECORD_DECL, member_start)!;
+				Diagnostic.EXPECTED_RECORD_DECL.@emit(p, member_start)!;
 				return PARSING_FAILED~;
 			}
 			type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.RECORD_FIELD,
@@ -551,41 +539,40 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 				parser_result::Result width_result = maybe_width;
 				if (!field_qt.is_int(p.comp))
 				{
-					p.err(parser_diagnostics::ParserDiag.NON_INT_BITFIELD, field_decl.has_name ? field_decl.name_tok : colon,
+					Diagnostic.NON_INT_BITFIELD.@emit(p, field_decl.has_name ? field_decl.name_tok : colon,
 						p.fmt_qt(field_qt))!;
 					return PARSING_FAILED~;
 				}
 				if (width_result.val.is_none())
 				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR,
-						"expression is not an integer constant expression", width_tok)!;
+					Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, width_tok)!;
 				}
 				else
 				{
 					if (value::compare(width_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
 					{
-						p.err(parser_diagnostics::ParserDiag.NEGATIVE_BITWIDTH, colon,
+						Diagnostic.NEGATIVE_BITWIDTH.@emit(p, colon,
 							p.fmt_value(width_result.val, width_result.qt))!;
 						return PARSING_FAILED~;
 					}
 					ulong width_value = width_result.val.to_u64(p.comp) ?? ulong::max;
 					if (width_value > field_qt.bit_sizeof(p.comp))
 					{
-						p.err(parser_diagnostics::ParserDiag.BITFIELD_TOO_BIG, colon)!;
+						Diagnostic.BITFIELD_TOO_BIG.@emit(p, colon)!;
 						return PARSING_FAILED~;
 					}
 					bit_width = (uint)width_value;
 					bit_width_node = width_result.node.pack();
 					if (bit_width == 0 && field_decl.has_name)
 					{
-						p.err(parser_diagnostics::ParserDiag.ZERO_WIDTH_NAMED_FIELD, field_decl.name_tok)!;
+						Diagnostic.ZERO_WIDTH_NAMED_FIELD.@emit(p, field_decl.name_tok)!;
 						return PARSING_FAILED~;
 					}
 				}
 			}
 			else if (!field_decl.has_name)
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_RECORD_DECL, p.tok_i)!;
+				Diagnostic.EXPECTED_RECORD_DECL.@emit(p, p.tok_i)!;
 				return PARSING_FAILED~;
 			}
 			// Attributes may also follow the bit-field width (`int i : 1 __attribute__((aligned(8)));`);
@@ -601,30 +588,30 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 				switch (field_ty.tag)
 				{
 					case FUNC:
-						p.err(parser_diagnostics::ParserDiag.FUNC_FIELD, first_tok)!;
+						Diagnostic.FUNC_FIELD.@emit(p, first_tok)!;
 						field_qt = type_store::INVALID;
 					case ARRAY:
 						switch (field_ty.array.len.kind)
 						{
 							case VARIABLE:
-								p.err(parser_diagnostics::ParserDiag.VLA_FIELD, first_tok)!;
+								Diagnostic.VLA_FIELD.@emit(p, first_tok)!;
 								field_qt = type_store::INVALID;
 							case INCOMPLETE:
 								if (seed.is_union)
 								{
 									if (p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
 									{
-										p.err(parser_diagnostics::ParserDiag.FLEXIBLE_IN_UNION_MSVC, first_tok)!;
+										Diagnostic.FLEXIBLE_IN_UNION_MSVC.@emit(p, first_tok)!;
 									}
 									else
 									{
-										p.err(parser_diagnostics::ParserDiag.FLEXIBLE_IN_UNION, first_tok)!;
+										Diagnostic.FLEXIBLE_IN_UNION.@emit(p, first_tok)!;
 										field_qt = type_store::INVALID;
 									}
 								}
 								if (has_flexible_field && !seed.is_union)
 								{
-									p.err(parser_diagnostics::ParserDiag.FLEXIBLE_NON_FINAL, flexible_field_tok)!;
+									Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, flexible_field_tok)!;
 								}
 								has_flexible_field = true;
 								flexible_field_tok = first_tok;
@@ -633,12 +620,12 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 					default:
 						if (field_qt.has_incomplete_size(p.comp))
 						{
-							p.err(parser_diagnostics::ParserDiag.FIELD_INCOMPLETE_TY, first_tok, p.fmt_qt(field_qt))!;
+							Diagnostic.FIELD_INCOMPLETE_TY.@emit(p, first_tok, p.fmt_qt(field_qt))!;
 							return PARSING_FAILED~;
 						}
 						if (has_flexible_field && !seed.is_union)
 						{
-							p.err(parser_diagnostics::ParserDiag.FLEXIBLE_NON_FINAL, flexible_field_tok)!;
+							Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, flexible_field_tok)!;
 						}
 				}
 			}
@@ -747,7 +734,7 @@ fn Enumerator enum_enumerator(parser::ContainerBodySeed seed)
 
 fn void? emit_enum_not_representable_fixed(parser::Parser* p, type_store::QualType qt, tokens::TokenIndex tok)
 {
-	return p.err(parser_diagnostics::ParserDiag.ENUM_NOT_REPRESENTABLE_FIXED, tok, p.fmt_qt(qt));
+	return Diagnostic.ENUM_NOT_REPRESENTABLE_FIXED.@emit(p, tok, p.fmt_qt(qt));
 }
 
 fn void? Enumerator.incr(&self, parser::Parser* p, tokens::TokenIndex tok)
@@ -776,7 +763,7 @@ fn void? Enumerator.incr(&self, parser::Parser* p, tokens::TokenIndex tok)
 	type_store::QualType larger_qt = next_larger_enum_int(self.qt, p.comp);
 	if (!larger_qt.is_invalid())
 	{
-		p.err(parser_diagnostics::ParserDiag.ENUMERATOR_OVERFLOW, tok)!;
+		Diagnostic.ENUMERATOR_OVERFLOW.@emit(p, tok)!;
 		self.qt = larger_qt;
 	}
 	else
@@ -784,7 +771,7 @@ fn void? Enumerator.incr(&self, parser::Parser* p, tokens::TokenIndex tok)
 		value::Value unbounded_next = increment_enum_value(old_val, p.comp);
 		bigint::BigIntConst value_bigint = unbounded_next.to_big_int(p.comp);
 		String value_text = value_bigint.to_string_alloc(tmem, 10, false);
-		p.err(parser_diagnostics::ParserDiag.ENUM_NOT_REPRESENTABLE, tok, value_text)!;
+		Diagnostic.ENUM_NOT_REPRESENTABLE.@emit(p, tok, value_text)!;
 		// Keep the unbounded value in the diagnostic, but wrap the stored value at ULL width.
 		self.qt = type_store::ULONG_LONG;
 		self.val = value::NONE;
@@ -860,7 +847,7 @@ fn type_store::QualType? Enumerator.get_type_specifier(&self, parser::Parser* p,
 		usz long_long_width = (usz)type_store::LONG_LONG.bit_sizeof(p.comp);
 		if (self.num_negative_bits > long_long_width || self.num_positive_bits >= long_long_width)
 		{
-			p.err(parser_diagnostics::ParserDiag.ENUM_TOO_LARGE, tok)!;
+			Diagnostic.ENUM_TOO_LARGE.@emit(p, tok)!;
 		}
 		return type_store::LONG_LONG;
 	}
@@ -949,7 +936,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 			parser_result::Result value_result = maybe_value;
 			if (value_result.val.is_none())
 			{
-				p.err(parser_diagnostics::ParserDiag.ENUM_VAL_UNAVAILABLE, name_tok + 2)!;
+				Diagnostic.ENUM_VAL_UNAVAILABLE.@emit(p, name_tok + 2)!;
 				enumerator.incr(p, name_tok)!;
 			}
 			else
@@ -972,14 +959,14 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 				if (value::compare(enumerator.val, bigint::CompareOperator.LT,
 					value::min_int(type_store::INT, p.comp), p.comp))
 				{
-					p.err(parser_diagnostics::ParserDiag.ENUMERATOR_TOO_SMALL, name_tok,
+					Diagnostic.ENUMERATOR_TOO_SMALL.@emit(p, name_tok,
 						p.fmt_value(enumerator.val, enumerator.qt))!;
 				}
 			}
 			else if (value::compare(enumerator.val, bigint::CompareOperator.GT,
 				value::max_int(type_store::INT, p.comp), p.comp))
 			{
-				p.err(parser_diagnostics::ParserDiag.ENUMERATOR_TOO_LARGE, name_tok,
+				Diagnostic.ENUMERATOR_TOO_LARGE.@emit(p, name_tok,
 					p.fmt_value(enumerator.val, enumerator.qt))!;
 			}
 		}
@@ -1167,19 +1154,16 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 			{
 				if (p.comp.langopts.standard.at_least(C23))
 				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.PRE_C23_COMPAT,
-						keyword_diag_text(spelling, "is incompatible with C standards before C23"), tok)!;
+					Diagnostic.PRE_C23_COMPAT.@emit(p, tok, spelling)!;
 				}
 			}
 			else if (p.comp.langopts.standard.at_least(C11))
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.PRE_C11_COMPAT,
-					keyword_diag_text(spelling, "is incompatible with C standards before C11"), tok)!;
+				Diagnostic.PRE_C11_COMPAT.@emit(p, tok, spelling)!;
 			}
 			else
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.C11_EXTENSION,
-					keyword_diag_text(spelling, "is a C11 extension"), tok)!;
+				Diagnostic.C11_EXTENSION.@emit(p, tok, spelling)!;
 			}
 			p.advance();
 			tokens::TokenIndex opener = p.tok_i;
@@ -1193,7 +1177,7 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 				type_store::QualType qt = type_name.qt;
 				if (!qt.alignable(p.comp))
 				{
-					p.err(parser_diagnostics::ParserDiag.INVALID_ALIGNOF, tok, p.fmt_qt(qt))!;
+					Diagnostic.INVALID_ALIGNOF.@emit(p, tok, p.fmt_qt(qt))!;
 				}
 				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.ALIGNAS_TYPE,
 					.alignas_type = { .alignas_tok = tok, .qt = qt } });
@@ -1214,7 +1198,7 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		if (id == KEYWORD_BIT_INT)
 		{
 			result.recognized = true;
-			p.err(parser_diagnostics::ParserDiag.BIT_INT, tok)!;
+			Diagnostic.BIT_INT.@emit(p, tok)!;
 			p.advance();
 			tokens::TokenIndex opener = p.tok_i;
 			if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
@@ -1224,8 +1208,7 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 			if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 			if (width.val.is_none())
 			{
-				p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_INTEGER_CONSTANT_EXPR,
-					"expression is not an integer constant expression", width.node.tok(&p.tree))!;
+				Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, width.node.tok(&p.tree))!;
 				return PARSING_FAILED~;
 			}
 			ulong bits = 0;
@@ -1248,7 +1231,7 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		if (id == KEYWORD_AUTO_TYPE)
 		{
 			result.recognized = true;
-			p.err(parser_diagnostics::ParserDiag.AUTO_TYPE_EXTENSION, tok)!;
+			Diagnostic.AUTO_TYPE_EXTENSION.@emit(p, tok)!;
 			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.AUTO_TYPE }, tok)) return PARSING_FAILED~;
 			result.auto_type_tok = tok;
 			p.advance(); consumed = true; result.recognized = true; continue;
@@ -1522,7 +1505,7 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 		if (p.comp.langopts.standard.at_least(C23) &&
 			(p.is_at(tokenizer::TokenId.IDENTIFIER) || p.is_at(tokenizer::TokenId.EXTENDED_IDENTIFIER)))
 		{
-			p.err(parser_diagnostics::ParserDiag.UNKNOWN_TYPE_NAME, first_tok,
+			Diagnostic.UNKNOWN_TYPE_NAME.@emit(p, first_tok,
 				p.tree.tok_slice(first_tok))!;
 			p.advance();
 			// C23 diagnoses the old-style identifier as an unknown type name,
@@ -1539,15 +1522,15 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 		{
 			if (p.at_eof())
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_EOF, p.diag_index(), "parameter declaration")!;
+				Diagnostic.EXPECTED_EOF.@emit(p, p.diag_index(), "parameter declaration")!;
 			}
 			else if (p.tree.tokens[(usz)first_tok].id == tokenizer::TokenId.INVALID)
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_INVALID, first_tok, "parameter declaration")!;
+				Diagnostic.EXPECTED_INVALID.@emit(p, first_tok, "parameter declaration")!;
 			}
 			else
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_TOKEN, first_tok,
+				Diagnostic.EXPECTED_TOKEN.@emit(p, first_tok,
 					"parameter declaration", p.tree.tokens[(usz)first_tok].id.symbol())!;
 			}
 			return PARSING_FAILED~;
@@ -1566,8 +1549,7 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 	}
 	if (spec.storage_class != StorageClass.NONE && spec.storage_class != StorageClass.REGISTER)
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.INVALID_STORAGE_ON_PARAM,
-			"invalid storage class on function parameter", first_tok)!;
+		Diagnostic.INVALID_STORAGE_ON_PARAM.@emit(p, first_tok)!;
 	}
 	if (spec.qt.is_auto())
 	{
@@ -1867,8 +1849,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 		DeclSpec spec = self.parse_decl_spec(p, &wip)!;
 		if (spec.storage_class != StorageClass.NONE && spec.storage_class != StorageClass.REGISTER)
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.INVALID_STORAGE_ON_PARAM,
-				"invalid storage class on function parameter", spec_tok)!;
+			Diagnostic.INVALID_STORAGE_ON_PARAM.@emit(p, spec_tok)!;
 		}
 		while (true)
 		{
@@ -1900,7 +1881,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 			}
 			if (match == param_entries.len)
 			{
-				p.err(parser_diagnostics::ParserDiag.PARAMETER_MISSING, name_tok,
+				Diagnostic.PARAMETER_MISSING.@emit(p, name_tok,
 					p.tree.tok_slice(name_tok))!;
 				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.PARAM, .param = {
 					.name_tok = name_tok,
@@ -1963,7 +1944,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 		if (was_declared[i]) continue;
 		type_store::FuncParam param = param_entries[i].param;
 		if (param.name == string_interner::EMPTY) continue;
-		p.err(parser_diagnostics::ParserDiag.PARAM_NOT_DECLARED, (tokens::TokenIndex)param.name_tok,
+		Diagnostic.PARAM_NOT_DECLARED.@emit(p, (tokens::TokenIndex)param.name_tok,
 			p.tree.tok_slice((tokens::TokenIndex)param.name_tok))!;
 	}
 
@@ -1992,9 +1973,7 @@ fn void? emit_expected_fn_body_after(parser::Parser* p, tokens::TokenIndex tok)
 {
 	source::Location loc = p.tree.tokens[(usz)tok].loc;
 	loc.byte_offset++;
-	return parser_diagnostics::ParserDiag.EXPECTED_FN_BODY.emit(p.comp, &p.comp.langopts,
-		p.extension_suppressed, parser_diagnostics::ParserDiag.EXPECTED_FN_BODY.fmt,
-		loc.expand(p.comp), p.pp.expansion_slice(tok));
+	return Diagnostic.EXPECTED_FN_BODY.@emit_at(p, loc.expand(p.comp), p.pp.expansion_slice(tok));
 }
 
 <* Definition-only checks apply after parameter declarators have been adjusted
@@ -2009,18 +1988,15 @@ fn void? DeclarationParser.validate_definition_parameters(&self, parser::Parser*
 	{
 		if (param.name == string_interner::EMPTY)
 		{
-			p.err(parser_diagnostics::ParserDiag.OMITTING_PARAMETER_NAME,
-				(tokens::TokenIndex)param.name_tok)!;
+			Diagnostic.OMITTING_PARAMETER_NAME.@emit(p, (tokens::TokenIndex)param.name_tok)!;
 		}
 		if (is_unbound_vla_parameter(p, param.qt))
 		{
-			p.err(parser_diagnostics::ParserDiag.UNBOUND_VLA,
-				(tokens::TokenIndex)param.name_tok)!;
+			Diagnostic.UNBOUND_VLA.@emit(p, (tokens::TokenIndex)param.name_tok)!;
 		}
 		if (param.qt.has_incomplete_size(p.comp))
 		{
-			p.err(parser_diagnostics::ParserDiag.PARAMETER_INCOMPLETE_TY,
-				(tokens::TokenIndex)param.name_tok, p.fmt_qt(param.qt))!;
+			Diagnostic.PARAMETER_INCOMPLETE_TY.@emit(p, (tokens::TokenIndex)param.name_tok, p.fmt_qt(param.qt))!;
 		}
 	}
 }
@@ -2053,7 +2029,7 @@ fn StaticAssertRequirement static_assert_message(parser::Parser* p, type_store::
 		{
 			w.append_string(": ");
 			text_literal_semantics::print_string(bytes, message.qt, p.comp, w,
-				text_literal_semantics::PrintStringStyle.BARE);
+				text_literal_semantics::PrintStringStyle.BARE)!!;
 		}
 	}
 	return { .req_start = start, .req_end = end };
@@ -2084,26 +2060,13 @@ fn void? static_assert_evaluation_note(parser::Parser* p, type_store::NodeIndex 
 	DString note;
 	note.init(tmem);
 	value::NestedPrint lhs_nested;
-	if (lhs_val.print(n.binary.lhs.qt(&p.tree), p.comp, &note, &lhs_nested)) return;
+	if (lhs_val.print(n.binary.lhs.qt(&p.tree), p.comp, &note, &lhs_nested)!) return;
 	note.appendf(" %s ", p.tree.tok_slice(n.binary.op_tok));
 	value::NestedPrint rhs_nested;
-	if (rhs_val.print(n.binary.rhs.qt(&p.tree), p.comp, &note, &rhs_nested)) return;
+	if (rhs_val.print(n.binary.rhs.qt(&p.tree), p.comp, &note, &rhs_nested)!) return;
 	String eval_text = note.str_view();
 	if (eval_text == requirement) return;
-	// emit_parser_diag takes the final text, so wrap the template's {s} here.
-	DString message;
-	message.init(tmem);
-	message.append_string("expression evaluates to '");
-	message.append_string(eval_text);
-	message.append_char('\'');
-	p.emit_parser_diag(parser_diagnostics::ParserDiag.STATIC_ASSERT_EXPRESSION_EVALUATES_TO, message.str_view(), n.binary.op_tok)!;
-}
-
-<* Final text for a `'{s}' <tail>` diagnostic template: `spelling` in single quotes, then `tail`. *>
-fn String keyword_diag_text(String spelling, String tail)
-{
-	String buf = string::tformat("'%s' %s", spelling, tail);
-	return buf;
+	Diagnostic.STATIC_ASSERT_EXPRESSION_EVALUATES_TO.@emit(p, n.binary.op_tok, eval_text)!;
 }
 
 <* Parse `_Static_assert` or C23 `static_assert`, at file, block or record-member scope:
@@ -2124,19 +2087,16 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 	{
 		if (p.comp.langopts.standard.at_least(C23))
 		{
-			p.emit_parser_diag(parser_diagnostics::ParserDiag.PRE_C23_COMPAT,
-				keyword_diag_text(spelling, "is incompatible with C standards before C23"), static_assert_tok)!;
+			Diagnostic.PRE_C23_COMPAT.@emit(p, static_assert_tok, spelling)!;
 		}
 	}
 	else if (p.comp.langopts.standard.at_least(C11))
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.PRE_C11_COMPAT,
-			keyword_diag_text(spelling, "is incompatible with C standards before C11"), static_assert_tok)!;
+		Diagnostic.PRE_C11_COMPAT.@emit(p, static_assert_tok, spelling)!;
 	}
 	else
 	{
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.C11_EXTENSION,
-			keyword_diag_text(spelling, "is a C11 extension"), static_assert_tok)!;
+		Diagnostic.C11_EXTENSION.@emit(p, static_assert_tok, spelling)!;
 	}
 	p.advance();
 	tokens::TokenIndex l_paren = p.tok_i;
@@ -2156,7 +2116,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 		p.advance();
 		if (p.at_eof() || !parser_primary::is_string_token(p.tree.tokens[(usz)p.tok_i].id))
 		{
-			p.err(parser_diagnostics::ParserDiag.EXPECTED_STR_LITERAL, p.tok_i)!;
+			Diagnostic.EXPECTED_STR_LITERAL.@emit(p, p.tok_i)!;
 			return PARSING_FAILED~;
 		}
 		parser_primary::PrimaryParser primary = { .parser = p };
@@ -2170,11 +2130,11 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 	{
 		if (p.comp.langopts.standard.at_least(C23))
 		{
-			p.err(parser_diagnostics::ParserDiag.STATIC_ASSERT_MISSING_MESSAGE_COMPAT, static_assert_tok)!;
+			Diagnostic.STATIC_ASSERT_MISSING_MESSAGE_COMPAT.@emit(p, static_assert_tok)!;
 		}
 		else
 		{
-			p.err(parser_diagnostics::ParserDiag.STATIC_ASSERT_MISSING_MESSAGE, static_assert_tok)!;
+			Diagnostic.STATIC_ASSERT_MISSING_MESSAGE.@emit(p, static_assert_tok)!;
 		}
 	}
 
@@ -2184,7 +2144,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 	if (!is_int_expr) res.val = value::NONE;
 	if (res.val.is_none())
 	{
-		if (!res.qt.is_invalid()) p.err(parser_diagnostics::ParserDiag.STATIC_ASSERT_NOT_CONSTANT, res_token)!;
+		if (!res.qt.is_invalid()) Diagnostic.STATIC_ASSERT_NOT_CONSTANT.@emit(p, res_token)!;
 	}
 	else if (!res.val.to_bool(p.comp))
 	{
@@ -2195,7 +2155,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 		full.append_string(STATIC_ASSERT_PREFIX);
 		StaticAssertRequirement requirement = static_assert_message(p, res.node, has_message, message, &full);
 		String full_text = full.str_view();
-		p.err(parser_diagnostics::ParserDiag.STATIC_ASSERT_FAILURE_MESSAGE, res_token, full_text[STATIC_ASSERT_PREFIX.len:full_text.len - STATIC_ASSERT_PREFIX.len])!;
+		Diagnostic.STATIC_ASSERT_FAILURE_MESSAGE.@emit(p, res_token, full_text[STATIC_ASSERT_PREFIX.len:full_text.len - STATIC_ASSERT_PREFIX.len])!;
 		// C3 `x[start:len]` takes a length, not an end index.
 		String requirement_text = full_text[requirement.req_start:requirement.req_end - requirement.req_start];
 		static_assert_evaluation_note(p, res.node, requirement_text)!;
@@ -2283,8 +2243,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			p.tree.root_decls.push(global_asm);
 			return (type_store::NodeIndex)0;
 		}
-		p.emit_parser_diag(parser_diagnostics::ParserDiag.EXPECTED_EXTERNAL_DECL,
-			"expected external declaration", p.diag_index())!;
+		Diagnostic.EXPECTED_EXTERNAL_DECL.@emit(p, p.diag_index())!;
 		// At file scope an unexpected compound statement is one malformed item.
 		// Skip its balanced body so each token inside it does not produce another
 		// expected-external-declaration diagnostic.
@@ -2357,7 +2316,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			bool has_auto_type = spec.qt.is_auto();
 			if (!local && spec.storage_class == StorageClass.AUTO)
 			{
-				p.err(parser_diagnostics::ParserDiag.AUTO_ON_GLOBAL, spec.auto_tok)!;
+				Diagnostic.AUTO_ON_GLOBAL.@emit(p, spec.auto_tok)!;
 			}
 			bool has_initializer = p.is_at(tokenizer::TokenId.EQUAL);
 			bool function_type = qt.is(p.comp, type_store::TypeTag.FUNC);
@@ -2385,7 +2344,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				}
 				else if (declarator_type == parser_declarator::DeclaratorType.POINTER)
 				{
-					p.err(parser_diagnostics::ParserDiag.AUTO_TYPE_REQUIRES_PLAIN_DECLARATOR, name_tok)!;
+					Diagnostic.AUTO_TYPE_REQUIRES_PLAIN_DECLARATOR.@emit(p, name_tok)!;
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
@@ -2421,8 +2380,8 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				// are still parsed at file scope; the function itself is missing
 				// its body at the closing parenthesis. Match Zig's non-K&R
 				// function-definition recovery: locate the diagnostic on `)`.
-				if (p.tok_i > 0) { p.err(parser_diagnostics::ParserDiag.EXPECTED_FN_BODY, p.tok_i - 1)!; }
-				else { p.err(parser_diagnostics::ParserDiag.EXPECTED_FN_BODY, p.diag_index())!; }
+				if (p.tok_i > 0) { Diagnostic.EXPECTED_FN_BODY.@emit(p, p.tok_i - 1)!; }
+				else { Diagnostic.EXPECTED_FN_BODY.@emit(p, p.diag_index())!; }
 				return PARSING_FAILED~;
 			}
 			if (function_type && (function_body_follows || old_style_declaration_list_follows || old_style_definition_context))
@@ -2432,18 +2391,16 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				defer extra_kr_params.free();
 				if (local || has_initializer || spec.storage_class == StorageClass.TYPEDEF)
 				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.ILLEGAL_STORAGE_ON_FUNC,
-						"illegal storage class on function", name_tok)!;
+					Diagnostic.ILLEGAL_STORAGE_ON_FUNC.@emit(p, name_tok)!;
 					return PARSING_FAILED~;
 				}
 				if (spec.storage_class == StorageClass.AUTO || spec.storage_class == StorageClass.REGISTER)
 				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.ILLEGAL_STORAGE_ON_FUNC,
-						"illegal storage class on function", name_tok)!;
+					Diagnostic.ILLEGAL_STORAGE_ON_FUNC.@emit(p, name_tok)!;
 				}
 				if (old_style_function && parsed.has_old_style_ident)
 				{
-					p.err(parser_diagnostics::ParserDiag.DEF_NO_PROTO_DEPRECATED, name_tok)!;
+					Diagnostic.DEF_NO_PROTO_DEPRECATED.@emit(p, name_tok)!;
 					qt = self.parse_kr_definition_parameters(p, fn_type, &extra_kr_params)!!;
 					fn_type = qt.get(p.comp, type_store::TypeTag.FUNC)!.func;
 					if (!p.is_at(tokenizer::TokenId.L_BRACE))
@@ -2454,7 +2411,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 						}
 						else
 						{
-							p.err(parser_diagnostics::ParserDiag.EXPECTED_FN_BODY, p.diag_index())!;
+							Diagnostic.EXPECTED_FN_BODY.@emit(p, p.diag_index())!;
 						}
 						return PARSING_FAILED~;
 					}
@@ -2482,8 +2439,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					}
 					if (!main_return_is_int)
 					{
-						p.emit_parser_diag(parser_diagnostics::ParserDiag.MAIN_RETURN_TYPE,
-							"return type of 'main' is not 'int'", name_tok)!;
+						Diagnostic.MAIN_RETURN_TYPE.@emit(p, name_tok)!;
 					}
 				}
 				self.active_parser = p;
@@ -2542,14 +2498,12 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			if (old_style_function && parsed.has_old_style_ident &&
 				(p.is_at(tokenizer::TokenId.SEMICOLON) || p.is_at(tokenizer::TokenId.COMMA)))
 			{
-				p.err(parser_diagnostics::ParserDiag.INVALID_OLD_STYLE_PARAMS,
-				parsed.old_style_ident_tok)!;
+				Diagnostic.INVALID_OLD_STYLE_PARAMS.@emit(p, parsed.old_style_ident_tok)!;
 			}
 			else if (old_style_function && !has_initializer &&
 				!p.is_at(tokenizer::TokenId.SEMICOLON) && !p.is_at(tokenizer::TokenId.COMMA))
 			{
-				p.err(parser_diagnostics::ParserDiag.EXPECTED_FN_BODY,
-					p.tok_i > 0 ? p.tok_i - 1 : p.diag_index())!;
+				Diagnostic.EXPECTED_FN_BODY.@emit(p, p.tok_i > 0 ? p.tok_i - 1 : p.diag_index())!;
 				return PARSING_FAILED~;
 			}
 
@@ -2575,8 +2529,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			{
 				if (has_initializer)
 				{
-					p.emit_parser_diag(parser_diagnostics::ParserDiag.ILLEGAL_INITIALIZER,
-						"illegal initializer (only variables can be initialized)", p.tok_i)!;
+					Diagnostic.ILLEGAL_INITIALIZER.@emit(p, p.tok_i)!;
 					p.advance(); // Consume '=' before reporting the malformed initializer.
 					parser_result::Result ignored_initializer = self.parse_variable_initializer(p, qt, false, false)!;
 				}
@@ -2616,8 +2569,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				{
 					if (spec.storage_class == StorageClass.EXTERN)
 					{
-						p.emit_parser_diag(parser_diagnostics::ParserDiag.EXTERN_INITIALIZER,
-							"extern variable has initializer", name_tok)!;
+						Diagnostic.EXTERN_INITIALIZER.@emit(p, name_tok)!;
 					}
 					parser_result::Result? maybe_initializer;
 					if (has_auto_type)
@@ -2687,11 +2639,11 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			{
 				if (spec.qt.is_auto_type())
 				{
-					p.err(parser_diagnostics::ParserDiag.AUTO_TYPE_REQUIRES_SINGLE_DECLARATOR, spec.auto_type_tok)!;
+					Diagnostic.AUTO_TYPE_REQUIRES_SINGLE_DECLARATOR.@emit(p, spec.auto_type_tok)!;
 				}
 				else
 				{
-					p.err(parser_diagnostics::ParserDiag.C23_AUTO_SINGLE_DECLARATOR, spec.c23_auto_tok)!;
+					Diagnostic.C23_AUTO_SINGLE_DECLARATOR.@emit(p, spec.c23_auto_tok)!;
 				}
 				warned_auto_single_declarator = true;
 			}

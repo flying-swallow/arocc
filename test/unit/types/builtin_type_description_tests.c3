@@ -57,7 +57,7 @@ fn String dmp(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.dump(comp, &w);
+	qt.dump(comp, &w)!!;
 	return w.str_view();
 }
 
@@ -65,7 +65,7 @@ fn String pr(Compilation* comp, QualType qt)
 {
 	DString w;
 	w.init(tmem);
-	qt.print(comp, &w);
+	qt.print(comp, &w)!!;
 	return w.str_view();
 }
 

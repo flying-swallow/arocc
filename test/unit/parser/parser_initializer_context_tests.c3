@@ -1,6 +1,6 @@
 // Initializer value requirements and variable-length-array diagnostics.
 module parser_init_ctx_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_diagnostics, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_result;
 import aro::preprocessor, aro::source, aro::symbol_stack, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::value;
 
 fn parser_result::Result? parse_context_test_expr(void* context, parser::Parser* p, bool eval)
@@ -139,7 +139,7 @@ fn parser_result::Result? parse_context_error_test_expr(void* context, parser::P
 {
 	if (p.at_eof()) return parser::PARSING_FAILED~;
 	tokens::TokenIndex tok = p.tok_i;
-	p.err(parser_diagnostics::ParserDiag.EXPECTED_EXPR, tok)!;
+	Diagnostic.EXPECTED_EXPR.@emit(p, tok)!;
 	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
 		.literal = { .literal_tok = tok, .qt = type_store::INT } });
 	p.advance();

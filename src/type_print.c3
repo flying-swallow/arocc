@@ -1,48 +1,48 @@
 // Port of the printing part of src/aro/TypeStore.zig: QualType.print,
 // printNamed, printDesugared, printPrologue/printEpilogue, dump and
 // shouldDesugar (with the `Builder.fromType(...).str(...)` it relies on).
-// Output is appended to a DString.
+// Output goes to an OutStream; write faults propagate.
 module aro::type_store;
-import aro::compilation, aro::lang_opts, aro::string_interner, std::core::dstring;
+import aro::compilation, aro::lang_opts, aro::string_interner, std::core::dstring, std::io;
 
-fn void QualType.print(self, Compilation* comp, DString* w)
+fn void? QualType.print(self, Compilation* comp, OutStream w)
 {
 	if (self.is_c23_auto())
 	{
-		w.append_string("auto");
+		w.write("auto")!;
 		return;
 	}
 	if (self.is_auto_type())
 	{
-		w.append_string("__auto_type");
+		w.write("__auto_type")!;
 		return;
 	}
-	self.print_prologue(comp, false, w);
-	self.print_epilogue(comp, false, w);
+	self.print_prologue(comp, false, w)!;
+	self.print_epilogue(comp, false, w)!;
 }
 
-fn void QualType.print_named(self, String name, Compilation* comp, DString* w)
+fn void? QualType.print_named(self, String name, Compilation* comp, OutStream w)
 {
 	if (self.is_c23_auto())
 	{
-		w.appendf("auto %s", name);
+		io::fprintf(w, "auto %s", name)!;
 		return;
 	}
 	if (self.is_auto_type())
 	{
-		w.appendf("__auto_type %s", name);
+		io::fprintf(w, "__auto_type %s", name)!;
 		return;
 	}
-	bool simple = self.print_prologue(comp, false, w);
-	if (simple) w.append_char(' ');
-	w.append_string(name);
-	self.print_epilogue(comp, false, w);
+	bool simple = self.print_prologue(comp, false, w)!;
+	if (simple) w.write_byte(' ')!;
+	w.write(name)!;
+	self.print_epilogue(comp, false, w)!;
 }
 
-fn void QualType.print_desugared(self, Compilation* comp, DString* w)
+fn void? QualType.print_desugared(self, Compilation* comp, OutStream w)
 {
-	self.print_prologue(comp, true, w);
-	self.print_epilogue(comp, true, w);
+	self.print_prologue(comp, true, w)!;
+	self.print_epilogue(comp, true, w)!;
 }
 
 <* Convenience: print into a temp-allocated string. *>
@@ -50,7 +50,7 @@ fn String QualType.tprint(self, Compilation* comp)
 {
 	DString w;
 	w.init(tmem);
-	self.print(comp, &w);
+	self.print(comp, &w)!!;
 	return w.str_view();
 }
 
@@ -59,26 +59,26 @@ fn String QualType.tdump(self, Compilation* comp)
 {
 	DString w;
 	w.init(tmem);
-	self.dump(comp, &w);
+	self.dump(comp, &w)!!;
 	return w.str_view();
 }
 
-fn void write_ptr_quals(QualType qt, DString* w) @local
+fn void? write_ptr_quals(QualType qt, OutStream w) @local
 {
-	if (qt.is_const) w.append_string("const");
+	if (qt.is_const) w.write("const")!;
 	if (qt.is_volatile)
 	{
-		if (qt.is_const) w.append_char(' ');
-		w.append_string("volatile");
+		if (qt.is_const) w.write_byte(' ')!;
+		w.write("volatile")!;
 	}
 	if (qt.is_restrict)
 	{
-		if (qt.is_const || qt.is_volatile) w.append_char(' ');
-		w.append_string("restrict");
+		if (qt.is_const || qt.is_volatile) w.write_byte(' ')!;
+		w.write("restrict")!;
 	}
 }
 
-fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* w)
+fn bool? QualType.print_prologue(self, Compilation* comp, bool desugar, OutStream w)
 {
 	Type ty = self.get_type(comp);
 	bool done = false;
@@ -88,34 +88,34 @@ fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* 
 		{
 			case POINTER:
 				Pointer pointer = ty.pointer;
-				bool simple = pointer.child.print_prologue(comp, desugar, w);
-				if (simple) w.append_char(' ');
+				bool simple = pointer.child.print_prologue(comp, desugar, w)!;
+				if (simple) w.write_byte(' ')!;
 				TypeTag child_tag = pointer.child.base(comp).ty.tag;
-				if (child_tag == FUNC || child_tag == ARRAY) w.append_char('(');
-				w.append_char('*');
-				write_ptr_quals(self, w);
+				if (child_tag == FUNC || child_tag == ARRAY) w.write_byte('(')!;
+				w.write_byte('*')!;
+				write_ptr_quals(self, w)!;
 				if (pointer.nullability != DEFAULT)
 				{
-					w.append_char(' ');
-					w.append_string(pointer.nullability.str);
+					w.write_byte(' ')!;
+					w.write(pointer.nullability.str)!;
 				}
 				return false;
 			case FUNC:
-				bool simple = ty.func.return_type.print_prologue(comp, desugar, w);
-				if (simple) w.append_char(' ');
+				bool simple = ty.func.return_type.print_prologue(comp, desugar, w)!;
+				if (simple) w.write_byte(' ')!;
 				return false;
 			case BLOCK:
 				assert(ty.block.func.is(comp, FUNC));
-				bool simple = ty.block.func.print_prologue(comp, desugar, w);
-				w.append_string(simple ? " ^" : "(^");
-				write_ptr_quals(self, w);
-				if (!simple) w.append_char(')');
+				bool simple = ty.block.func.print_prologue(comp, desugar, w)!;
+				w.write(simple ? " ^" : "(^")!;
+				write_ptr_quals(self, w)!;
+				if (!simple) w.write_byte(')')!;
 				return false;
 			case ARRAY:
-				if (self.is_const) w.append_string("const ");
-				if (self.is_volatile) w.append_string("volatile");
-				bool simple = ty.array.elem.print_prologue(comp, desugar, w);
-				if (simple) w.append_char(' ');
+				if (self.is_const) w.write("const ")!;
+				if (self.is_volatile) w.write("volatile")!;
+				bool simple = ty.array.elem.print_prologue(comp, desugar, w)!;
+				if (simple) w.write_byte(' ')!;
 				return false;
 			case TYPEOF:
 				if (desugar)
@@ -123,11 +123,11 @@ fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* 
 					ty = ty.type_of.base.get_type(comp);
 					continue;
 				}
-				if (self.is_const && !ty.type_of.base.is_const) w.append_string("const ");
-				if (self.is_volatile && !ty.type_of.base.is_volatile) w.append_string("volatile ");
-				w.append_string("typeof(");
-				ty.type_of.base.print(comp, w);
-				w.append_string(")");
+				if (self.is_const && !ty.type_of.base.is_const) w.write("const ")!;
+				if (self.is_volatile && !ty.type_of.base.is_volatile) w.write("volatile ")!;
+				w.write("typeof(")!;
+				ty.type_of.base.print(comp, w)!;
+				w.write(")")!;
 				return true;
 			case TYPEDEF:
 				if (desugar)
@@ -135,16 +135,16 @@ fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* 
 					ty = ty.type_def.base.get_type(comp);
 					continue;
 				}
-				if (self.is_const) w.append_string("const ");
-				if (self.is_volatile) w.append_string("volatile ");
-				w.append_string(ty.type_def.name.lookup(comp));
+				if (self.is_const) w.write("const ")!;
+				if (self.is_volatile) w.write("volatile ")!;
+				w.write(ty.type_def.name.lookup(comp))!;
 				return true;
 			default:
 				done = true;
 		}
 	}
-	if (self.is_const) w.append_string("const ");
-	if (self.is_volatile) w.append_string("volatile ");
+	if (self.is_const) w.write("const ")!;
+	if (self.is_volatile) w.write("volatile ")!;
 
 	Type base = self.base(comp).ty;
 	switch (base.tag)
@@ -156,44 +156,44 @@ fn bool QualType.print_prologue(self, Compilation* comp, bool desugar, DString* 
 		case TYPEDEF:
 		case BLOCK:
 			unreachable();
-		case VOID: w.append_string("void");
-		case BOOL: w.append_string(comp.langopts.standard.at_least(C23) ? "bool" : "_Bool");
-		case NULLPTR_T: w.append_string("nullptr_t");
-		case STORAGE_FLOAT: w.append_string(base.storage_float.name);
-		case INT: w.append_string(int_name(base.int_ty));
+		case VOID: w.write("void")!;
+		case BOOL: w.write(comp.langopts.standard.at_least(C23) ? "bool" : "_Bool")!;
+		case NULLPTR_T: w.write("nullptr_t")!;
+		case STORAGE_FLOAT: w.write(base.storage_float.name)!;
+		case INT: w.write(int_name(base.int_ty))!;
 		case BIT_INT:
-			w.appendf("%s _BitInt(%d)", base.bit_int.signedness == SIGNED ? "signed" : "unsigned", base.bit_int.bits);
-		case FLOAT: w.append_string(float_name(base.float_ty));
+			io::fprintf(w, "%s _BitInt(%d)", base.bit_int.signedness == SIGNED ? "signed" : "unsigned", base.bit_int.bits)!;
+		case FLOAT: w.write(float_name(base.float_ty))!;
 		case COMPLEX:
-			w.append_string("_Complex ");
-			base.complex.print_prologue(comp, desugar, w);
+			w.write("_Complex ")!;
+			base.complex.print_prologue(comp, desugar, w)!;
 		case ATOMIC:
-			w.append_string("_Atomic(");
-			base.atomic.print_prologue(comp, desugar, w);
-			base.atomic.print_epilogue(comp, desugar, w);
-			w.append_string(")");
+			w.write("_Atomic(")!;
+			base.atomic.print_prologue(comp, desugar, w)!;
+			base.atomic.print_epilogue(comp, desugar, w)!;
+			w.write(")")!;
 		case VECTOR:
 			switch (base.vector.kind)
 			{
 				case GENERIC:
-					w.appendf("__attribute__((__vector_size__(%d * sizeof(", base.vector.len);
-					base.vector.elem.print_prologue(comp, desugar, w);
-					w.append_string(")))) ");
-				case NEON: w.appendf("__attribute__((neon_vector_type(%d))) ", base.vector.len);
-				case NEON_POLY: w.appendf("__attribute__((neon_polyvector_type(%d))) ", base.vector.len);
+					io::fprintf(w, "__attribute__((__vector_size__(%d * sizeof(", base.vector.len)!;
+					base.vector.elem.print_prologue(comp, desugar, w)!;
+					w.write(")))) ")!;
+				case NEON: io::fprintf(w, "__attribute__((neon_vector_type(%d))) ", base.vector.len)!;
+				case NEON_POLY: io::fprintf(w, "__attribute__((neon_polyvector_type(%d))) ", base.vector.len)!;
 			}
-			base.vector.elem.print_prologue(comp, desugar, w);
-		case STRUCT: w.appendf("struct %s", base.record.name.lookup(comp));
-		case UNION: w.appendf("union %s", base.record.name.lookup(comp));
+			base.vector.elem.print_prologue(comp, desugar, w)!;
+		case STRUCT: io::fprintf(w, "struct %s", base.record.name.lookup(comp))!;
+		case UNION: io::fprintf(w, "union %s", base.record.name.lookup(comp))!;
 		case ENUM:
 			if (base.enum_ty.fixed)
 			{
-				w.appendf("enum %s: ", base.enum_ty.name.lookup(comp));
-				base.enum_ty.tag.print_prologue(comp, desugar, w);
+				io::fprintf(w, "enum %s: ", base.enum_ty.name.lookup(comp))!;
+				base.enum_ty.tag.print_prologue(comp, desugar, w)!;
 			}
 			else
 			{
-				w.appendf("enum %s", base.enum_ty.name.lookup(comp));
+				io::fprintf(w, "enum %s", base.enum_ty.name.lookup(comp))!;
 			}
 	}
 	return true;
@@ -203,7 +203,7 @@ fn String int_name(TypeInt k) => k.name;
 
 fn String float_name(TypeFloat k) => k.name;
 
-fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString* w)
+fn void? QualType.print_epilogue(self, Compilation* comp, bool desugar, OutStream w)
 {
 	Type ty = self.get_type(comp);
 	while (true)
@@ -212,50 +212,50 @@ fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString* 
 		{
 			case POINTER:
 				TypeTag child_tag = ty.pointer.child.base(comp).ty.tag;
-				if (child_tag == FUNC || child_tag == ARRAY) w.append_char(')');
+				if (child_tag == FUNC || child_tag == ARRAY) w.write_byte(')')!;
 				ty = ty.pointer.child.get_type(comp);
 			case BLOCK:
 				ty = ty.block.func.get_type(comp);
 			case FUNC:
 				Func func = ty.func;
-				w.append_char('(');
+				w.write_byte('(')!;
 				foreach (i, param : func.params)
 				{
-					if (i != 0) w.append_string(", ");
-					param.qt.print_prologue(comp, desugar, w);
-					param.qt.print_epilogue(comp, desugar, w);
+					if (i != 0) w.write(", ")!;
+					param.qt.print_prologue(comp, desugar, w)!;
+					param.qt.print_epilogue(comp, desugar, w)!;
 				}
 				if (func.kind != NORMAL)
 				{
-					if (func.params.len != 0) w.append_string(", ");
-					w.append_string("...");
+					if (func.params.len != 0) w.write(", ")!;
+					w.write("...")!;
 				}
 				else if (func.params.len == 0 && !comp.langopts.standard.at_least(C23))
 				{
-					w.append_string("void");
+					w.write("void")!;
 				}
-				w.append_char(')');
-				if (func.cc != DEFAULT) w.appendf(" __attribute__((%s))", func.cc.name);
+				w.write_byte(')')!;
+				if (func.cc != DEFAULT) io::fprintf(w, " __attribute__((%s))", func.cc.name)!;
 				ty = func.return_type.get_type(comp);
 			case ARRAY:
 				Array array = ty.array;
-				w.append_char('[');
+				w.write_byte('[')!;
 				switch (array.len.kind)
 				{
 					case FIXED:
-					case STATIC: w.appendf("%d", array.len.len);
+					case STATIC: io::fprintf(w, "%d", array.len.len)!;
 					case INCOMPLETE: break;
-					case UNSPECIFIED_VARIABLE: w.append_char('*');
-					case VARIABLE: w.append_string("<expr>");
+					case UNSPECIFIED_VARIABLE: w.write_byte('*')!;
+					case VARIABLE: w.write("<expr>")!;
 				}
 				bool is_static = array.len.kind == STATIC;
-				if (is_static) w.append_string("static");
+				if (is_static) w.write("static")!;
 				if (self.is_restrict)
 				{
-					if (is_static || self.is_const || self.is_volatile) w.append_char(' ');
-					w.append_string("restrict");
+					if (is_static || self.is_const || self.is_volatile) w.write_byte(' ')!;
+					w.write("restrict")!;
 				}
-				w.append_char(']');
+				w.write_byte(']')!;
 				ty = array.elem.get_type(comp);
 			case TYPEOF:
 				if (!desugar) return;
@@ -268,33 +268,33 @@ fn void QualType.print_epilogue(self, Compilation* comp, bool desugar, DString* 
 	}
 }
 
-fn void dump_params(Func func, Compilation* comp, DString* w) @local
+fn void? dump_params(Func func, Compilation* comp, OutStream w) @local
 {
 	foreach (i, param : func.params)
 	{
-		if (i != 0) w.append_string(", ");
-		if (param.name != string_interner::EMPTY) w.appendf("%s: ", param.name.lookup(comp));
-		param.qt.dump(comp, w);
+		if (i != 0) w.write(", ")!;
+		if (param.name != string_interner::EMPTY) io::fprintf(w, "%s: ", param.name.lookup(comp))!;
+		param.qt.dump(comp, w)!;
 	}
 	if (func.kind != NORMAL)
 	{
-		if (func.params.len != 0) w.append_string(", ");
-		w.append_string("...");
+		if (func.params.len != 0) w.write(", ")!;
+		w.write("...")!;
 	}
-	w.append_string(") ");
-	if (func.cc != DEFAULT) w.appendf("cc(%s) ", func.cc.name);
-	func.return_type.dump(comp, w);
+	w.write(") ")!;
+	if (func.cc != DEFAULT) io::fprintf(w, "cc(%s) ", func.cc.name)!;
+	func.return_type.dump(comp, w)!;
 }
 
 <* The AST-dump spelling of a type (Zig QualType.dump). *>
-fn void QualType.dump(self, Compilation* comp, DString* w)
+fn void? QualType.dump(self, Compilation* comp, OutStream w)
 {
-	if (self.is_const) w.append_string("const ");
-	if (self.is_volatile) w.append_string("volatile ");
-	if (self.is_restrict) w.append_string("restrict ");
+	if (self.is_const) w.write("const ")!;
+	if (self.is_volatile) w.write("volatile ")!;
+	if (self.is_restrict) w.write("restrict ")!;
 	if (self.is_invalid())
 	{
-		w.append_string("invalid");
+		w.write("invalid")!;
 		return;
 	}
 	Type ty = self.get_type(comp);
@@ -304,42 +304,42 @@ fn void QualType.dump(self, Compilation* comp, DString* w)
 			Pointer pointer = ty.pointer;
 			if (pointer.nullability != DEFAULT)
 			{
-				w.append_string(pointer.nullability.str);
-				w.append_char(' ');
+				w.write(pointer.nullability.str)!;
+				w.write_byte(' ')!;
 			}
 			if (pointer.has_decayed)
 			{
-				w.append_string("decayed *");
-				pointer.decayed.dump(comp, w);
+				w.write("decayed *")!;
+				pointer.decayed.dump(comp, w)!;
 			}
 			else
 			{
-				w.append_string("*");
+				w.write("*")!;
 				switch (pointer.bounds)
 				{
-					case SINGLE: w.append_string("single ");
-					case UNSAFE_INDEXABLE: w.append_string("unsafe_indexable ");
+					case SINGLE: w.write("single ")!;
+					case UNSAFE_INDEXABLE: w.write("unsafe_indexable ")!;
 					case C: break;
 				}
-				pointer.child.dump(comp, w);
+				pointer.child.dump(comp, w)!;
 			}
 		case FUNC:
-			w.append_string(ty.func.kind == OLD_STYLE ? "kr (" : "fn (");
-			dump_params(ty.func, comp, w);
+			w.write(ty.func.kind == OLD_STYLE ? "kr (" : "fn (")!;
+			dump_params(ty.func, comp, w)!;
 		case BLOCK:
 			Func func = ty.block.func.get(comp, FUNC)!!.func;
-			w.append_string("block (");
-			dump_params(func, comp, w);
+			w.write("block (")!;
+			dump_params(func, comp, w)!;
 		case ARRAY:
 			switch (ty.array.len.kind)
 			{
-				case FIXED: w.appendf("[%d]", ty.array.len.len);
-				case STATIC: w.appendf("[static %d]", ty.array.len.len);
-				case INCOMPLETE: w.append_string("[]");
-				case UNSPECIFIED_VARIABLE: w.append_string("[*]");
-				case VARIABLE: w.append_string("[<expr>]");
+				case FIXED: io::fprintf(w, "[%d]", ty.array.len.len)!;
+				case STATIC: io::fprintf(w, "[static %d]", ty.array.len.len)!;
+				case INCOMPLETE: w.write("[]")!;
+				case UNSPECIFIED_VARIABLE: w.write("[*]")!;
+				case VARIABLE: w.write("[<expr>]")!;
 			}
-			ty.array.elem.dump(comp, w);
+			ty.array.elem.dump(comp, w)!;
 		case VECTOR:
 			String kind;
 			switch (ty.vector.kind)
@@ -348,30 +348,30 @@ fn void QualType.dump(self, Compilation* comp, DString* w)
 				case NEON: kind = "neon_vector";
 				case NEON_POLY: kind = "neon_polyvector";
 			}
-			w.appendf("%s(%d, ", kind, ty.vector.len);
-			ty.vector.elem.dump(comp, w);
-			w.append_string(")");
+			io::fprintf(w, "%s(%d, ", kind, ty.vector.len)!;
+			ty.vector.elem.dump(comp, w)!;
+			w.write(")")!;
 		case TYPEOF:
-			w.append_string("typeof(");
-			if (ty.type_of.has_expr) w.append_string("<expr>: ");
-			ty.type_of.base.dump(comp, w);
-			w.append_string(")");
+			w.write("typeof(")!;
+			if (ty.type_of.has_expr) w.write("<expr>: ")!;
+			ty.type_of.base.dump(comp, w)!;
+			w.write(")")!;
 		case TYPEDEF:
-			w.append_string(ty.type_def.name.lookup(comp));
-			w.append_string(": ");
-			ty.type_def.base.dump(comp, w);
+			w.write(ty.type_def.name.lookup(comp))!;
+			w.write(": ")!;
+			ty.type_def.base.dump(comp, w)!;
 		case ENUM:
-			w.appendf("enum %s: ", ty.enum_ty.name.lookup(comp));
+			io::fprintf(w, "enum %s: ", ty.enum_ty.name.lookup(comp))!;
 			if (ty.enum_ty.has_tag)
 			{
-				ty.enum_ty.tag.dump(comp, w);
+				ty.enum_ty.tag.dump(comp, w)!;
 			}
 			else
 			{
-				w.append_string("<incomplete>");
+				w.write("<incomplete>")!;
 			}
 		default:
-			self.unqualified().print(comp, w);
+			self.unqualified().print(comp, w)!;
 	}
 }
 

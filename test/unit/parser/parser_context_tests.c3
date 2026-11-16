@@ -892,3 +892,7 @@ struct CheckExpressions (parser::IExpressionGrammar)
 
 fn parser_result::Result? CheckExpressions.expression(&self, parser::Parser* p, bool eval) @dynamic
 	=> inspect_function_context_body(self.check, p, eval);
+fn parser_result::Result? CheckExpressions.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
+	=> parser::HOOK_ABSENT~;
+fn parser_result::Result? CheckExpressions.integer_constant_expression(&self, parser::Parser* p,
+	parser::ConstDeclFoldingMode mode, bool eval) @dynamic => parser::HOOK_ABSENT~;

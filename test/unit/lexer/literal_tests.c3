@@ -14,8 +14,8 @@
 // vector's byte offset). The vectors list diagnostics before the
 // effective-kind filter, so every Compilation here runs with -Weverything
 // (`enable_all_warnings`): off-by-default templates are then emitted too.
-// Diagnostics that the API returns instead of reporting (NumberValueDiag,
-// TextSemanticsDiag) are appended after the reported ones at offset 0, which
+// Diagnostics that the API returns instead of reporting (Diagnostic,
+// Diagnostic) are appended after the reported ones at offset 0, which
 // is where Zig reports them.
 //
 // Provenance: `fixture` / `fixture-ast` lines are copied from test/cases (the
@@ -195,7 +195,7 @@ fn uint Ctx.col(&self, uint tok, uint offset)
 	return loc.expand(&self.comp).col;
 }
 
-<* Record a returned diagnostic enum value (NumberValueDiag, TextSemanticsDiag) with its fmt as text. *>
+<* Record a returned diagnostic enum value (Diagnostic, Diagnostic) with its fmt as text. *>
 macro void Ctx.add_returned(&self, uint tok, t)
 {
 	self.returned.push({ .tok = tok, .col = self.col(tok, 0), .text = t.fmt, .kind = t.kind, .has_opt = t.meta.has_opt, .opt = t.meta.opt, .extension = t.meta.extension });
@@ -381,7 +381,7 @@ fn String show_value(Compilation* comp, Value v)
 fn String printed(Compilation* comp, Value v, QualType qt)
 {
 	DString w = dstring::temp();
-	bool nested = v.print(qt, comp, &w);
+	bool nested = v.print(qt, comp, &w)!!;
 	assert(!nested);
 	return w.str_view();
 }
@@ -515,7 +515,7 @@ fn String op_number(Ctx* c, String lit, Typed* typed = null)
 		return "fail";
 	}
 	NumberValue v = number_value::number_value(&c.comp, parsed);
-	foreach (d : v.diags.slice()) c.add_returned(0, d);
+	v.diags.@each(; $diag) { c.add_returned(0, $diag); };
 	if (typed) *typed = { true, v.qt, v.val };
 	Compilation* comp = &c.comp;
 	return string::tformat("%s %s %s %s %s %s %s", prefix_name(parsed.prefix), suffix_name(parsed.suffix), pct(parsed.bytes),
@@ -529,7 +529,7 @@ fn String op_pp_number(Ctx* c, String lit)
 	NumberLiteralResult? parsed = p.parse();
 	if (catch f = parsed) return "fail";
 	PpNumberValue v = number_value::pp_int_value(parsed);
-	foreach (d : v.diags.slice()) c.add_returned(0, d);
+	v.diags.@each(; $diag) { c.add_returned(0, $diag); };
 	if (v.rejected) return "rejected";
 	if (v.is_signed) return string::tformat("signed %s", hex_signed(v.signed));
 	return string::tformat("unsigned 0x%x", v.unsigned);
@@ -600,7 +600,7 @@ fn String op_string(Ctx* c, String[] toks, Typed* typed = null)
 	{
 		if (f == text_literal::CANNOT_CONCAT)
 		{
-			c.add_returned((uint)idx, TextSemanticsDiag.UNSUPPORTED_STR_CAT);
+			c.add_returned((uint)idx, Diagnostic.UNSUPPORTED_STR_CAT);
 			return string::tformat("cannot_concat %d", idx);
 		}
 		assert(f == text_literal::PARSING_FAILED);

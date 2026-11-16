@@ -2,7 +2,7 @@
 // This module owns tag lookup, incomplete type creation, and forward-declaration
 // nodes; the declaration grammar supplies record-member and enumerator parsing.
 module aro::parser;
-import aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::symbol_stack, aro::string_interner, aro::parser_diagnostics;
+import aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::symbol_stack, aro::string_interner, aro::diagnostics;
 import aro::pragmas::pack;
 
 excuse ENUM_UNDERLYING_NO_DECL_SPEC;
@@ -21,7 +21,10 @@ struct TagHeader
 	type_store::QualType fixed_qt;
 }
 
-enum TagAttributeStage : char { PARSE_HEADER, APPLY_HEADER, PARSE_BODY_END, APPLY_BODY_END }
+enum TagAttributeStage : char
+{
+	PARSE_HEADER, APPLY_HEADER, PARSE_BODY_END, APPLY_BODY_END
+}
 
 <* The declaration grammar owns attribute parsing and application. Header stages
    run around the tag name; body-end stages run after `}` but before layout. *>
@@ -69,8 +72,8 @@ fn type_store::QualType? Parser.enum_fixed_type(&self, type_store::QualType pars
 {
 	if (parsed.is_invalid())
 	{
-		self.err(parser_diagnostics::ParserDiag.EXPECTED_TYPE, self.diag_index())!;
-		self.err(parser_diagnostics::ParserDiag.ENUM_FIXED, colon_tok)!;
+		Diagnostic.EXPECTED_TYPE.@emit(self, self.diag_index())!;
+		Diagnostic.ENUM_FIXED.@emit(self, colon_tok)!;
 		return type_store::INT;
 	}
 	type_store::QualType underlying = parsed;
@@ -80,14 +83,14 @@ fn type_store::QualType? Parser.enum_fixed_type(&self, type_store::QualType pars
 		switch (bt.ty.tag)
 		{
 			case type_store::TypeTag.INT:
-				self.err(parser_diagnostics::ParserDiag.ENUM_FIXED, colon_tok)!;
-				if (underlying.is_qualified()) self.err(parser_diagnostics::ParserDiag.ENUM_QUALIFIERS_IGNORED, ty_start)!;
+				Diagnostic.ENUM_FIXED.@emit(self, colon_tok)!;
+				if (underlying.is_qualified()) Diagnostic.ENUM_QUALIFIERS_IGNORED.@emit(self, ty_start)!;
 				return underlying.unqualified();
 			case type_store::TypeTag.ATOMIC:
-				self.err(parser_diagnostics::ParserDiag.ENUM_ATOMIC_IGNORED, ty_start)!;
+				Diagnostic.ENUM_ATOMIC_IGNORED.@emit(self, ty_start)!;
 				underlying = bt.ty.atomic.with_qualifiers(underlying);
 			default:
-				self.err(parser_diagnostics::ParserDiag.ENUM_INVALID_UNDERLYING_TYPE, ty_start, self.fmt_qt(parsed))!;
+				Diagnostic.ENUM_INVALID_UNDERLYING_TYPE.@emit(self, ty_start, self.fmt_qt(parsed))!;
 				return type_store::INT;
 		}
 	}
@@ -102,21 +105,21 @@ fn void? Parser.check_enum_fixed_ty(&self, bool has_fixed, type_store::QualType 
 	{
 		if (!prev_enum.fixed)
 		{
-			self.err(parser_diagnostics::ParserDiag.ENUM_PREV_NONFIXED, ident_tok)!;
-			self.err(parser_diagnostics::ParserDiag.PREVIOUS_DEFINITION, prev.tok)!;
+			Diagnostic.ENUM_PREV_NONFIXED.@emit(self, ident_tok)!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(self, prev.tok)!;
 			return PARSING_FAILED~;
 		}
 		if (!prev_enum.tag.eql(fixed_qt, self.comp))
 		{
-			self.err(parser_diagnostics::ParserDiag.ENUM_DIFFERENT_EXPLICIT_TY, ident_tok, self.fmt_qt(fixed_qt), self.fmt_qt(prev_enum.tag))!;
-			self.err(parser_diagnostics::ParserDiag.PREVIOUS_DEFINITION, prev.tok)!;
+			Diagnostic.ENUM_DIFFERENT_EXPLICIT_TY.@emit(self, ident_tok, self.fmt_qt(fixed_qt), self.fmt_qt(prev_enum.tag))!;
+			Diagnostic.PREVIOUS_DEFINITION.@emit(self, prev.tok)!;
 			return PARSING_FAILED~;
 		}
 	}
 	else if (prev_enum.fixed)
 	{
-		self.err(parser_diagnostics::ParserDiag.ENUM_PREV_FIXED, ident_tok)!;
-		self.err(parser_diagnostics::ParserDiag.PREVIOUS_DEFINITION, prev.tok)!;
+		Diagnostic.ENUM_PREV_FIXED.@emit(self, ident_tok)!;
+		Diagnostic.PREVIOUS_DEFINITION.@emit(self, prev.tok)!;
 		return PARSING_FAILED~;
 	}
 }
@@ -131,7 +134,10 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 	{
 		if (keyword != tokenizer::TokenId.KEYWORD_ENUM) return PARSING_FAILED~;
 	}
-	else if (keyword != tokenizer::TokenId.KEYWORD_STRUCT && keyword != tokenizer::TokenId.KEYWORD_UNION) { return PARSING_FAILED~; }
+	else if (keyword != tokenizer::TokenId.KEYWORD_STRUCT && keyword != tokenizer::TokenId.KEYWORD_UNION)
+	{
+		return PARSING_FAILED~;
+	}
 	self.advance();
 	bool is_union = keyword == tokenizer::TokenId.KEYWORD_UNION;
 	if (tag_attributes) tag_attributes(tag_attribute_context, self, {}, TagAttributeStage.PARSE_HEADER)!;
@@ -192,8 +198,8 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 				self.check_enum_fixed_ty(has_fixed, fixed_qt, name_tok, prev)!;
 			}
 			TagHeader header = { .qt = prev.qt, .name = name, .keyword_tok = keyword_tok, .name_tok = name_tok,
-				.decl_node = prev.node, .is_union = is_union, .is_enum = is_enum, .is_definition = false,
-				.has_fixed = has_fixed, .fixed_qt = fixed_qt };
+			.decl_node = prev.node, .is_union = is_union, .is_enum = is_enum, .is_definition = false,
+			.has_fixed = has_fixed, .fixed_qt = fixed_qt };
 			if (tag_attributes) tag_attributes(tag_attribute_context, self, header, TagAttributeStage.APPLY_HEADER)!;
 			return header;
 		}
@@ -201,16 +207,18 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 
 	if (name_tok == 0 && !is_definition)
 	{
-		self.err(parser_diagnostics::ParserDiag.IDENT_OR_L_BRACE, self.diag_index())!;
+		Diagnostic.IDENT_OR_L_BRACE.@emit(self, self.diag_index())!;
 		return PARSING_FAILED~;
 	}
 
 	// Like Parser.zig, keep an index reserved for each syntactic occurrence.
 	// A definition's callback replaces this provisional forward-decl node.
-	type_store::NodeIndex node = self.tree.add_node({
-		.kind = is_enum ? tree::NodeKind.ENUM_FORWARD_DECL : is_union ? tree::NodeKind.UNION_FORWARD_DECL : tree::NodeKind.STRUCT_FORWARD_DECL,
-		.container_forward_decl = { .name_or_kind_tok = name_tok, .container_qt = type_store::INVALID, .definition = type_store::NODE_NULL },
-	});
+	type_store::NodeIndex node = self.tree.add_node(
+		{
+			.kind = is_enum ? tree::NodeKind.ENUM_FORWARD_DECL : is_union ? tree::NodeKind.UNION_FORWARD_DECL : tree::NodeKind.STRUCT_FORWARD_DECL,
+			.container_forward_decl = { .name_or_kind_tok = name_tok, .container_qt = type_store::INVALID, .definition = type_store::NODE_NULL },
+		}
+	);
 
 	bool reused_previous = false;
 	symbol_stack::Symbol previous_symbol;
@@ -232,8 +240,8 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 			}
 			else
 			{
-				self.err(parser_diagnostics::ParserDiag.REDEFINITION, name_tok, self.tree.tok_slice(name_tok))!;
-				self.err(parser_diagnostics::ParserDiag.PREVIOUS_DEFINITION, previous_symbol.tok)!;
+				Diagnostic.REDEFINITION.@emit(self, name_tok, self.tree.tok_slice(name_tok))!;
+				Diagnostic.PREVIOUS_DEFINITION.@emit(self, previous_symbol.tok)!;
 			}
 		}
 	}
@@ -246,10 +254,14 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 	else if (is_enum)
 	{
 		string_interner::StringId enum_name = name_tok != 0 ? name : self.anonymous_container_name(keyword_tok, false, true);
-		qt = self.comp.type_store.put({ .tag = type_store::TypeTag.ENUM, .enum_ty = {
-			.has_tag = has_fixed, .tag = has_fixed ? fixed_qt : type_store::INVALID, .fixed = has_fixed,
-			.incomplete = true, .name = enum_name, .decl_node = node,
-		} });
+		qt = self.comp.type_store.put(
+			{
+				.tag = type_store::TypeTag.ENUM, .enum_ty = {
+					.has_tag = has_fixed, .tag = has_fixed ? fixed_qt: type_store::INVALID, .fixed = has_fixed,
+					.incomplete = true, .name = enum_name, .decl_node = node,
+				}
+			}
+		);
 	}
 	else
 	{
@@ -259,33 +271,41 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 
 	if (is_enum && !is_definition && name_tok != 0 && !has_fixed)
 	{
-		self.err(parser_diagnostics::ParserDiag.ENUM_FORWARD_DECLARATION, name_tok)!;
+		Diagnostic.ENUM_FORWARD_DECLARATION.@emit(self, name_tok)!;
 	}
 
 	if (name_tok != 0 && !reused_previous)
 	{
 		symbol_stack::SymbolKind symbol_kind = is_enum ? symbol_stack::SymbolKind.ENUM : is_union ? symbol_stack::SymbolKind.UNION : symbol_stack::SymbolKind.STRUCT;
-		self.define_symbol({ .kind = symbol_kind, .name = name, .tok = name_tok, .qt = qt, .node = node });
+		self.define_symbol(
+		{
+			.kind = symbol_kind, .name = name, .tok = name_tok, .qt = qt, .node = node
+		}
+		);
 	}
 	if (!is_definition)
 	{
-		self.tree.set_node({
-			.kind = is_enum ? tree::NodeKind.ENUM_FORWARD_DECL : is_union ? tree::NodeKind.UNION_FORWARD_DECL : tree::NodeKind.STRUCT_FORWARD_DECL,
-			.container_forward_decl = { .name_or_kind_tok = name_tok, .container_qt = qt, .definition = type_store::NODE_NULL },
-		}, (sz)node);
+		self.tree.set_node(
+			{
+				.kind = is_enum ? tree::NodeKind.ENUM_FORWARD_DECL : is_union ? tree::NodeKind.UNION_FORWARD_DECL : tree::NodeKind.STRUCT_FORWARD_DECL,
+				.container_forward_decl = { .name_or_kind_tok = name_tok, .container_qt = qt, .definition = type_store::NODE_NULL },
+			}
+			, (sz)node);
 	}
 	else
 	{
 		// The provisional node is visible to tag attributes before the body is
 		// parsed, so layout-affecting attributes can be applied in time.
-		self.tree.set_node({
-			.kind = is_enum ? tree::NodeKind.ENUM_FORWARD_DECL : is_union ? tree::NodeKind.UNION_FORWARD_DECL : tree::NodeKind.STRUCT_FORWARD_DECL,
-			.container_forward_decl = { .name_or_kind_tok = name_tok, .container_qt = qt, .definition = type_store::NODE_NULL },
-		}, (sz)node);
+		self.tree.set_node(
+			{
+				.kind = is_enum ? tree::NodeKind.ENUM_FORWARD_DECL : is_union ? tree::NodeKind.UNION_FORWARD_DECL : tree::NodeKind.STRUCT_FORWARD_DECL,
+				.container_forward_decl = { .name_or_kind_tok = name_tok, .container_qt = qt, .definition = type_store::NODE_NULL },
+			}
+			, (sz)node);
 	}
 	TagHeader header = { .qt = qt, .name = name, .keyword_tok = keyword_tok, .name_tok = name_tok,
-		.decl_node = node, .is_union = is_union, .is_enum = is_enum, .is_definition = is_definition,
-		.has_fixed = has_fixed, .fixed_qt = fixed_qt };
+	.decl_node = node, .is_union = is_union, .is_enum = is_enum, .is_definition = is_definition,
+	.has_fixed = has_fixed, .fixed_qt = fixed_qt };
 	if (tag_attributes) tag_attributes(tag_attribute_context, self, header, TagAttributeStage.APPLY_HEADER)!;
 	return header;
 }
@@ -300,7 +320,7 @@ fn type_store::QualType? Parser.record_spec(&self, bool is_enum = false, FixedUn
 	{
 		tokenizer::TokenId keyword = self.tree.tokens[(usz)self.tok_i].id;
 		if ((is_enum && keyword == tokenizer::TokenId.KEYWORD_ENUM) ||
-			(!is_enum && (keyword == tokenizer::TokenId.KEYWORD_STRUCT || keyword == tokenizer::TokenId.KEYWORD_UNION)))
+		(!is_enum && (keyword == tokenizer::TokenId.KEYWORD_STRUCT || keyword == tokenizer::TokenId.KEYWORD_UNION)))
 		{
 			usz lookahead = 1;
 			if ((usz)start + lookahead < self.tree.tokens.len && self.tree.tokens[(usz)start + lookahead].id.is_identifier()) lookahead++;
@@ -334,15 +354,15 @@ fn type_store::QualType? Parser.record_spec_with_body(&self, ContainerBodyCallba
 	if (catch parsed) return PARSING_FAILED~;
 	TagHeader header = parsed;
 	if (!header.is_definition) return header.qt;
-	self.advance(); // opening brace
+	self.advance();  // opening brace
 	type_store::QualType completed = parse_body(context, self, {
-		.qt = header.qt, .name = header.name, .keyword_tok = header.keyword_tok,
-		.name_tok = header.name_tok, .decl_node = header.decl_node,
-		.is_union = header.is_union, .is_enum = header.is_enum,
-		.has_fixed = header.has_fixed, .fixed_qt = header.fixed_qt,
-		.pack_value = pack_value,
-		.tag_attributes = tag_attributes, .tag_attribute_context = tag_attribute_context,
-	})!;
+			.qt = header.qt, .name = header.name, .keyword_tok = header.keyword_tok,
+			.name_tok = header.name_tok, .decl_node = header.decl_node,
+			.is_union = header.is_union, .is_enum = header.is_enum,
+			.has_fixed = header.has_fixed, .fixed_qt = header.fixed_qt,
+			.pack_value = pack_value,
+			.tag_attributes = tag_attributes, .tag_attribute_context = tag_attribute_context,
+		})!;
 	assert(completed.index == header.qt.index, "container body callback must preserve tag identity");
 	return completed;
 }

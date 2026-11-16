@@ -1,4 +1,4 @@
-// Tests for src/float_soft_wide.c3 (plan 10 agent 10.2 `wide-float`).
+// Tests for src/primitive_float_soft_wide.c3 (plan 10 agent 10.2 `wide-float`).
 //
 // Two kinds of expected values:
 //   - Hand cases (the `@test` functions below): IEEE 754 / x87 encodings derived

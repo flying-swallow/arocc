@@ -13,14 +13,14 @@
 // unsupported directives.
 //
 // Deviations from Zig (each marked at the point of use):
-//  - PpDiag.DIRECTIVE_UNSUPPORTED is a C3-only record (plans 14/15 remove its uses).
+//  - Diagnostic.DIRECTIVE_UNSUPPORTED is a C3-only record (plans 14/15 remove its uses).
 //  - Reading an IfContext level that was never set (e.g. `#ifdef` without a
 //    name followed by `#else`) is a safety-checked panic in Zig (invalid enum
 //    value); here it is the same panic via `unreachable`.
 //  - `#line N x` with a one-byte non-string filename panics in Zig
 //    (`slice[1 .. slice.len - 1]` with start > end); here the alias name is "".
 //  - Kept as in Zig: `#elifndef` after `#else` in the main loop reports
-//    PpDiag.ELIFDEF_AFTER_ELSE, and `skip` reports "#elifdef" as the C23
+//    Diagnostic.ELIFDEF_AFTER_ELSE, and `skip` reports "#elifdef" as the C23
 //    extension for both #elifdef and #elifndef.
 module aro::preprocessor;
 import aro::source, aro::tokens, aro::tokenizer, aro::compilation, aro::diagnostics;
@@ -112,13 +112,13 @@ fn bool parse_u32_decimal(String s, uint* out) @local
 }
 
 <*
- Report PpDiag.DIRECTIVE_UNSUPPORTED for `what` at `loc` when `f` is
+ Report Diagnostic.DIRECTIVE_UNSUPPORTED for `what` at `loc` when `f` is
  aro::UNSUPPORTED, then return `f`. Always fails.
  @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, aro::UNSUPPORTED
 *>
 fn void? Preprocessor.surface_unsupported(&self, Location loc, String what, fault f)
 {
-	if (f == aro::UNSUPPORTED) self.err_loc(loc, PpDiag.DIRECTIVE_UNSUPPORTED, what)!;
+	if (f == aro::UNSUPPORTED) self.err_loc(loc, Diagnostic.DIRECTIVE_UNSUPPORTED, what)!;
 	return f~;
 }
 
@@ -129,14 +129,14 @@ fn void? Preprocessor.surface_unsupported(&self, Location loc, String what, faul
  #elif/#elifdef/#elifndef/#else at level 1, by #endif at level 0 or when
  something follows the level-1 #endif, stored in include_guards at eof).
  Directives: #error/#warning (WARNING_EXTENSION before C23; tokens
- stringified, the text without quotes reported as PpDiag.ERROR_DIRECTIVE /
- PpDiag.WARNING_DIRECTIVE at the directive), #if (fatal "too many #if
+ stringified, the text without quotes reported as Diagnostic.ERROR_DIRECTIVE /
+ Diagnostic.WARNING_DIRECTIVE at the directive), #if (fatal "too many #if
  nestings" on overflow; `expr`; skip UNTIL_ELSE), #ifdef/#ifndef
  (expect_macro_name, expect_nl), #elif/#elifdef/#elifndef (C23_EXTENSION
  before C23 for the latter two; *_WITHOUT_IF at level 0; *_AFTER_ELSE),
  #else, #endif, #define (define), #undef (store_macro_tokens, ordered
  remove, verbose log, expect_nl), #include (include FIRST), #include_next
- (PpDiag.INCLUDE_NEXT; outside a header PpDiag.INCLUDE_NEXT_OUTSIDE_HEADER and
+ (Diagnostic.INCLUDE_NEXT; outside a header Diagnostic.INCLUDE_NEXT_OUTSIDE_HEADER and
  FIRST), #embed (C23_EXTENSION, embed), #pragma (pragma), #line N "file"
  (LINE_SIMPLE_DIGIT, LINE_INVALID_NUMBER "#line", LINE_INVALID_FILENAME,
  source alias via comp.add_source_alias, LINEMARKER token when linemarkers),
@@ -147,7 +147,7 @@ fn void? Preprocessor.surface_unsupported(&self, Location loc, String what, faul
  nl kept with preserve_whitespace; invalid literals warn and expand;
  unterminated comment errors; poisoned identifiers error; others go to
  expand_macro. At eof: UNTERMINATED_CONDITIONAL_DIRECTIVE when nested,
- PpDiag.NEWLINE_EOF if the buffer does not end in '\n'.
+ Diagnostic.NEWLINE_EOF if the buffer does not end in '\n'.
  #include / #include_next / #embed / #pragma: file lookup, include markers,
  embed byte tokens, and pragma handling are implemented by plan 15.
  @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, aro::UNSUPPORTED
@@ -192,7 +192,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 					case KEYWORD_WARNING:
 						if (directive.id == KEYWORD_WARNING && !self.comp.langopts.standard.at_least(C23))
 						{
-							self.err_loc(directive_loc, PpDiag.WARNING_EXTENSION)!;
+							self.err_loc(directive_loc, Diagnostic.WARNING_EXTENSION)!;
 						}
 						// #error tokens..
 						self.top_expansion_buf.clear();
@@ -211,11 +211,11 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 						String slice = (String)self.char_buf.array_view()[char_top + 1 : self.char_buf.len() - 2 - (char_top + 1)];
 						if (directive.id == KEYWORD_ERROR)
 						{
-							self.err_loc(directive_loc, PpDiag.ERROR_DIRECTIVE, slice)!;
+							self.err_loc(directive_loc, Diagnostic.ERROR_DIRECTIVE, slice)!;
 						}
 						else
 						{
-							self.err_loc(directive_loc, PpDiag.WARNING_DIRECTIVE, slice)!;
+							self.err_loc(directive_loc, Diagnostic.WARNING_DIRECTIVE, slice)!;
 						}
 					case KEYWORD_IF:
 						if (if_context.increment())
@@ -283,7 +283,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 					case KEYWORD_ELIF:
 						if (if_context.level == 0)
 						{
-							self.err_raw(directive, PpDiag.ELIF_WITHOUT_IF)!;
+							self.err_raw(directive, Diagnostic.ELIF_WITHOUT_IF)!;
 							if_context.increment();
 							if_context.set(UNTIL_ELSE);
 						}
@@ -307,7 +307,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 							case UNTIL_ENDIF:
 								self.skip(&tokenizer, UNTIL_ENDIF)!;
 							case UNTIL_ENDIF_SEEN_ELSE:
-								self.err_raw(directive, PpDiag.ELIF_AFTER_ELSE)!;
+								self.err_raw(directive, Diagnostic.ELIF_AFTER_ELSE)!;
 								skip_to_nl(&tokenizer);
 						}
 					case KEYWORD_ELIFDEF:
@@ -315,11 +315,11 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 						bool is_def = directive.id == KEYWORD_ELIFDEF;
 						if (!self.comp.langopts.standard.at_least(C23))
 						{
-							self.err_loc(directive_loc, PpDiag.C23_EXTENSION, is_def ? "#elifdef" : "#elifndef")!;
+							self.err_loc(directive_loc, Diagnostic.C23_EXTENSION, is_def ? "#elifdef" : "#elifndef")!;
 						}
 						if (if_context.level == 0)
 						{
-							self.err_dyn_at(tokens::raw_location(directive), {}, is_def ? PpDiag.ELIFDEF_WITHOUT_IF : PpDiag.ELIFNDEF_WITHOUT_IF)!;
+							if (is_def) { self.err_raw(directive, Diagnostic.ELIFDEF_WITHOUT_IF)!; } else { self.err_raw(directive, Diagnostic.ELIFNDEF_WITHOUT_IF)!; }
 							if_context.increment();
 							if_context.set(UNTIL_ELSE);
 						}
@@ -356,14 +356,14 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 								self.skip(&tokenizer, UNTIL_ENDIF)!;
 							case UNTIL_ENDIF_SEEN_ELSE:
 								// Zig reports elifdef_after_else for #elifndef too.
-								self.err_raw(directive, PpDiag.ELIFDEF_AFTER_ELSE)!;
+								self.err_raw(directive, Diagnostic.ELIFDEF_AFTER_ELSE)!;
 								skip_to_nl(&tokenizer);
 						}
 					case KEYWORD_ELSE:
 						self.expect_nl(&tokenizer)!;
 						if (if_context.level == 0)
 						{
-							self.err_raw(directive, PpDiag.ELSE_WITHOUT_IF)!;
+							self.err_raw(directive, Diagnostic.ELSE_WITHOUT_IF)!;
 							continue;
 						}
 						else if (if_context.level == 1)
@@ -378,7 +378,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 							case UNTIL_ENDIF:
 								self.skip(&tokenizer, UNTIL_ENDIF_SEEN_ELSE)!;
 							case UNTIL_ENDIF_SEEN_ELSE:
-								self.err_raw(directive, PpDiag.ELSE_AFTER_ELSE)!;
+								self.err_raw(directive, Diagnostic.ELSE_AFTER_ELSE)!;
 								skip_to_nl(&tokenizer);
 						}
 					case KEYWORD_ENDIF:
@@ -386,7 +386,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 						if (if_context.level == 0)
 						{
 							has_guard = false;
-							self.err_raw(directive, PpDiag.ENDIF_WITHOUT_IF)!;
+							self.err_raw(directive, Diagnostic.ENDIF_WITHOUT_IF)!;
 							continue;
 						}
 						else if (if_context.level == 1)
@@ -415,18 +415,18 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 						if (catch f = self.include(&tokenizer, FIRST)) self.surface_unsupported(directive_loc, "#include", f)!;
 						continue;
 					case KEYWORD_INCLUDE_NEXT:
-						self.err_loc(directive_loc, PpDiag.INCLUDE_NEXT)!;
+						self.err_loc(directive_loc, Diagnostic.INCLUDE_NEXT)!;
 						WhichInclude which = NEXT;
 						if (self.include_depth == 0)
 						{
-							self.err_loc(directive_loc, PpDiag.INCLUDE_NEXT_OUTSIDE_HEADER)!;
+							self.err_loc(directive_loc, Diagnostic.INCLUDE_NEXT_OUTSIDE_HEADER)!;
 							which = FIRST;
 						}
 						if (catch f = self.include(&tokenizer, which)) self.surface_unsupported(directive_loc, "#include_next", f)!;
 					case KEYWORD_EMBED:
 						if (!self.comp.langopts.standard.at_least(C23))
 						{
-							self.err_loc(directive_loc, PpDiag.C23_EXTENSION, "#embed")!;
+							self.err_loc(directive_loc, Diagnostic.C23_EXTENSION, "#embed")!;
 						}
 						if (catch f = self.embed(&tokenizer)) self.surface_unsupported(directive_loc, "#embed", f)!;
 					case KEYWORD_PRAGMA:
@@ -448,15 +448,15 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 					case KEYWORD_LINE:
 						// #line number "file"
 						RawToken digits = tokenizer.next_no_ws();
-						if (digits.id != PP_NUM) self.err_raw(digits, PpDiag.LINE_SIMPLE_DIGIT)!;
+						if (digits.id != PP_NUM) self.err_raw(digits, Diagnostic.LINE_SIMPLE_DIGIT)!;
 						uint new_line;
 						bool has_new_line = parse_u32_decimal(self.tok_slice(digits), &new_line);
-						if (!has_new_line) self.err_raw(digits, PpDiag.LINE_INVALID_NUMBER, "#line")!;
+						if (!has_new_line) self.err_raw(digits, Diagnostic.LINE_INVALID_NUMBER, "#line")!;
 
 						if (digits.id == EOF || digits.id == NL) continue;
 						RawToken name = tokenizer.next_no_ws();
 						if (name.id == EOF || name.id == NL) continue;
-						if (name.id != STRING_LITERAL) self.err_raw(name, PpDiag.LINE_INVALID_FILENAME)!;
+						if (name.id != STRING_LITERAL) self.err_raw(name, Diagnostic.LINE_INVALID_FILENAME)!;
 						self.expect_nl(&tokenizer)!;
 
 						if (has_new_line) tokenizer.line = new_line;
@@ -470,11 +470,11 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 						// # number "file" flags
 						uint new_line;
 						bool has_new_line = parse_u32_decimal(self.tok_slice(directive), &new_line);
-						if (!has_new_line) self.err_raw(directive, PpDiag.LINE_INVALID_NUMBER, "line marker")!;
+						if (!has_new_line) self.err_raw(directive, Diagnostic.LINE_INVALID_NUMBER, "line marker")!;
 
 						RawToken name = tokenizer.next_no_ws();
 						if (name.id == EOF || name.id == NL) continue;
-						if (name.id != STRING_LITERAL) self.err_raw(name, PpDiag.LINE_INVALID_FILENAME)!;
+						if (name.id != STRING_LITERAL) self.err_raw(name, Diagnostic.LINE_INVALID_FILENAME)!;
 
 						TokenId marker_id = LINEMARKER;
 						SourceKind source_kind = USER;
@@ -515,7 +515,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 										break;
 								}
 							}
-							self.err_raw(flag, PpDiag.LINE_INVALID_FLAG, flag_str)!;
+							self.err_raw(flag, Diagnostic.LINE_INVALID_FLAG, flag_str)!;
 							skip_to_nl(&tokenizer);
 							break FLAGS;
 						}
@@ -530,10 +530,10 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 					case NL:
 						break;
 					case EOF:
-						if (if_context.level != 0) self.err_raw(tok, PpDiag.UNTERMINATED_CONDITIONAL_DIRECTIVE)!;
+						if (if_context.level != 0) self.err_raw(tok, Diagnostic.UNTERMINATED_CONDITIONAL_DIRECTIVE)!;
 						return tokens::from_raw(directive);
 					default:
-						self.err_raw(tok, PpDiag.INVALID_PREPROCESSING_DIRECTIVE)!;
+						self.err_raw(tok, Diagnostic.INVALID_PREPROCESSING_DIRECTIVE)!;
 						skip_to_nl(&tokenizer);
 				}
 				if (self.preserve_whitespace)
@@ -547,12 +547,12 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 				start_of_line = true;
 				if (self.preserve_whitespace) self.add_token(tokens::from_raw(tok))!;
 			case EOF:
-				if (if_context.level != 0) self.err_raw(tok, PpDiag.UNTERMINATED_CONDITIONAL_DIRECTIVE)!;
+				if (if_context.level != 0) self.err_raw(tok, Diagnostic.UNTERMINATED_CONDITIONAL_DIRECTIVE)!;
 				// The following check needs to occur here and not at the top of the function
 				// because a pragma may change the level during preprocessing
 				if (src.buf.len > 0 && src.buf[src.buf.len - 1] != '\n')
 				{
-					self.err_raw(tok, PpDiag.NEWLINE_EOF)!;
+					self.err_raw(tok, Diagnostic.NEWLINE_EOF)!;
 				}
 				if (has_guard)
 				{
@@ -568,11 +568,11 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 				self.err_invalid_token(tok)!;
 				self.expand_macro(&tokenizer, tok)!;
 			case UNTERMINATED_COMMENT:
-				self.err_raw(tok, PpDiag.UNTERMINATED_COMMENT)!;
+				self.err_raw(tok, Diagnostic.UNTERMINATED_COMMENT)!;
 			default:
 				if (tok.id.is_macro_identifier() && @ok(self.poisoned_identifiers.find(self.tok_slice(tok))))
 				{
-					self.err_raw(tok, PpDiag.POISONED_IDENTIFIER)!;
+					self.err_raw(tok, Diagnostic.POISONED_IDENTIFIER)!;
 				}
 				// Add the token to the buffer doing any necessary expansions.
 				start_of_line = false;
@@ -648,12 +648,12 @@ fn bool? Preprocessor.expr(&self, Tokenizer* tokenizer)
 			case EMPTY_CHAR_LITERAL:
 				self.err_invalid_token(tok)!;
 			case UNTERMINATED_COMMENT:
-				self.err_raw(tok, PpDiag.UNTERMINATED_COMMENT)!;
+				self.err_raw(tok, Diagnostic.UNTERMINATED_COMMENT)!;
 				continue;
 			default:
 				if (tok.id.is_macro_identifier() && @ok(self.poisoned_identifiers.find(self.tok_slice(tok))))
 				{
-					self.err_raw(tok, PpDiag.POISONED_IDENTIFIER)!;
+					self.err_raw(tok, Diagnostic.POISONED_IDENTIFIER)!;
 				}
 		}
 		if (tok.id == NL || tok.id == EOF) break;
@@ -710,7 +710,7 @@ fn void? Preprocessor.skip(&self, Tokenizer* tokenizer, IfNesting cont)
 					if (ifs_seen != 0) continue;
 					if (cont == UNTIL_ENDIF_SEEN_ELSE)
 					{
-						self.err_raw(directive, PpDiag.ELSE_AFTER_ELSE)!;
+						self.err_raw(directive, Diagnostic.ELSE_AFTER_ELSE)!;
 						continue;
 					}
 					*tokenizer = saved_tokenizer;
@@ -719,7 +719,7 @@ fn void? Preprocessor.skip(&self, Tokenizer* tokenizer, IfNesting cont)
 					if (ifs_seen != 0 || cont == UNTIL_ENDIF) continue;
 					if (cont == UNTIL_ENDIF_SEEN_ELSE)
 					{
-						self.err_raw(directive, PpDiag.ELIF_AFTER_ELSE)!;
+						self.err_raw(directive, Diagnostic.ELIF_AFTER_ELSE)!;
 						continue;
 					}
 					*tokenizer = saved_tokenizer;
@@ -729,12 +729,12 @@ fn void? Preprocessor.skip(&self, Tokenizer* tokenizer, IfNesting cont)
 					if (!self.comp.langopts.standard.at_least(C23))
 					{
 						// Zig says "#elifdef" for #elifndef as well.
-						self.err_raw(directive, PpDiag.C23_EXTENSION, "#elifdef")!;
+						self.err_raw(directive, Diagnostic.C23_EXTENSION, "#elifdef")!;
 					}
 					if (ifs_seen != 0 || cont == UNTIL_ENDIF) continue;
 					if (cont == UNTIL_ENDIF_SEEN_ELSE)
 					{
-						self.err_dyn_at(tokens::raw_location(directive), {}, directive.id == KEYWORD_ELIFDEF ? PpDiag.ELIFDEF_AFTER_ELSE : PpDiag.ELIFNDEF_AFTER_ELSE)!;
+						if (directive.id == KEYWORD_ELIFDEF) { self.err_raw(directive, Diagnostic.ELIFDEF_AFTER_ELSE)!; } else { self.err_raw(directive, Diagnostic.ELIFNDEF_AFTER_ELSE)!; }
 						continue;
 					}
 					*tokenizer = saved_tokenizer;
@@ -786,7 +786,7 @@ fn void skip_to_nl(Tokenizer* tokenizer)
 
 <*
  Zig `expectMacroName`: next_no_ws must be a macro identifier (its tok_slice
- is returned); otherwise PpDiag.MACRO_NAME_MISSING, skip_to_nl and
+ is returned); otherwise Diagnostic.MACRO_NAME_MISSING, skip_to_nl and
  NO_MACRO_NAME (Zig null).
  @return? NO_MACRO_NAME, compilation::FATAL_ERROR
 *>
@@ -795,7 +795,7 @@ fn String? Preprocessor.expect_macro_name(&self, Tokenizer* tokenizer)
 	RawToken macro_name = tokenizer.next_no_ws();
 	if (!macro_name.id.is_macro_identifier())
 	{
-		self.err_raw(macro_name, PpDiag.MACRO_NAME_MISSING)!;
+		self.err_raw(macro_name, Diagnostic.MACRO_NAME_MISSING)!;
 		skip_to_nl(tokenizer);
 		return NO_MACRO_NAME~;
 	}
@@ -807,7 +807,7 @@ excuse NO_MACRO_NAME;
 
 <*
  Zig `expectNl`: consume up to nl/eof; the first token that is not
- whitespace or a comment gets PpDiag.EXTRA_TOKENS_DIRECTIVE_END (once).
+ whitespace or a comment gets Diagnostic.EXTRA_TOKENS_DIRECTIVE_END (once).
  @return? compilation::FATAL_ERROR
 *>
 fn void? Preprocessor.expect_nl(&self, Tokenizer* tokenizer)
@@ -821,7 +821,7 @@ fn void? Preprocessor.expect_nl(&self, Tokenizer* tokenizer)
 		if (!sent_err)
 		{
 			sent_err = true;
-			self.err_raw(tok, PpDiag.EXTRA_TOKENS_DIRECTIVE_END)!;
+			self.err_raw(tok, Diagnostic.EXTRA_TOKENS_DIRECTIVE_END)!;
 		}
 	}
 }

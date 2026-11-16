@@ -12,9 +12,9 @@
 //   test/cases/<name>.c, mapped to the result of the Value operation behind them.
 // - "source-derived": worked out by hand from the Zig source and IEEE 754.
 //
-// These tests call the soft-float primitives of float_soft_wide.c3 (round_pack,
+// These tests call the soft-float primitives of primitive_float_soft_wide.c3 (round_pack,
 // to_f128, from_f128, f128_mul, f128_div), the narrow arithmetic of
-// float_soft_narrow.c3 and annex_g.c3, which other plan 10 agents implement; the
+// primitive_float_soft_narrow.c3 and annex_g.c3, which other plan 10 agents implement; the
 // Bazel target is tagged "manual" until those land.
 module float_conversion_tests;
 import aro::primitive_value;

@@ -4,7 +4,7 @@ module aro::builtin_call;
 import aro::builtin_defs::aarch64, aro::builtin_defs::arm, aro::builtin_defs::common;
 import aro::builtin_eval, aro::builtins, aro::builtin_properties;
 import aro::lang_opts;
-import aro::parser, aro::parser_diagnostics, aro::parser_postfix, aro::parser_result;
+import aro::parser, aro::diagnostics, aro::parser_postfix, aro::parser_result;
 import aro::tree, aro::tokens, aro::type_store, aro::value;
 import std::core::dstring;
 
@@ -124,19 +124,6 @@ fn uint? param_count_override(builtins::Expanded expanded)
 		case arm::TAG___BUILTIN_ARM_STLEX: return 2;
 		default: return NO_PARAM_COUNT~;
 	}
-}
-
-fn void? arity_error(parser::Parser* p, type_store::NodeIndex[] args,
-	tokens::TokenIndex l_paren, uint expected, bool variadic)
-{
-	tokens::TokenIndex tok = args.len < expected ? (p.tok_i > 0 ? p.tok_i - 1 : l_paren) : args[(usz)expected].tok(&p.tree);
-	DString message;
-	message.init(tmem);
-	if (variadic) { message.appendf("expected at least %d argument(s) got %d", expected, args.len); }
-	else { message.appendf("expected %d argument(s) got %d", expected, args.len); }
-	p.emit_parser_diag(variadic ? parser_diagnostics::ParserDiag.EXPECTED_AT_LEAST_ARGUMENTS :
-		parser_diagnostics::ParserDiag.EXPECTED_ARGUMENTS, message.str_view(), tok)!;
-	return;
 }
 
 fn type_store::QualType return_type(parser::Parser* p, builtins::Expanded expanded,
@@ -304,7 +291,7 @@ fn void? check_overflow_arg_type(parser::Parser* p, type_store::NodeIndex[] args
 	{
 		if (!qt.is_real_int(p.comp))
 		{
-			p.err(parser_diagnostics::ParserDiag.OVERFLOW_BUILTIN_REQUIRES_INT, tok,
+			Diagnostic.OVERFLOW_BUILTIN_REQUIRES_INT.@emit(p, tok,
 				p.fmt_qt(qt))!;
 			return;
 		}
@@ -314,7 +301,7 @@ fn void? check_overflow_arg_type(parser::Parser* p, type_store::NodeIndex[] args
 	if (try ptr = qt.get(p.comp, type_store::TypeTag.POINTER)) child = ptr.pointer.child;
 	if (child.is_invalid() || child.scalar_kind(p.comp) != type_store::ScalarKind.INT || child.is_const)
 	{
-		p.err(parser_diagnostics::ParserDiag.OVERFLOW_RESULT_REQUIRES_PTR, tok,
+		Diagnostic.OVERFLOW_RESULT_REQUIRES_PTR.@emit(p, tok,
 			p.fmt_qt(qt))!;
 		return;
 	}
@@ -353,8 +340,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 	type_store::Type? maybe_pointer = original_pointer.get(p.comp, type_store::TypeTag.POINTER);
 	if (catch maybe_pointer)
 	{
-		p.err(parser_diagnostics::ParserDiag.BUILTIN_ARM_LDREX_STREX_INVALID_PTR_TYPE,
-			pointer_node.tok(&p.tree), name, p.fmt_qt(original_pointer))!;
+		Diagnostic.BUILTIN_ARM_LDREX_STREX_INVALID_PTR_TYPE.@emit(p, pointer_node.tok(&p.tree), name, p.fmt_qt(original_pointer))!;
 		return;
 	}
 	type_store::Type pointer = maybe_pointer;
@@ -374,7 +360,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 	if (try pointer_value = p.tree.value_of(pointer_node)) pointer_arg.val = pointer_value;
 	if (!pointer_arg.coerce_scalar(p, qualified_pointer, pointer_node.tok(&p.tree), parser_result::CoercionContext.ARGUMENT)!)
 	{
-		p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_ARG, pointer_node.tok(&p.tree),
+		Diagnostic.INCOMPATIBLE_ARG.@emit(p, pointer_node.tok(&p.tree),
 			p.fmt_qt(original_pointer), p.fmt_qt(qualified_pointer))!;
 	}
 	else
@@ -387,8 +373,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 	bool valid_number = (child_kind.is_int || child_kind.is_float) && child_kind.is_real;
 	if (!valid_number && !child_kind.is_pointer)
 	{
-		p.err(parser_diagnostics::ParserDiag.BUILTIN_ARM_LDREX_STREX_INVALID_PTR_TYPE,
-			pointer_node.tok(&p.tree), name, p.fmt_qt(original_pointer))!;
+		Diagnostic.BUILTIN_ARM_LDREX_STREX_INVALID_PTR_TYPE.@emit(p, pointer_node.tok(&p.tree), name, p.fmt_qt(original_pointer))!;
 		return;
 	}
 
@@ -403,7 +388,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 	if (is_dword) mask = mask & lang_opts::ARM_LDREX_D_INT;
 	if (mask == 0)
 	{
-		p.err(parser_diagnostics::ParserDiag.BUILTIN_ARM_LDREX_STREX_UNSUPPORTED, builtin_tok, name)!;
+		Diagnostic.BUILTIN_ARM_LDREX_STREX_UNSUPPORTED.@emit(p, builtin_tok, name)!;
 		return;
 	}
 
@@ -443,8 +428,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 			if (seen > 0) sizes.append_string(seen + 1 == size_count ? " or " : ", ");
 			sizes.appendf("%d", 8);
 		}
-		p.err(parser_diagnostics::ParserDiag.BUILTIN_ARM_LDREX_STREX_UNSUPPORTED_SIZE,
-			pointer_node.tok(&p.tree), name, sizes.str_view(), p.fmt_qt(original_pointer))!;
+		Diagnostic.BUILTIN_ARM_LDREX_STREX_UNSUPPORTED_SIZE.@emit(p, pointer_node.tok(&p.tree), name, sizes.str_view(), p.fmt_qt(original_pointer))!;
 	}
 
 	if (is_store)
@@ -454,7 +438,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 		if (try value = p.tree.value_of(value_node)) value_arg.val = value;
 		if (!value_arg.coerce_scalar(p, child, value_node.tok(&p.tree), parser_result::CoercionContext.ARGUMENT)!)
 		{
-			p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_ARG, value_node.tok(&p.tree),
+			Diagnostic.INCOMPATIBLE_ARG.@emit(p, value_node.tok(&p.tree),
 				p.fmt_qt(value_arg.qt), p.fmt_qt(child))!;
 		}
 		else
@@ -472,7 +456,7 @@ fn void? check_complex_arg(parser::Parser* p, type_store::NodeIndex[] args, uint
 	if (qt.is_invalid()) return;
 	if (index <= 1 && !qt.is(p.comp, type_store::TypeTag.FLOAT))
 	{
-		p.err(parser_diagnostics::ParserDiag.NOT_FLOATING_TYPE, tok, p.fmt_qt(qt))!;
+		Diagnostic.NOT_FLOATING_TYPE.@emit(p, tok, p.fmt_qt(qt))!;
 		return;
 	}
 	else if (index == 1)
@@ -480,7 +464,7 @@ fn void? check_complex_arg(parser::Parser* p, type_store::NodeIndex[] args, uint
 		type_store::QualType prev = args[0].qt(&p.tree);
 		if (!prev.is_invalid() && !prev.eql(qt, p.comp))
 		{
-			p.err(parser_diagnostics::ParserDiag.ARGUMENT_TYPES_DIFFER, tok,
+			Diagnostic.ARGUMENT_TYPES_DIFFER.@emit(p, tok,
 				p.fmt_qt(prev), p.fmt_qt(qt))!;
 		}
 	}
@@ -497,11 +481,11 @@ fn void? check_c11_atomic_load_arg(parser::Parser* p, type_store::NodeIndex[] ar
 	{
 		if (!pointer.pointer.child.is(p.comp, type_store::TypeTag.ATOMIC))
 		{
-			p.err(parser_diagnostics::ParserDiag.C11_ATOMIC_ADDRESS_TYPE, tok, p.fmt_qt(qt))!;
+			Diagnostic.C11_ATOMIC_ADDRESS_TYPE.@emit(p, tok, p.fmt_qt(qt))!;
 		}
 		return;
 	}
-	p.err(parser_diagnostics::ParserDiag.ATOMIC_ADDRESS_POINTER, tok, p.fmt_qt(qt))!;
+	Diagnostic.ATOMIC_ADDRESS_POINTER.@emit(p, tok, p.fmt_qt(qt))!;
 	return;
 }
 
@@ -513,12 +497,12 @@ fn void? check_va_start_arg(parser::Parser* p, tokens::TokenIndex builtin_tok,
 		parser::FunctionContext context = p.function_context;
 		if (!context.active)
 		{
-			p.err(parser_diagnostics::ParserDiag.VA_FUNC_NOT_IN_FUNC, builtin_tok, "va_start")!;
+			Diagnostic.VA_FUNC_NOT_IN_FUNC.@emit(p, builtin_tok, "va_start")!;
 			return;
 		}
 		if (!context.variadic)
 		{
-			p.err(parser_diagnostics::ParserDiag.VA_FUNC_FIXED_ARGS, builtin_tok, "va_start")!;
+			Diagnostic.VA_FUNC_FIXED_ARGS.@emit(p, builtin_tok, "va_start")!;
 			return;
 		}
 		type_store::Func? maybe_func = context.function_qt.get_func(p.comp);
@@ -526,7 +510,7 @@ fn void? check_va_start_arg(parser::Parser* p, tokens::TokenIndex builtin_tok,
 		type_store::Func function = maybe_func;
 		if (function.kind != type_store::FuncKind.VARIADIC || function.params.len == 0)
 		{
-			p.err(parser_diagnostics::ParserDiag.VA_FUNC_FIXED_ARGS, builtin_tok, "va_start")!;
+			Diagnostic.VA_FUNC_FIXED_ARGS.@emit(p, builtin_tok, "va_start")!;
 			return;
 		}
 
@@ -548,20 +532,20 @@ fn void? check_va_start_arg(parser::Parser* p, tokens::TokenIndex builtin_tok,
 		}
 		if (!is_last_named_param)
 		{
-			p.err(parser_diagnostics::ParserDiag.VA_START_NOT_LAST_PARAM, last_arg.tok(&p.tree))!;
+			Diagnostic.VA_START_NOT_LAST_PARAM.@emit(p, last_arg.tok(&p.tree))!;
 		}
 	}
 	else if (index > 1)
 	{
 		// Zig's first_after is the first argument after the fixed parameters.
-		p.err(parser_diagnostics::ParserDiag.CLOSING_PAREN, args[1].tok(&p.tree))!;
+		Diagnostic.CLOSING_PAREN.@emit(p, args[1].tok(&p.tree))!;
 	}
 	return;
 }
 
 fn parser_result::Result? builtin_argument_type_error(parser::Parser* p, type_store::NodeIndex arg, type_store::QualType expected)
 {
-	p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_ARG, arg.tok(&p.tree), p.fmt_qt(arg.qt(&p.tree)), p.fmt_qt(expected))!;
+	Diagnostic.INCOMPATIBLE_ARG.@emit(p, arg.tok(&p.tree), p.fmt_qt(arg.qt(&p.tree)), p.fmt_qt(expected))!;
 	return parser::PARSING_FAILED~;
 }
 
@@ -656,7 +640,19 @@ fn parser_result::Result? dispatch(void* context, parser::Parser* p,
 
 	if (has_expected && ((variadic && args.len < (usz)expected) || (!variadic && args.len != (usz)expected)))
 	{
-		arity_error(p, args, l_paren, expected, variadic)!;
+		// Wrong argument count (Zig callExpr arity check): too few args -> report at
+		// the closing ')' (the token just consumed, or `(` if none); too many ->
+		// report at the first extra argument. Variadic builtins only fail when
+		// short, with "at least N".
+		tokens::TokenIndex arity_tok = args.len < expected ? (p.tok_i > 0 ? p.tok_i - 1 : l_paren) : args[(usz)expected].tok(&p.tree);
+		if (variadic)
+		{
+			Diagnostic.EXPECTED_AT_LEAST_ARGUMENTS.@emit(p, arity_tok, expected, args.len)!;
+		}
+		else
+		{
+			Diagnostic.EXPECTED_ARGUMENTS.@emit(p, arity_tok, expected, args.len)!;
+		}
 		type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
 			.builtin_call = { .builtin_tok = builtin_tok, .qt = type_store::INVALID, .args = args } });
 		return { .node = node, .qt = type_store::INVALID, .val = value::NONE };
