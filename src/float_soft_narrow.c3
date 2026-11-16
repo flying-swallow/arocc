@@ -2,14 +2,14 @@
 //
 // OWNER: plan 10 stage 1 agent 10.1 `narrow-float`. Stage 0 fixed the signatures.
 //
-// Contract (see the header of float_value.c3 for the shared rules):
+// Contract (see the header of primitive_float.c3 for the shared rules):
 //   - Operands and results are raw IEEE bit patterns (ushort / uint / ulong).
 //   - Per the native capability decision, f16/f32/f64 + - * / may use c3c's
 //     float16/float/double (bitcast in, operate, bitcast out); this is the only
 //     production file allowed to use native float types. Results must equal the
 //     reference (x86_64 Zig: SSE for f32/f64; f16 computed in f32 and rounded
 //     once to half), ties to even, subnormals kept.
-//   - NaN results follow float_value.c3's NaN rules: an invalid operation gives
+//   - NaN results follow primitive_float.c3's NaN rules: an invalid operation gives
 //     DEFAULT_NAN_F16/F32/F64, a NaN operand propagates (first NaN operand,
 //     quieted, payload kept). Native x86 already behaves like this; route NaN
 //     cases through those constants anyway so a vectors-confirmed change to the
@@ -20,10 +20,9 @@
 //     of ldexp) and the @max builtin. They must not use native floats.
 //
 // All private helpers here are prefixed `narrow_` because the whole
-// aro::float_value module (float_value.c3, float_soft_wide.c3, ...) shares one
+// aro::primitive_value module (primitive_float.c3, float_soft_wide.c3, ...) shares one
 // namespace.
-module aro::float_value;
-import aro::value_interner;
+module aro::primitive_value;
 
 // =============================================================================
 // Native f16/f32/f64 arithmetic
@@ -197,12 +196,6 @@ fn ulong f64_div(ulong a, ulong b)
 // frac_bits + 1 for f80 (the explicit integer bit) and frac_bits otherwise;
 // floatFractionalBits is frac_bits.
 
-<* All ones in the low `total_bits` bits. *>
-fn uint128 narrow_width_mask(FloatFormat fmt) @inline
-{
-	return fmt.total_bits == 128 ? ~(uint128)0 : ((uint128)1 << fmt.total_bits) - 1;
-}
-
 <* Zig math.floatMantissaBits(T). *>
 fn int narrow_mantissa_bits(FloatFormat fmt) @inline => (int)fmt.frac_bits + (fmt.explicit_int ? 1 : 0);
 
@@ -229,14 +222,14 @@ fn int narrow_ctz(uint128 x, FloatFormat fmt) @inline
  magnitude with inf's bits, so a pseudo-infinity (integer bit clear) gives
  int::max, and an unnormal gives e - bias.
 *>
-fn int InternerKey.ilogb(self)
+fn int PrimitiveValue.ilogb(self)
 {
-	FloatFormat fmt = format_of(self.tag);
+	FloatFormat fmt = self.tag.format;
 	int significand_bits = narrow_mantissa_bits(fmt);
-	uint128 sign_bit = sign_mask(self.tag);
+	uint128 sign_bit = self.tag.sign_mask();
 	int max_exponent = (1 << fmt.exp_bits) - 1;
 	int exponent_bias = max_exponent >> 1;
-	uint128 u = self.raw() & (sign_bit - 1);
+	uint128 u = self.float_bits() & (sign_bit - 1);
 	int e = (int)(u >> significand_bits);
 	if (e == 0)
 	{
@@ -247,7 +240,7 @@ fn int InternerKey.ilogb(self)
 	}
 	if (e == max_exponent)
 	{
-		return u > inf(self.tag).raw() ? int::min : int::max; // fp_ilogbnan
+		return u > inf(self.tag).float_bits() ? int::min : int::max; // fp_ilogbnan
 	}
 	return e - exponent_bias;
 }
@@ -267,18 +260,18 @@ fn int InternerKey.ilogb(self)
  (int::min included) overflows, and Zig's results are reproduced wherever Zig
  itself does not trap.
 *>
-fn InternerKey InternerKey.scalbn(self, int n_in)
+fn PrimitiveValue PrimitiveValue.scalbn(self, int n_in)
 {
 	if (!self.is_finite()) return self;
-	FloatFormat fmt = format_of(self.tag);
-	uint128 wmask = narrow_width_mask(fmt);
+	FloatFormat fmt = self.tag.format;
+	uint128 wmask = fmt.mask();
 	long exponent_bits = fmt.exp_bits;
 	long mantissa_bits = narrow_mantissa_bits(fmt);
 	long fractional_bits = fmt.frac_bits;
 	long max_biased_exponent = 2 * (long)fmt.bias; // 2 * floatExponentMax(T)
 	uint128 mantissa_mask = ((uint128)1 << mantissa_bits) - 1;
-	uint128 repr = self.raw();
-	uint128 sign_bit = repr & sign_mask(self.tag);
+	uint128 repr = self.float_bits();
+	uint128 sign_bit = repr & self.tag.sign_mask();
 	long n = n_in;
 
 	long exponent = (long)(((repr << 1) & wmask) >> (mantissa_bits + 1));
@@ -292,27 +285,27 @@ fn InternerKey InternerKey.scalbn(self, int n_in)
 		if (n > max_biased_exponent - exponent)
 		{
 			// Overflow. Return +/- inf
-			return from_raw(self.tag, inf(self.tag).raw() | sign_bit);
+			return float_key(self.tag, inf(self.tag).float_bits() | sign_bit);
 		}
 		if (exponent + n <= 0)
 		{
 			// Result is subnormal
-			return from_raw(self.tag, ((repr << n) & wmask) | sign_bit);
+			return float_key(self.tag, ((repr << n) & wmask) | sign_bit);
 		}
 		if (exponent <= 0)
 		{
 			// Result is normal, but needs shifting
 			uint128 result = (uint128)(n + exponent) << mantissa_bits;
 			result |= ((repr << (1 - exponent)) & wmask) & mantissa_mask;
-			return from_raw(self.tag, result | sign_bit);
+			return float_key(self.tag, result | sign_bit);
 		}
 		// Result needs no shifting
-		return from_raw(self.tag, (repr + ((uint128)n << mantissa_bits)) & wmask);
+		return float_key(self.tag, (repr + ((uint128)n << mantissa_bits)) & wmask);
 	}
 	if (n <= -exponent)
 	{
 		// Severe underflow. Return +/- 0
-		if (n < -(mantissa_bits + exponent)) return from_raw(self.tag, sign_bit);
+		if (n < -(mantissa_bits + exponent)) return float_key(self.tag, sign_bit);
 		// Result underflowed, we need to shift and round
 		long shift = min(-n, -(exponent + n) + 1);
 		bool exact_tie = narrow_ctz(repr, fmt) == shift - 1;
@@ -322,10 +315,10 @@ fn InternerKey InternerKey.scalbn(self, int n_in)
 		result = result >> (shift - 1);
 		// Round result, including round-to-even for exact ties
 		result = ((result + 1) >> 1) & ~(uint128)(exact_tie ? 1 : 0);
-		return from_raw(self.tag, result | sign_bit);
+		return float_key(self.tag, result | sign_bit);
 	}
 	// Result is exact, and needs no shifting
-	return from_raw(self.tag, (repr - ((uint128)(-n) << mantissa_bits)) & wmask);
+	return float_key(self.tag, (repr - ((uint128)(-n) << mantissa_bits)) & wmask);
 }
 
 <*
@@ -333,15 +326,15 @@ fn InternerKey InternerKey.scalbn(self, int n_in)
  pseudo-denormal (exponent 0, integer bit set) has the value of biased
  exponent 1, so it is moved there.
 *>
-fn uint128 narrow_magnitude_key(InternerKey f) @inline
+fn uint128 narrow_magnitude_key(PrimitiveValue f) @inline
 {
-	uint128 m = f.raw() & ~sign_mask(f.tag);
+	uint128 m = f.float_bits() & ~f.tag.sign_mask();
 	if (f.tag == F80 && (m >> 64) == 0 && (m >> 63) != 0) m += (uint128)1 << 64;
 	return m;
 }
 
 <* `a < b` for two non-NaN values of one width (+0 == -0). *>
-fn bool narrow_less_than(InternerKey a, InternerKey b)
+fn bool narrow_less_than(PrimitiveValue a, PrimitiveValue b)
 {
 	if (a.is_zero() && b.is_zero()) return false;
 	bool sa = a.signbit();
@@ -360,9 +353,9 @@ fn bool narrow_less_than(InternerKey a, InternerKey b)
  Otherwise the larger value (equal values: the lhs).
  @require self.tag == other.tag : "operands must have the same width"
 *>
-fn InternerKey InternerKey.max(self, InternerKey other)
+fn PrimitiveValue PrimitiveValue.max(self, PrimitiveValue other)
 {
-	// No `?:` on InternerKey values: see CONVENTIONS.md (c3c by-value aggregate ternary).
+	// No `?:` on PrimitiveValue values: see CONVENTIONS.md (c3c by-value aggregate ternary).
 	if (self.is_nan()) return other; // with two NaNs: the rhs, unchanged (observed)
 	if (other.is_nan()) return self;
 	if (self.is_zero() && other.is_zero())

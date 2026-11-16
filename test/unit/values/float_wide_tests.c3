@@ -21,8 +21,9 @@
 //     self-hosted backend (Debug), -fllvm Debug and -fllvm ReleaseFast.
 //     Row layout: f128 = hi, lo; f80 = sign|exponent (16 bits), significand.
 module float_wide_tests;
+import aro::primitive_value;
 import std::io;
-import aro::float_value, aro::value_interner;
+import aro::value_interner;
 
 macro check(left, right)
 {
@@ -92,38 +93,38 @@ const ulong SIGN = 0x8000_0000_0000_0000;
 
 fn void unpack_every_width() @test
 {
-	Unpacked u = float_value::f16_value(0x3C00).unpack(); // 1.0 = 1024 * 2^-10
+	Unpacked u = primitive_value::f16_value(0x3C00).unpack(); // 1.0 = 1024 * 2^-10
 	assert(u.cls == FloatClass.NORMAL);
 	check(u.sig, 1024);
 	check(u.exp, -10);
-	u = float_value::f16_value(0x8001).unpack(); // -min subnormal = -1 * 2^-24
+	u = primitive_value::f16_value(0x8001).unpack(); // -min subnormal = -1 * 2^-24
 	assert(u.cls == FloatClass.SUBNORMAL && u.sign);
 	check(u.sig, 1);
 	check(u.exp, -24);
-	u = float_value::f32_value(0x7FA0_0001).unpack(); // sNaN payload
+	u = primitive_value::f32_value(0x7FA0_0001).unpack(); // sNaN payload
 	assert(u.cls == FloatClass.NAN);
 	check(u.sig, 0x20_0001);
-	u = float_value::f64_value(0x0010_0000_0000_0000).unpack(); // min normal 2^-1022
+	u = primitive_value::f64_value(0x0010_0000_0000_0000).unpack(); // min normal 2^-1022
 	check(u.sig, (ulong)1 << 52);
 	check(u.exp, -1074);
-	u = float_value::f80_value(x(0x3FFF, 0x8000_0000_0000_0000)).unpack(); // 1.0
+	u = primitive_value::f80_value(x(0x3FFF, 0x8000_0000_0000_0000)).unpack(); // 1.0
 	check(u.sig, 0x8000_0000_0000_0000);
 	check(u.exp, -63);
 	// pseudo-denormal: SUBNORMAL with the value of biased exponent 1
-	u = float_value::f80_value(x(0x0000, 0x8000_0000_0000_0001)).unpack();
+	u = primitive_value::f80_value(x(0x0000, 0x8000_0000_0000_0001)).unpack();
 	assert(u.cls == FloatClass.SUBNORMAL);
 	check(u.sig, 0x8000_0000_0000_0001);
 	check(u.exp, 1 - 16383 - 63);
 	// unnormal: NAN class, sig = fraction without the integer bit
-	u = float_value::f80_value(x(0x3FFF, 0x4000_0000_0000_0000)).unpack();
+	u = primitive_value::f80_value(x(0x3FFF, 0x4000_0000_0000_0000)).unpack();
 	assert(u.cls == FloatClass.NAN);
 	check(u.sig, 0x4000_0000_0000_0000);
-	u = float_value::f128_value(q(0x0000_0000_0000_0000, 3)).unpack();
+	u = primitive_value::f128_value(q(0x0000_0000_0000_0000, 3)).unpack();
 	check(u.sig, 3);
 	check(u.exp, -16494);
-	u = float_value::f128_value(q(NINF_HI, 0)).unpack();
+	u = primitive_value::f128_value(q(NINF_HI, 0)).unpack();
 	assert(u.cls == FloatClass.INFINITE && u.sign);
-	u = float_value::f128_value(q(SIGN, 0)).unpack();
+	u = primitive_value::f128_value(q(SIGN, 0)).unpack();
 	assert(u.cls == FloatClass.ZERO && u.sign);
 }
 
@@ -131,25 +132,25 @@ fn void round_pack_ties_and_status() @test
 {
 	FloatStatus s;
 	// 0x801 * 2^-11 = 1 + 2^-11 is a tie between 1.0 and 1+2^-10 in f16 -> even (1.0)
-	InternerKey r = float_value::round_pack(F16, false, -11, 0x801, false, NEAREST_EVEN, &s);
+	PrimitiveValue r = primitive_value::round_pack(F16, false, -11, 0x801, false, NEAREST_EVEN, &s);
 	check(r.f16(), 0x3C00);
 	check_status(s, false, false, false, false, true);
 	// 0x803 * 2^-11: tie, odd lower neighbour -> up
-	r = float_value::round_pack(F16, false, -11, 0x803, false);
+	r = primitive_value::round_pack(F16, false, -11, 0x803, false);
 	check(r.f16(), 0x3C02);
 	// the sticky bit breaks the tie upwards
-	r = float_value::round_pack(F16, false, -11, 0x801, true);
+	r = primitive_value::round_pack(F16, false, -11, 0x801, true);
 	check(r.f16(), 0x3C01);
 	// TOWARD_ZERO truncates
-	r = float_value::round_pack(F16, true, -11, 0x803, false, TOWARD_ZERO);
+	r = primitive_value::round_pack(F16, true, -11, 0x803, false, TOWARD_ZERO);
 	check(r.f16(), 0xBC01);
 	// exact: no flags
 	s = {};
-	r = float_value::round_pack(F32, false, 0, 3, false, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F32, false, 0, 3, false, NEAREST_EVEN, &s);
 	check(r.f32(), 0x4040_0000);
 	check_status(s, false, false, false, false, false);
 	// zero significand gives a signed zero
-	r = float_value::round_pack(F64, true, 5, 0, false);
+	r = primitive_value::round_pack(F64, true, 5, 0, false);
 	check(r.f64(), 0x8000_0000_0000_0000);
 }
 
@@ -157,21 +158,21 @@ fn void round_pack_overflow() @test
 {
 	FloatStatus s;
 	// 2^16 overflows f16
-	InternerKey r = float_value::round_pack(F16, false, 16, 1, false, NEAREST_EVEN, &s);
+	PrimitiveValue r = primitive_value::round_pack(F16, false, 16, 1, false, NEAREST_EVEN, &s);
 	check(r.f16(), 0x7C00);
 	check_status(s, false, false, true, false, true);
 	s = {};
-	r = float_value::round_pack(F16, true, 16, 1, false, TOWARD_ZERO, &s);
+	r = primitive_value::round_pack(F16, true, 16, 1, false, TOWARD_ZERO, &s);
 	check(r.f16(), 0xFBFF);
 	check_status(s, false, false, true, false, true);
 	// 65520 = 0xFFF * 2^4 is the f16 tie between 65504 and 2^16 -> inf
-	r = float_value::round_pack(F16, false, 4, 0xFFF, false);
+	r = primitive_value::round_pack(F16, false, 4, 0xFFF, false);
 	check(r.f16(), 0x7C00);
-	r = float_value::round_pack(F16, false, 4, 0xFFE, true);
+	r = primitive_value::round_pack(F16, false, 4, 0xFFE, true);
 	check(r.f16(), 0x7BFF);
 	// f80: 2^16384 -> inf with explicit integer bit
 	s = {};
-	r = float_value::round_pack(F80, false, 16384, 1, false, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F80, false, 16384, 1, false, NEAREST_EVEN, &s);
 	check(r.f80().hi, 0x7FFF);
 	check(r.f80().lo, 0x8000_0000_0000_0000);
 	assert(s.overflow);
@@ -181,46 +182,46 @@ fn void round_pack_underflow() @test
 {
 	FloatStatus s;
 	// 2^-25 is half the smallest f16 subnormal: tie -> 0 (even), underflow
-	InternerKey r = float_value::round_pack(F16, false, -25, 1, false, NEAREST_EVEN, &s);
+	PrimitiveValue r = primitive_value::round_pack(F16, false, -25, 1, false, NEAREST_EVEN, &s);
 	check(r.f16(), 0x0000);
 	check_status(s, false, false, false, true, true);
 	// 3 * 2^-26 = 0.75 ulp -> min subnormal
-	r = float_value::round_pack(F16, true, -26, 3, false);
+	r = primitive_value::round_pack(F16, true, -26, 3, false);
 	check(r.f16(), 0x8001);
 	// an exact subnormal raises nothing (underflow needs inexact)
 	s = {};
-	r = float_value::round_pack(F16, false, -24, 5, false, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F16, false, -24, 5, false, NEAREST_EVEN, &s);
 	check(r.f16(), 0x0005);
 	check_status(s, false, false, false, false, false);
 	// rounding carries a subnormal into the smallest normal
-	r = float_value::round_pack(F16, false, -25, 0x7FF, false);
+	r = primitive_value::round_pack(F16, false, -25, 0x7FF, false);
 	check(r.f16(), 0x0400);
 	// tininess after rounding: (2^11 - 1) * 2^-25 = 2^-14 - 2^-25 has 11 bits, so
 	// with an unbounded exponent it stays below 2^-14: tiny, and the subnormal
 	// rounding to 2^-14 is inexact -> underflow (x86 rule).
 	s = {};
-	r = float_value::round_pack(F16, false, -25, 0x7FF, false, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F16, false, -25, 0x7FF, false, NEAREST_EVEN, &s);
 	check_status(s, false, false, false, true, true);
 	// 2^-14 - 2^-26 = (2^12 - 1) * 2^-26: 11-bit rounding gives 2^-14 too -> not tiny
 	s = {};
-	r = float_value::round_pack(F16, false, -26, 0xFFF, false, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F16, false, -26, 0xFFF, false, NEAREST_EVEN, &s);
 	check(r.f16(), 0x0400);
 	check_status(s, false, false, false, false, true);
 	// 0xFFD * 2^-26 = 1023.25 subnormal ulps -> 0x03FF, tiny, underflow
 	s = {};
-	r = float_value::round_pack(F16, false, -26, 0xFFD, false, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F16, false, -26, 0xFFD, false, NEAREST_EVEN, &s);
 	check(r.f16(), 0x03FF);
 	check_status(s, false, false, false, true, true);
 	// f80 subnormal keeps the integer bit clear; min normal sets it
-	r = float_value::round_pack(F80, false, -16445, 1, false);
+	r = primitive_value::round_pack(F80, false, -16445, 1, false);
 	check(r.f80().hi, 0);
 	check(r.f80().lo, 1);
-	r = float_value::round_pack(F80, true, -16382, 1, false);
+	r = primitive_value::round_pack(F80, true, -16382, 1, false);
 	check(r.f80().hi, 0x8001);
 	check(r.f80().lo, 0x8000_0000_0000_0000);
 	// far below the subnormal range with a sticky bit
 	s = {};
-	r = float_value::round_pack(F128, false, -30000, 1, true, NEAREST_EVEN, &s);
+	r = primitive_value::round_pack(F128, false, -30000, 1, true, NEAREST_EVEN, &s);
 	check(r.f128().hi, 0);
 	check(r.f128().lo, 0);
 	check_status(s, false, false, false, true, true);
@@ -233,93 +234,93 @@ fn void round_pack_underflow() @test
 fn void hub_widening_is_exact() @test
 {
 	// f16 min subnormal 2^-24
-	check_q(float_value::f16_value(0x0001).to_f128(), 0x3FE7_0000_0000_0000, 0);
+	check_q(primitive_value::f16_value(0x0001).to_f128(), 0x3FE7_0000_0000_0000, 0);
 	// f32 0.1f = 0x3DCCCCCD
-	check_q(float_value::f32_value(0x3DCC_CCCD).to_f128(), 0x3FFB_9999_9A00_0000, 0);
+	check_q(primitive_value::f32_value(0x3DCC_CCCD).to_f128(), 0x3FFB_9999_9A00_0000, 0);
 	// f64 max
-	check_q(float_value::f64_value(0x7FEF_FFFF_FFFF_FFFF).to_f128(), 0x43FE_FFFF_FFFF_FFFF, 0xF000_0000_0000_0000);
+	check_q(primitive_value::f64_value(0x7FEF_FFFF_FFFF_FFFF).to_f128(), 0x43FE_FFFF_FFFF_FFFF, 0xF000_0000_0000_0000);
 	// -0.0 and -inf
-	check_q(float_value::f64_value(0x8000_0000_0000_0000).to_f128(), SIGN, 0);
-	check_q(float_value::f32_value(0xFF80_0000).to_f128(), NINF_HI, 0);
+	check_q(primitive_value::f64_value(0x8000_0000_0000_0000).to_f128(), SIGN, 0);
+	check_q(primitive_value::f32_value(0xFF80_0000).to_f128(), NINF_HI, 0);
 	// NaN: payload shifted up, quiet bit kept as is (Zig 0.17.0: f16 0x7C01 -> 7fff0040..)
-	check_q(float_value::f16_value(0x7C01).to_f128(), 0x7FFF_0040_0000_0000, 0);
-	check_q(float_value::f64_value(0xFFF8_0000_0000_0001).to_f128(), 0xFFFF_8000_0000_0000, 0x1000_0000_0000_0000);
+	check_q(primitive_value::f16_value(0x7C01).to_f128(), 0x7FFF_0040_0000_0000, 0);
+	check_q(primitive_value::f64_value(0xFFF8_0000_0000_0001).to_f128(), 0xFFFF_8000_0000_0000, 0x1000_0000_0000_0000);
 	// f80 1.0 and f80 min subnormal 2^-16445
-	check_q(float_value::f80_value(x(0x3FFF, 0x8000_0000_0000_0000)).to_f128(), ONE_HI, 0);
-	check_q(float_value::f80_value(x(0x0000, 1)).to_f128(), 0, (ulong)1 << 49);
+	check_q(primitive_value::f80_value(x(0x3FFF, 0x8000_0000_0000_0000)).to_f128(), ONE_HI, 0);
+	check_q(primitive_value::f80_value(x(0x0000, 1)).to_f128(), 0, (ulong)1 << 49);
 	// f128 unchanged, also a signaling NaN
-	check_q(float_value::f128_value(q(0x7FFF_0000_0000_0000, 1)).to_f128(), 0x7FFF_0000_0000_0000, 1);
+	check_q(primitive_value::f128_value(q(0x7FFF_0000_0000_0000, 1)).to_f128(), 0x7FFF_0000_0000_0000, 1);
 }
 
 fn void hub_f80_non_canonical_follows_compiler_rt() @test
 {
 	// Zig 0.17.0 (__extendxftf2): pseudo-denormal loses its integer bit
-	check_q(float_value::f80_value(x(0x0000, 0x8000_0000_0000_0001)).to_f128(), 0, 0x0002_0000_0000_0000);
+	check_q(primitive_value::f80_value(x(0x0000, 0x8000_0000_0000_0001)).to_f128(), 0, 0x0002_0000_0000_0000);
 	// unnormal 0x3FFF:4000.. becomes the subnormal with fraction bit 111
-	check_q(float_value::f80_value(x(0x3FFF, 0x4000_0000_0000_0000)).to_f128(), 0x0000_8000_0000_0000, 0);
+	check_q(primitive_value::f80_value(x(0x3FFF, 0x4000_0000_0000_0000)).to_f128(), 0x0000_8000_0000_0000, 0);
 	// pseudo-infinity becomes inf
-	check_q(float_value::f80_value(x(0x7FFF, 0)).to_f128(), INF_HI, 0);
+	check_q(primitive_value::f80_value(x(0x7FFF, 0)).to_f128(), INF_HI, 0);
 }
 
 fn void hub_narrowing() @test
 {
 	FloatStatus s;
 	// 1 + 2^-11 (f128) -> f16 tie -> 1.0
-	InternerKey r = float_value::from_f128(q(0x3FFF_0020_0000_0000, 0), F16, NEAREST_EVEN, &s);
+	PrimitiveValue r = primitive_value::from_f128(q(0x3FFF_0020_0000_0000, 0), F16, NEAREST_EVEN, &s);
 	check(r.f16(), 0x3C00);
 	check_status(s, false, false, false, false, true);
 	// 65520 -> f16 inf with overflow
 	s = {};
-	r = float_value::from_f128(q(0x400E_FFE0_0000_0000, 0), F16, NEAREST_EVEN, &s);
+	r = primitive_value::from_f128(q(0x400E_FFE0_0000_0000, 0), F16, NEAREST_EVEN, &s);
 	check(r.f16(), 0x7C00);
 	check_status(s, false, false, true, false, true);
 	// TOWARD_ZERO: 65520 -> 65504
-	r = float_value::from_f128(q(0x400E_FFE0_0000_0000, 0), F16, TOWARD_ZERO);
+	r = primitive_value::from_f128(q(0x400E_FFE0_0000_0000, 0), F16, TOWARD_ZERO);
 	check(r.f16(), 0x7BFF);
 	// tiny f128 -> f64 signed zero with underflow
 	s = {};
-	r = float_value::from_f128(q(0x8001_0000_0000_0000, 0), F64, NEAREST_EVEN, &s);
+	r = primitive_value::from_f128(q(0x8001_0000_0000_0000, 0), F64, NEAREST_EVEN, &s);
 	check(r.f64(), 0x8000_0000_0000_0000);
 	check_status(s, false, false, false, true, true);
 	// 2^-1074 * 1.5 -> f64 rounds to 2^-1073 (tie to even)
-	r = float_value::from_f128(q(0x3BCD_8000_0000_0000, 0), F64);
+	r = primitive_value::from_f128(q(0x3BCD_8000_0000_0000, 0), F64);
 	check(r.f64(), 2);
 	// f128 0.1 -> f32 0x3DCCCCCD and f64 0x3FB999999999999A
 	F128Bits tenth = q(0x3FFB_9999_9999_9999, 0x9999_9999_9999_999A);
-	check(float_value::from_f128(tenth, F32).f32(), 0x3DCC_CCCD);
-	check(float_value::from_f128(tenth, F64).f64(), 0x3FB9_9999_9999_999A);
-	r = float_value::from_f128(tenth, F80);
+	check(primitive_value::from_f128(tenth, F32).f32(), 0x3DCC_CCCD);
+	check(primitive_value::from_f128(tenth, F64).f64(), 0x3FB9_9999_9999_999A);
+	r = primitive_value::from_f128(tenth, F80);
 	check(r.f80().hi, 0x3FFB);
 	check(r.f80().lo, 0xCCCC_CCCC_CCCC_CCCD);
 	// NaN -> f64 quiets and keeps the top payload (Zig 0.17.0: 7ff8000100000000)
 	s = {};
-	r = float_value::from_f128(q(0x7FFF_0000_1000_0000, 1), F64, NEAREST_EVEN, &s);
+	r = primitive_value::from_f128(q(0x7FFF_0000_1000_0000, 1), F64, NEAREST_EVEN, &s);
 	check(r.f64(), 0x7FF8_0001_0000_0000);
 	assert(s.invalid);
 	// NaN -> f80 is NOT quieted (Zig 0.17.0: 7fff8000080000000000) ...
-	r = float_value::from_f128(q(0x7FFF_0000_1000_0000, 1), F80);
+	r = primitive_value::from_f128(q(0x7FFF_0000_1000_0000, 1), F80);
 	check(r.f80().hi, 0x7FFF);
 	check(r.f80().lo, 0x8000_0800_0000_0000);
 	// ... and a payload only in the low 49 bits becomes infinity (Zig 0.17.0)
-	r = float_value::from_f128(q(0x7FFF_0000_0000_0000, 1), F80);
+	r = primitive_value::from_f128(q(0x7FFF_0000_0000_0000, 1), F80);
 	check(r.f80().hi, 0x7FFF);
 	check(r.f80().lo, 0x8000_0000_0000_0000);
 	// f128 -> f128 unchanged
-	check_q(float_value::from_f128(tenth, F128).f128(), tenth.hi, tenth.lo);
+	check_q(primitive_value::from_f128(tenth, F128).f128(), tenth.hi, tenth.lo);
 }
 
 fn void hub_round_trip_every_width() @test
 {
-	InternerKey[*] samples = {
-		float_value::f16_value(0x7BFF), float_value::f16_value(0x83FF),
-		float_value::f32_value(0x0000_0001), float_value::f32_value(0xC2F6_E979),
-		float_value::f64_value(0x0000_0000_0000_0001), float_value::f64_value(0x4009_21FB_5444_2D18),
-		float_value::f80_value(x(0x0000, 0x0000_0000_0000_0001)), float_value::f80_value(x(0xC00D, 0xFFFF_FFFF_FFFF_FFFF)),
+	PrimitiveValue[*] samples = {
+		primitive_value::f16_value(0x7BFF), primitive_value::f16_value(0x83FF),
+		primitive_value::f32_value(0x0000_0001), primitive_value::f32_value(0xC2F6_E979),
+		primitive_value::f64_value(0x0000_0000_0000_0001), primitive_value::f64_value(0x4009_21FB_5444_2D18),
+		primitive_value::f80_value(x(0x0000, 0x0000_0000_0000_0001)), primitive_value::f80_value(x(0xC00D, 0xFFFF_FFFF_FFFF_FFFF)),
 	};
 	foreach (k : samples)
 	{
-		InternerKey back = float_value::from_f128(k.to_f128(), k.tag);
-		assert(back.raw() == k.raw());
+		PrimitiveValue back = primitive_value::from_f128(k.to_f128(), k.tag);
+		assert(back.float_bits() == k.float_bits());
 	}
 }
 
@@ -336,34 +337,34 @@ fn void f128_specials() @test
 	F128Bits pz = q(0, 0);
 	F128Bits nz = q(SIGN, 0);
 	// inf - inf -> positive default NaN, invalid
-	check_q(float_value::f128_add(pinf, ninf, &s), 0x7FFF_8000_0000_0000, 0);
+	check_q(primitive_value::f128_add(pinf, ninf, &s), 0x7FFF_8000_0000_0000, 0);
 	check_status(s, true, false, false, false, false);
 	// 0 * inf, 0 / 0, inf / inf
-	check_q(float_value::f128_mul(pz, ninf), 0x7FFF_8000_0000_0000, 0);
-	check_q(float_value::f128_div(nz, pz), 0x7FFF_8000_0000_0000, 0);
-	check_q(float_value::f128_div(pinf, ninf), 0x7FFF_8000_0000_0000, 0);
+	check_q(primitive_value::f128_mul(pz, ninf), 0x7FFF_8000_0000_0000, 0);
+	check_q(primitive_value::f128_div(nz, pz), 0x7FFF_8000_0000_0000, 0);
+	check_q(primitive_value::f128_div(pinf, ninf), 0x7FFF_8000_0000_0000, 0);
 	// 1 / -0 -> -inf, div_by_zero
 	s = {};
-	check_q(float_value::f128_div(one, nz, &s), NINF_HI, 0);
+	check_q(primitive_value::f128_div(one, nz, &s), NINF_HI, 0);
 	check_status(s, false, true, false, false, false);
 	// signed zeros
-	check_q(float_value::f128_add(nz, nz), SIGN, 0);
-	check_q(float_value::f128_add(pz, nz), 0, 0);
-	check_q(float_value::f128_sub(one, one), 0, 0);
-	check_q(float_value::f128_mul(nz, one), SIGN, 0);
-	check_q(float_value::f128_div(pz, q(SIGN | ONE_HI, 0)), SIGN, 0);
+	check_q(primitive_value::f128_add(nz, nz), SIGN, 0);
+	check_q(primitive_value::f128_add(pz, nz), 0, 0);
+	check_q(primitive_value::f128_sub(one, one), 0, 0);
+	check_q(primitive_value::f128_mul(nz, one), SIGN, 0);
+	check_q(primitive_value::f128_div(pz, q(SIGN | ONE_HI, 0)), SIGN, 0);
 	// NaN propagation: first NaN, quieted, sign kept; sNaN raises invalid
 	F128Bits snan = q(0xFFFF_0000_0000_0000, 0x1234);
 	F128Bits qnan = q(0x7FFF_8000_0000_0000, 0x99);
 	s = {};
-	check_q(float_value::f128_add(snan, qnan, &s), 0xFFFF_8000_0000_0000, 0x1234);
+	check_q(primitive_value::f128_add(snan, qnan, &s), 0xFFFF_8000_0000_0000, 0x1234);
 	assert(s.invalid);
-	check_q(float_value::f128_mul(one, qnan), 0x7FFF_8000_0000_0000, 0x99);
-	check_q(float_value::f128_div(qnan, snan), 0x7FFF_8000_0000_0000, 0x99);
+	check_q(primitive_value::f128_mul(one, qnan), 0x7FFF_8000_0000_0000, 0x99);
+	check_q(primitive_value::f128_div(qnan, snan), 0x7FFF_8000_0000_0000, 0x99);
 	// Zig 0.17.0: 3 - NaN flips the NaN's sign (__subtf3 = a + -b)
-	check_q(float_value::f128_sub(q(0x4000_8000_0000_0000, 0), q(0x7FFF_8000_0000_0000, 0x1234)), 0xFFFF_8000_0000_0000, 0x1234);
+	check_q(primitive_value::f128_sub(q(0x4000_8000_0000_0000, 0), q(0x7FFF_8000_0000_0000, 0x1234)), 0xFFFF_8000_0000_0000, 0x1234);
 	// ... but a NaN lhs keeps its sign
-	check_q(float_value::f128_sub(qnan, one), 0x7FFF_8000_0000_0000, 0x99);
+	check_q(primitive_value::f128_sub(qnan, one), 0x7FFF_8000_0000_0000, 0x99);
 }
 
 fn void f128_rounding() @test
@@ -371,49 +372,49 @@ fn void f128_rounding() @test
 	FloatStatus s;
 	F128Bits one = q(ONE_HI, 0);
 	// 1 + 2^-113 is a tie -> 1.0 (even); 1 + 3*2^-113 -> up
-	check_q(float_value::f128_add(one, q(0x3F8E_0000_0000_0000, 0), &s), ONE_HI, 0);
+	check_q(primitive_value::f128_add(one, q(0x3F8E_0000_0000_0000, 0), &s), ONE_HI, 0);
 	check_status(s, false, false, false, false, true);
-	check_q(float_value::f128_add(q(ONE_HI, 1), q(0x3F8E_0000_0000_0000, 0)), ONE_HI, 2);
-	check_q(float_value::f128_add(one, q(0x3F8E_8000_0000_0000, 0)), ONE_HI, 1);
+	check_q(primitive_value::f128_add(q(ONE_HI, 1), q(0x3F8E_0000_0000_0000, 0)), ONE_HI, 2);
+	check_q(primitive_value::f128_add(one, q(0x3F8E_8000_0000_0000, 0)), ONE_HI, 1);
 	// 1 - 2^-114 rounds back to 1 (tie between 1-2^-113 and 1, even is 1)
-	check_q(float_value::f128_sub(one, q(0x3F8D_0000_0000_0000, 0)), ONE_HI, 0);
+	check_q(primitive_value::f128_sub(one, q(0x3F8D_0000_0000_0000, 0)), ONE_HI, 0);
 	// 1 - 2^-113 is exact
 	s = {};
-	check_q(float_value::f128_sub(one, q(0x3F8E_0000_0000_0000, 0), &s), 0x3FFE_FFFF_FFFF_FFFF, ALL);
+	check_q(primitive_value::f128_sub(one, q(0x3F8E_0000_0000_0000, 0), &s), 0x3FFE_FFFF_FFFF_FFFF, ALL);
 	check_status(s, false, false, false, false, false);
 	// 1/3
-	check_q(float_value::f128_div(one, q(0x4000_8000_0000_0000, 0)), 0x3FFD_5555_5555_5555, 0x5555_5555_5555_5555);
+	check_q(primitive_value::f128_div(one, q(0x4000_8000_0000_0000, 0)), 0x3FFD_5555_5555_5555, 0x5555_5555_5555_5555);
 	// 2/3 rounds up
-	check_q(float_value::f128_div(q(TWO_HI, 0), q(0x4000_8000_0000_0000, 0)), 0x3FFE_5555_5555_5555, 0x5555_5555_5555_5555);
+	check_q(primitive_value::f128_div(q(TWO_HI, 0), q(0x4000_8000_0000_0000, 0)), 0x3FFE_5555_5555_5555, 0x5555_5555_5555_5555);
 	// (1 + 2^-112)^2 = 1 + 2^-111 + 2^-224 -> 1 + 2^-111
-	check_q(float_value::f128_mul(q(ONE_HI, 1), q(ONE_HI, 1)), ONE_HI, 2);
+	check_q(primitive_value::f128_mul(q(ONE_HI, 1), q(ONE_HI, 1)), ONE_HI, 2);
 }
 
 fn void f128_overflow_underflow() @test
 {
 	FloatStatus s;
 	F128Bits max = q(MAX_HI, ALL);
-	check_q(float_value::f128_add(max, max, &s), INF_HI, 0);
+	check_q(primitive_value::f128_add(max, max, &s), INF_HI, 0);
 	check_status(s, false, false, true, false, true);
 	s = {};
-	check_q(float_value::f128_mul(q(SIGN | MAX_HI, ALL), q(TWO_HI, 0), &s), NINF_HI, 0);
+	check_q(primitive_value::f128_mul(q(SIGN | MAX_HI, ALL), q(TWO_HI, 0), &s), NINF_HI, 0);
 	assert(s.overflow);
 	// min normal / 2 -> subnormal exactly (Zig 0.17.0: 00008000..)
 	s = {};
-	check_q(float_value::f128_div(q(MIN_NORMAL_HI, 0), q(TWO_HI, 0), &s), 0x0000_8000_0000_0000, 0);
+	check_q(primitive_value::f128_div(q(MIN_NORMAL_HI, 0), q(TWO_HI, 0), &s), 0x0000_8000_0000_0000, 0);
 	check_status(s, false, false, false, false, false);
 	// min normal / 3 (Zig 0.17.0: 0000555..5)
 	s = {};
-	check_q(float_value::f128_div(q(MIN_NORMAL_HI, 0), q(0x4000_8000_0000_0000, 0), &s), 0x0000_5555_5555_5555, 0x5555_5555_5555_5555);
+	check_q(primitive_value::f128_div(q(MIN_NORMAL_HI, 0), q(0x4000_8000_0000_0000, 0), &s), 0x0000_5555_5555_5555, 0x5555_5555_5555_5555);
 	check_status(s, false, false, false, true, true);
 	// min subnormal * 0.5 -> tie -> +0, underflow
 	s = {};
-	check_q(float_value::f128_mul(q(0, 1), q(0x3FFE_0000_0000_0000, 0), &s), 0, 0);
+	check_q(primitive_value::f128_mul(q(0, 1), q(0x3FFE_0000_0000_0000, 0), &s), 0, 0);
 	check_status(s, false, false, false, true, true);
 	// min subnormal * 0.75 -> min subnormal
-	check_q(float_value::f128_mul(q(0, 1), q(0x3FFE_8000_0000_0000, 0)), 0, 1);
+	check_q(primitive_value::f128_mul(q(0, 1), q(0x3FFE_8000_0000_0000, 0)), 0, 1);
 	// subnormal + subnormal is exact and may become normal
-	check_q(float_value::f128_add(q(0x0000_FFFF_FFFF_FFFF, ALL), q(0, 1)), MIN_NORMAL_HI, 0);
+	check_q(primitive_value::f128_add(q(0x0000_FFFF_FFFF_FFFF, ALL), q(0, 1)), MIN_NORMAL_HI, 0);
 }
 
 fn void f128_fma() @test
@@ -421,26 +422,26 @@ fn void f128_fma() @test
 	F128Bits one = q(ONE_HI, 0);
 	F128Bits two64 = q(0x403F_0000_0000_0000, 0);
 	// bigIntToFloat step: 2^64 * 2^64 + 1 -> 2^128 (Zig 0.17.0: 407f0000..)
-	check_q(float_value::f128_mul_add(two64, two64, one), 0x407F_0000_0000_0000, 0);
+	check_q(primitive_value::f128_mul_add(two64, two64, one), 0x407F_0000_0000_0000, 0);
 	// 2^64 * (2^64 - 1) + (2^64 - 1) = 2^128 - 1 -> rounds to 2^128
 	F128Bits m = q(0x403E_FFFF_FFFF_FFFF, 0xFFFE_0000_0000_0000);
-	check_q(float_value::f128_mul_add(two64, m, m), 0x407F_0000_0000_0000, 0);
+	check_q(primitive_value::f128_mul_add(two64, m, m), 0x407F_0000_0000_0000, 0);
 	// single rounding: (1 + 2^-112) * (1 - 2^-112) - 1 = -2^-224 exactly
 	FloatStatus s;
-	check_q(float_value::f128_mul_add(q(ONE_HI, 1), q(0x3FFE_FFFF_FFFF_FFFF, 0xFFFF_FFFF_FFFF_FFFE), q(SIGN | ONE_HI, 0), &s), 0xBF1F_0000_0000_0000, 0);
+	check_q(primitive_value::f128_mul_add(q(ONE_HI, 1), q(0x3FFE_FFFF_FFFF_FFFF, 0xFFFF_FFFF_FFFF_FFFE), q(SIGN | ONE_HI, 0), &s), 0xBF1F_0000_0000_0000, 0);
 	check_status(s, false, false, false, false, false);
 	// 1 * 1 - 1 = +0
-	check_q(float_value::f128_mul_add(one, one, q(SIGN | ONE_HI, 0)), 0, 0);
+	check_q(primitive_value::f128_mul_add(one, one, q(SIGN | ONE_HI, 0)), 0, 0);
 	// Zig 0.17.0 quirk: fma(2^60, 2^60, -2^120) = 2^-16374 (ldexp(0, 122) bug)
 	F128Bits two60 = q(0x403B_0000_0000_0000, 0);
-	check_q(float_value::f128_mul_add(two60, two60, q(0xC077_0000_0000_0000, 0)), 0x0009_0000_0000_0000, 0);
+	check_q(primitive_value::f128_mul_add(two60, two60, q(0xC077_0000_0000_0000, 0)), 0x0009_0000_0000_0000, 0);
 	// specials: inf * 0 + x -> default NaN; finite * finite + sNaN returns the sNaN unchanged
 	s = {};
-	check_q(float_value::f128_mul_add(q(INF_HI, 0), q(0, 0), one, &s), 0x7FFF_8000_0000_0000, 0);
+	check_q(primitive_value::f128_mul_add(q(INF_HI, 0), q(0, 0), one, &s), 0x7FFF_8000_0000_0000, 0);
 	assert(s.invalid);
-	check_q(float_value::f128_mul_add(one, one, q(0x7FFF_0000_0000_0000, 7)), 0x7FFF_0000_0000_0000, 7);
+	check_q(primitive_value::f128_mul_add(one, one, q(0x7FFF_0000_0000_0000, 7)), 0x7FFF_0000_0000_0000, 7);
 	// z == 0: plain product (sign of x*y)
-	check_q(float_value::f128_mul_add(q(SIGN | ONE_HI, 0), one, q(0, 0)), SIGN | ONE_HI, 0);
+	check_q(primitive_value::f128_mul_add(q(SIGN | ONE_HI, 0), one, q(0, 0)), SIGN | ONE_HI, 0);
 }
 
 // =============================================================================
@@ -452,23 +453,23 @@ fn void f80_basics() @test
 	FloatStatus s;
 	F80Bits one = x(0x3FFF, 0x8000_0000_0000_0000);
 	F80Bits three = x(0x4000, 0xC000_0000_0000_0000);
-	check_x(float_value::f80_add(one, one), 0x4000, 0x8000_0000_0000_0000);
-	check_x(float_value::f80_div(one, three, &s), 0x3FFD, 0xAAAA_AAAA_AAAA_AAAB);
+	check_x(primitive_value::f80_add(one, one), 0x4000, 0x8000_0000_0000_0000);
+	check_x(primitive_value::f80_div(one, three, &s), 0x3FFD, 0xAAAA_AAAA_AAAA_AAAB);
 	check_status(s, false, false, false, false, true);
-	check_x(float_value::f80_sub(one, one), 0, 0);
-	check_x(float_value::f80_mul(x(0x8000, 0), one), 0x8000, 0);
+	check_x(primitive_value::f80_sub(one, one), 0, 0);
+	check_x(primitive_value::f80_mul(x(0x8000, 0), one), 0x8000, 0);
 	// 1 + 2^-64 is a tie -> 1; (1 + 2^-63) + 2^-64 -> 1 + 2^-62
-	check_x(float_value::f80_add(one, x(0x3FBF, 0x8000_0000_0000_0000)), 0x3FFF, 0x8000_0000_0000_0000);
-	check_x(float_value::f80_add(x(0x3FFF, 0x8000_0000_0000_0001), x(0x3FBF, 0x8000_0000_0000_0000)), 0x3FFF, 0x8000_0000_0000_0002);
+	check_x(primitive_value::f80_add(one, x(0x3FBF, 0x8000_0000_0000_0000)), 0x3FFF, 0x8000_0000_0000_0000);
+	check_x(primitive_value::f80_add(x(0x3FFF, 0x8000_0000_0000_0001), x(0x3FBF, 0x8000_0000_0000_0000)), 0x3FFF, 0x8000_0000_0000_0002);
 	// overflow, division by zero
 	s = {};
-	check_x(float_value::f80_mul(x(0x7FFE, ALL), x(0x4000, 0x8000_0000_0000_0000), &s), 0x7FFF, 0x8000_0000_0000_0000);
+	check_x(primitive_value::f80_mul(x(0x7FFE, ALL), x(0x4000, 0x8000_0000_0000_0000), &s), 0x7FFF, 0x8000_0000_0000_0000);
 	assert(s.overflow);
 	s = {};
-	check_x(float_value::f80_div(x(0xBFFF, 0x8000_0000_0000_0000), x(0, 0), &s), 0xFFFF, 0x8000_0000_0000_0000);
+	check_x(primitive_value::f80_div(x(0xBFFF, 0x8000_0000_0000_0000), x(0, 0), &s), 0xFFFF, 0x8000_0000_0000_0000);
 	assert(s.div_by_zero);
 	// subnormal results
-	check_x(float_value::f80_mul(x(0x0001, 0x8000_0000_0000_0000), x(0x3FFE, 0x8000_0000_0000_0000)), 0x0000, 0x4000_0000_0000_0000);
+	check_x(primitive_value::f80_mul(x(0x0001, 0x8000_0000_0000_0000), x(0x3FFE, 0x8000_0000_0000_0000)), 0x0000, 0x4000_0000_0000_0000);
 }
 
 fn void f80_nan_rules() @test
@@ -476,38 +477,38 @@ fn void f80_nan_rules() @test
 	FloatStatus s;
 	F80Bits one = x(0x3FFF, 0x8000_0000_0000_0000);
 	// invalid operations -> negative real indefinite (Zig 0.17.0: ffffc000..)
-	check_x(float_value::f80_div(x(0, 0), x(0, 0), &s), 0xFFFF, 0xC000_0000_0000_0000);
+	check_x(primitive_value::f80_div(x(0, 0), x(0, 0), &s), 0xFFFF, 0xC000_0000_0000_0000);
 	assert(s.invalid);
-	check_x(float_value::f80_add(x(0x7FFF, 0x8000_0000_0000_0000), x(0xFFFF, 0x8000_0000_0000_0000)), 0xFFFF, 0xC000_0000_0000_0000);
-	check_x(float_value::f80_mul(x(0x7FFF, 0x8000_0000_0000_0000), x(0, 0)), 0xFFFF, 0xC000_0000_0000_0000);
+	check_x(primitive_value::f80_add(x(0x7FFF, 0x8000_0000_0000_0000), x(0xFFFF, 0x8000_0000_0000_0000)), 0xFFFF, 0xC000_0000_0000_0000);
+	check_x(primitive_value::f80_mul(x(0x7FFF, 0x8000_0000_0000_0000), x(0, 0)), 0xFFFF, 0xC000_0000_0000_0000);
 	// Zig 0.17.0 x87 NaN selection
 	F80Bits q1 = x(0x7FFF, 0xC000_0000_0000_0005);
 	F80Bits q2 = x(0xFFFF, 0xC000_0000_0000_0009);
 	F80Bits s1 = x(0x7FFF, 0x8000_0000_0000_0009);
 	F80Bits q1n = x(0xFFFF, 0xC000_0000_0000_0005);
-	check_x(float_value::f80_add(q1, q2), 0xFFFF, 0xC000_0000_0000_0009); // larger significand
-	check_x(float_value::f80_div(q2, q1), 0xFFFF, 0xC000_0000_0000_0009);
-	check_x(float_value::f80_sub(q1n, q1), 0x7FFF, 0xC000_0000_0000_0005); // equal: positive wins
-	check_x(float_value::f80_mul(q1n, q1), 0x7FFF, 0xC000_0000_0000_0005);
-	check_x(float_value::f80_add(s1, q1), 0x7FFF, 0xC000_0000_0000_0005); // quiet beats signaling
+	check_x(primitive_value::f80_add(q1, q2), 0xFFFF, 0xC000_0000_0000_0009); // larger significand
+	check_x(primitive_value::f80_div(q2, q1), 0xFFFF, 0xC000_0000_0000_0009);
+	check_x(primitive_value::f80_sub(q1n, q1), 0x7FFF, 0xC000_0000_0000_0005); // equal: positive wins
+	check_x(primitive_value::f80_mul(q1n, q1), 0x7FFF, 0xC000_0000_0000_0005);
+	check_x(primitive_value::f80_add(s1, q1), 0x7FFF, 0xC000_0000_0000_0005); // quiet beats signaling
 	s = {};
-	check_x(float_value::f80_sub(one, s1, &s), 0x7FFF, 0xC000_0000_0000_0009); // quieted, sign kept
+	check_x(primitive_value::f80_sub(one, s1, &s), 0x7FFF, 0xC000_0000_0000_0009); // quieted, sign kept
 	assert(s.invalid);
-	check_x(float_value::f80_sub(one, q1n), 0xFFFF, 0xC000_0000_0000_0005); // fsub keeps the NaN sign
+	check_x(primitive_value::f80_sub(one, q1n), 0xFFFF, 0xC000_0000_0000_0005); // fsub keeps the NaN sign
 	// unnormal / pseudo-infinity operands are invalid even next to a NaN
 	F80Bits un = x(0x3FFF, 0x4000_0000_0000_0000);
-	check_x(float_value::f80_add(un, one), 0xFFFF, 0xC000_0000_0000_0000);
-	check_x(float_value::f80_add(q1, un), 0xFFFF, 0xC000_0000_0000_0000);
-	check_x(float_value::f80_add(x(0x7FFF, 0), one), 0xFFFF, 0xC000_0000_0000_0000);
+	check_x(primitive_value::f80_add(un, one), 0xFFFF, 0xC000_0000_0000_0000);
+	check_x(primitive_value::f80_add(q1, un), 0xFFFF, 0xC000_0000_0000_0000);
+	check_x(primitive_value::f80_add(x(0x7FFF, 0), one), 0xFFFF, 0xC000_0000_0000_0000);
 }
 
 fn void f80_pseudo_denormal_operands() @test
 {
 	// Zig 0.17.0: a pseudo-denormal is a valid operand and results are canonical
 	F80Bits pd = x(0x0000, 0x8000_0000_0000_0001);
-	check_x(float_value::f80_add(pd, x(0, 0)), 0x0001, 0x8000_0000_0000_0001);
-	check_x(float_value::f80_mul(pd, x(0x3FFF, 0x8000_0000_0000_0000)), 0x0001, 0x8000_0000_0000_0001);
-	check_x(float_value::f80_sub(pd, pd), 0, 0);
+	check_x(primitive_value::f80_add(pd, x(0, 0)), 0x0001, 0x8000_0000_0000_0001);
+	check_x(primitive_value::f80_mul(pd, x(0x3FFF, 0x8000_0000_0000_0000)), 0x0001, 0x8000_0000_0000_0001);
+	check_x(primitive_value::f80_sub(pd, pd), 0, 0);
 }
 
 // =============================================================================
@@ -524,10 +525,10 @@ fn int run_f128_op(String name, Vec2[] vecs, char op)
 		F128Bits r;
 		switch (op)
 		{
-			case '+': r = float_value::f128_add(a, b);
-			case '-': r = float_value::f128_sub(a, b);
-			case '*': r = float_value::f128_mul(a, b);
-			default: r = float_value::f128_div(a, b);
+			case '+': r = primitive_value::f128_add(a, b);
+			case '-': r = primitive_value::f128_sub(a, b);
+			case '*': r = primitive_value::f128_mul(a, b);
+			default: r = primitive_value::f128_div(a, b);
 		}
 		if (r.hi != v.rh || r.lo != v.rl)
 		{
@@ -549,10 +550,10 @@ fn int run_f80_op(String name, Vec2[] vecs, char op)
 		F80Bits r;
 		switch (op)
 		{
-			case '+': r = float_value::f80_add(a, b);
-			case '-': r = float_value::f80_sub(a, b);
-			case '*': r = float_value::f80_mul(a, b);
-			default: r = float_value::f80_div(a, b);
+			case '+': r = primitive_value::f80_add(a, b);
+			case '-': r = primitive_value::f80_sub(a, b);
+			case '*': r = primitive_value::f80_mul(a, b);
+			default: r = primitive_value::f80_div(a, b);
 		}
 		if (r.hi != v.rh || r.lo != v.rl)
 		{
@@ -586,7 +587,7 @@ fn void vectors_f128_fma() @test
 	int bad = 0;
 	foreach (i, v : F128_FMA)
 	{
-		F128Bits r = float_value::f128_mul_add(q(v.xh, v.xl), q(v.yh, v.yl), q(v.zh, v.zl));
+		F128Bits r = primitive_value::f128_mul_add(q(v.xh, v.xl), q(v.yh, v.yl), q(v.zh, v.zl));
 		if (r.hi != v.rh || r.lo != v.rl)
 		{
 			bad++;
@@ -597,12 +598,12 @@ fn void vectors_f128_fma() @test
 	check(bad, 0);
 }
 
-fn int run_to_f128(String name, Vec1[] vecs, InternerKeyTag tag)
+fn int run_to_f128(String name, Vec1[] vecs, PrimitiveType tag)
 {
 	int bad = 0;
 	foreach (i, v : vecs)
 	{
-		InternerKey a = float_value::from_raw(tag, (uint128)v.ah << 64 | (uint128)v.al);
+		PrimitiveValue a = primitive_value::float_key(tag, (uint128)v.ah << 64 | (uint128)v.al);
 		F128Bits r = a.to_f128();
 		if (r.hi != v.rh || r.lo != v.rl)
 		{
@@ -613,17 +614,17 @@ fn int run_to_f128(String name, Vec1[] vecs, InternerKeyTag tag)
 	return bad;
 }
 
-fn int run_from_f128(String name, Vec1[] vecs, InternerKeyTag tag)
+fn int run_from_f128(String name, Vec1[] vecs, PrimitiveType tag)
 {
 	int bad = 0;
 	foreach (i, v : vecs)
 	{
-		InternerKey r = float_value::from_f128(q(v.ah, v.al), tag);
+		PrimitiveValue r = primitive_value::from_f128(q(v.ah, v.al), tag);
 		uint128 want = (uint128)v.rh << 64 | (uint128)v.rl;
-		if (r.raw() != want)
+		if (r.float_bits() != want)
 		{
 			bad++;
-			io::printfn("%s[%d]: %016x_%016x -> %x, want %04x_%016x", name, i, v.ah, v.al, r.raw(), v.rh, v.rl);
+			io::printfn("%s[%d]: %016x_%016x -> %x, want %04x_%016x", name, i, v.ah, v.al, r.float_bits(), v.rh, v.rl);
 		}
 	}
 	return bad;

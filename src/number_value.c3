@@ -9,8 +9,8 @@
 // Inputs: the NumberLiteralResult from number_literal (or its parts) and the
 // Compilation (langopts.emulate, target.has_int128, type_store, interner).
 // Outputs: NumberValue { qt, val, ... } with interned values (aro::value for
-// integers, value::intern_big for _BitInt, float_value::intern_float /
-// intern_complex for floats).
+// integers, value::intern_big for _BitInt, value::intern for
+// floats and complexes).
 //
 // Diagnostics: Zig reports these through `Parser.err(tok_i, ...)`, which
 // first drops extension diagnostics inside `__extension__` and then reports at
@@ -32,8 +32,9 @@
 //   is value::NONE there. Imaginary integers keep the int_literal value
 //   (fixedSizeInt / bitInt call putValue before the wrap).
 module aro::number_value;
+import aro::primitive_value;
 import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::type_store;
-import aro::value, aro::value_interner, aro::float_value, aro::bigint;
+import aro::value, aro::value_interner, aro::bigint;
 import aro::number_literal, aro::text_literal;
 
 <*
@@ -296,10 +297,10 @@ fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix
 
 <*
  Zig `Parser.parseFloat`: qt = float_suffix_type(suffix); strip '\''
- separators; float_value::parse_f128; on failure (only `0x.p1`-style hex
+ separators; primitive_value::parse_f128; on failure (only `0x.p1`-style hex
  floats without significand digits, where Zig's `catch unreachable` panics)
  push the C3-only HEX_FLOAT_NO_SIGNIFICAND error and use +0.0;
- cast to the InternerKeyTag of qt.bit_sizeof (16 -> F16 — also for __bf16, as in
+ cast to the PrimitiveType of qt.bit_sizeof (16 -> F16 — also for __bf16, as in
  Zig —, 32, 64, 80, 128; decimal floats use the binary width too); intern.
  Imaginary: push GNU_IMAGINARY_CONSTANT, qt = to_complex, val = complex
  {+0.0, x} at the same width, is_imaginary = true, literal_val = NONE (see
@@ -309,7 +310,7 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 {
 	QualType qt = float_suffix_type(comp, suffix);
 	String digits = strip_separators(comp, bytes);
-	F128Bits? parsed = float_value::parse_f128(digits);
+	F128Bits? parsed = primitive_value::parse_f128(digits);
 	free_stripped(comp, bytes, digits);
 	NumberValue res;
 	F128Bits bits;
@@ -323,9 +324,9 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 		res.diags.push(HEX_FLOAT_NO_SIGNIFICAND);
 	}
 
-	InternerKeyTag tag = float_value::width_of(qt, comp);
-	InternerKey f = float_value::f128_value(bits).cast(tag);
-	Value val = float_value::intern_float(f, comp);
+	PrimitiveType tag = value::width_of(qt, comp);
+	PrimitiveValue f = primitive_value::f128_value(bits).cast(tag);
+	Value val = value::intern(comp, f);
 
 	res.qt = qt;
 	res.literal_qt = qt;
@@ -335,8 +336,8 @@ fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 	{
 		res.diags.push(GNU_IMAGINARY_CONSTANT);
 		res.qt = qt.to_complex(comp);
-		InternerKey re = float_value::zero(tag);
-		res.val = float_value::intern_complex(float_value::make_complex(re, f), comp);
+		PrimitiveValue re = primitive_value::zero(tag);
+		res.val = value::intern(comp, primitive_value::complex_key(re, f));
 		res.literal_val = value::NONE;
 		res.is_imaginary = true;
 	}

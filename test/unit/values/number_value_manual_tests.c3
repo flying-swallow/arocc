@@ -3,7 +3,8 @@
 // "manual" until 11.1's syntax parser is merged; the integrator should drop
 // the tag then. Expected values: see number_value_tests.c3 for the labels.
 module number_value_manual_tests;
-import aro::number_value, aro::number_literal, aro::value, aro::value_interner, aro::float_value;
+import aro::primitive_value;
+import aro::number_value, aro::number_literal, aro::value, aro::value_interner;
 import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts;
 import std::io, std::core::mem::allocators;
 
@@ -70,7 +71,7 @@ fn void end_to_end() @test
 		v = tok(comp, "0b1001'0110");
 		check(v.val.to_u64(comp)!!, 150);
 		v = tok(comp, "0x1.ep-1");
-		InternerKey k = comp.interner.get(v.val.ref());
+		PrimitiveValue k = comp.interner.get(v.val.ref());
 		check(k.float_val.f64(), 0x3FEE_0000_0000_0000);
 		// [fixture float types.c]
 		assert(tok(comp, "1.0bf16").qt == type_store::BF16);

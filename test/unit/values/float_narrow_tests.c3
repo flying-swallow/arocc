@@ -1,5 +1,5 @@
 // Tests for src/float_soft_narrow.c3 (plan 10, agent 10.1 `narrow-float`):
-// f16/f32/f64 + - * / and the width-generic InternerKey.ilogb / scalbn / max.
+// f16/f32/f64 + - * / and the width-generic PrimitiveValue.ilogb / scalbn / max.
 //
 // Provenance of expected values:
 //   - The *_TABLE constants at the end of this file are OBSERVED: they were
@@ -23,27 +23,28 @@
 //   - The hand-written tests are SOURCE-DERIVED from the IEEE 754 rules (round to
 //     nearest, ties to even), from the Zig 0.17.0 test blocks of
 //     lib/std/math/ldexp.zig / ilogb.zig, or from the NaN rules of
-//     src/float_value.c3; each says which.
+//     src/primitive_float.c3; each says which.
 module float_narrow_tests;
-import aro::float_value, aro::value_interner;
+import aro::primitive_value;
+import aro::value_interner;
 
 struct F16ArithRow { ushort a; ushort b; ushort add; ushort sub; ushort mul; ushort div; }
 struct F32ArithRow { uint a; uint b; uint add; uint sub; uint mul; uint div; }
 struct F64ArithRow { ulong a; ulong b; ulong add; ulong sub; ulong mul; ulong div; }
-struct IlogbRow { InternerKeyTag w; ulong hi; ulong lo; long r; }
-struct ScalbnRow { InternerKeyTag w; ulong hi; ulong lo; long n; ulong r_hi; ulong r_lo; }
-struct MaxRow { InternerKeyTag w; ulong a_hi; ulong a_lo; ulong b_hi; ulong b_lo; ulong r_hi; ulong r_lo; }
+struct IlogbRow { PrimitiveType w; ulong hi; ulong lo; long r; }
+struct ScalbnRow { PrimitiveType w; ulong hi; ulong lo; long n; ulong r_hi; ulong r_lo; }
+struct MaxRow { PrimitiveType w; ulong a_hi; ulong a_lo; ulong b_hi; ulong b_lo; ulong r_hi; ulong r_lo; }
 
 macro check(left, right)
 {
 	test::eq((ulong)left, (ulong)right);
 }
 
-fn InternerKey kf(InternerKeyTag w, ulong hi, ulong lo) => float_value::from_raw(w, (uint128)hi << 64 | (uint128)lo);
+fn PrimitiveValue kf(PrimitiveType w, ulong hi, ulong lo) => primitive_value::float_key(w, (uint128)hi << 64 | (uint128)lo);
 
-fn void check_kf(InternerKey f, ulong hi, ulong lo)
+fn void check_kf(PrimitiveValue f, ulong hi, ulong lo)
 {
-	uint128 r = f.raw();
+	uint128 r = f.float_bits();
 	check((ulong)(r >> 64), hi);
 	check((ulong)r, lo);
 }
@@ -56,10 +57,10 @@ fn void f16_table() @test
 {
 	foreach (r : F16_TABLE)
 	{
-		assert(float_value::f16_add(r.a, r.b) == r.add, "f16 %x + %x", r.a, r.b);
-		assert(float_value::f16_sub(r.a, r.b) == r.sub, "f16 %x - %x", r.a, r.b);
-		assert(float_value::f16_mul(r.a, r.b) == r.mul, "f16 %x * %x", r.a, r.b);
-		assert(float_value::f16_div(r.a, r.b) == r.div, "f16 %x / %x", r.a, r.b);
+		assert(primitive_value::f16_add(r.a, r.b) == r.add, "f16 %x + %x", r.a, r.b);
+		assert(primitive_value::f16_sub(r.a, r.b) == r.sub, "f16 %x - %x", r.a, r.b);
+		assert(primitive_value::f16_mul(r.a, r.b) == r.mul, "f16 %x * %x", r.a, r.b);
+		assert(primitive_value::f16_div(r.a, r.b) == r.div, "f16 %x / %x", r.a, r.b);
 	}
 }
 
@@ -67,10 +68,10 @@ fn void f32_table() @test
 {
 	foreach (r : F32_TABLE)
 	{
-		assert(float_value::f32_add(r.a, r.b) == r.add, "f32 %x + %x", r.a, r.b);
-		assert(float_value::f32_sub(r.a, r.b) == r.sub, "f32 %x - %x", r.a, r.b);
-		assert(float_value::f32_mul(r.a, r.b) == r.mul, "f32 %x * %x", r.a, r.b);
-		assert(float_value::f32_div(r.a, r.b) == r.div, "f32 %x / %x", r.a, r.b);
+		assert(primitive_value::f32_add(r.a, r.b) == r.add, "f32 %x + %x", r.a, r.b);
+		assert(primitive_value::f32_sub(r.a, r.b) == r.sub, "f32 %x - %x", r.a, r.b);
+		assert(primitive_value::f32_mul(r.a, r.b) == r.mul, "f32 %x * %x", r.a, r.b);
+		assert(primitive_value::f32_div(r.a, r.b) == r.div, "f32 %x / %x", r.a, r.b);
 	}
 }
 
@@ -78,10 +79,10 @@ fn void f64_table() @test
 {
 	foreach (r : F64_TABLE)
 	{
-		assert(float_value::f64_add(r.a, r.b) == r.add, "f64 %x + %x", r.a, r.b);
-		assert(float_value::f64_sub(r.a, r.b) == r.sub, "f64 %x - %x", r.a, r.b);
-		assert(float_value::f64_mul(r.a, r.b) == r.mul, "f64 %x * %x", r.a, r.b);
-		assert(float_value::f64_div(r.a, r.b) == r.div, "f64 %x / %x", r.a, r.b);
+		assert(primitive_value::f64_add(r.a, r.b) == r.add, "f64 %x + %x", r.a, r.b);
+		assert(primitive_value::f64_sub(r.a, r.b) == r.sub, "f64 %x - %x", r.a, r.b);
+		assert(primitive_value::f64_mul(r.a, r.b) == r.mul, "f64 %x * %x", r.a, r.b);
+		assert(primitive_value::f64_div(r.a, r.b) == r.div, "f64 %x / %x", r.a, r.b);
 	}
 }
 
@@ -98,7 +99,7 @@ fn void scalbn_table() @test
 {
 	foreach (r : SCALBN_TABLE)
 	{
-		uint128 got = kf(r.w, r.hi, r.lo).scalbn((int)r.n).raw();
+		uint128 got = kf(r.w, r.hi, r.lo).scalbn((int)r.n).float_bits();
 		uint128 want = (uint128)r.r_hi << 64 | (uint128)r.r_lo;
 		assert(got == want, "scalbn %s %x:%x, %d = %x:%x", r.w, r.hi, r.lo, r.n, (ulong)(got >> 64), (ulong)got);
 	}
@@ -108,7 +109,7 @@ fn void max_table() @test
 {
 	foreach (r : MAX_TABLE)
 	{
-		uint128 got = kf(r.w, r.a_hi, r.a_lo).max(kf(r.w, r.b_hi, r.b_lo)).raw();
+		uint128 got = kf(r.w, r.a_hi, r.a_lo).max(kf(r.w, r.b_hi, r.b_lo)).float_bits();
 		uint128 want = (uint128)r.r_hi << 64 | (uint128)r.r_lo;
 		assert(got == want, "max %s %x:%x %x:%x", r.w, r.a_hi, r.a_lo, r.b_hi, r.b_lo);
 	}
@@ -120,17 +121,17 @@ fn void max_table() @test
 
 fn void rounding_ties() @test
 {
-	check(float_value::f16_add(0x3C00, 0x1000), 0x3C00);   // 1 + 2^-11: tie -> even (1.0)
-	check(float_value::f16_add(0x3C01, 0x1000), 0x3C02);   // (1 + 2^-10) + 2^-11: tie -> even (up)
-	check(float_value::f16_sub(0x3C00, 0x0C00), 0x3C00);   // 1 - 2^-12: tie between 1-2^-11 and 1 -> even (1.0)
-	check(float_value::f16_div(0x3C00, 0x4200), 0x3555);   // 1 / 3
-	check(float_value::f32_add(0x3F80_0000, 0x3380_0000), 0x3F80_0000); // 1 + 2^-24: tie -> 1.0
-	check(float_value::f32_add(0x3F80_0001, 0x3380_0000), 0x3F80_0002); // tie -> even (up)
-	check(float_value::f32_mul(0x3F80_0001, 0x3F80_0001), 0x3F80_0002); // (1+u)^2 = 1+2u+u^2 -> 1+2u
-	check(float_value::f64_add(0x3FF0_0000_0000_0000, 0x3CA0_0000_0000_0000), 0x3FF0_0000_0000_0000);
-	check(float_value::f64_add(0x3FF0_0000_0000_0001, 0x3CA0_0000_0000_0000), 0x3FF0_0000_0000_0002);
-	check(float_value::f64_add(0x3FB9_9999_9999_999A, 0x3FC9_9999_9999_999A), 0x3FD3_3333_3333_3334); // 0.1 + 0.2
-	check(float_value::f64_div(0x3FF0_0000_0000_0000, 0x4008_0000_0000_0000), 0x3FD5_5555_5555_5555); // 1 / 3
+	check(primitive_value::f16_add(0x3C00, 0x1000), 0x3C00);   // 1 + 2^-11: tie -> even (1.0)
+	check(primitive_value::f16_add(0x3C01, 0x1000), 0x3C02);   // (1 + 2^-10) + 2^-11: tie -> even (up)
+	check(primitive_value::f16_sub(0x3C00, 0x0C00), 0x3C00);   // 1 - 2^-12: tie between 1-2^-11 and 1 -> even (1.0)
+	check(primitive_value::f16_div(0x3C00, 0x4200), 0x3555);   // 1 / 3
+	check(primitive_value::f32_add(0x3F80_0000, 0x3380_0000), 0x3F80_0000); // 1 + 2^-24: tie -> 1.0
+	check(primitive_value::f32_add(0x3F80_0001, 0x3380_0000), 0x3F80_0002); // tie -> even (up)
+	check(primitive_value::f32_mul(0x3F80_0001, 0x3F80_0001), 0x3F80_0002); // (1+u)^2 = 1+2u+u^2 -> 1+2u
+	check(primitive_value::f64_add(0x3FF0_0000_0000_0000, 0x3CA0_0000_0000_0000), 0x3FF0_0000_0000_0000);
+	check(primitive_value::f64_add(0x3FF0_0000_0000_0001, 0x3CA0_0000_0000_0000), 0x3FF0_0000_0000_0002);
+	check(primitive_value::f64_add(0x3FB9_9999_9999_999A, 0x3FC9_9999_9999_999A), 0x3FD3_3333_3333_3334); // 0.1 + 0.2
+	check(primitive_value::f64_div(0x3FF0_0000_0000_0000, 0x4008_0000_0000_0000), 0x3FD5_5555_5555_5555); // 1 / 3
 }
 
 // ---------------------------------------------------------------------------
@@ -139,88 +140,88 @@ fn void rounding_ties() @test
 
 fn void overflow_and_underflow() @test
 {
-	check(float_value::f16_add(0x7BFF, 0x7BFF), 0x7C00);   // 65504 + 65504 = +inf
-	check(float_value::f16_mul(0xFBFF, 0x4000), 0xFC00);   // -65504 * 2 = -inf
-	check(float_value::f16_add(0x7BFF, 0x4B80), 0x7BFF);   // 65504 + 15 < 65520: stays HALF_MAX
-	check(float_value::f16_add(0x7BFF, 0x4C00), 0x7C00);   // 65504 + 16 = 65520: tie between HALF_MAX and 2^16, even -> +inf
-	check(float_value::f32_mul(0x7F7F_FFFF, 0x4000_0000), 0x7F80_0000);
-	check(float_value::f64_mul(0x7FEF_FFFF_FFFF_FFFF, 0x4000_0000_0000_0000), 0x7FF0_0000_0000_0000);
-	check(float_value::f64_div(0x7FEF_FFFF_FFFF_FFFF, 0x3FE0_0000_0000_0000), 0x7FF0_0000_0000_0000);
+	check(primitive_value::f16_add(0x7BFF, 0x7BFF), 0x7C00);   // 65504 + 65504 = +inf
+	check(primitive_value::f16_mul(0xFBFF, 0x4000), 0xFC00);   // -65504 * 2 = -inf
+	check(primitive_value::f16_add(0x7BFF, 0x4B80), 0x7BFF);   // 65504 + 15 < 65520: stays HALF_MAX
+	check(primitive_value::f16_add(0x7BFF, 0x4C00), 0x7C00);   // 65504 + 16 = 65520: tie between HALF_MAX and 2^16, even -> +inf
+	check(primitive_value::f32_mul(0x7F7F_FFFF, 0x4000_0000), 0x7F80_0000);
+	check(primitive_value::f64_mul(0x7FEF_FFFF_FFFF_FFFF, 0x4000_0000_0000_0000), 0x7FF0_0000_0000_0000);
+	check(primitive_value::f64_div(0x7FEF_FFFF_FFFF_FFFF, 0x3FE0_0000_0000_0000), 0x7FF0_0000_0000_0000);
 	// Underflow to subnormal and to zero (no flush to zero, no DAZ)
-	check(float_value::f16_div(0x0400, 0x4000), 0x0200);   // HALF_MIN / 2
-	check(float_value::f16_mul(0x0001, 0x3800), 0x0000);   // min subnormal * 0.5: tie -> +0
-	check(float_value::f16_mul(0x0003, 0x3800), 0x0002);   // 1.5 ulp: tie -> even
-	check(float_value::f16_mul(0x8001, 0x3800), 0x8000);   // -min subnormal * 0.5 -> -0
-	check(float_value::f32_div(0x0080_0000, 0x4000_0000), 0x0040_0000);
-	check(float_value::f32_mul(0x0000_0001, 0x3F00_0000), 0);
-	check(float_value::f32_mul(0x0000_0003, 0x3F00_0000), 2);
-	check(float_value::f32_add(0x0000_0001, 0x0000_0001), 2);
-	check(float_value::f32_sub(0x0080_0000, 0x007F_FFFF), 1); // FLT_MIN - largest subnormal = min subnormal
-	check(float_value::f64_div(0x0010_0000_0000_0000, 0x4000_0000_0000_0000), 0x0008_0000_0000_0000);
-	check(float_value::f64_mul(0x0000_0000_0000_0003, 0x3FE0_0000_0000_0000), 2);
-	check(float_value::f64_mul(0x8000_0000_0000_0001, 0x3FE0_0000_0000_0000), 0x8000_0000_0000_0000);
+	check(primitive_value::f16_div(0x0400, 0x4000), 0x0200);   // HALF_MIN / 2
+	check(primitive_value::f16_mul(0x0001, 0x3800), 0x0000);   // min subnormal * 0.5: tie -> +0
+	check(primitive_value::f16_mul(0x0003, 0x3800), 0x0002);   // 1.5 ulp: tie -> even
+	check(primitive_value::f16_mul(0x8001, 0x3800), 0x8000);   // -min subnormal * 0.5 -> -0
+	check(primitive_value::f32_div(0x0080_0000, 0x4000_0000), 0x0040_0000);
+	check(primitive_value::f32_mul(0x0000_0001, 0x3F00_0000), 0);
+	check(primitive_value::f32_mul(0x0000_0003, 0x3F00_0000), 2);
+	check(primitive_value::f32_add(0x0000_0001, 0x0000_0001), 2);
+	check(primitive_value::f32_sub(0x0080_0000, 0x007F_FFFF), 1); // FLT_MIN - largest subnormal = min subnormal
+	check(primitive_value::f64_div(0x0010_0000_0000_0000, 0x4000_0000_0000_0000), 0x0008_0000_0000_0000);
+	check(primitive_value::f64_mul(0x0000_0000_0000_0003, 0x3FE0_0000_0000_0000), 2);
+	check(primitive_value::f64_mul(0x8000_0000_0000_0001, 0x3FE0_0000_0000_0000), 0x8000_0000_0000_0000);
 }
 
 fn void signed_zero() @test
 {
-	check(float_value::f16_add(0x8000, 0x8000), 0x8000);   // -0 + -0 = -0
-	check(float_value::f16_add(0x0000, 0x8000), 0x0000);   // +0 + -0 = +0
-	check(float_value::f16_sub(0x8000, 0x0000), 0x8000);   // -0 - +0 = -0
-	check(float_value::f16_sub(0x3C00, 0x3C00), 0x0000);   // 1 - 1 = +0
-	check(float_value::f32_mul(0xBF80_0000, 0x0000_0000), 0x8000_0000); // -1 * +0 = -0
-	check(float_value::f32_div(0x0000_0000, 0xBF80_0000), 0x8000_0000); // +0 / -1 = -0
-	check(float_value::f32_div(0x3F80_0000, 0x8000_0000), 0xFF80_0000); // 1 / -0 = -inf
-	check(float_value::f64_add(0x8000_0000_0000_0000, 0x8000_0000_0000_0000), 0x8000_0000_0000_0000);
-	check(float_value::f64_add(0x8000_0000_0000_0000, 0), 0);           // -0 + +0 = +0
-	check(float_value::f64_sub(0xBFF0_0000_0000_0000, 0xBFF0_0000_0000_0000), 0); // -1 - -1 = +0
+	check(primitive_value::f16_add(0x8000, 0x8000), 0x8000);   // -0 + -0 = -0
+	check(primitive_value::f16_add(0x0000, 0x8000), 0x0000);   // +0 + -0 = +0
+	check(primitive_value::f16_sub(0x8000, 0x0000), 0x8000);   // -0 - +0 = -0
+	check(primitive_value::f16_sub(0x3C00, 0x3C00), 0x0000);   // 1 - 1 = +0
+	check(primitive_value::f32_mul(0xBF80_0000, 0x0000_0000), 0x8000_0000); // -1 * +0 = -0
+	check(primitive_value::f32_div(0x0000_0000, 0xBF80_0000), 0x8000_0000); // +0 / -1 = -0
+	check(primitive_value::f32_div(0x3F80_0000, 0x8000_0000), 0xFF80_0000); // 1 / -0 = -inf
+	check(primitive_value::f64_add(0x8000_0000_0000_0000, 0x8000_0000_0000_0000), 0x8000_0000_0000_0000);
+	check(primitive_value::f64_add(0x8000_0000_0000_0000, 0), 0);           // -0 + +0 = +0
+	check(primitive_value::f64_sub(0xBFF0_0000_0000_0000, 0xBFF0_0000_0000_0000), 0); // -1 - -1 = +0
 }
 
 // ---------------------------------------------------------------------------
-// NaN rules (source-derived from float_value.c3; DEFAULT_NAN_* constants)
+// NaN rules (source-derived from primitive_float.c3; DEFAULT_NAN_* constants)
 // ---------------------------------------------------------------------------
 
 fn void invalid_operations_give_default_nan() @test
 {
-	check(float_value::f16_div(0x0000, 0x0000), float_value::DEFAULT_NAN_F16);
-	check(float_value::f16_sub(0x7C00, 0x7C00), float_value::DEFAULT_NAN_F16);  // inf - inf
-	check(float_value::f16_add(0x7C00, 0xFC00), float_value::DEFAULT_NAN_F16);  // inf + -inf
-	check(float_value::f16_mul(0x8000, 0xFC00), float_value::DEFAULT_NAN_F16);  // -0 * -inf
-	check(float_value::f16_div(0xFC00, 0x7C00), float_value::DEFAULT_NAN_F16);  // -inf / inf
-	check(float_value::f32_div(0x8000_0000, 0x0000_0000), float_value::DEFAULT_NAN_F32);
-	check(float_value::f32_sub(0xFF80_0000, 0xFF80_0000), float_value::DEFAULT_NAN_F32);
-	check(float_value::f32_mul(0x7F80_0000, 0x0000_0000), float_value::DEFAULT_NAN_F32);
-	check(float_value::f64_div(0, 0), float_value::DEFAULT_NAN_F64);
-	check(float_value::f64_add(0x7FF0_0000_0000_0000, 0xFFF0_0000_0000_0000), float_value::DEFAULT_NAN_F64);
-	check(float_value::f64_mul(0x8000_0000_0000_0000, 0x7FF0_0000_0000_0000), float_value::DEFAULT_NAN_F64);
+	check(primitive_value::f16_div(0x0000, 0x0000), primitive_value::DEFAULT_NAN_F16);
+	check(primitive_value::f16_sub(0x7C00, 0x7C00), primitive_value::DEFAULT_NAN_F16);  // inf - inf
+	check(primitive_value::f16_add(0x7C00, 0xFC00), primitive_value::DEFAULT_NAN_F16);  // inf + -inf
+	check(primitive_value::f16_mul(0x8000, 0xFC00), primitive_value::DEFAULT_NAN_F16);  // -0 * -inf
+	check(primitive_value::f16_div(0xFC00, 0x7C00), primitive_value::DEFAULT_NAN_F16);  // -inf / inf
+	check(primitive_value::f32_div(0x8000_0000, 0x0000_0000), primitive_value::DEFAULT_NAN_F32);
+	check(primitive_value::f32_sub(0xFF80_0000, 0xFF80_0000), primitive_value::DEFAULT_NAN_F32);
+	check(primitive_value::f32_mul(0x7F80_0000, 0x0000_0000), primitive_value::DEFAULT_NAN_F32);
+	check(primitive_value::f64_div(0, 0), primitive_value::DEFAULT_NAN_F64);
+	check(primitive_value::f64_add(0x7FF0_0000_0000_0000, 0xFFF0_0000_0000_0000), primitive_value::DEFAULT_NAN_F64);
+	check(primitive_value::f64_mul(0x8000_0000_0000_0000, 0x7FF0_0000_0000_0000), primitive_value::DEFAULT_NAN_F64);
 	// The constants themselves (x86 SSE default NaN, negative)
-	check(float_value::DEFAULT_NAN_F16, 0xFE00);
-	check(float_value::DEFAULT_NAN_F32, 0xFFC0_0000);
-	check(float_value::DEFAULT_NAN_F64, 0xFFF8_0000_0000_0000);
+	check(primitive_value::DEFAULT_NAN_F16, 0xFE00);
+	check(primitive_value::DEFAULT_NAN_F32, 0xFFC0_0000);
+	check(primitive_value::DEFAULT_NAN_F64, 0xFFF8_0000_0000_0000);
 }
 
 fn void nan_operands_propagate() @test
 {
 	// The first NaN operand wins, quieted, with its sign and payload.
-	check(float_value::f16_add(0x7C01, 0x3C00), 0x7E01);   // sNaN + 1
-	check(float_value::f16_sub(0x3C00, 0xFC01), 0xFE01);   // 1 - (-sNaN): sign of the NaN kept, not flipped
-	check(float_value::f16_mul(0xFE42, 0x7E12), 0xFE42);   // two quiet NaNs: lhs
-	check(float_value::f16_div(0x7C05, 0x7E12), 0x7E05);   // sNaN lhs beats qNaN rhs
-	check(float_value::f16_div(0x7E12, 0x7C05), 0x7E12);   // qNaN lhs beats sNaN rhs
-	check(float_value::f32_add(0xFF80_0001, 0x7FC0_0000), 0xFFC0_0001);
-	check(float_value::f32_mul(0x0000_0000, 0x7F80_0123), 0x7FC0_0123); // 0 * NaN = NaN, not invalid
-	check(float_value::f32_div(0x7FC0_0123, 0xFFC0_0042), 0x7FC0_0123);
-	check(float_value::f64_add(0x7FF0_0000_0000_0001, 0x3FF0_0000_0000_0000), 0x7FF8_0000_0000_0001);
-	check(float_value::f64_sub(0x7FF0_0000_0000_0000, 0xFFF0_0000_0000_0007), 0xFFF8_0000_0000_0007); // inf - NaN
-	check(float_value::f64_mul(0xFFF8_0000_0000_0042, 0x7FF8_0000_0000_0123), 0xFFF8_0000_0000_0042);
+	check(primitive_value::f16_add(0x7C01, 0x3C00), 0x7E01);   // sNaN + 1
+	check(primitive_value::f16_sub(0x3C00, 0xFC01), 0xFE01);   // 1 - (-sNaN): sign of the NaN kept, not flipped
+	check(primitive_value::f16_mul(0xFE42, 0x7E12), 0xFE42);   // two quiet NaNs: lhs
+	check(primitive_value::f16_div(0x7C05, 0x7E12), 0x7E05);   // sNaN lhs beats qNaN rhs
+	check(primitive_value::f16_div(0x7E12, 0x7C05), 0x7E12);   // qNaN lhs beats sNaN rhs
+	check(primitive_value::f32_add(0xFF80_0001, 0x7FC0_0000), 0xFFC0_0001);
+	check(primitive_value::f32_mul(0x0000_0000, 0x7F80_0123), 0x7FC0_0123); // 0 * NaN = NaN, not invalid
+	check(primitive_value::f32_div(0x7FC0_0123, 0xFFC0_0042), 0x7FC0_0123);
+	check(primitive_value::f64_add(0x7FF0_0000_0000_0001, 0x3FF0_0000_0000_0000), 0x7FF8_0000_0000_0001);
+	check(primitive_value::f64_sub(0x7FF0_0000_0000_0000, 0xFFF0_0000_0000_0007), 0xFFF8_0000_0000_0007); // inf - NaN
+	check(primitive_value::f64_mul(0xFFF8_0000_0000_0042, 0x7FF8_0000_0000_0123), 0xFFF8_0000_0000_0042);
 }
 
 fn void key_float_dispatch() @test
 {
-	// InternerKey.add/sub/mul/div (float_value.c3) forward to this file for f16/f32/f64.
-	check_kf(float_value::f16_value(0x3C00).add(float_value::f16_value(0x3C00)), 0, 0x4000);
-	check_kf(float_value::f32_value(0x4040_0000).sub(float_value::f32_value(0x3F80_0000)), 0, 0x4000_0000);
-	check_kf(float_value::f64_value(0x4008_0000_0000_0000).mul(float_value::f64_value(0x4000_0000_0000_0000)), 0, 0x4018_0000_0000_0000);
-	check_kf(float_value::f64_value(0).div(float_value::f64_value(0)), 0, 0xFFF8_0000_0000_0000);
+	// PrimitiveValue.add/sub/mul/div (primitive_float.c3) forward to this file for f16/f32/f64.
+	check_kf(primitive_value::f16_value(0x3C00).add(primitive_value::f16_value(0x3C00)), 0, 0x4000);
+	check_kf(primitive_value::f32_value(0x4040_0000).sub(primitive_value::f32_value(0x3F80_0000)), 0, 0x4000_0000);
+	check_kf(primitive_value::f64_value(0x4008_0000_0000_0000).mul(primitive_value::f64_value(0x4000_0000_0000_0000)), 0, 0x4018_0000_0000_0000);
+	check_kf(primitive_value::f64_value(0).div(primitive_value::f64_value(0)), 0, 0xFFF8_0000_0000_0000);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,20 +230,20 @@ fn void key_float_dispatch() @test
 
 fn void ilogb_zig_tests() @test
 {
-	check((long)float_value::f16_value(0x0000).ilogb(), (long)int::min);  // fp_ilogb0
-	check((long)float_value::f16_value(0x3800).ilogb(), -1);              // 0.5
-	check((long)float_value::f16_value(0x4900).ilogb(), 3);               // 10.0
-	check((long)float_value::f16_value(0xFBFF).ilogb(), 15);              // -65504
-	check((long)float_value::f16_value(0x0002).ilogb(), -23);             // 0x1p-23 (subnormal)
-	check((long)float_value::f16_value(0x0001).ilogb(), -24);             // 0x1p-24
-	check((long)float_value::f32_value(0x0000_0001).ilogb(), -149);
-	check((long)float_value::f64_value(0x0000_0000_0000_0001).ilogb(), -1074);
+	check((long)primitive_value::f16_value(0x0000).ilogb(), (long)int::min);  // fp_ilogb0
+	check((long)primitive_value::f16_value(0x3800).ilogb(), -1);              // 0.5
+	check((long)primitive_value::f16_value(0x4900).ilogb(), 3);               // 10.0
+	check((long)primitive_value::f16_value(0xFBFF).ilogb(), 15);              // -65504
+	check((long)primitive_value::f16_value(0x0002).ilogb(), -23);             // 0x1p-23 (subnormal)
+	check((long)primitive_value::f16_value(0x0001).ilogb(), -24);             // 0x1p-24
+	check((long)primitive_value::f32_value(0x0000_0001).ilogb(), -149);
+	check((long)primitive_value::f64_value(0x0000_0000_0000_0001).ilogb(), -1074);
 	check((long)kf(F80, 0, 1).ilogb(), -16445);                           // f80 true min
 	check((long)kf(F80, 0x3FFF, 0x8000_0000_0000_0000).ilogb(), 0);       // 1.0
 	check((long)kf(F128, 0, 1).ilogb(), -16494);                          // f128 true min
-	check((long)float_value::inf(F128, true).ilogb(), (long)int::max);
-	check((long)float_value::std_nan(F80).ilogb(), (long)int::min);       // fp_ilogbnan
-	check((long)float_value::default_nan(F32).ilogb(), (long)int::min);
+	check((long)primitive_value::inf(F128, true).ilogb(), (long)int::max);
+	check((long)primitive_value::std_nan(F80).ilogb(), (long)int::min);       // fp_ilogbnan
+	check((long)primitive_value::default_nan(F32).ilogb(), (long)int::min);
 }
 
 // ---------------------------------------------------------------------------
@@ -252,48 +253,48 @@ fn void ilogb_zig_tests() @test
 fn void scalbn_zig_tests() @test
 {
 	// ldexp(0x1.1FFp14, -14 - 9 - 15) == floatTrueMin(f16) (rounding of a subnormal result)
-	check_kf(float_value::f16_value(0x75FF).scalbn(-14 - 9 - 15), 0, 0x0001);
+	check_kf(primitive_value::f16_value(0x75FF).scalbn(-14 - 9 - 15), 0, 0x0001);
 	// ldexp(0x1.3FFFFFp-1, -126 - 22) == floatTrueMin(f32); the literal rounds to 0x3F20_0000 (tie, even)
-	check_kf(float_value::f32_value(0x3F20_0000).scalbn(-126 - 22), 0, 0x0000_0001);
+	check_kf(primitive_value::f32_value(0x3F20_0000).scalbn(-126 - 22), 0, 0x0000_0001);
 	// ldexp(0x1.7FFFFFFFFFFFFp-1, -1022 - 51) == floatTrueMin(f64)
-	check_kf(float_value::f64_value(0x3FE7_FFFF_FFFF_FFFF).scalbn(-1022 - 51), 0, 1);
+	check_kf(primitive_value::f64_value(0x3FE7_FFFF_FFFF_FFFF).scalbn(-1022 - 51), 0, 1);
 	// ldexp(0x1.7FFFFFFFFFFFFFFEp-1, -16382 - 62) == floatTrueMin(f80)
 	check_kf(kf(F80, 0x3FFE, 0xBFFF_FFFF_FFFF_FFFF).scalbn(-16382 - 62), 0, 1);
 	// ldexp(0x1.7FFF...Fp-1, -16382 - 111) == floatTrueMin(f128)
 	check_kf(kf(F128, 0x3FFE_7FFF_FFFF_FFFF, 0xFFFF_FFFF_FFFF_FFFF).scalbn(-16382 - 111), 0, 1);
 	// ldexp(1.5, 4) == 24.0
-	check_kf(float_value::f32_value(0x3FC0_0000).scalbn(4), 0, 0x41C0_0000);
+	check_kf(primitive_value::f32_value(0x3FC0_0000).scalbn(4), 0, 0x41C0_0000);
 	check_kf(kf(F80, 0x3FFF, 0xC000_0000_0000_0000).scalbn(4), 0x4003, 0xC000_0000_0000_0000);
 	// subnormals -> normals: ldexp(trueMin, fractional_bits) == floatMin
 	check_kf(kf(F80, 0, 1).scalbn(63), 0x0001, 0x8000_0000_0000_0000);
 	check_kf(kf(F128, 0, 1).scalbn(112), 0x0001_0000_0000_0000, 0);
-	check_kf(float_value::f64_value(0x8000_0000_0000_0001).scalbn(52), 0, 0x8010_0000_0000_0000);
+	check_kf(primitive_value::f64_value(0x8000_0000_0000_0001).scalbn(52), 0, 0x8010_0000_0000_0000);
 	// ldexp(EightTimesTrueMin, -2) == TwoTimesTrueMin
-	check_kf(float_value::f16_value(0x0008).scalbn(-2), 0, 0x0002);
+	check_kf(primitive_value::f16_value(0x0008).scalbn(-2), 0, 0x0002);
 	// ldexp(trueMin, -1) == 0 (tie -> even)
-	check_kf(float_value::f32_value(0x0000_0001).scalbn(-1), 0, 0);
+	check_kf(primitive_value::f32_value(0x0000_0001).scalbn(-1), 0, 0);
 	// subnormals -> +-inf: ldexp(+-trueMin, max_exponent + bias + fractional_bits)
-	check_kf(float_value::f16_value(0x8001).scalbn(15 + 15 + 10), 0, 0xFC00);
-	check_kf(float_value::f16_value(0x8001).scalbn(15 + 15 + 10 - 1), 0, 0xF800);
+	check_kf(primitive_value::f16_value(0x8001).scalbn(15 + 15 + 10), 0, 0xFC00);
+	check_kf(primitive_value::f16_value(0x8001).scalbn(15 + 15 + 10 - 1), 0, 0xF800);
 	// extremely large n
 	check_kf(kf(F80, 0x7FFE, 0xFFFF_FFFF_FFFF_FFFF).scalbn(int::max), 0x7FFF, 0x8000_0000_0000_0000);
 	check_kf(kf(F80, 0x7FFE, 0xFFFF_FFFF_FFFF_FFFF).scalbn(int::min), 0, 0);
 	check_kf(kf(F128, 0x7FFE_FFFF_FFFF_FFFF, 0xFFFF_FFFF_FFFF_FFFF).scalbn(-int::max), 0, 0);
-	check_kf(float_value::f64_value(0x8000_0000_0000_0001).scalbn(int::min), 0, 0x8000_0000_0000_0000);
+	check_kf(primitive_value::f64_value(0x8000_0000_0000_0001).scalbn(int::min), 0, 0x8000_0000_0000_0000);
 	// inf and NaN unchanged, also for the Annex G n = -(int::min + 1)
-	check_kf(float_value::inf(F128, true).scalbn(int::max), 0xFFFF_0000_0000_0000, 0);
-	check_kf(float_value::f32_value(0x7F80_0001).scalbn(-(int::min + 1)), 0, 0x7F80_0001); // sNaN not quieted
-	check_kf(float_value::inf(F16).scalbn(int::min), 0, 0x7C00);
+	check_kf(primitive_value::inf(F128, true).scalbn(int::max), 0xFFFF_0000_0000_0000, 0);
+	check_kf(primitive_value::f32_value(0x7F80_0001).scalbn(-(int::min + 1)), 0, 0x7F80_0001); // sNaN not quieted
+	check_kf(primitive_value::inf(F16).scalbn(int::min), 0, 0x7C00);
 }
 
 fn void scalbn_zero_quirk() @test
 {
 	// Observed with Zig 0.17.0 (x86_64): std.math.ldexp(@as(f32, 0.0), 25) is
 	// FLT_MIN and ldexp(0.0, 300) is +inf; the port keeps this.
-	check_kf(float_value::f32_value(0).scalbn(24), 0, 0);
-	check_kf(float_value::f32_value(0).scalbn(25), 0, 0x0080_0000);
-	check_kf(float_value::f32_value(0).scalbn(300), 0, 0x7F80_0000);
-	check_kf(float_value::f32_value(0x8000_0000).scalbn(-5), 0, 0x8000_0000);
+	check_kf(primitive_value::f32_value(0).scalbn(24), 0, 0);
+	check_kf(primitive_value::f32_value(0).scalbn(25), 0, 0x0080_0000);
+	check_kf(primitive_value::f32_value(0).scalbn(300), 0, 0x7F80_0000);
+	check_kf(primitive_value::f32_value(0x8000_0000).scalbn(-5), 0, 0x8000_0000);
 }
 
 // ---------------------------------------------------------------------------
@@ -304,20 +305,20 @@ fn void max_signed_zero() @test
 {
 	// +0 vs -0 (Zig leaves it unspecified): observed in the canonical vectors
 	// (annex_helpers.txt), f32/f64 return the lhs, f16/f80/f128 return +0.
-	check_kf(float_value::zero(F32).max(float_value::zero(F32, true)), 0, 0);
-	check_kf(float_value::zero(F32, true).max(float_value::zero(F32)), 0, 0x8000_0000);
-	check_kf(float_value::zero(F80, true).max(float_value::zero(F80)), 0, 0);
-	check_kf(float_value::zero(F80).max(float_value::zero(F80, true)), 0, 0);
-	check_kf(float_value::zero(F16, true).max(float_value::zero(F16)), 0, 0);
+	check_kf(primitive_value::zero(F32).max(primitive_value::zero(F32, true)), 0, 0);
+	check_kf(primitive_value::zero(F32, true).max(primitive_value::zero(F32)), 0, 0x8000_0000);
+	check_kf(primitive_value::zero(F80, true).max(primitive_value::zero(F80)), 0, 0);
+	check_kf(primitive_value::zero(F80).max(primitive_value::zero(F80, true)), 0, 0);
+	check_kf(primitive_value::zero(F16, true).max(primitive_value::zero(F16)), 0, 0);
 }
 
 fn void max_nan_and_order() @test
 {
-	check_kf(float_value::f16_value(0x7C01).max(float_value::f16_value(0x3C00)), 0, 0x3C00);  // NaN lhs -> rhs
-	check_kf(float_value::f16_value(0xBC00).max(float_value::f16_value(0xFE00)), 0, 0xBC00);  // NaN rhs -> lhs
-	check_kf(float_value::f16_value(0x7C01).max(float_value::f16_value(0x7E00)), 0, 0x7E00);  // both NaN -> rhs unchanged (canonical vectors)
+	check_kf(primitive_value::f16_value(0x7C01).max(primitive_value::f16_value(0x3C00)), 0, 0x3C00);  // NaN lhs -> rhs
+	check_kf(primitive_value::f16_value(0xBC00).max(primitive_value::f16_value(0xFE00)), 0, 0xBC00);  // NaN rhs -> lhs
+	check_kf(primitive_value::f16_value(0x7C01).max(primitive_value::f16_value(0x7E00)), 0, 0x7E00);  // both NaN -> rhs unchanged (canonical vectors)
 	check_kf(kf(F80, 0x7FFF, 0x8000_0000_0000_0001).max(kf(F80, 0xFFFF, 0xC000_0000_0000_0000)), 0xFFFF, 0xC000_0000_0000_0000);
-	check_kf(float_value::f64_value(0xBFF0_0000_0000_0000).max(float_value::f64_value(0xC000_0000_0000_0000)), 0, 0xBFF0_0000_0000_0000);
+	check_kf(primitive_value::f64_value(0xBFF0_0000_0000_0000).max(primitive_value::f64_value(0xC000_0000_0000_0000)), 0, 0xBFF0_0000_0000_0000);
 	check_kf(kf(F128, 0x8000_0000_0000_0000, 1).max(kf(F128, 0, 0)), 0, 0);   // -subnormal < +0
 	check_kf(kf(F80, 0, 0x8000_0000_0000_0000).max(kf(F80, 0x0001, 0x8000_0000_0000_0000)), 0, 0x8000_0000_0000_0000); // pseudo-denormal == min normal: self
 	check_kf(kf(F80, 0, 0x8000_0000_0000_0001).max(kf(F80, 0x0001, 0x8000_0000_0000_0000)), 0, 0x8000_0000_0000_0001); // pseudo-denormal ordered by value

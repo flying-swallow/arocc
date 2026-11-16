@@ -13,15 +13,15 @@
 // OPT_NONE = 0xFFFF_FFFF. Converting between them is a plain bit copy.
 //
 // Keys. Deviation from Zig: numeric keys are flat. The key tag carries the whole
-// type (INT_POSITIVE / INT_NEGATIVE, F16..F128, CF16..CF128) and `limbs` carries
-// the payload:
-//   - ints: Zig-normalized magnitude (no leading zero limbs, at least one limb;
-//     zero is `[0]` and INT_POSITIVE);
-//   - floats: the IEEE/x87 bit pattern, 1 limb up to 64 bits, 2 limbs (lo, hi)
-//     for f80/f128; bits above the width are zero;
-//   - complexes: the real component's limbs followed by the imaginary's.
-// Keys built outside the interner (int_key, float_key, float arithmetic) put their
-// limbs in `tmem`; `put` copies every slice it stores, so callers keep ownership.
+// type (INT_POSITIVE / INT_NEGATIVE, F16..F128, CF16..CF128) and the payload is:
+//   - ints: `limbs`, the Zig-normalized magnitude (no leading zero limbs, at least
+//     one limb; zero is `[0]` and INT_POSITIVE);
+//   - floats: inline `fbits`, the IEEE/x87 bit pattern; bits above the width are zero;
+//   - complexes: inline `cbits` = { real, imaginary } bit patterns.
+// Int keys built outside the interner (primitive_value::int_key) put their limbs in `tmem`; float
+// and complex keys never allocate. `put` copies every slice it stores (floats are
+// stored as owned limb slices: 1 limb up to 64 bits, 2 (lo, hi) for f80/f128,
+// real then imaginary for complexes), so callers keep ownership.
 //
 // Invariants implementers must keep:
 //   - `put(key)` first maps static keys to static refs exactly like Zig `Key.toRef`
@@ -44,7 +44,7 @@
 //     (Array, Vector, Pointer, Bytes, Record); numeric payloads index `limbs`.
 //   - Running out of memory panics (no faults); `free` releases everything.
 module aro::value_interner;
-import aro::bigint, std::collections::list, std::io, std::hash::metro64;
+import aro::bigint, aro::primitive_value, std::collections::list, std::io;
 
 // ---------------------------------------------------------------------------
 // Handles
@@ -98,148 +98,6 @@ fn bool InternerRef.is_static(self) => (uint)self >= FIRST_STATIC_REF;
 // Keys
 // ---------------------------------------------------------------------------
 
-<* Coarse class of a key tag, for switches that only care about int / float / complex. *>
-enum NumberKind : char
-{
-	NOT_NUMBER,
-	INT,
-	FLOAT,
-	COMPLEX,
-}
-
-<*
- std.meta.Tag(Interner.Key) with the int/float/complex payload tags flattened in.
- kind: number class of the payload (NOT_NUMBER for types, null, bytes, pointers).
- width: bit width of a float, or of one complex component; 0 otherwise.
-*>
-enum InternerKeyTag : char (NumberKind kind, ushort width)
-{
-	INT_TY       { NOT_NUMBER, 0 },
-	FLOAT_TY     { NOT_NUMBER, 0 },
-	COMPLEX_TY   { NOT_NUMBER, 0 },
-	PTR_TY       { NOT_NUMBER, 0 },
-	NORETURN_TY  { NOT_NUMBER, 0 },
-	VOID_TY      { NOT_NUMBER, 0 },
-	FUNC_TY      { NOT_NUMBER, 0 },
-	ARRAY_TY     { NOT_NUMBER, 0 },
-	VECTOR_TY    { NOT_NUMBER, 0 },
-	RECORD_TY    { NOT_NUMBER, 0 },
-	<* Zig `.null`: the nullptr constant (may not be zero). *>
-	NULL         { NOT_NUMBER, 0 },
-	<* Integer >= 0; `limbs` is the normalized magnitude. *>
-	INT_POSITIVE { INT, 0 },
-	<* Integer < 0; `limbs` is the normalized magnitude. *>
-	INT_NEGATIVE { INT, 0 },
-	F16          { FLOAT, 16 },
-	F32          { FLOAT, 32 },
-	F64          { FLOAT, 64 },
-	F80          { FLOAT, 80 },
-	F128         { FLOAT, 128 },
-	CF16         { COMPLEX, 16 },
-	CF32         { COMPLEX, 32 },
-	CF64         { COMPLEX, 64 },
-	CF80         { COMPLEX, 80 },
-	CF128        { COMPLEX, 128 },
-	BYTES        { NOT_NUMBER, 0 },
-	POINTER      { NOT_NUMBER, 0 },
-}
-
-<* Every float tag, narrowest first (the old KeyFloatTag::values). *>
-const InternerKeyTag[5] FLOAT_TAGS = { F16, F32, F64, F80, F128 };
-
-fn bool InternerKeyTag.is_int(self) => self.kind == INT;
-fn bool InternerKeyTag.is_float(self) => self.kind == FLOAT;
-fn bool InternerKeyTag.is_complex(self) => self.kind == COMPLEX;
-<* Whether the key's payload is `limbs`. *>
-fn bool InternerKeyTag.has_limbs(self) => self.kind != NOT_NUMBER;
-
-<*
- The scalar float tag of a float or complex tag (CF64 -> F64, F64 -> F64).
- @require self.is_float() || self.is_complex()
-*>
-fn InternerKeyTag InternerKeyTag.scalar(self) => self.is_complex() ? float_tag_of_width(self.width) : self;
-
-<*
- The complex tag over float tag `self` (F64 -> CF64).
- @require self.is_float()
-*>
-fn InternerKeyTag InternerKeyTag.complex(self) => InternerKeyTag::values[self.ordinal - InternerKeyTag.F16.ordinal + InternerKeyTag.CF16.ordinal];
-
-<*
- Limbs per float (or per complex component).
- @require self.is_float() || self.is_complex()
-*>
-fn sz InternerKeyTag.float_limbs(self) => self.width <= 64 ? 1 : 2;
-
-<* The float tag of bit width `bits` (16/32/64/80/128). *>
-fn InternerKeyTag float_tag_of_width(uint bits)
-{
-	switch (bits)
-	{
-		case 16: return F16;
-		case 32: return F32;
-		case 64: return F64;
-		case 80: return F80;
-		case 128: return F128;
-		default: unreachable("unsupported float width");
-	}
-}
-
-struct KeyArrayTy
-{
-	ulong len;
-	InternerRef child;
-}
-
-struct KeyVectorTy
-{
-	uint len;
-	InternerRef child;
-}
-
-<* Key.Pointer: an address constant is a declaration/compound-literal node plus a byte offset, never a host address. *>
-struct KeyPointer
-{
-	<* NodeIndex of the decl or compound literal whose address we are offsetting from. *>
-	uint node;
-	<* Offset in bytes (an interned integer). *>
-	InternerRef offset;
-}
-
-// Float bit views. Both are uint128-backed bitstructs, so neither has internal
-// padding (c3c can drop padding bytes when it copies an aggregate by value).
-
-<* f80 bits: `lo` = bits 0..63 (explicit-integer-bit mantissa), `hi` = bits 64..79 (sign + exponent); 80..127 zero. *>
-bitstruct F80Bits : uint128
-{
-	ulong lo : 0..63;
-	ushort hi : 64..79;
-}
-
-<* f128 bits: `lo` = bits 0..63, `hi` = bits 64..127. *>
-bitstruct F128Bits : uint128
-{
-	ulong lo : 0..63;
-	ulong hi : 64..127;
-}
-
-<* Interner.Key: a tag plus its payload; numeric tags use `limbs`. *>
-struct InternerKey (Printable)
-{
-	InternerKeyTag tag;
-	union
-	{
-		<* INT_TY / FLOAT_TY / COMPLEX_TY: bit width. *>
-		ushort ty_bits;
-		KeyArrayTy array_ty;
-		KeyVectorTy vector_ty;
-		InternerRef[] record_ty;
-		char[] bytes;
-		KeyPointer pointer;
-		<* INT_*, F*, CF*: see the module header for the layout. *>
-		Limb[] limbs;
-	}
-}
 
 <*
  Interner.Tag.Int.BigIntSpace: big enough for any 64-bit int, plus one limb of
@@ -250,419 +108,11 @@ struct BigIntSpace
 	Limb[bigint::SMALL_LIMBS] limbs;
 }
 
-// Shared limbs for the static int refs (never written).
-Limb[1] zero_limbs @local = { 0 };
-Limb[1] one_limbs @local = { 1 };
-
-// Integer keys.
-
-<* An integer key for `v` (limbs in tmem; zero and one use static limbs). *>
-fn InternerKey int_key(int128 v)
-{
-	if (v == 0) return { .tag = INT_POSITIVE, .limbs = zero_limbs[..] };
-	if (v == 1) return { .tag = INT_POSITIVE, .limbs = one_limbs[..] };
-	bool negative = v < 0;
-	// Two's-complement negation in uint128 handles int128::min.
-	uint128 mag = negative ? (uint128)0 - (uint128)v : (uint128)v;
-	return mag_key(negative, mag);
-}
-
-<* An integer key for unsigned `v` (limbs in tmem). *>
-fn InternerKey uint_key(uint128 v)
-{
-	if (v == 0) return { .tag = INT_POSITIVE, .limbs = zero_limbs[..] };
-	return mag_key(false, v);
-}
-
-fn InternerKey mag_key(bool negative, uint128 mag) @local
-{
-	sz n = mag >> 64 != 0 ? 2 : 1;
-	Limb[] limbs = alloc::new_array(tmem, Limb, n);
-	limbs[0] = (Limb)mag;
-	if (n == 2) limbs[1] = (Limb)(mag >> 64);
-	return { .tag = negative ? INT_NEGATIVE : INT_POSITIVE, .limbs = limbs };
-}
-
-<* An integer key viewing `big`'s limbs (no copy; leading zero limbs are dropped). *>
-fn InternerKey big_int_key(BigIntConst big)
-{
-	BigIntConst c = normalized_int(big);
-	return { .tag = c.positive ? INT_POSITIVE : INT_NEGATIVE, .limbs = c.limbs };
-}
-
-<*
- Key.toBigInt: a view of the key's limbs (no copy).
- @require self.tag.is_int()
-*>
-fn BigIntConst InternerKey.to_big_int(self) => { .limbs = self.limbs, .positive = self.tag == INT_POSITIVE };
-
-<* @require self.tag.is_int() *>
-fn bool InternerKey.int_is_zero(self) => canonical_int(self.to_big_int()).limbs.len == 0;
-
-<*
- Whether the integer fits in 64 bits as either u64 or i64 (the old `.u64` / `.i64` key forms).
- @require self.tag.is_int()
-*>
-fn bool InternerKey.int_fits_64(self)
-{
-	BigIntConst c = canonical_int(self.to_big_int());
-	if (c.limbs.len == 0) return true;
-	if (c.limbs.len > 1) return false;
-	return c.positive || c.limbs[0] <= 0x8000_0000_0000_0000;
-}
-
-<*
- The low 64 bits of the integer in two's complement (wraps when wider).
- @require self.tag.is_int()
-*>
-fn ulong InternerKey.int_low_u64(self)
-{
-	BigIntConst c = canonical_int(self.to_big_int());
-	ulong low = c.limbs.len > 0 ? c.limbs[0] : 0;
-	return c.positive ? low : 0 - low;
-}
-
-// Float and complex keys.
-
-<* `bits` truncated to the width of float tag `tag`. *>
-fn uint128 float_width_bits(InternerKeyTag tag, uint128 bits) @local
-{
-	uint w = tag.width;
-	return w >= 128 ? bits : bits & (((uint128)1 << w) - 1);
-}
-
-<*
- A float key holding bit pattern `bits` (limbs in tmem; bits above the width are dropped).
- @require tag.is_float()
-*>
-fn InternerKey float_key(InternerKeyTag tag, uint128 bits)
-{
-	bits = float_width_bits(tag, bits);
-	Limb[] limbs = alloc::new_array(tmem, Limb, tag.float_limbs());
-	limbs[0] = (Limb)bits;
-	if (limbs.len == 2) limbs[1] = (Limb)(bits >> 64);
-	return { .tag = tag, .limbs = limbs };
-}
-
 fn uint128 limbs_bits(Limb[] limbs) @local
 {
 	if (limbs.len == 0) return 0;
 	if (limbs.len == 1) return limbs[0];
 	return (uint128)limbs[0] | (uint128)limbs[1] << 64;
-}
-
-<*
- The float's bit pattern, zero-extended to 128 bits.
- @require self.tag.is_float()
-*>
-fn uint128 InternerKey.float_bits(self) => limbs_bits(self.limbs);
-
-fn ushort InternerKey.f16(self) => (ushort)self.float_bits();
-fn uint InternerKey.f32(self) => (uint)self.float_bits();
-fn ulong InternerKey.f64(self) => (ulong)self.float_bits();
-fn F80Bits InternerKey.f80(self) => (F80Bits)self.float_bits();
-fn F128Bits InternerKey.f128(self) => (F128Bits)self.float_bits();
-
-<*
- A complex key from two floats of the same width (limbs in tmem).
- @require re.tag.is_float() && re.tag == im.tag
-*>
-fn InternerKey complex_key(InternerKey re, InternerKey im)
-{
-	sz n = re.tag.float_limbs();
-	Limb[] limbs = alloc::new_array(tmem, Limb, 2 * n);
-	uint128 r = float_width_bits(re.tag, re.float_bits());
-	uint128 i = float_width_bits(re.tag, im.float_bits());
-	limbs[0] = (Limb)r;
-	limbs[n] = (Limb)i;
-	if (n == 2)
-	{
-		limbs[1] = (Limb)(r >> 64);
-		limbs[3] = (Limb)(i >> 64);
-	}
-	return { .tag = re.tag.complex(), .limbs = limbs };
-}
-
-<* @require self.tag.is_complex() *>
-fn InternerKey InternerKey.re(self)
-{
-	sz n = self.tag.float_limbs();
-	return { .tag = self.tag.scalar(), .limbs = self.limbs[:n] };
-}
-
-<* @require self.tag.is_complex() *>
-fn InternerKey InternerKey.im(self)
-{
-	sz n = self.tag.float_limbs();
-	return { .tag = self.tag.scalar(), .limbs = self.limbs[n:n] };
-}
-
-<* Integers print in decimal; other keys print their tag. *>
-fn sz? InternerKey.to_format(&self, Formatter* f) @dynamic
-{
-	if (self.tag.is_int()) return f.print(self.to_big_int().to_string_alloc(tmem, 10, false));
-	return f.printf("%s", self.tag);
-}
-
-// Integer helpers. These read limbs directly instead of calling bigint queries so
-// the interner does not depend on the bigint implementation.
-
-<* Canonical view of `big`: no leading zero limbs, zero has no limbs and is positive. *>
-fn BigIntConst canonical_int(BigIntConst big) @local
-{
-	sz n = big.limbs.len;
-	while (n > 0 && big.limbs[n - 1] == 0) n--;
-	return { .limbs = big.limbs[:n], .positive = n == 0 || big.positive };
-}
-
-<* Zig-normalized view of `big`: as canonical_int, but zero is `[0]`. *>
-fn BigIntConst normalized_int(BigIntConst big) @local
-{
-	BigIntConst c = canonical_int(big);
-	if (c.limbs.len == 0) return { .limbs = zero_limbs[..], .positive = true };
-	return c;
-}
-
-fn bool canonical_int_eql(BigIntConst a, BigIntConst b) @local
-{
-	if (a.positive != b.positive || a.limbs.len != b.limbs.len) return false;
-	foreach (i, l : a.limbs) if (l != b.limbs[i]) return false;
-	return true;
-}
-
-// Float bit-pattern helpers (Zig compares float payloads with `==`).
-
-fn bool f16_is_nan(ushort b) @local => (b & 0x7C00) == 0x7C00 && (b & 0x03FF) != 0;
-fn bool f32_is_nan(uint b) @local => (b & 0x7F80_0000) == 0x7F80_0000 && (b & 0x007F_FFFF) != 0;
-fn bool f64_is_nan(ulong b) @local
-{
-	return (b & 0x7FF0_0000_0000_0000) == 0x7FF0_0000_0000_0000 && (b & 0x000F_FFFF_FFFF_FFFF) != 0;
-}
-<* x87: exponent all ones with any fraction bit set (the explicit integer bit, bit 63, is not part of the fraction). *>
-fn bool f80_is_nan(F80Bits b) @local => (b.hi & 0x7FFF) == 0x7FFF && (b.lo & 0x7FFF_FFFF_FFFF_FFFF) != 0;
-fn bool f128_is_nan(F128Bits b) @local
-{
-	return (b.hi & 0x7FFF_0000_0000_0000) == 0x7FFF_0000_0000_0000
-		&& ((b.hi & 0x0000_FFFF_FFFF_FFFF) | b.lo) != 0;
-}
-
-<* Whether bit pattern `bits` of float tag `tag` is a NaN. *>
-fn bool bits_are_nan(InternerKeyTag tag, uint128 bits) @local
-{
-	switch (tag)
-	{
-		case F16: return f16_is_nan((ushort)bits);
-		case F32: return f32_is_nan((uint)bits);
-		case F64: return f64_is_nan((ulong)bits);
-		case F80: return f80_is_nan((F80Bits)bits);
-		case F128: return f128_is_nan((F128Bits)bits);
-		default: unreachable("not a float tag");
-	}
-}
-
-<* std.meta.eql on one float: equal bits, never equal when NaN. *>
-fn bool float_bits_eql(InternerKeyTag tag, Limb[] a, Limb[] b) @local
-{
-	uint128 x = float_width_bits(tag, limbs_bits(a));
-	return x == float_width_bits(tag, limbs_bits(b)) && !bits_are_nan(tag, x);
-}
-
-<* Key.hash (32-bit, folded MetroHash64). Need not match Zig's Wyhash bit-for-bit (ref numbering does not depend on it), but must be consistent with `eql`. Fields are fed one at a time so union and struct padding never reach the hash. *>
-fn uint InternerKey.hash(self)
-{
-	MetroHash64 hs;
-	hs.init(0x243F_6A88_85A3_08D3);
-	if (self.tag.is_int())
-	{
-		// The sign comes from the canonical value so negative zero hashes as zero.
-		BigIntConst big = canonical_int(self.to_big_int());
-		InternerKeyTag int_tag = INT_POSITIVE;
-		hs.update(@as_char_view(int_tag));
-		hs.update(@as_char_view(big.positive));
-		hs.update(((char*)big.limbs.ptr)[:big.limbs.len * @sizeof(big.limbs[0])]);
-		return (uint)hs.final();
-	}
-	hs.update(@as_char_view(self.tag));
-	switch (self.tag)
-	{
-		case INT_TY:
-		case FLOAT_TY:
-		case COMPLEX_TY:
-			hs.update(@as_char_view(self.ty_bits));
-		case PTR_TY:
-		case NORETURN_TY:
-		case VOID_TY:
-		case FUNC_TY:
-		case NULL:
-			break;
-		case ARRAY_TY:
-			hs.update(@as_char_view(self.array_ty.len));
-			hs.update(@as_char_view(self.array_ty.child));
-		case VECTOR_TY:
-			hs.update(@as_char_view(self.vector_ty.len));
-			hs.update(@as_char_view(self.vector_ty.child));
-		case RECORD_TY:
-			InternerRef[] fields = self.record_ty;
-			sz fields_len = fields.len;
-			hs.update(@as_char_view(fields_len));
-			hs.update(((char*)fields.ptr)[:fields_len * @sizeof(fields[0])]);
-		case F16:
-		case F32:
-		case F64:
-		case F80:
-		case F128:
-			uint128 b = float_width_bits(self.tag, self.float_bits());
-			hs.update(@as_char_view(b));
-		case CF16:
-		case CF32:
-		case CF64:
-		case CF80:
-		case CF128:
-			InternerKeyTag s = self.tag.scalar();
-			uint128 r = float_width_bits(s, self.re().float_bits());
-			uint128 i = float_width_bits(s, self.im().float_bits());
-			hs.update(@as_char_view(r));
-			hs.update(@as_char_view(i));
-		case BYTES:
-			char[] bytes = self.bytes;
-			sz bytes_len = bytes.len;
-			hs.update(@as_char_view(bytes_len));
-			hs.update(bytes);
-		case POINTER:
-			hs.update(@as_char_view(self.pointer.node));
-			hs.update(@as_char_view(self.pointer.offset));
-		case INT_POSITIVE:
-		case INT_NEGATIVE:
-			unreachable();
-	}
-	return (uint)hs.final();
-}
-
-<*
- Key.eql. Ints compare by mathematical value; floats and complexes compare their
- bit patterns, and a NaN component never compares equal (Zig `std.meta.eql` uses
- `==` on float payloads).
-*>
-fn bool InternerKey.eql(a, InternerKey b)
-{
-	if (a.tag.is_int() && b.tag.is_int())
-	{
-		return canonical_int_eql(canonical_int(a.to_big_int()), canonical_int(b.to_big_int()));
-	}
-	if (a.tag != b.tag) return false;
-	switch (a.tag)
-	{
-		case INT_TY:
-		case FLOAT_TY:
-		case COMPLEX_TY:
-			return a.ty_bits == b.ty_bits;
-		case PTR_TY:
-		case NORETURN_TY:
-		case VOID_TY:
-		case FUNC_TY:
-		case NULL:
-			return true;
-		case ARRAY_TY:
-			return a.array_ty.len == b.array_ty.len && a.array_ty.child == b.array_ty.child;
-		case VECTOR_TY:
-			return a.vector_ty.len == b.vector_ty.len && a.vector_ty.child == b.vector_ty.child;
-		case RECORD_TY:
-			if (a.record_ty.len != b.record_ty.len) return false;
-			foreach (i, e : a.record_ty) if (e != b.record_ty[i]) return false;
-			return true;
-		case F16:
-		case F32:
-		case F64:
-		case F80:
-		case F128:
-			return float_bits_eql(a.tag, a.limbs, b.limbs);
-		case CF16:
-		case CF32:
-		case CF64:
-		case CF80:
-		case CF128:
-			InternerKeyTag s = a.tag.scalar();
-			return float_bits_eql(s, a.re().limbs, b.re().limbs) && float_bits_eql(s, a.im().limbs, b.im().limbs);
-		case BYTES:
-			if (a.bytes.len != b.bytes.len) return false;
-			foreach (i, c : a.bytes) if (c != b.bytes[i]) return false;
-			return true;
-		case POINTER:
-			return a.pointer.node == b.pointer.node && a.pointer.offset == b.pointer.offset;
-		case INT_POSITIVE:
-		case INT_NEGATIVE:
-			unreachable();
-	}
-}
-
-<* Key.toRef: the static ref for keys that have one; NO_STATIC_REF otherwise. *>
-excuse NO_STATIC_REF;
-fn InternerRef? InternerKey.to_ref(self)
-{
-	switch (self.tag)
-	{
-		case INT_TY:
-			switch (self.ty_bits)
-			{
-				case 1: return REF_I1;
-				case 8: return REF_I8;
-				case 16: return REF_I16;
-				case 32: return REF_I32;
-				case 64: return REF_I64;
-				case 128: return REF_I128;
-			}
-		case FLOAT_TY:
-			switch (self.ty_bits)
-			{
-				case 16: return REF_F16;
-				case 32: return REF_F32;
-				case 64: return REF_F64;
-				case 80: return REF_F80;
-				case 128: return REF_F128;
-				default: unreachable("float_ty with unsupported bit width");
-			}
-		case COMPLEX_TY:
-			switch (self.ty_bits)
-			{
-				case 16: return REF_CF16;
-				case 32: return REF_CF32;
-				case 64: return REF_CF64;
-				case 80: return REF_CF80;
-				case 128: return REF_CF128;
-				default: unreachable("complex_ty with unsupported bit width");
-			}
-		case PTR_TY: return REF_PTR;
-		case FUNC_TY: return REF_FUNC;
-		case NORETURN_TY: return REF_NORETURN;
-		case VOID_TY: return REF_VOID;
-		case NULL: return REF_NULL;
-		case INT_POSITIVE:
-		case INT_NEGATIVE:
-			BigIntConst big = canonical_int(self.to_big_int());
-			if (big.limbs.len == 0) return REF_ZERO;
-			if (big.positive && big.limbs.len == 1 && big.limbs[0] == 1) return REF_ONE;
-		case F16:
-		case F32:
-		case F64:
-		case F80:
-		case F128:
-			// isPositiveZero(x) -> zero; x == 1 -> one (compared as the bit pattern of 1.0).
-			uint128 b = float_width_bits(self.tag, self.float_bits());
-			if (b == 0) return REF_ZERO;
-			uint128 one;
-			switch (self.tag)
-			{
-				case F16: one = 0x3C00;
-				case F32: one = 0x3F80_0000;
-				case F64: one = 0x3FF0_0000_0000_0000;
-				case F80: one = 0x3FFF_8000_0000_0000_0000;
-				default: one = 0x3FFF_0000_0000_0000_0000_0000_0000_0000;
-			}
-			if (b == one) return REF_ONE;
-		default:
-			break;
-	}
-	return NO_STATIC_REF~;
 }
 
 // ---------------------------------------------------------------------------
@@ -713,7 +163,7 @@ struct TagRecord
 
 struct InternerItem
 {
-	InternerKeyTag tag;
+	PrimitiveType tag;
 	uint data;
 }
 
@@ -773,7 +223,7 @@ fn sz Interner.len(&self) => self.items.len();
  new entry with the next dense index). Copies all slices in `key`.
  PTR_TY/NORETURN_TY/VOID_TY/FUNC_TY/NULL always resolve through `to_ref`.
 *>
-fn InternerRef Interner.put(&self, InternerKey key)
+fn InternerRef Interner.put(&self, PrimitiveValue key)
 {
 	if (try r = key.to_ref()) return r;
 	uint h = key.hash();
@@ -808,20 +258,31 @@ fn InternerRef Interner.put(&self, InternerKey key)
 			item = { POINTER, self.add_extra(key.pointer.node, (uint)key.pointer.offset) };
 		case INT_POSITIVE:
 		case INT_NEGATIVE:
-			BigIntConst big = normalized_int(key.to_big_int());
+			BigIntConst big = primitive_value::normalized_int(key.to_big_int());
 			item = { big.positive ? INT_POSITIVE : INT_NEGATIVE, self.add_limbs(big.limbs) };
 		case F16:
 		case F32:
 		case F64:
 		case F80:
 		case F128:
-			item = { key.tag, self.add_limbs(key.limbs[:key.tag.float_limbs()]) };
+			sz n = key.tag.float_limbs();
+			Limb[2] buf = { (Limb)key.fbits, (Limb)(key.fbits >> 64) };
+			item = { key.tag, self.add_limbs(buf[:n]) };
 		case CF16:
 		case CF32:
 		case CF64:
 		case CF80:
 		case CF128:
-			item = { key.tag, self.add_limbs(key.limbs[:2 * key.tag.float_limbs()]) };
+			sz n = key.tag.float_limbs();
+			Limb[4] buf;
+			buf[0] = (Limb)key.cbits[0];
+			buf[n] = (Limb)key.cbits[1];
+			if (n == 2)
+			{
+				buf[1] = (Limb)(key.cbits[0] >> 64);
+				buf[3] = (Limb)(key.cbits[1] >> 64);
+			}
+			item = { key.tag, self.add_limbs(buf[:2 * n]) };
 		case BYTES:
 			uint strings_index = (uint)self.strings.len();
 			self.strings.push(copy_slice(self.gpa, key.bytes));
@@ -899,7 +360,7 @@ fn ulong Interner.u64_at(&self, uint at) => (ulong)self.extra[(sz)at] | (ulong)s
  Zig quirk kept: REF_CF128 has no case in Zig's `get` (it would index `items`);
  treat it as unreachable.
 *>
-fn InternerKey Interner.get(&self, InternerRef ref)
+fn PrimitiveValue Interner.get(&self, InternerRef ref)
 {
 	if (ref.is_static())
 	{
@@ -920,8 +381,8 @@ fn InternerKey Interner.get(&self, InternerRef ref)
 			case REF_F64: return { .tag = FLOAT_TY, .ty_bits = 64 };
 			case REF_F80: return { .tag = FLOAT_TY, .ty_bits = 80 };
 			case REF_F128: return { .tag = FLOAT_TY, .ty_bits = 128 };
-			case REF_ZERO: return { .tag = INT_POSITIVE, .limbs = zero_limbs[..] };
-			case REF_ONE: return { .tag = INT_POSITIVE, .limbs = one_limbs[..] };
+			case REF_ZERO: return { .tag = INT_POSITIVE, .limbs = primitive_value::zero_limbs[..] };
+			case REF_ONE: return { .tag = INT_POSITIVE, .limbs = primitive_value::one_limbs[..] };
 			case REF_NULL: return { .tag = NULL };
 			case REF_CF16: return { .tag = COMPLEX_TY, .ty_bits = 16 };
 			case REF_CF32: return { .tag = COMPLEX_TY, .ty_bits = 32 };
@@ -933,8 +394,15 @@ fn InternerKey Interner.get(&self, InternerRef ref)
 
 	InternerItem item = self.items[(sz)(uint)ref];
 	uint data = item.data;
-	InternerKeyTag tag = item.tag;
-	if (tag.has_limbs()) return { .tag = tag, .limbs = self.limbs[(sz)data] };
+	PrimitiveType tag = item.tag;
+	if (tag.kind == NumberKind.INT) return { .tag = tag, .limbs = self.limbs[(sz)data] };
+	if (tag.kind == NumberKind.FLOAT) return { .tag = tag, .fbits = limbs_bits(self.limbs[(sz)data]) };
+	if (tag.kind == NumberKind.COMPLEX)
+	{
+		Limb[] l = self.limbs[(sz)data];
+		sz n = tag.float_limbs();
+		return { .tag = tag, .cbits = { limbs_bits(l[:n]), limbs_bits(l[n:n]) } };
+	}
 	switch (tag)
 	{
 		case INT_TY:

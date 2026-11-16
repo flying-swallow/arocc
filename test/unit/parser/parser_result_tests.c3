@@ -1,6 +1,7 @@
 // Focused direct-AST tests for Result's type conversions.
 module parser_result_tests;
-import aro::compilation, aro::diagnostics, aro::float_value, aro::parser, aro::parser_declaration, aro::parser_postfix, aro::parser_result, aro::tree, aro::type_store, aro::value, aro::value_interner;
+import aro::primitive_value;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_postfix, aro::parser_result, aro::tree, aro::type_store, aro::value, aro::value_interner;
 import aro::preprocessor, aro::source, aro::symbol_stack, aro::tokens;
 import std::core::mem::allocators;
 
@@ -32,8 +33,8 @@ fn parser_result::Result? parse_initializer_context_ice(void* context, parser::P
 fn void assert_declaration_pointer_offset(value::Value result, compilation::Compilation* comp,
 	type_store::NodeIndex decl, long expected_offset)
 {
-	assert(result.is(value_interner::InternerKeyTag.POINTER, comp));
-	value_interner::InternerKey key = comp.interner.get(result.ref());
+	assert(result.is(primitive_value::PrimitiveType.POINTER, comp));
+	primitive_value::PrimitiveValue key = comp.interner.get(result.ref());
 	assert(key.pointer.node == (uint)decl);
 	assert(value::from_ref(key.pointer.offset).to_i64(comp)!! == expected_offset);
 }
@@ -216,8 +217,8 @@ fn void array_decay_carries_declaration_pointer_value() @test
 			res.lval_conversion(&p);
 			assert(res.node.kind(&p.tree) == tree::NodeKind.CAST && res.node.form(&p.tree).implicit);
 			assert(res.node.get(&p.tree).cast.kind == CastKind.ARRAY_TO_POINTER);
-			assert(res.val.is(value_interner::InternerKeyTag.POINTER, &comp));
-			value_interner::InternerKey key = comp.interner.get(res.val.ref());
+			assert(res.val.is(primitive_value::PrimitiveType.POINTER, &comp));
+			primitive_value::PrimitiveValue key = comp.interner.get(res.val.ref());
 			assert(key.pointer.node == (uint)decl);
 			assert(value::from_ref(key.pointer.offset).is_zero(&comp));
 			p.tree.free();
@@ -244,14 +245,14 @@ fn void string_literal_array_decay_preserves_bytes_value() @test
 				char_qt, type_store::ArrayLenKind.FIXED, 4));
 			NodeIndex literal = p.tree.add_node({ .kind = NodeKind.STRING_LITERAL_EXPR,
 				.char_literal = { .literal_tok = 1, .qt = array_qt, .kind = tree::CharLiteralKind.ASCII } });
-			value::Value bytes = value::intern(&comp, { .tag = value_interner::InternerKeyTag.BYTES,
+			value::Value bytes = value::intern(&comp, { .tag = primitive_value::PrimitiveType.BYTES,
 				.bytes = "abc" });
 			p.tree.set_value(literal, bytes);
 			parser_result::Result res;
 			res.init(literal, array_qt);
 			res.lval_conversion(&p);
 			assert(res.node.get(&p.tree).cast.kind == CastKind.ARRAY_TO_POINTER);
-			assert(res.val.is(value_interner::InternerKeyTag.BYTES, &comp));
+			assert(res.val.is(primitive_value::PrimitiveType.BYTES, &comp));
 			assert(res.val.opt_ref == bytes.opt_ref);
 			p.tree.free();
 		}
@@ -397,7 +398,7 @@ fn void implicit_float_to_integer_reports_value_change() @test
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
 			NodeIndex literal = p.tree.add_node({ .kind = NodeKind.FLOAT_LITERAL, .literal = { .literal_tok = 1, .qt = type_store::DOUBLE } });
-			value::Value floating = value::intern(&comp, float_value::f64_value(0x3FF8_0000_0000_0000));
+			value::Value floating = value::intern(&comp, primitive_value::f64_value(0x3FF8_0000_0000_0000));
 			parser_result::Result res;
 			res.init(literal, type_store::DOUBLE, floating);
 			res.cast_to_int(&p, type_store::INT, 1)!!;
@@ -456,7 +457,7 @@ fn void complex_float_to_bool_checks_both_components() @test
 			p.tree.init(&comp, {});
 			type_store::QualType complex_ty = comp.type_store.put(type_store::type_complex(type_store::DOUBLE));
 			NodeIndex literal = p.tree.add_node({ .kind = NodeKind.FLOAT_LITERAL, .literal = { .literal_tok = 1, .qt = complex_ty } });
-			value::Value imaginary_one = value::intern(&comp, float_value::make_complex(float_value::zero(F64), float_value::one(F64)));
+			value::Value imaginary_one = value::intern(&comp, primitive_value::complex_key(primitive_value::zero(F64), primitive_value::one(F64)));
 			parser_result::Result res;
 			res.init(literal, complex_ty, imaginary_one);
 			res.cast_to_bool(&p, 1)!!;

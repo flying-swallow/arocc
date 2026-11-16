@@ -35,6 +35,7 @@ enum AttrDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
 	ALIGNAS_BITFIELD { "{at} attribute cannot be applied to a bit-field", ERROR, {} },
 	MINIMUM_ALIGNMENT { "requested alignment is less than minimum alignment of %d", ERROR, {} },
 	NON_POW2_ALIGN { "requested alignment is not a power of 2", ERROR, {} },
+	MSVC_ENUM_ALIGN_IGNORED { "alignment specifier is ignored on enum", WARNING, { .has_opt = true, .opt = Option.IGNORED_ATTRIBUTES } },
 	WARN_UNUSED_RESULT_VOID { "attribute {at} cannot be applied to functions without return value", WARNING, { .has_opt = true, .opt = Option.IGNORED_ATTRIBUTES } },
 	NONNULL_PARAM_ARGS { "{at} attribute when used on parameters takes no arguments", WARNING, { .has_opt = true, .opt = Option.IGNORED_ATTRIBUTES } },
 	PARAM_OUT_OF_BOUNDS { "{at} attribute parameter %d is out of bounds", ERROR, {} },

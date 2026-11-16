@@ -229,6 +229,44 @@ fn void abstract_declarator_suffix_respects_parenthesized_pointer_precedence() @
 	assert(ta.allocation_count() == 0);
 }
 
+fn void declarator_around_invalid_base_is_invalid() @test
+{
+	// Zig Declarator.validate: `*` / `[]` around an invalid base (e.g. a rejected
+	// `_Atomic struct incomplete`) is invalid, not a pointer to invalid.
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("declarator.c", "* []")!!;
+		pp.add_token({ .id = tokenizer::TokenId.ASTERISK, .loc = declaration_loc(src, 0) })!!;
+		pp.add_token({ .id = tokenizer::TokenId.L_BRACKET, .loc = declaration_loc(src, 2) })!!;
+		pp.add_token({ .id = tokenizer::TokenId.R_BRACKET, .loc = declaration_loc(src, 3) })!!;
+		pp.tokens.push({ .id = tokenizer::TokenId.EOF, .loc = declaration_loc(src, 4) });
+
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		UnusedTypeName unused;
+		parser_declarator::DeclaratorParser declarator = { .parser = &p, .grammar = &unused };
+		type_store::QualType pointer = declarator.abstract_declarator(type_store::INVALID)!!;
+		assert(pointer.is_invalid(), "pointer to an invalid type must be invalid");
+		type_store::QualType array = declarator.abstract_declarator(type_store::INVALID)!!;
+		assert(array.is_invalid(), "array of an invalid type must be invalid");
+
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
 fn void malformed_function_recovery_preserves_following_translation_unit_state() @test
 {
 	TrackingAllocator ta;
@@ -3898,3 +3936,141 @@ struct UnusedTypeName (parser_declarator::IDeclaratorGrammar) { bool unused; }
 
 fn type_store::QualType? UnusedTypeName.declarator_type_name(&self, parser::Parser* p) @dynamic
 	=> unused_type_name(null, p);
+
+<* Parse `source` as a translation unit and report whether `expected` was diagnosed. *>
+fn bool declaration_diagnoses(String source, String expected,
+	lang_opts::Standard standard = lang_opts::Standard.C17, String enable = "")
+{
+	uint errors;
+	return parse_declarations(source, expected, standard, enable, &errors);
+}
+
+<* Number of errors `source` produces as a translation unit. *>
+fn uint declaration_error_count(String source, lang_opts::Standard standard = lang_opts::Standard.C17)
+{
+	uint errors;
+	parse_declarations(source, "", standard, "", &errors);
+	return errors;
+}
+
+fn bool parse_declarations(String source, String expected, lang_opts::Standard standard,
+	String enable, uint* errors)
+{
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	bool found;
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.langopts.standard = standard;
+		if (enable.len) d.set(enable, diagnostics::MessageKind.WARNING)!!;
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("validate.c", source)!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+		foreach (message : d.messages) if (message.text == expected) found = true;
+		*errors = d.errors;
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+	return found;
+}
+
+fn void declarator_validate_reports_zig_validate_extra_diagnostics() @test
+{
+	// Zig Declarator.validateExtra: checks run on the composed declarator type.
+	assert(declaration_diagnoses("struct S; struct S a[2];", "array has incomplete element type 'struct S'"));
+	assert(declaration_diagnoses("int f[2](void);", "arrays cannot have functions as their element type"));
+	assert(declaration_diagnoses("int g(void)[2];", "function cannot return an array"));
+	assert(declaration_diagnoses("int h(void)(void);", "function cannot return a function"));
+	assert(declaration_diagnoses("void p(int x[2][static 3]);", "'static' used in non-outermost array type"));
+	assert(declaration_diagnoses("char huge[0x7fffffffffffffff][16];", "array is too large"));
+	assert(!declaration_diagnoses("int ok[2][3];", "array is too large"));
+}
+
+fn void c23_function_type_returns_unqualified_non_atomic_type() @test
+{
+	// C23 6.7.7.4p4 (Zig validateExtra setFuncReturnType): `const int f(void)` returns `int`.
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		diagnostics::Diagnostics d;
+		d.init_list(&ta);
+		compilation::Compilation comp;
+		comp.init(&ta, null, &d);
+		comp.langopts.standard = lang_opts::Standard.C23;
+		preprocessor::Preprocessor pp;
+		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		source::Source src = comp.add_source_from_buffer("c23_return.c", "const int f(void);")!!;
+		pp.add_token(pp.preprocess(src)!!)!!;
+
+		parser_declaration::DeclarationParser declarations = {};
+		parser::Parser p;
+		p.init(&pp, &declarations);
+		tree::Tree result = p.parse()!!;
+		assert(result.root_decls.len() == 1);
+		tree::Node decl = result.root_decls[0].get(&result);
+		type_store::Type func = decl.function.qt.get(&comp, type_store::TypeTag.FUNC)!!;
+		assert(!func.func.return_type.is_const, "C23 drops qualifiers from a function's return type");
+		assert(func.func.return_type.eql(type_store::INT, &comp));
+
+		result.free();
+		p.free();
+		pp.free();
+		comp.free();
+		d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void declarator_validate_reports_alignment_and_return_qualifier_diagnostics() @test
+{
+	assert(declaration_diagnoses(
+		"typedef struct S5 { char c[3]; } T5 __attribute__((aligned(4))); T5 arr[2];",
+		"size of array element of type 'T5' (aka 'struct S5') (3 bytes) isn't a multiple of its alignment (4 bytes)"));
+	assert(declaration_diagnoses("const int f(void);", "'const' type qualifier on return type has no effect",
+		lang_opts::Standard.C17, "ignored-qualifiers"));
+	assert(!declaration_diagnoses("const int f(void);", "'const' type qualifier on return type has no effect"),
+		"-Wignored-qualifiers is off by default");
+}
+
+fn void vector_binary_operators_follow_zig_adjust_types() @test
+{
+	String prelude = "typedef int __attribute__((vector_size(16))) v4si;"
+		"typedef int __attribute__((vector_size(8))) v2si;"
+		"typedef float __attribute__((vector_size(16))) v4sf;"
+		"v4si a, b; v2si c; v4sf f;";
+	String[*] valid = {
+		"void t(void) { a = a + b; }",
+		"void t(void) { a = a % b; }",
+		"void t(void) { a %= b; }",
+		"void t(void) { a <<= b; }",
+		"void t(void) { a = a + 1; }",
+		"void t(void) { a = 2 * a; }",
+		"void t(void) { a = a == b; }",
+		"void t(void) { a = f < f; }",
+	};
+	foreach (body : valid)
+	{
+		String source = string::tformat("%s%s", prelude, body);
+		assert(declaration_error_count(source) == 0, "vector operation must be accepted: %s", body);
+	}
+	assert(declaration_diagnoses(string::tformat("%s%s", prelude, "void t(void) { a = a + c; }"),
+		"cannot convert between vector type 'v4si' (vector of 4 'int' values) and vector type 'v2si' (vector of 2 'int' values) as implicit conversion would cause truncation"));
+	assert(declaration_diagnoses(string::tformat("%s%s", prelude, "void t(void) { a = a && b; }"),
+		"invalid operands to binary expression ('v4si' (vector of 4 'int' values) and 'v4si' (vector of 4 'int' values))"));
+}

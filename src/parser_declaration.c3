@@ -403,6 +403,11 @@ fn type_store::QualType? DeclarationParser.parse_record_specifier(&self, parser:
 	bool* has_tag_decl_node_out)
 {
 	*has_tag_decl_node_out = false;
+	// Zig recordSpec/enumSpec: `state(true)` so attributes parsed before the
+	// tag keyword (e.g. `__declspec(align(8)) typedef enum {...} A;`) belong
+	// to the declaration, not the tag.
+	attribute_wip::State tag_state = declaration_wip.state(true);
+	defer declaration_wip.restore(tag_state);
 	TagAttributeContext tag_context = { .declaration_parser = (DeclarationParser*)self, .wip = declaration_wip,
 		.tag_decl_node_out = tag_decl_node_out, .has_tag_decl_node_out = has_tag_decl_node_out };
 	return p.record_spec_with_body(&record_body_callback, (void*)self, is_enum,
@@ -1579,7 +1584,8 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 	self.append_attributes(p, wip)!;
 	qt = wip.apply_type_attrs(p, qt)!;
 	qt = wip.apply_pending_calling_conventions(p, qt)!;
-	if (qt.is(p.comp, type_store::TypeTag.ARRAY) || qt.is(p.comp, type_store::TypeTag.FUNC))
+	// Zig QualType.decay returns invalid for invalid; validate may have produced it.
+	if (!qt.is_invalid() && (qt.is(p.comp, type_store::TypeTag.ARRAY) || qt.is(p.comp, type_store::TypeTag.FUNC)))
 	{
 		qt = qt.decay(p.comp);
 	}
@@ -2361,21 +2367,23 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			bool deduced_type = has_auto_type;
 			if (has_auto_type)
 			{
-				if (qt.is(p.comp, type_store::TypeTag.FUNC) || qt.is(p.comp, type_store::TypeTag.BLOCK))
+				// Zig switches on declarator_type: validate may already have made qt invalid.
+				parser_declarator::DeclaratorType declarator_type = parsed.declarator_type;
+				if (declarator_type == parser_declarator::DeclaratorType.FUNC || declarator_type == parser_declarator::DeclaratorType.BLOCK)
 				{
-					String context = qt.is(p.comp, type_store::TypeTag.BLOCK) ? "block return type" : "function return type";
+					String context = declarator_type == parser_declarator::DeclaratorType.BLOCK ? "block return type" : "function return type";
 					emit_deduced_type_not_allowed(p, spec.qt.is_auto_type(), context,
 						spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
-				else if (qt.is(p.comp, type_store::TypeTag.ARRAY))
+				else if (declarator_type == parser_declarator::DeclaratorType.ARRAY)
 				{
 					emit_deduced_type_array(p, spec.qt.is_auto_type(), p.tree.tok_slice(name_tok), name_tok)!;
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
-				else if (qt.is(p.comp, type_store::TypeTag.POINTER))
+				else if (declarator_type == parser_declarator::DeclaratorType.POINTER)
 				{
 					p.err(parser_diagnostics::ParserDiag.AUTO_TYPE_REQUIRES_PLAIN_DECLARATOR, name_tok)!;
 					qt = type_store::INVALID;
@@ -2550,7 +2558,9 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.TYPEDEF, .type_def = {
 					.name_tok = name_tok, .qt = qt, .implicit = false,
 				} });
-				type_store::QualType typedef_qt = p.comp.type_store.put(type_store::type_typedef(qt, name, node)).with_qualifiers(qt);
+				// Zig: an invalid declarator type is not wrapped, so the typedef stays invalid.
+				type_store::QualType typedef_qt = qt.is_invalid() ? qt :
+					p.comp.type_store.put(type_store::type_typedef(qt, name, node)).with_qualifiers(qt);
 				tree::Node typedef_node = node.get(&p.tree);
 				typedef_node.type_def.qt = typedef_qt;
 				p.tree.set_node(typedef_node, (sz)node);

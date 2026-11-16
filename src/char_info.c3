@@ -15,7 +15,7 @@ fn bool is_c11_id_char(uint codepoint)
 {
 	switch (codepoint)
 	{
-		case 0x00A8: // 1
+		case 0x00A8:  // 1
 		case 0x00AA:
 		case 0x00AD:
 		case 0x00AF:
@@ -25,28 +25,28 @@ fn bool is_c11_id_char(uint codepoint)
 		case 0x00C0..0x00D6:
 		case 0x00D8..0x00F6:
 		case 0x00F8..0x00FF:
-		case 0x0100..0x167F: // 2
+		case 0x0100..0x167F:  // 2
 		case 0x1681..0x180D:
 		case 0x180F..0x1FFF:
-		case 0x200B..0x200D: // 3
+		case 0x200B..0x200D:  // 3
 		case 0x202A..0x202E:
 		case 0x203F..0x2040:
 		case 0x2054:
 		case 0x2060..0x206F:
-		case 0x2070..0x218F: // 4
+		case 0x2070..0x218F:  // 4
 		case 0x2460..0x24FF:
 		case 0x2776..0x2793:
 		case 0x2C00..0x2DFF:
 		case 0x2E80..0x2FFF:
-		case 0x3004..0x3007: // 5
+		case 0x3004..0x3007:  // 5
 		case 0x3021..0x302F:
 		case 0x3031..0x303F:
-		case 0x3040..0xD7FF: // 6
-		case 0xF900..0xFD3D: // 7
+		case 0x3040..0xD7FF:  // 6
+		case 0xF900..0xFD3D:  // 7
 		case 0xFD40..0xFDCF:
 		case 0xFDF0..0xFE44:
 		case 0xFE47..0xFFFD:
-		case 0x10000..0x1FFFD: // 8
+		case 0x10000..0x1FFFD:  // 8
 		case 0x20000..0x2FFFD:
 		case 0x30000..0x3FFFD:
 		case 0x40000..0x4FFFD:
@@ -74,7 +74,7 @@ fn bool is_c99_id_char(uint codepoint)
 {
 	switch (codepoint)
 	{
-		case 0x00AA: // Latin
+		case 0x00AA:  // Latin
 		case 0x00BA:
 		case 0x00C0..0x00D6:
 		case 0x00D8..0x00F6:
@@ -84,7 +84,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x1E00..0x1E9B:
 		case 0x1EA0..0x1EF9:
 		case 0x207F:
-		case 0x0386: // Greek
+		case 0x0386:  // Greek
 		case 0x0388..0x038A:
 		case 0x038C:
 		case 0x038E..0x03A1:
@@ -113,7 +113,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x1FE0..0x1FEC:
 		case 0x1FF2..0x1FF4:
 		case 0x1FF6..0x1FFC:
-		case 0x0401..0x040C: // Cyrillic
+		case 0x0401..0x040C:  // Cyrillic
 		case 0x040E..0x044F:
 		case 0x0451..0x045C:
 		case 0x045E..0x0481:
@@ -123,15 +123,15 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x04D0..0x04EB:
 		case 0x04EE..0x04F5:
 		case 0x04F8..0x04F9:
-		case 0x0531..0x0556: // Armenian
+		case 0x0531..0x0556:  // Armenian
 		case 0x0561..0x0587:
-		case 0x05B0..0x05B9: // Hebrew
+		case 0x05B0..0x05B9:  // Hebrew
 		case 0x05BB..0x05BD:
 		case 0x05BF:
 		case 0x05C1..0x05C2:
 		case 0x05D0..0x05EA:
 		case 0x05F0..0x05F2:
-		case 0x0621..0x063A: // Arabic
+		case 0x0621..0x063A:  // Arabic
 		case 0x0640..0x0652:
 		case 0x0670..0x06B7:
 		case 0x06BA..0x06BE:
@@ -139,12 +139,12 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x06D0..0x06DC:
 		case 0x06E5..0x06E8:
 		case 0x06EA..0x06ED:
-		case 0x0901..0x0903: // Devanagari
+		case 0x0901..0x0903:  // Devanagari
 		case 0x0905..0x0939:
 		case 0x093E..0x094D:
 		case 0x0950..0x0952:
 		case 0x0958..0x0963:
-		case 0x0981..0x0983: // Bengali
+		case 0x0981..0x0983:  // Bengali
 		case 0x0985..0x098C:
 		case 0x098F..0x0990:
 		case 0x0993..0x09A8:
@@ -157,7 +157,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x09DC..0x09DD:
 		case 0x09DF..0x09E3:
 		case 0x09F0..0x09F1:
-		case 0x0A02: // Gurmukhi
+		case 0x0A02:  // Gurmukhi
 		case 0x0A05..0x0A0A:
 		case 0x0A0F..0x0A10:
 		case 0x0A13..0x0A28:
@@ -171,7 +171,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0A59..0x0A5C:
 		case 0x0A5E:
 		case 0x0A74:
-		case 0x0A81..0x0A83: // Gujarati
+		case 0x0A81..0x0A83:  // Gujarati
 		case 0x0A85..0x0A8B:
 		case 0x0A8D:
 		case 0x0A8F..0x0A91:
@@ -184,7 +184,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0ACB..0x0ACD:
 		case 0x0AD0:
 		case 0x0AE0:
-		case 0x0B01..0x0B03: // Oriya
+		case 0x0B01..0x0B03:  // Oriya
 		case 0x0B05..0x0B0C:
 		case 0x0B0F..0x0B10:
 		case 0x0B13..0x0B28:
@@ -196,7 +196,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0B4B..0x0B4D:
 		case 0x0B5C..0x0B5D:
 		case 0x0B5F..0x0B61:
-		case 0x0B82..0x0B83: // Tamil
+		case 0x0B82..0x0B83:  // Tamil
 		case 0x0B85..0x0B8A:
 		case 0x0B8E..0x0B90:
 		case 0x0B92..0x0B95:
@@ -210,7 +210,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0BBE..0x0BC2:
 		case 0x0BC6..0x0BC8:
 		case 0x0BCA..0x0BCD:
-		case 0x0C01..0x0C03: // Telugu
+		case 0x0C01..0x0C03:  // Telugu
 		case 0x0C05..0x0C0C:
 		case 0x0C0E..0x0C10:
 		case 0x0C12..0x0C28:
@@ -220,7 +220,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0C46..0x0C48:
 		case 0x0C4A..0x0C4D:
 		case 0x0C60..0x0C61:
-		case 0x0C82..0x0C83: // Kannada
+		case 0x0C82..0x0C83:  // Kannada
 		case 0x0C85..0x0C8C:
 		case 0x0C8E..0x0C90:
 		case 0x0C92..0x0CA8:
@@ -231,7 +231,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0CCA..0x0CCD:
 		case 0x0CDE:
 		case 0x0CE0..0x0CE1:
-		case 0x0D02..0x0D03: // Malayalam
+		case 0x0D02..0x0D03:  // Malayalam
 		case 0x0D05..0x0D0C:
 		case 0x0D0E..0x0D10:
 		case 0x0D12..0x0D28:
@@ -240,10 +240,10 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0D46..0x0D48:
 		case 0x0D4A..0x0D4D:
 		case 0x0D60..0x0D61:
-		case 0x0E01..0x0E3A: // Thai (excluding digits 0x0E50...0x0E59; originally 0x0E01...0x0E3A and 0x0E40...0x0E5B
+		case 0x0E01..0x0E3A:  // Thai (excluding digits 0x0E50...0x0E59; originally 0x0E01...0x0E3A and 0x0E40...0x0E5B
 		case 0x0E40..0x0E4F:
 		case 0x0E5A..0x0E5B:
-		case 0x0E81..0x0E82: // Lao
+		case 0x0E81..0x0E82:  // Lao
 		case 0x0E84:
 		case 0x0E87..0x0E88:
 		case 0x0E8A:
@@ -261,7 +261,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0EC6:
 		case 0x0EC8..0x0ECD:
 		case 0x0EDC..0x0EDD:
-		case 0x0F00: // Tibetan
+		case 0x0F00:  // Tibetan
 		case 0x0F18..0x0F19:
 		case 0x0F35:
 		case 0x0F37:
@@ -275,16 +275,16 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0F99..0x0FAD:
 		case 0x0FB1..0x0FB7:
 		case 0x0FB9:
-		case 0x10A0..0x10C5: // Georgian
+		case 0x10A0..0x10C5:  // Georgian
 		case 0x10D0..0x10F6:
-		case 0x3041..0x3093: // Hiragana
+		case 0x3041..0x3093:  // Hiragana
 		case 0x309B..0x309C:
-		case 0x30A1..0x30F6: // Katakana
+		case 0x30A1..0x30F6:  // Katakana
 		case 0x30FB..0x30FC:
-		case 0x3105..0x312C: // Bopomofo
-		case 0x4E00..0x9FA5: // CJK Unified Ideographs
-		case 0xAC00..0xD7A3: // Hangul
-		case 0x0660..0x0669: // Digits
+		case 0x3105..0x312C:  // Bopomofo
+		case 0x4E00..0x9FA5:  // CJK Unified Ideographs
+		case 0xAC00..0xD7A3:  // Hangul
+		case 0x0660..0x0669:  // Digits
 		case 0x06F0..0x06F9:
 		case 0x0966..0x096F:
 		case 0x09E6..0x09EF:
@@ -298,7 +298,7 @@ fn bool is_c99_id_char(uint codepoint)
 		case 0x0E50..0x0E59:
 		case 0x0ED0..0x0ED9:
 		case 0x0F20..0x0F33:
-		case 0x00B5: // Special characters
+		case 0x00B5:  // Special characters
 		case 0x00B7:
 		case 0x02B0..0x02B8:
 		case 0x02BB:
@@ -383,17 +383,17 @@ fn bool is_invisible(uint codepoint)
 {
 	switch (codepoint)
 	{
-		case 0x00ad: // SOFT HYPHEN
-		case 0x200b: // ZERO WIDTH SPACE
-		case 0x200c: // ZERO WIDTH NON-JOINER
-		case 0x200d: // ZERO WIDTH JOINER
-		case 0x2060: // WORD JOINER
-		case 0x2061: // FUNCTION APPLICATION
-		case 0x2062: // INVISIBLE TIMES
-		case 0x2063: // INVISIBLE SEPARATOR
-		case 0x2064: // INVISIBLE PLUS
-		case 0xfeff: // ZERO WIDTH NO-BREAK SPACE
-			return true;
+		case 0x00ad:  // SOFT HYPHEN
+		case 0x200b:  // ZERO WIDTH SPACE
+		case 0x200c:  // ZERO WIDTH NON-JOINER
+		case 0x200d:  // ZERO WIDTH JOINER
+		case 0x2060:  // WORD JOINER
+		case 0x2061:  // FUNCTION APPLICATION
+		case 0x2062:  // INVISIBLE TIMES
+		case 0x2063:  // INVISIBLE SEPARATOR
+		case 0x2064:  // INVISIBLE PLUS
+		case 0xfeff:  // ZERO WIDTH NO-BREAK SPACE
+		return true;
 		default:
 			return false;
 	}
@@ -409,83 +409,83 @@ fn String homoglyph(uint codepoint)
 	switch (codepoint)
 	{
 		case 0x01c3:
-			return "!"; // LATIN LETTER RETROFLEX CLICK
+			return "!";  // LATIN LETTER RETROFLEX CLICK
 		case 0x037e:
-			return ";"; // GREEK QUESTION MARK
+			return ";";  // GREEK QUESTION MARK
 		case 0x2212:
-			return "-"; // MINUS SIGN
+			return "-";  // MINUS SIGN
 		case 0x2215:
-			return "/"; // DIVISION SLASH
+			return "/";  // DIVISION SLASH
 		case 0x2216:
-			return "\\"; // SET MINUS
+			return "\\";  // SET MINUS
 		case 0x2217:
-			return "*"; // ASTERISK OPERATOR
+			return "*";  // ASTERISK OPERATOR
 		case 0x2223:
-			return "|"; // DIVIDES
+			return "|";  // DIVIDES
 		case 0x2227:
-			return "^"; // LOGICAL AND
+			return "^";  // LOGICAL AND
 		case 0x2236:
-			return ":"; // RATIO
+			return ":";  // RATIO
 		case 0x223c:
-			return "~"; // TILDE OPERATOR
+			return "~";  // TILDE OPERATOR
 		case 0xa789:
-			return ":"; // MODIFIER LETTER COLON
+			return ":";  // MODIFIER LETTER COLON
 		case 0xff01:
-			return "!"; // FULLWIDTH EXCLAMATION MARK
+			return "!";  // FULLWIDTH EXCLAMATION MARK
 		case 0xff03:
-			return "#"; // FULLWIDTH NUMBER SIGN
+			return "#";  // FULLWIDTH NUMBER SIGN
 		case 0xff04:
-			return "$"; // FULLWIDTH DOLLAR SIGN
+			return "$";  // FULLWIDTH DOLLAR SIGN
 		case 0xff05:
-			return "%"; // FULLWIDTH PERCENT SIGN
+			return "%";  // FULLWIDTH PERCENT SIGN
 		case 0xff06:
-			return "&"; // FULLWIDTH AMPERSAND
+			return "&";  // FULLWIDTH AMPERSAND
 		case 0xff08:
-			return "("; // FULLWIDTH LEFT PARENTHESIS
+			return "(";  // FULLWIDTH LEFT PARENTHESIS
 		case 0xff09:
-			return ")"; // FULLWIDTH RIGHT PARENTHESIS
+			return ")";  // FULLWIDTH RIGHT PARENTHESIS
 		case 0xff0a:
-			return "*"; // FULLWIDTH ASTERISK
+			return "*";  // FULLWIDTH ASTERISK
 		case 0xff0b:
-			return "+"; // FULLWIDTH ASTERISK
+			return "+";  // FULLWIDTH ASTERISK
 		case 0xff0c:
-			return ","; // FULLWIDTH COMMA
+			return ",";  // FULLWIDTH COMMA
 		case 0xff0d:
-			return "-"; // FULLWIDTH HYPHEN-MINUS
+			return "-";  // FULLWIDTH HYPHEN-MINUS
 		case 0xff0e:
-			return "."; // FULLWIDTH FULL STOP
+			return ".";  // FULLWIDTH FULL STOP
 		case 0xff0f:
-			return "/"; // FULLWIDTH SOLIDUS
+			return "/";  // FULLWIDTH SOLIDUS
 		case 0xff1a:
-			return ":"; // FULLWIDTH COLON
+			return ":";  // FULLWIDTH COLON
 		case 0xff1b:
-			return ";"; // FULLWIDTH SEMICOLON
+			return ";";  // FULLWIDTH SEMICOLON
 		case 0xff1c:
-			return "<"; // FULLWIDTH LESS-THAN SIGN
+			return "<";  // FULLWIDTH LESS-THAN SIGN
 		case 0xff1d:
-			return "="; // FULLWIDTH EQUALS SIGN
+			return "=";  // FULLWIDTH EQUALS SIGN
 		case 0xff1e:
-			return ">"; // FULLWIDTH GREATER-THAN SIGN
+			return ">";  // FULLWIDTH GREATER-THAN SIGN
 		case 0xff1f:
-			return "?"; // FULLWIDTH QUESTION MARK
+			return "?";  // FULLWIDTH QUESTION MARK
 		case 0xff20:
-			return "@"; // FULLWIDTH COMMERCIAL AT
+			return "@";  // FULLWIDTH COMMERCIAL AT
 		case 0xff3b:
-			return "["; // FULLWIDTH LEFT SQUARE BRACKET
+			return "[";  // FULLWIDTH LEFT SQUARE BRACKET
 		case 0xff3c:
-			return "\\"; // FULLWIDTH REVERSE SOLIDUS
+			return "\\";  // FULLWIDTH REVERSE SOLIDUS
 		case 0xff3d:
-			return "]"; // FULLWIDTH RIGHT SQUARE BRACKET
+			return "]";  // FULLWIDTH RIGHT SQUARE BRACKET
 		case 0xff3e:
-			return "^"; // FULLWIDTH CIRCUMFLEX ACCENT
+			return "^";  // FULLWIDTH CIRCUMFLEX ACCENT
 		case 0xff5b:
-			return "{"; // FULLWIDTH LEFT CURLY BRACKET
+			return "{";  // FULLWIDTH LEFT CURLY BRACKET
 		case 0xff5c:
-			return "|"; // FULLWIDTH VERTICAL LINE
+			return "|";  // FULLWIDTH VERTICAL LINE
 		case 0xff5d:
-			return "}"; // FULLWIDTH RIGHT CURLY BRACKET
+			return "}";  // FULLWIDTH RIGHT CURLY BRACKET
 		case 0xff5e:
-			return "~"; // FULLWIDTH TILDE
+			return "~";  // FULLWIDTH TILDE
 		default:
 			return "";
 	}
@@ -648,7 +648,7 @@ fn NfcQuickCheck is_normalized(uint codepoint)
 }
 
 <* Zig's `enum(u8)`; the Unicode class number is the associated `value`. *>
-enum CanonicalCombiningClass : char (char value)
+enum CanonicalCombiningClass : char(char value)
 {
 	NOT_REORDERED { 0 },
 	OVERLAY { 1 },

@@ -6,7 +6,7 @@
 module builtin_call_tests;
 import aro::builtin_call, aro::builtins, aro::compilation, aro::diagnostics, aro::parser, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::float_value, aro::target;
+import aro::type_store, aro::value, aro::target, aro::primitive_value;
 import std::core::mem::allocators;
 
 struct CallOperands
@@ -212,7 +212,7 @@ fn void check_builtin_call(String text, bool eval, String diag_fragment = "", ui
 				assert(!result.val.is_none(), "expected a folded builtin-call value");
 				if (expected_infinity)
 				{
-					assert(float_value::is_inf(result.val, &comp));
+					assert(result.val.is_inf(&comp));
 				}
 				else
 				{

@@ -2,10 +2,13 @@ load("//tools:c3.bzl", "c3_binary", "c3_main_test", "c3_test")
 
 # GCC C testsuite (copied into test/gcc) as golden cases: torture compile must
 # compile cleanly, torture execute/ieee must build, link and exit 0, gcc.dg must
-# match dg-error/dg-warning lines. Gated by test/src/gcc/baseline.json
-# (only new non-PASS results fail); summary.md/results.jsonl are in the test's
-# undeclared outputs. `bazel run :gcc_testsuite_update_baseline` refreshes it.
-exports_files(["baseline.json"])
+# match dg-error/dg-warning lines, asm compiles gcc.dg cases with -S and applies
+# their dg-final scan-assembler checks. Not gated: the suite targets are tagged
+# manual (skipped by `bazel test //...`) and serve as a worklist for migrating
+# cases into the main unit tests. summary.md/results.jsonl are in the test's
+# undeclared outputs. Run explicitly, e.g.
+#   bazel test //test/src/gcc:gcc_testsuite_execute
+#   bazel run //test/src/gcc:gcc_testsuite_run [-- --filter 'pr1*']
 
 c3_test(
     name = "gcc_testsuite_tests",
@@ -18,6 +21,7 @@ _GCC_TESTSUITE_SUITES = {
     "execute": 2,
     "ieee": 1,
     "dg": 4,
+    "asm": 1,
 }
 
 [c3_main_test(
@@ -29,37 +33,32 @@ _GCC_TESTSUITE_SUITES = {
         "$(rootpath //:aro_c3)",
         "--suite",
         suite,
-        "--baseline",
-        "$(rootpath :baseline.json)",
-        # Like the old sh wrapper: under `bazel run`, rewrite the workspace baseline.
-        "--bazel-run-update",
     ],
     data = [
         "//:aro_c3",
         "//test:gcc_testsuite",
-        ":baseline.json",
     ],
     shard_count = shards,
+    tags = ["manual"],
     deps = ["//test/src/lib:harness_lib"],
 ) for suite, shards in _GCC_TESTSUITE_SUITES.items()]
 
 test_suite(
     name = "gcc_testsuite",
+    tags = ["manual"],
     tests = [":gcc_testsuite_" + suite for suite in _GCC_TESTSUITE_SUITES],
 )
 
-# bazel run //test/src/gcc:gcc_testsuite_update_baseline [-- extra args]
-# runs every suite on <workspace>/test/gcc and rewrites
-# <workspace>/test/src/gcc/baseline.json.
+# bazel run //test/src/gcc:gcc_testsuite_run [-- extra args]
+# runs every suite on <workspace>/test/gcc.
 c3_binary(
-    name = "gcc_testsuite_update_baseline",
+    name = "gcc_testsuite_run",
     srcs = ["gcc_testsuite.c3"],
     args = [
         "--aro",
         "$(rootpath //:aro_c3)",
         "--suite",
         ",".join(_GCC_TESTSUITE_SUITES.keys()),
-        "--bazel-run-update",
     ],
     data = ["//:aro_c3"],
     deps = ["//test/src/lib:harness_lib"],

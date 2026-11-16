@@ -6,7 +6,7 @@
 module ir_probe;
 import aro::backend::ir, aro::backend::object, aro::codegen, aro::compilation, aro::diagnostics;
 import aro::preprocessor, aro::source, aro::target, aro::tokens, aro::tokenizer, aro::tree;
-import aro::type_store, aro::value, aro::value_interner, std::io;
+import aro::type_store, aro::value, aro::value_interner, aro::primitive_value, std::io;
 
 struct AstFixture
 {
@@ -64,7 +64,7 @@ fn Ir scalar_ir(Allocator allocator, value_interner::Interner* interner)
 	builder.init(allocator, interner);
 	builder.start_fn();
 	Ref input = builder.add_arg(value_interner::REF_I32);
-	Ref one = builder.add_constant(interner.put(value_interner::int_key(1)), value_interner::REF_I32);
+	Ref one = builder.add_constant(interner.put(primitive_value::int_key(1)), value_interner::REF_I32);
 	Ref result = builder.add_inst(ADD, { .bin = { input, one } }, value_interner::REF_I32);
 	builder.add_return(result);
 	builder.finish_fn("increment");
@@ -85,11 +85,11 @@ fn Ir control_flow_ir(Allocator allocator, value_interner::Interner* interner)
 	builder.add_branch(condition, then_label, else_label);
 
 	builder.start_block(then_label);
-	Ref then_value = builder.add_constant(interner.put(value_interner::int_key(1)), value_interner::REF_I32);
+	Ref then_value = builder.add_constant(interner.put(primitive_value::int_key(1)), value_interner::REF_I32);
 	builder.add_jump(join_label);
 
 	builder.start_block(else_label);
-	Ref else_value = builder.add_constant(interner.put(value_interner::int_key(0)), value_interner::REF_I32);
+	Ref else_value = builder.add_constant(interner.put(primitive_value::int_key(0)), value_interner::REF_I32);
 	builder.add_jump(join_label);
 
 	builder.start_block(join_label);

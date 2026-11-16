@@ -55,9 +55,10 @@
 // Files are read relative to the working directory (the Bazel runfiles root),
 // or from $LITERAL_VECTORS_DIR when set.
 module literal_tests;
+import aro::primitive_value;
 import aro::number_literal, aro::number_value, aro::text_literal, aro::text_literal_semantics;
 import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts, aro::tokenizer;
-import aro::value, aro::value_interner, aro::float_value, aro::bigint;
+import aro::value, aro::value_interner, aro::bigint;
 import std::io, std::os::env, std::core::mem::allocators, std::core::dstring;
 
 const Host HOST = { X86_64, LINUX, GNU };
@@ -328,7 +329,7 @@ fn String ast_elem_name(String n)
 	}
 }
 
-fn String width_name(InternerKeyTag t)
+fn String width_name(PrimitiveType t)
 {
 	switch (t)
 	{
@@ -341,15 +342,15 @@ fn String width_name(InternerKeyTag t)
 }
 }
 
-fn String float_bits(InternerKey f)
+fn String float_bits(PrimitiveValue f)
 {
 	switch (f.tag)
 	{
-		case F16: return string::tformat("%04x", f.raw());
-		case F32: return string::tformat("%08x", f.raw());
-		case F64: return string::tformat("%016x", f.raw());
-		case F80: return string::tformat("%020x", f.raw());
-		case F128: return string::tformat("%032x", f.raw());
+		case F16: return string::tformat("%04x", f.float_bits());
+		case F32: return string::tformat("%08x", f.float_bits());
+		case F64: return string::tformat("%016x", f.float_bits());
+		case F80: return string::tformat("%020x", f.float_bits());
+		case F128: return string::tformat("%032x", f.float_bits());
 			default: unreachable("not a float tag");
 }
 }
@@ -357,7 +358,7 @@ fn String float_bits(InternerKey f)
 fn String show_value(Compilation* comp, Value v)
 {
 	if (v.is_none()) return "none";
-	InternerKey key = comp.interner.get(v.ref());
+	PrimitiveValue key = comp.interner.get(v.ref());
 	switch (key.tag.kind)
 	{
 		case INT:
@@ -368,9 +369,9 @@ fn String show_value(Compilation* comp, Value v)
 		case FLOAT:
 			return string::tformat("%s:0x%s", width_name(key.tag), float_bits(key));
 		case COMPLEX:
-			InternerKeyTag t = key.tag.scalar();
-			InternerKey re = float_value::to_float(v, t, comp);
-			InternerKey im = float_value::imag(v, t, comp);
+			PrimitiveType t = key.tag.scalar();
+			PrimitiveValue re = v.to_float(t, comp);
+			PrimitiveValue im = v.imag(t, comp);
 			return string::tformat("c%s:0x%s:0x%s", width_name(t), float_bits(re), float_bits(im));
 		default:
 			return string::tformat("<key %s>", key.tag);
@@ -1050,8 +1051,8 @@ fn void VectorRun.run_fixture(&self, Allocator a, String line, String[] f, sz eq
 		case "fixture_eq":
 			if (!typed.ok) return self.fail(line, string::tformat("no typed result (%s)", got));
 			int128 want = parse_hex(f[eq + 1])!!;
-			InternerKey key = comp.interner.get(typed.val.ref());
-			if (!key.tag.is_int()) return self.fail(line, "not an integer value");
+			PrimitiveValue key = comp.interner.get(typed.val.ref());
+			if (key.tag.kind != NumberKind.INT) return self.fail(line, "not an integer value");
 			int128 have = parse_hex(show_value(comp, typed.val))!!;
 			if (have == want) return;
 			// usual arithmetic conversions: a negative N against an unsigned literal

@@ -1,5 +1,5 @@
-// Tests for the CONVERSIONS section of src/float_value.c3 (plan 10 agent
-// 10.3): InternerKey.cast, int -> float, bigIntToFloat, float -> big int,
+// Tests for the CONVERSIONS section of src/primitive_float.c3 (plan 10 agent
+// 10.3): PrimitiveValue.cast, int -> float, bigIntToFloat, float -> big int,
 // std.fmt.parseFloat(f128) and the Value-level float/complex operations.
 //
 // Sources of expected values (each test says which one it uses):
@@ -17,7 +17,8 @@
 // float_soft_narrow.c3 and annex_g.c3, which other plan 10 agents implement; the
 // Bazel target is tagged "manual" until those land.
 module float_conversion_tests;
-import aro::float_value, aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation;
+import aro::primitive_value;
+import aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)
@@ -27,18 +28,18 @@ macro check(left, right)
 
 fn uint128 u128(ulong hi, ulong lo) => (uint128)hi << 64 | (uint128)lo;
 
-fn void check_bits(InternerKey f, InternerKeyTag tag, uint128 bits)
+fn void check_bits(PrimitiveValue f, PrimitiveType tag, uint128 bits)
 {
-	if (f.tag != tag || f.raw() != bits)
+	if (f.tag != tag || f.float_bits() != bits)
 	{
-		io::printfn("got tag %s bits %032x, want tag %s bits %032x", f.tag, f.raw(), tag, bits);
+		io::printfn("got tag %s bits %032x, want tag %s bits %032x", f.tag, f.float_bits(), tag, bits);
 		test::eq(1, 0);
 	}
 }
 
-fn void check_f128(F128Bits f, ulong hi, ulong lo) => check_bits(float_value::f128_value(f), F128, u128(hi, lo));
+fn void check_f128(F128Bits f, ulong hi, ulong lo) => check_bits(primitive_value::f128_value(f), F128, u128(hi, lo));
 
-fn InternerKey raw(InternerKeyTag tag, uint128 bits) => float_value::from_raw(tag, bits);
+fn PrimitiveValue raw(PrimitiveType tag, uint128 bits) => primitive_value::float_key(tag, bits);
 
 const Host HOST = { X86_64, LINUX, GNU };
 
@@ -60,11 +61,11 @@ macro @with_comp(; @body(Compilation* comp))
 	check(ta.allocation_count(), 0);
 }
 
-fn Value fv(Compilation* comp, InternerKey f) => value::intern(comp, f);
-fn Value f32v(Compilation* comp, uint bits) => fv(comp, float_value::f32_value(bits));
-fn Value f64v(Compilation* comp, ulong bits) => fv(comp, float_value::f64_value(bits));
-fn Value cv(Compilation* comp, InternerKey re, InternerKey im) => value::intern(comp, float_value::make_complex(re, im));
-fn Value c64v(Compilation* comp, ulong re, ulong im) => cv(comp, float_value::f64_value(re), float_value::f64_value(im));
+fn Value fv(Compilation* comp, PrimitiveValue f) => value::intern(comp, f);
+fn Value f32v(Compilation* comp, uint bits) => fv(comp, primitive_value::f32_value(bits));
+fn Value f64v(Compilation* comp, ulong bits) => fv(comp, primitive_value::f64_value(bits));
+fn Value cv(Compilation* comp, PrimitiveValue re, PrimitiveValue im) => value::intern(comp, primitive_value::complex_key(re, im));
+fn Value c64v(Compilation* comp, ulong re, ulong im) => cv(comp, primitive_value::f64_value(re), primitive_value::f64_value(im));
 
 fn void check_value(Value got, Value want)
 {
@@ -78,11 +79,11 @@ fn void check_value(Value got, Value want)
 fn QualType complex_of(Compilation* comp, QualType qt) => comp.type_store.put(type_store::type_complex(qt));
 
 <* The interner dedups floats with `==` (as Zig does), so a NaN gets a new ref each time: compare bits. *>
-fn void check_float_key(Compilation* comp, Value v, InternerKey want)
+fn void check_float_key(Compilation* comp, Value v, PrimitiveValue want)
 {
-	InternerKey k = comp.interner.get(v.ref());
-	assert(k.tag.is_float());
-	check_bits(k, want.tag, want.raw());
+	PrimitiveValue k = comp.interner.get(v.ref());
+	assert(k.tag.kind == NumberKind.FLOAT);
+	check_bits(k, want.tag, want.float_bits());
 }
 
 const ulong D_ONE = 0x3FF0_0000_0000_0000;
@@ -93,7 +94,7 @@ const ulong D_NEG_TWO = 0xC000_0000_0000_0000;
 const ulong D_NEG_ZERO = 0x8000_0000_0000_0000;
 
 // ---------------------------------------------------------------------------
-// InternerKey.cast
+// PrimitiveValue.cast
 // ---------------------------------------------------------------------------
 
 fn void cast_same_tag_is_identity() @test
@@ -107,7 +108,7 @@ fn void cast_from_f64_observed() @test
 {
 	// observed (Zig 0.17.0): @floatCast of f64 bit patterns to every width.
 	// 1 + 2^-24: an f32 tie, rounds to even (down).
-	InternerKey a = raw(F64, 0x3FF0_0000_1000_0000);
+	PrimitiveValue a = raw(F64, 0x3FF0_0000_1000_0000);
 	check_bits(a.cast(F16), F16, 0x3C00);
 	check_bits(a.cast(F32), F32, 0x3F80_0000);
 	check_bits(a.cast(F80), F80, u128(0x3FFF, 0x8000_0080_0000_0000));
@@ -115,25 +116,25 @@ fn void cast_from_f64_observed() @test
 	// 1 + 3 * 2^-24: an f32 tie, rounds to even (up).
 	check_bits(raw(F64, 0x3FF0_0000_3000_0000).cast(F32), F32, 0x3F80_0002);
 	// 0.1
-	InternerKey tenth = raw(F64, 0x3FB9_9999_9999_999A);
+	PrimitiveValue tenth = raw(F64, 0x3FB9_9999_9999_999A);
 	check_bits(tenth.cast(F16), F16, 0x2E66);
 	check_bits(tenth.cast(F32), F32, 0x3DCC_CCCD);
 	check_bits(tenth.cast(F80), F80, u128(0x3FFB, 0xCCCC_CCCC_CCCC_D000));
 	check_bits(tenth.cast(F128), F128, u128(0x3FFB_9999_9999_9999, 0xA000_0000_0000_0000));
 	// min subnormal f64: underflows to +0 in f16/f32, normal in f80/f128.
-	InternerKey tiny = raw(F64, 1);
+	PrimitiveValue tiny = raw(F64, 1);
 	check_bits(tiny.cast(F16), F16, 0);
 	check_bits(tiny.cast(F32), F32, 0);
 	check_bits(tiny.cast(F80), F80, u128(0x3BCD, 0x8000_0000_0000_0000));
 	check_bits(tiny.cast(F128), F128, u128(0x3BCD_0000_0000_0000, 0));
 	// -0.0 keeps its sign.
-	InternerKey nz = raw(F64, D_NEG_ZERO);
+	PrimitiveValue nz = raw(F64, D_NEG_ZERO);
 	check_bits(nz.cast(F16), F16, 0x8000);
 	check_bits(nz.cast(F32), F32, 0x8000_0000);
 	check_bits(nz.cast(F80), F80, u128(0x8000, 0));
 	check_bits(nz.cast(F128), F128, u128(0x8000_0000_0000_0000, 0));
 	// overflow to +inf in f16/f32
-	InternerKey big = raw(F64, 0x47EF_FFFF_F000_0000);
+	PrimitiveValue big = raw(F64, 0x47EF_FFFF_F000_0000);
 	check_bits(big.cast(F16), F16, 0x7C00);
 	check_bits(big.cast(F32), F32, 0x7F80_0000);
 	check_bits(big.cast(F80), F80, u128(0x407E, 0xFFFF_FF80_0000_0000));
@@ -149,14 +150,14 @@ fn void cast_from_f80_and_f128_observed() @test
 {
 	// observed (Zig 0.17.0)
 	// f80 1 + 2^-53: an f64 tie, to even (down); exact in f128.
-	InternerKey a = raw(F80, u128(0x3FFF, 0x8000_0000_0000_0400));
+	PrimitiveValue a = raw(F80, u128(0x3FFF, 0x8000_0000_0000_0400));
 	check_bits(a.cast(F64), F64, D_ONE);
 	check_bits(a.cast(F32), F32, 0x3F80_0000);
 	check_bits(a.cast(F128), F128, u128(0x3FFF_0000_0000_0000, 0x0800_0000_0000_0000));
 	// f80 1 + 3 * 2^-53: tie, to even (up).
 	check_bits(raw(F80, u128(0x3FFF, 0x8000_0000_0000_0C00)).cast(F64), F64, 0x3FF0_0000_0000_0002);
 	// largest f80 below 2: rounds up to 2.0 in every narrower width.
-	InternerKey b = raw(F80, u128(0x3FFF, 0xFFFF_FFFF_FFFF_FFFF));
+	PrimitiveValue b = raw(F80, u128(0x3FFF, 0xFFFF_FFFF_FFFF_FFFF));
 	check_bits(b.cast(F16), F16, 0x4000);
 	check_bits(b.cast(F32), F32, 0x4000_0000);
 	check_bits(b.cast(F64), F64, D_TWO);
@@ -165,13 +166,13 @@ fn void cast_from_f80_and_f128_observed() @test
 	check_bits(raw(F128, u128(0x3FFF_0000_0000_0000, 0x0000_8000_0000_0000)).cast(F80), F80, u128(0x3FFF, 0x8000_0000_0000_0000));
 	check_bits(raw(F128, u128(0x3FFF_0000_0000_0000, 0x0001_8000_0000_0000)).cast(F80), F80, u128(0x3FFF, 0x8000_0000_0000_0001));
 	// f128 0.1
-	InternerKey c = raw(F128, u128(0x3FFB_9999_9999_9999, 0x9999_9999_9999_999A));
+	PrimitiveValue c = raw(F128, u128(0x3FFB_9999_9999_9999, 0x9999_9999_9999_999A));
 	check_bits(c.cast(F16), F16, 0x2E66);
 	check_bits(c.cast(F32), F32, 0x3DCC_CCCD);
 	check_bits(c.cast(F64), F64, 0x3FB9_9999_9999_999A);
 	check_bits(c.cast(F80), F80, u128(0x3FFB, 0xCCCC_CCCC_CCCC_CCCD));
 	// f128 min subnormal underflows to +0 everywhere.
-	InternerKey d = raw(F128, 1);
+	PrimitiveValue d = raw(F128, 1);
 	check_bits(d.cast(F64), F64, 0);
 	check_bits(d.cast(F80), F80, 0);
 }
@@ -184,27 +185,27 @@ fn void cast_nan_observed() @test
 	// f16 -> f32/f80 follow the canonical `-mcpu=baseline` run of
 	// test/unit/float_values (nan.txt); an F16C host (`-mcpu=native`,
 	// vcvtph2ps) quiets them, which is what this test first recorded.
-	InternerKey h = raw(F16, 0x7C01);
+	PrimitiveValue h = raw(F16, 0x7C01);
 	check_bits(h.cast(F32), F32, 0x7F80_2000);
 	check_bits(h.cast(F64), F64, 0x7FF8_0400_0000_0000);
 	check_bits(h.cast(F80), F80, u128(0x7FFF, 0x8020_0000_0000_0000));
 	check_bits(h.cast(F128), F128, u128(0x7FFF_0040_0000_0000, 0));
-	InternerKey s = raw(F32, 0x7F80_0001);
+	PrimitiveValue s = raw(F32, 0x7F80_0001);
 	check_bits(s.cast(F16), F16, 0x7E00);
 	check_bits(s.cast(F64), F64, 0x7FF8_0000_2000_0000);
 	check_bits(s.cast(F80), F80, u128(0x7FFF, 0xC000_0100_0000_0000));
 	check_bits(s.cast(F128), F128, u128(0x7FFF_0000_0200_0000, 0));
-	InternerKey d = raw(F64, 0x7FF0_0000_0000_0001);
+	PrimitiveValue d = raw(F64, 0x7FF0_0000_0000_0001);
 	check_bits(d.cast(F32), F32, 0x7FC0_0000);
 	check_bits(d.cast(F80), F80, u128(0x7FFF, 0xC000_0000_0000_0800));
 	check_bits(d.cast(F128), F128, u128(0x7FFF_0000_0000_0000, 0x1000_0000_0000_0000));
-	InternerKey x = raw(F80, u128(0x7FFF, 0x8000_0000_0000_0001));
+	PrimitiveValue x = raw(F80, u128(0x7FFF, 0x8000_0000_0000_0001));
 	check_bits(x.cast(F64), F64, 0x7FF8_0000_0000_0000);
 	check_bits(x.cast(F128), F128, u128(0x7FFF_0000_0000_0000, 0x0002_0000_0000_0000));
 	// source-derived: the default NaN of f64 (negative quiet) keeps its sign.
 	check_bits(raw(F64, 0xFFF8_0000_0000_0000).cast(F32), F32, 0xFFC0_0000);
-	check_bits(float_value::inf(F64, true).cast(F16), F16, 0xFC00);
-	check_bits(float_value::inf(F16).cast(F128), F128, u128(0x7FFF_0000_0000_0000, 0));
+	check_bits(primitive_value::inf(F64, true).cast(F16), F16, 0xFC00);
+	check_bits(primitive_value::inf(F16).cast(F128), F128, u128(0x7FFF_0000_0000_0000, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -213,20 +214,20 @@ fn void cast_nan_observed() @test
 
 fn void check_u64(ulong x, ushort h, uint s, ulong d, uint128 e, uint128 q)
 {
-	check_bits(float_value::from_u64(x, F16), F16, h);
-	check_bits(float_value::from_u64(x, F32), F32, s);
-	check_bits(float_value::from_u64(x, F64), F64, d);
-	check_bits(float_value::from_u64(x, F80), F80, e);
-	check_bits(float_value::from_u64(x, F128), F128, q);
+	check_bits(primitive_value::from_u64(x, F16), F16, h);
+	check_bits(primitive_value::from_u64(x, F32), F32, s);
+	check_bits(primitive_value::from_u64(x, F64), F64, d);
+	check_bits(primitive_value::from_u64(x, F80), F80, e);
+	check_bits(primitive_value::from_u64(x, F128), F128, q);
 }
 
 fn void check_i64(long x, ushort h, uint s, ulong d, uint128 e, uint128 q)
 {
-	check_bits(float_value::from_i64(x, F16), F16, h);
-	check_bits(float_value::from_i64(x, F32), F32, s);
-	check_bits(float_value::from_i64(x, F64), F64, d);
-	check_bits(float_value::from_i64(x, F80), F80, e);
-	check_bits(float_value::from_i64(x, F128), F128, q);
+	check_bits(primitive_value::from_i64(x, F16), F16, h);
+	check_bits(primitive_value::from_i64(x, F32), F32, s);
+	check_bits(primitive_value::from_i64(x, F64), F64, d);
+	check_bits(primitive_value::from_i64(x, F80), F80, e);
+	check_bits(primitive_value::from_i64(x, F128), F128, q);
 }
 
 fn void int_to_float_observed() @test
@@ -247,7 +248,7 @@ fn void int_to_float_observed() @test
 	check_i64(long::min, 0xFC00, 0xDF00_0000, 0xC3E0_0000_0000_0000, u128(0xC03E, 0x8000_0000_0000_0000), u128(0xC03E_0000_0000_0000, 0));
 }
 
-fn F128Bits big_to_f128(bool positive, Limb[] limbs) => float_value::big_int_to_f128({ .limbs = limbs, .positive = positive });
+fn F128Bits big_to_f128(bool positive, Limb[] limbs) => primitive_value::big_int_to_f128({ .limbs = limbs, .positive = positive });
 
 fn void big_int_to_f128_observed() @test
 {
@@ -291,14 +292,14 @@ fn void key_int_to_float_double_rounding_observed() @test
 	// f64 tie) and then to f64 (to even: 2^127). A single rounding would give
 	// 0x47E0000000000001. Reference quirk kept.
 	Limb[2] limbs = { 1, 0x8000_0000_0000_0400 };
-	InternerKey k = value_interner::big_int_key({ .limbs = limbs[..], .positive = true });
-	check_bits(float_value::key_int_to_float(k, F128), F128, u128(0x407E_0000_0000_0000, 0x0800_0000_0000_0000));
-	check_bits(float_value::key_int_to_float(k, F64), F64, 0x47E0_0000_0000_0000);
-	check_bits(float_value::key_int_to_float(k, F32), F32, 0x7F00_0000);
-	InternerKey u = value_interner::int_key(3);
-	check_bits(float_value::key_int_to_float(u, F32), F32, 0x4040_0000);
-	InternerKey n = value_interner::int_key(-2);
-	check_bits(float_value::key_int_to_float(n, F64), F64, D_NEG_TWO);
+	PrimitiveValue k = primitive_value::big_int_key({ .limbs = limbs[..], .positive = true });
+	check_bits(primitive_value::key_int_to_float(k, F128), F128, u128(0x407E_0000_0000_0000, 0x0800_0000_0000_0000));
+	check_bits(primitive_value::key_int_to_float(k, F64), F64, 0x47E0_0000_0000_0000);
+	check_bits(primitive_value::key_int_to_float(k, F32), F32, 0x7F00_0000);
+	PrimitiveValue u = primitive_value::int_key(3);
+	check_bits(primitive_value::key_int_to_float(u, F32), F32, 0x4040_0000);
+	PrimitiveValue n = primitive_value::int_key(-2);
+	check_bits(primitive_value::key_int_to_float(n, F64), F64, D_NEG_TWO);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,20 +309,20 @@ fn void key_int_to_float_double_rounding_observed() @test
 fn void calc_float_limb_len_source_derived() @test
 {
 	// source-derived from std.math.big.int.calcLimbLen
-	check(float_value::calc_float_limb_len({ 0, 0 }), 1);
-	check(float_value::calc_float_limb_len({ 1, 0 }), 1);                       // subnormal
-	check(float_value::calc_float_limb_len({ 0, 0x3FFE_0000_0000_0000 }), 1);  // 0.5: 2 + 0 bits
-	check(float_value::calc_float_limb_len({ 0, 0x403D_0000_0000_0000 }), 1);  // 2^62: 64 bits
-	check(float_value::calc_float_limb_len({ 0, 0x403E_0000_0000_0000 }), 2);  // 2^63: 65 bits
-	check(float_value::calc_float_limb_len({ 0, 0x7FFE_0000_0000_0000 }), 257); // 2^16383: 16385 bits
-	check(float_value::calc_float_limb_len({ 0, 0x7FFF_0000_0000_0000 }), 0);  // inf
+	check(primitive_value::calc_float_limb_len({ 0, 0 }), 1);
+	check(primitive_value::calc_float_limb_len({ 1, 0 }), 1);                       // subnormal
+	check(primitive_value::calc_float_limb_len({ 0, 0x3FFE_0000_0000_0000 }), 1);  // 0.5: 2 + 0 bits
+	check(primitive_value::calc_float_limb_len({ 0, 0x403D_0000_0000_0000 }), 1);  // 2^62: 64 bits
+	check(primitive_value::calc_float_limb_len({ 0, 0x403E_0000_0000_0000 }), 2);  // 2^63: 65 bits
+	check(primitive_value::calc_float_limb_len({ 0, 0x7FFE_0000_0000_0000 }), 257); // 2^16383: 16385 bits
+	check(primitive_value::calc_float_limb_len({ 0, 0x7FFF_0000_0000_0000 }), 0);  // inf
 }
 
 fn void check_trunc(F128Bits f, bool want_inexact, bool want_positive, Limb[] want)
 {
 	Limb[300] buf;
-	BigIntMutable m = { .limbs = buf[:float_value::calc_float_limb_len(f)], .len = 1, .positive = true };
-	bool inexact = float_value::f128_to_big_int_trunc(f, &m);
+	BigIntMutable m = { .limbs = buf[:primitive_value::calc_float_limb_len(f)], .len = 1, .positive = true };
+	bool inexact = primitive_value::f128_to_big_int_trunc(f, &m);
 	assert(inexact == want_inexact);
 	assert(m.positive == want_positive);
 	check(m.len, want.len);
@@ -355,7 +356,7 @@ fn void f128_to_big_int_trunc_source_derived() @test
 
 fn void check_parse(String s, ulong hi, ulong lo)
 {
-	F128Bits? r = float_value::parse_f128(s);
+	F128Bits? r = primitive_value::parse_f128(s);
 	if (catch r)
 	{
 		io::printfn("parse_f128(\"%s\") failed", s);
@@ -372,7 +373,7 @@ fn void check_parse(String s, ulong hi, ulong lo)
 
 fn void check_parse_error(String s)
 {
-	F128Bits? r = float_value::parse_f128(s);
+	F128Bits? r = primitive_value::parse_f128(s);
 	if (try r)
 	{
 		io::printfn("parse_f128(\"%s\") succeeded", s);
@@ -487,38 +488,38 @@ fn void float_to_int_fixture() @test
 	@with_comp(; Compilation* comp)
 	{
 		Value v = f32v(comp, 0x5015_02F9); // 10000000000.0f -> int
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
 		v = f32v(comp, 0x3F99_999A); // 1.2f
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.VALUE_CHANGED);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.VALUE_CHANGED);
 		check_value(v, value::ONE);
 		v = f32v(comp, 0xFFC0_0000); // 0.0f / 0 (x86 default NaN)
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.OVERFLOW);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.OVERFLOW);
 		assert(v.is_none());
 		v = f64v(comp, 0x4004_0000_0000_0000); // 5.0 / 2
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.VALUE_CHANGED);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.VALUE_CHANGED);
 		check_value(v, value::int_u64(2, comp));
 		v = f32v(comp, 0x3F00_0000); // 1.0f / 2
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.NONZERO_TO_ZERO);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.NONZERO_TO_ZERO);
 		check_value(v, value::ZERO);
 		v = f64v(comp, D_TWO); // 2.0
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, value::int_u64(2, comp));
 		v = f32v(comp, 0x4F00_0000); // 2147483647.0f == 2^31
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
 		check_value(v, value::int_u64(0x8000_0000, comp)); // stored untruncated
 		v = f32v(comp, 0x4380_0000); // 256.0f -> char
-		assert(float_value::float_to_int(&v, type_store::CHAR, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		assert(v.float_to_int(type_store::CHAR, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
 		v = f64v(comp, 0xBFF0_0000_0000_0000); // -1.0 -> unsigned
-		assert(float_value::float_to_int(&v, type_store::UINT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		assert(v.float_to_int(type_store::UINT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
 		check_value(v, value::ZERO);
 		v = f64v(comp, 0); // 0.0 -> _Bool
-		assert(float_value::float_to_int(&v, type_store::BOOL, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::BOOL, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, value::ZERO);
 		v = f32v(comp, 0x3F80_0000); // 1.0f -> _Bool
-		assert(float_value::float_to_int(&v, type_store::BOOL, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::BOOL, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, value::ONE);
 		v = f32v(comp, 0x3FC0_0000); // 1.5f -> _Bool
-		assert(float_value::float_to_int(&v, type_store::BOOL, comp) == FloatToIntChangeKind.VALUE_CHANGED);
+		assert(v.float_to_int(type_store::BOOL, comp) == FloatToIntChangeKind.VALUE_CHANGED);
 		check_value(v, value::ONE);
 	};
 }
@@ -529,49 +530,49 @@ fn void float_to_int_source_derived() @test
 	@with_comp(; Compilation* comp)
 	{
 		Value v = value::NONE;
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.NONE);
 		assert(v.is_none());
 		// NaN -> unsigned: `f < 0` is false for NaN, so OVERFLOW (not OUT_OF_RANGE).
 		v = f32v(comp, 0xFFC0_0000);
-		assert(float_value::float_to_int(&v, type_store::UINT, comp) == FloatToIntChangeKind.OVERFLOW);
+		assert(v.float_to_int(type_store::UINT, comp) == FloatToIntChangeKind.OVERFLOW);
 		// NaN -> _Bool: NaN != 0, so true and VALUE_CHANGED.
 		v = f32v(comp, 0x7FC0_0000);
-		assert(float_value::float_to_int(&v, type_store::BOOL, comp) == FloatToIntChangeKind.VALUE_CHANGED);
+		assert(v.float_to_int(type_store::BOOL, comp) == FloatToIntChangeKind.VALUE_CHANGED);
 		check_value(v, value::ONE);
 		// -inf -> unsigned is `< 0`: ZERO, OUT_OF_RANGE; -inf -> int: OVERFLOW.
-		v = fv(comp, float_value::inf(F64, true));
-		assert(float_value::float_to_int(&v, type_store::UINT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
-		v = fv(comp, float_value::inf(F64, true));
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.OVERFLOW);
+		v = fv(comp, primitive_value::inf(F64, true));
+		assert(v.float_to_int(type_store::UINT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		v = fv(comp, primitive_value::inf(F64, true));
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.OVERFLOW);
 		// -0.0 -> unsigned: not `< 0`, converts to 0 unchanged.
 		v = f64v(comp, D_NEG_ZERO);
-		assert(float_value::float_to_int(&v, type_store::UINT, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::UINT, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, value::ZERO);
 		// -0.5 -> unsigned: OUT_OF_RANGE wins over NONZERO_TO_ZERO; -> int: NONZERO_TO_ZERO.
 		v = f64v(comp, 0xBFE0_0000_0000_0000);
-		assert(float_value::float_to_int(&v, type_store::UINT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		assert(v.float_to_int(type_store::UINT, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
 		v = f64v(comp, 0xBFE0_0000_0000_0000);
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.NONZERO_TO_ZERO);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.NONZERO_TO_ZERO);
 		// -2.5 -> int: -2, VALUE_CHANGED.
 		v = f64v(comp, 0xC004_0000_0000_0000);
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.VALUE_CHANGED);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.VALUE_CHANGED);
 		check_value(v, value::int_i64(-2, comp));
 		// 1e30 -> __int128 fits; -> long does not and the untruncated value is kept.
 		Limb[2] e30 = { 0x4675_0000_0000_0000, 0xC_9F2C_9CD0 };
-		Value want = value::intern(comp, value_interner::big_int_key({ .limbs = e30[..], .positive = true }));
+		Value want = value::intern(comp, primitive_value::big_int_key({ .limbs = e30[..], .positive = true }));
 		v = f64v(comp, 0x4629_3E59_39A0_8CEA);
-		assert(float_value::float_to_int(&v, type_store::INT128, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::INT128, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, want);
 		v = f64v(comp, 0x4629_3E59_39A0_8CEA);
-		assert(float_value::float_to_int(&v, type_store::LONG, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
+		assert(v.float_to_int(type_store::LONG, comp) == FloatToIntChangeKind.OUT_OF_RANGE);
 		check_value(v, want);
 		// complex: the real part converts.
 		v = c64v(comp, 0x4008_0000_0000_0000, D_FOUR); // 3.0 + 4.0i
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, value::int_u64(3, comp));
 		// an int stays an int.
 		v = value::int_i64(-7, comp);
-		assert(float_value::float_to_int(&v, type_store::INT, comp) == FloatToIntChangeKind.NONE);
+		assert(v.float_to_int(type_store::INT, comp) == FloatToIntChangeKind.NONE);
 		check_value(v, value::int_i64(-7, comp));
 	};
 }
@@ -582,29 +583,29 @@ fn void int_to_float_values() @test
 	{
 		// observed (Zig 0.17.0, @floatFromInt)
 		Value v = value::int_u64(ulong::max, comp);
-		float_value::int_to_float(&v, type_store::DOUBLE, comp);
+		v.int_to_float(type_store::DOUBLE, comp);
 		check_value(v, f64v(comp, 0x43F0_0000_0000_0000));
 		v = value::int_u64(65520, comp);
-		float_value::int_to_float(&v, type_store::FLOAT16, comp);
+		v.int_to_float(type_store::FLOAT16, comp);
 		check_value(v, fv(comp, raw(F16, 0x7C00)));
 		v = value::int_i64(-9007199254740993, comp);
-		float_value::int_to_float(&v, type_store::DOUBLE, comp);
+		v.int_to_float(type_store::DOUBLE, comp);
 		check_value(v, f64v(comp, 0xC340_0000_0000_0000));
 		v = value::int_i64(-9007199254740995, comp);
-		float_value::int_to_float(&v, type_store::LONG_DOUBLE, comp);
+		v.int_to_float(type_store::LONG_DOUBLE, comp);
 		check_value(v, fv(comp, raw(F80, u128(0xC034, 0x8000_0000_0000_0C00))));
 		// observed: big int through f128 then f64 (double rounding kept).
 		Limb[2] limbs = { 1, 0x8000_0000_0000_0400 };
-		v = value::intern(comp, value_interner::big_int_key({ .limbs = limbs[..], .positive = true }));
-		float_value::int_to_float(&v, type_store::DOUBLE, comp);
+		v = value::intern(comp, primitive_value::big_int_key({ .limbs = limbs[..], .positive = true }));
+		v.int_to_float(type_store::DOUBLE, comp);
 		check_value(v, f64v(comp, 0x47E0_0000_0000_0000));
 		// source-derived: complex destination -> { value, +0.0 }.
 		v = value::int_u64(3, comp);
-		float_value::int_to_float(&v, complex_of(comp, type_store::DOUBLE), comp);
+		v.int_to_float(complex_of(comp, type_store::DOUBLE), comp);
 		check_value(v, c64v(comp, 0x4008_0000_0000_0000, 0));
 		// none stays none.
 		v = value::NONE;
-		float_value::int_to_float(&v, type_store::DOUBLE, comp);
+		v.int_to_float(type_store::DOUBLE, comp);
 		assert(v.is_none());
 	};
 }
@@ -615,23 +616,23 @@ fn void float_cast_values() @test
 	@with_comp(; Compilation* comp)
 	{
 		Value v = f64v(comp, 0x3FB9_9999_9999_999A); // 0.1 -> float
-		float_value::float_cast(&v, type_store::FLOAT, comp);
+		v.float_cast(type_store::FLOAT, comp);
 		check_value(v, f32v(comp, 0x3DCC_CCCD));
 		v = c64v(comp, 0x3FF8_0000_0000_0000, D_TWO); // (1.5 + 2.0i) -> float: the real part
-		float_value::float_cast(&v, type_store::FLOAT, comp);
+		v.float_cast(type_store::FLOAT, comp);
 		check_value(v, f32v(comp, 0x3FC0_0000));
 		v = f64v(comp, D_TWO); // 2.0 -> _Complex float
 		QualType cf = complex_of(comp, type_store::FLOAT);
-		float_value::float_cast(&v, cf, comp);
+		v.float_cast(cf, comp);
 		check_value(v, cv(comp, raw(F32, 0x4000_0000), raw(F32, 0)));
 		v = c64v(comp, 0x3FB9_9999_9999_999A, D_NEG_FOUR); // _Complex double -> _Complex float
-		float_value::float_cast(&v, cf, comp);
+		v.float_cast(cf, comp);
 		check_value(v, cv(comp, raw(F32, 0x3DCC_CCCD), raw(F32, 0xC080_0000)));
 		v = value::int_u64(5, comp); // int value with a float cast (to_float of an int key)
-		float_value::float_cast(&v, type_store::FLOAT128, comp);
+		v.float_cast(type_store::FLOAT128, comp);
 		check_value(v, fv(comp, raw(F128, u128(0x4001_4000_0000_0000, 0))));
 		v = value::NONE;
-		float_value::float_cast(&v, type_store::FLOAT, comp);
+		v.float_cast(type_store::FLOAT, comp);
 		assert(v.is_none());
 	};
 }
@@ -642,24 +643,24 @@ fn void real_imaginary_conj_values() @test
 	{
 		// source-derived from Value.realPart / imaginaryPart / complexConj
 		Value c = c64v(comp, 0x3FF8_0000_0000_0000, 0x4004_0000_0000_0000); // 1.5 + 2.5i
-		check_value(float_value::real_part(c, comp), f64v(comp, 0x3FF8_0000_0000_0000));
-		check_value(float_value::imaginary_part(c, comp), f64v(comp, 0x4004_0000_0000_0000));
+		check_value(c.real_part(comp), f64v(comp, 0x3FF8_0000_0000_0000));
+		check_value(c.imaginary_part(comp), f64v(comp, 0x4004_0000_0000_0000));
 		Value f = f64v(comp, 0x3FF8_0000_0000_0000);
-		check_value(float_value::real_part(f, comp), f);
-		check_value(float_value::imaginary_part(f, comp), value::ZERO);
-		check_value(float_value::imaginary_part(value::int_u64(9, comp), comp), value::ZERO);
-		assert(float_value::real_part(value::NONE, comp).is_none());
-		assert(float_value::imaginary_part(value::NONE, comp).is_none());
+		check_value(f.real_part(comp), f);
+		check_value(f.imaginary_part(comp), value::ZERO);
+		check_value(value::int_u64(9, comp).imaginary_part(comp), value::ZERO);
+		assert(value::NONE.real_part(comp).is_none());
+		assert(value::NONE.imaginary_part(comp).is_none());
 		QualType cd = complex_of(comp, type_store::DOUBLE);
 		// fixture "complex values": ~(2.0 + 4.0i) == 2.0 - 4.0i
-		check_value(float_value::complex_conj(c64v(comp, D_TWO, D_FOUR), cd, comp), c64v(comp, D_TWO, D_NEG_FOUR));
+		check_value(value::complex_conj(c64v(comp, D_TWO, D_FOUR), cd, comp), c64v(comp, D_TWO, D_NEG_FOUR));
 		// conj of a real value: the +0.0 imaginary part becomes -0.0.
-		check_value(float_value::complex_conj(value::int_u64(5, comp), cd, comp), c64v(comp, 0x4014_0000_0000_0000, D_NEG_ZERO));
+		check_value(value::complex_conj(value::int_u64(5, comp), cd, comp), c64v(comp, 0x4014_0000_0000_0000, D_NEG_ZERO));
 		// to_float / imag at another width
-		check_bits(float_value::to_float(c, F32, comp), F32, 0x3FC0_0000);
-		check_bits(float_value::imag(c, F32, comp), F32, 0x4020_0000);
-		check_bits(float_value::imag(f, F80, comp), F80, 0);
-		check_bits(float_value::to_float(value::ONE, F16, comp), F16, 0x3C00);
+		check_bits(c.to_float(F32, comp), F32, 0x3FC0_0000);
+		check_bits(c.imag(F32, comp), F32, 0x4020_0000);
+		check_bits(f.imag(F80, comp), F80, 0);
+		check_bits(value::ONE.to_float(F16, comp), F16, 0x3C00);
 	};
 }
 
@@ -669,23 +670,23 @@ fn void real_arithmetic_values() @test
 	{
 		Value r;
 		// source-derived (IEEE 754): 0.1 + 0.2 = 0x3FD3333333333334 in double.
-		assert(!float_value::add(&r, f64v(comp, 0x3FB9_9999_9999_999A), f64v(comp, 0x3FC9_9999_9999_999A), type_store::DOUBLE, comp));
+		assert(!r.add(f64v(comp, 0x3FB9_9999_9999_999A), f64v(comp, 0x3FC9_9999_9999_999A), type_store::DOUBLE, comp));
 		check_value(r, f64v(comp, 0x3FD3_3333_3333_3334));
 		// int operands are converted first: 1 - 3 = -2.0.
-		assert(!float_value::sub(&r, value::ONE, value::int_u64(3, comp), type_store::DOUBLE, comp));
+		assert(!r.sub(value::ONE, value::int_u64(3, comp), type_store::DOUBLE, comp));
 		check_value(r, f64v(comp, D_NEG_TWO));
 		// 1.5f * 2 = 3.0f
-		assert(!float_value::mul(&r, f32v(comp, 0x3FC0_0000), value::int_u64(2, comp), type_store::FLOAT, comp));
+		assert(!r.mul(f32v(comp, 0x3FC0_0000), value::int_u64(2, comp), type_store::FLOAT, comp));
 		check_value(r, f32v(comp, 0x4040_0000));
 		// 1.0 / 0.0 = +inf (no error); 0.0 / 0.0 = the x86 default NaN.
-		assert(!float_value::div(&r, value::ONE, f64v(comp, 0), type_store::DOUBLE, comp));
-		check_value(r, fv(comp, float_value::inf(F64)));
-		assert(!float_value::div(&r, f64v(comp, 0), f64v(comp, 0), type_store::DOUBLE, comp));
-		check_float_key(comp, r, float_value::f64_value(0xFFF8_0000_0000_0000)); // NaN: never shares a ref
+		assert(!r.div(value::ONE, f64v(comp, 0), type_store::DOUBLE, comp));
+		check_value(r, fv(comp, primitive_value::inf(F64)));
+		assert(!r.div(f64v(comp, 0), f64v(comp, 0), type_store::DOUBLE, comp));
+		check_float_key(comp, r, primitive_value::f64_value(0xFFF8_0000_0000_0000)); // NaN: never shares a ref
 		// long double / __float128: 1 + 1 = 2
-		assert(!float_value::add(&r, value::ONE, value::ONE, type_store::LONG_DOUBLE, comp));
+		assert(!r.add(value::ONE, value::ONE, type_store::LONG_DOUBLE, comp));
 		check_value(r, fv(comp, raw(F80, u128(0x4000, 0x8000_0000_0000_0000))));
-		assert(!float_value::add(&r, value::ONE, value::ONE, type_store::FLOAT128, comp));
+		assert(!r.add(value::ONE, value::ONE, type_store::FLOAT128, comp));
 		check_value(r, fv(comp, raw(F128, u128(0x4000_0000_0000_0000, 0))));
 	};
 }
@@ -698,22 +699,22 @@ fn void complex_arithmetic_fixture() @test
 		QualType cd = complex_of(comp, type_store::DOUBLE);
 		Value r;
 		// 1.0 + 2.0i
-		assert(!float_value::add(&r, value::ONE, c64v(comp, 0, D_TWO), cd, comp));
+		assert(!r.add(value::ONE, c64v(comp, 0, D_TWO), cd, comp));
 		check_value(r, c64v(comp, D_ONE, D_TWO));
 		// -2.0i - 2.0i == -4.0i  (-0.0 - +0.0 = -0.0)
-		assert(!float_value::sub(&r, c64v(comp, D_NEG_ZERO, D_NEG_TWO), c64v(comp, 0, D_TWO), cd, comp));
+		assert(!r.sub(c64v(comp, D_NEG_ZERO, D_NEG_TWO), c64v(comp, 0, D_TWO), cd, comp));
 		check_value(r, c64v(comp, D_NEG_ZERO, D_NEG_FOUR));
 		// 2.0i * 2.0i == -4.0
-		assert(!float_value::mul(&r, c64v(comp, 0, D_TWO), c64v(comp, 0, D_TWO), cd, comp));
+		assert(!r.mul(c64v(comp, 0, D_TWO), c64v(comp, 0, D_TWO), cd, comp));
 		check_value(r, c64v(comp, D_NEG_FOUR, 0));
 		// (2.0 + 2.0i) / 2.0 == 1.0 + 1.0i
-		assert(!float_value::div(&r, c64v(comp, D_TWO, D_TWO), f64v(comp, D_TWO), cd, comp));
+		assert(!r.div(c64v(comp, D_TWO, D_TWO), f64v(comp, D_TWO), cd, comp));
 		check_value(r, c64v(comp, D_ONE, D_ONE));
 		// (2.0 + 4.0i) / 1.0i == 4.0 - 2.0i
-		assert(!float_value::div(&r, c64v(comp, D_TWO, D_FOUR), c64v(comp, 0, D_ONE), cd, comp));
+		assert(!r.div(c64v(comp, D_TWO, D_FOUR), c64v(comp, 0, D_ONE), cd, comp));
 		check_value(r, c64v(comp, D_FOUR, D_NEG_TWO));
 		// (_Complex double){2.0} + (_Complex double){2.0, 4.0} == {4.0, 4.0}
-		assert(!float_value::add(&r, c64v(comp, D_TWO, 0), c64v(comp, D_TWO, D_FOUR), cd, comp));
+		assert(!r.add(c64v(comp, D_TWO, 0), c64v(comp, D_TWO, D_FOUR), cd, comp));
 		check_value(r, c64v(comp, D_FOUR, D_FOUR));
 	};
 }

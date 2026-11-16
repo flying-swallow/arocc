@@ -2,7 +2,8 @@
 // source-derived from src/backend/assembly_x86_64.c3, not executable Zig
 // parity.
 module assembly_tests;
-import aro::backend::assembly, aro::compilation, aro::diagnostics, aro::float_value;
+import aro::primitive_value;
+import aro::backend::assembly, aro::compilation, aro::diagnostics;
 import aro::code_gen_options, aro::source, aro::target, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
 import aro::value, aro::value_interner;
 
@@ -71,12 +72,12 @@ fn NodeIndex AssemblyFixture.int_literal(&self, tokens::TokenIndex tok, type_sto
 }
 
 fn NodeIndex AssemblyFixture.float_literal(&self, tokens::TokenIndex tok, type_store::QualType qt,
-	value_interner::InternerKeyTag tag, uint128 bits)
+	primitive_value::PrimitiveType tag, uint128 bits)
 {
 	NodeIndex node = self.tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL,
 		.literal = { .literal_tok = tok, .qt = qt } });
 	self.tree.set_value(node, value::intern(&self.comp,
-		float_value::from_raw(tag, bits)));
+		primitive_value::float_key(tag, bits)));
 	return node;
 }
 

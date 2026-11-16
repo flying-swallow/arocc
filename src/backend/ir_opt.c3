@@ -1,5 +1,6 @@
 // IR optimization passes, analyses, and verifier.
 module aro::backend::ir_opt;
+import aro::primitive_value;
 import aro::backend::ir, aro::value_interner, aro::code_gen_options, std::collections::list, std::collections::map;
 
 excuse VERIFY_FAIL;
@@ -1017,14 +1018,14 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 		}
 	}
 	if (!has_access_type) return false;
-	value_interner::InternerKey access_key = ir.interner.get(access_type);
+	primitive_value::PrimitiveValue access_key = ir.interner.get(access_type);
 	uint expected_size;
 	switch (access_key.tag)
 	{
-		case value_interner::InternerKeyTag.INT_TY: case value_interner::InternerKeyTag.FLOAT_TY:
+		case primitive_value::PrimitiveType.INT_TY: case primitive_value::PrimitiveType.FLOAT_TY:
 			if (access_key.ty_bits == 0) return false;
 			expected_size = ((uint)access_key.ty_bits + 7) / 8;
-		case value_interner::InternerKeyTag.PTR_TY:
+		case primitive_value::PrimitiveType.PTR_TY:
 			expected_size = 8;
 		default:
 			return false;
@@ -1200,8 +1201,8 @@ fn long const_prop_signed(ulong bits, ushort width)
 
 fn bool const_prop_int_width(ir::Ir* graph, value_interner::InternerRef ty, ushort* width)
 {
-	value_interner::InternerKey key = graph.interner.get(ty);
-	if (key.tag != value_interner::InternerKeyTag.INT_TY || key.ty_bits == 0 || key.ty_bits > 64) return false;
+	primitive_value::PrimitiveValue key = graph.interner.get(ty);
+	if (key.tag != primitive_value::PrimitiveType.INT_TY || key.ty_bits == 0 || key.ty_bits > 64) return false;
 	*width = key.ty_bits;
 	return true;
 }
@@ -1231,8 +1232,8 @@ fn ConstPropValue const_prop_constant_inst(ir::Ir* graph, ir::Inst* inst)
 {
 	ushort width;
 	if (!const_prop_int_width(graph, inst.ty, &width)) return const_prop_bottom();
-	value_interner::InternerKey key = graph.interner.get(inst.data.constant);
-	if (!key.tag.is_int() || !key.int_fits_64()) return const_prop_bottom();
+	primitive_value::PrimitiveValue key = graph.interner.get(inst.data.constant);
+	if (key.tag.kind != NumberKind.INT || !key.int_fits_64()) return const_prop_bottom();
 	return const_prop_constant(width, key.int_low_u64());
 }
 
@@ -1438,8 +1439,8 @@ fn bool const_prop_mark_edge(Cfg* cfg, bool[] executable_edges, bool[] executabl
 
 fn bool const_prop_switch_value(ir::Ir* graph, value_interner::InternerRef ref, ushort width, ulong* bits)
 {
-	value_interner::InternerKey key = graph.interner.get(ref);
-	if (!key.tag.is_int()) return false;
+	primitive_value::PrimitiveValue key = graph.interner.get(ref);
+	if (key.tag.kind != NumberKind.INT) return false;
 	*bits = key.int_low_u64() & const_prop_mask(width);
 	return true;
 }
@@ -1628,7 +1629,7 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 		if (!const_prop_int_width(graph, inst.ty, &width)) continue;
 		value_interner::InternerRef constant_ref;
 		if (width == 1) { constant_ref = value.bits == 0 ? value_interner::REF_ZERO : value_interner::REF_ONE; }
-		else { constant_ref = graph.interner.put(value_interner::int_key(const_prop_signed(value.bits, width))); }
+		else { constant_ref = graph.interner.put(primitive_value::int_key(const_prop_signed(value.bits, width))); }
 		ir::Ref constant_inst = editor.add_constant(constant_ref, inst.ty);
 		editor_replace_all_uses(&editor, ref, constant_inst);
 		changed = true;

@@ -1,6 +1,7 @@
 // Text dump, lowering status and object rendering for the index-based C3 IR.
 module aro::backend::ir;
-import aro::diagnostics, aro::value_interner, aro::float_value, aro::backend::object, aro::backend::x86_64, aro::target, std::collections::list, std::core::dstring, std::io;
+import aro::primitive_value;
+import aro::diagnostics, aro::value_interner, aro::backend::object, aro::backend::x86_64, aro::target, std::collections::list, std::core::dstring, std::io;
 
 // Lowering failure fault reported by Renderer.fail (Zig Renderer.Error.LowerFail).
 excuse LOWER_FAIL;
@@ -225,7 +226,7 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 
 fn void? Ir.write_type(&self, value_interner::InternerRef ty_ref, Terminal term)
 {
-	InternerKey ty = self.interner.get(ty_ref); IrDumpRole.TYPE.apply(term)!;
+	PrimitiveValue ty = self.interner.get(ty_ref); IrDumpRole.TYPE.apply(term)!;
 	switch (ty.tag)
 	{
 		case PTR_TY: io::write_all(term.writer, "ptr_ty")!;
@@ -246,7 +247,7 @@ fn Terminal plain_term(Terminal term) { term.mode = diagnostics::ColorMode.NO_CO
 
 fn void? Ir.write_value(&self, value_interner::InternerRef val, Terminal term)
 {
-	IrDumpRole.LITERAL.apply(term)!; InternerKey key = self.interner.get(val);
+	IrDumpRole.LITERAL.apply(term)!; PrimitiveValue key = self.interner.get(val);
 	switch (key.tag)
 	{
 		case NULL: io::write_all(term.writer, "nullptr_t")!;
@@ -258,7 +259,7 @@ fn void? Ir.write_value(&self, value_interner::InternerRef val, Terminal term)
 		case F80:
 		case F128:
 			DString number; number.init(self.allocator); defer number.free();
-			float_value::print_float(key, &number); io::write_all(term.writer, number.str_view())!;
+			primitive_value::print_float(key, &number); io::write_all(term.writer, number.str_view())!;
 		case BYTES: self.write_escaped_bytes(key.bytes, term)!;
 		default: unreachable();
 	}

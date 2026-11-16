@@ -2,9 +2,9 @@
 // plus C3-only bswap folding. Bswap folding extends eval.zig as required by option B:
 // keep C3's “not a compile-time constant” check by folding these values instead.
 module aro::builtin_eval;
+import aro::primitive_value;
 import aro::builtins, aro::builtin_defs::common;
 import aro::compilation, aro::parser, aro::tree, aro::type_store, aro::value, aro::value_interner;
-import aro::float_value;
 
 <* Recognized string literal after Zig's paren/no-op/bitcast/array-to-pointer peeling. *>
 fn value::Value? decayed_string(parser::Parser* p, type_store::NodeIndex index)
@@ -76,14 +76,14 @@ fn uint128 parse_nan_payload(char[] bytes, uint width)
 }
 
 <* Construct std.math.nan(T) with the parsed payload, matching eval.zig's bitwise OR. *>
-fn value_interner::InternerKey nan_with_payload(ulong bits, char[] payload)
+fn primitive_value::PrimitiveValue nan_with_payload(ulong bits, char[] payload)
 {
-	value_interner::InternerKeyTag tag = float_value::tag_for_bits(bits);
-	uint payload_width = float_value::format_of(tag).frac_bits;
-	if (tag == value_interner::InternerKeyTag.F80) payload_width = 63;
+	primitive_value::PrimitiveType tag = primitive_value::float_tag_of_width(bits);
+	uint payload_width = tag.format.frac_bits;
+	if (tag == primitive_value::PrimitiveType.F80) payload_width = 63;
 	uint128 parsed = parse_nan_payload(payload, (uint)bits);
 	uint128 payload_mask = ((uint128)1 << payload_width) - 1;
-	return float_value::from_raw(tag, float_value::std_nan(tag).raw() | (parsed & payload_mask));
+	return primitive_value::float_key(tag, primitive_value::std_nan(tag).float_bits() | (parsed & payload_mask));
 }
 
 fn ulong swap_bytes(ulong v, uint bytes)
@@ -109,7 +109,7 @@ fn value::Value eval(builtins::Expanded expanded, parser::Parser* p, type_store:
 	{
 		type_store::QualType qt = expanded.tag == common::TAG___BUILTIN_INFF ? type_store::FLOAT :
 			expanded.tag == common::TAG___BUILTIN_INF ? type_store::DOUBLE : type_store::LONG_DOUBLE;
-		return float_value::intern_float(float_value::inf(float_value::tag_for_bits(qt.bit_sizeof(comp))), comp);
+		return value::intern(comp, primitive_value::inf(primitive_value::float_tag_of_width(qt.bit_sizeof(comp))));
 	}
 	if (expanded.tag == common::TAG___BUILTIN_ISINF || expanded.tag == common::TAG___BUILTIN_ISINF_SIGN || expanded.tag == common::TAG___BUILTIN_ISNAN)
 	{
@@ -117,9 +117,9 @@ fn value::Value eval(builtins::Expanded expanded, parser::Parser* p, type_store:
 		value::Value? maybe = p.tree.value_of(args[0]);
 		if (catch maybe) return value::NONE;
 		value::Value val = maybe;
-		if (expanded.tag == common::TAG___BUILTIN_ISINF) return value::from_bool(float_value::is_inf(val, comp));
-		if (expanded.tag == common::TAG___BUILTIN_ISNAN) return value::from_bool(float_value::is_nan(val, comp));
-		switch (float_value::is_inf_sign(val, comp))
+		if (expanded.tag == common::TAG___BUILTIN_ISINF) return value::from_bool(val.is_inf(comp));
+		if (expanded.tag == common::TAG___BUILTIN_ISNAN) return value::from_bool(val.is_nan(comp));
+		switch (val.is_inf_sign(comp))
 		{
 			case UNKNOWN: return value::NONE;
 			case FINITE: return value::ZERO;
@@ -133,8 +133,8 @@ fn value::Value eval(builtins::Expanded expanded, parser::Parser* p, type_store:
 		value::Value? maybe = decayed_string(p, args[0]);
 		if (catch maybe) return value::NONE;
 		value::Value str = maybe;
-		if (!str.is(value_interner::InternerKeyTag.BYTES, comp)) return value::NONE;
-		return float_value::intern_float(nan_with_payload(type_store::DOUBLE.bit_sizeof(comp), str.to_bytes(comp)), comp);
+		if (!str.is(primitive_value::PrimitiveType.BYTES, comp)) return value::NONE;
+		return value::intern(comp, nan_with_payload(type_store::DOUBLE.bit_sizeof(comp), str.to_bytes(comp)));
 	}
 	if (expanded.tag == common::TAG___BUILTIN_CONSTANT_P)
 	{

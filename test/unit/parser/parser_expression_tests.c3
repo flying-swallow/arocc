@@ -2,6 +2,7 @@
 // scope. The callback supplies primary tokens; unary and parenthesis parsing
 // are part of the expression engine under test.
 module parser_expression_tests;
+import aro::primitive_value;
 import aro::compilation, aro::diagnostics, aro::parser, aro::parser_diagnostics, aro::parser_expression, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
@@ -455,8 +456,8 @@ fn void parser_owned_address_of_local_object_carries_pointer_value() @test
 
 	parser_result::Result address = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
 	assert(address.node.kind(&f.parser.tree) == tree::NodeKind.ADDR_OF_EXPR);
-	assert(address.val.is(value_interner::InternerKeyTag.POINTER, &f.comp));
-	value_interner::InternerKey pointer = f.comp.interner.get(address.val.ref());
+	assert(address.val.is(primitive_value::PrimitiveType.POINTER, &f.comp));
+	primitive_value::PrimitiveValue pointer = f.comp.interner.get(address.val.ref());
 	assert(pointer.pointer.node == (uint)object_decl);
 	assert(value::from_ref(pointer.pointer.offset).is_zero(&f.comp));
 }
@@ -609,8 +610,8 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	assert(float_result.qt == type_store::FLOAT && float_result.qt.is_float(&f.comp));
 	assert(float_result.qt.bit_sizeof(&f.comp) == type_store::FLOAT.bit_sizeof(&f.comp));
 	assert(!float_result.val.is_none() && float_result.val.is_float(&f.comp));
-	value_interner::InternerKey float_key = f.comp.interner.get(float_result.val.ref());
-	assert(float_key.tag == value_interner::InternerKeyTag.F32);
+	primitive_value::PrimitiveValue float_key = f.comp.interner.get(float_result.val.ref());
+	assert(float_key.tag == primitive_value::PrimitiveType.F32);
 	assert(float_key.f32() == 0x3FC00000); // IEEE-754 bits for 1.5f
 	assert(f.parser.at_eof());
 
@@ -621,8 +622,8 @@ fn void parser_owned_primary_decodes_number_types_and_imaginary_literals() @test
 	assert(double_result.qt == type_store::DOUBLE && double_result.qt.is_float(&f.comp));
 	assert(double_result.qt.bit_sizeof(&f.comp) == type_store::DOUBLE.bit_sizeof(&f.comp));
 	assert(double_result.val.is_float(&f.comp));
-	value_interner::InternerKey double_key = f.comp.interner.get(double_result.val.ref());
-	assert(double_key.tag == value_interner::InternerKeyTag.F64);
+	primitive_value::PrimitiveValue double_key = f.comp.interner.get(double_result.val.ref());
+	assert(double_key.tag == primitive_value::PrimitiveType.F64);
 	assert(double_key.f64() == 0x3FF8000000000000); // IEEE-754 bits for 1.5
 	assert(f.parser.at_eof());
 
@@ -848,8 +849,8 @@ fn void parser_owned_unavailable_statement_and_specialized_builtin_forms_fail() 
 	f.init("__builtin_choose_expr(1, 2, 3)\n");
 	parser_result::Result builtin = f.parser.expr()!!;
 	tree::Node builtin_call = builtin.node.get(&f.parser.tree);
-	assert(builtin_call.kind == tree::NodeKind.CALL_EXPR);
-	assert(call_callee_reference(&f.parser.tree, builtin_call.call.callee).kind == tree::NodeKind.BUILTIN_REF);
+	assert(builtin_call.kind == tree::NodeKind.BUILTIN_CALL_EXPR);
+	assert(f.parser.tree.tok_slice(builtin_call.builtin_call.builtin_tok) == "__builtin_choose_expr");
 	assert(!has_expression_diagnostic(&f, "specialized builtin primary expressions are unavailable"));
 	assert(f.parser.at_eof());
 
@@ -899,8 +900,8 @@ fn void parser_owned_constexpr_references_respect_symbol_kind_and_restore_foldin
 }
 
 // Call-site cases below use ExpressionFixture, which composes the real primary
-// and postfix parsers. Its ProbeHandler leaves the builtin-call hook unset, so
-// the callee observed here is the node the primary parser produced.
+// and postfix parsers. A call through a BUILTIN_REF callee (even parenthesized)
+// becomes BUILTIN_CALL_EXPR; other callees stay CALL_EXPR.
 
 fn tree::Node call_callee_reference(tree::Tree* tree, type_store::NodeIndex callee)
 {
@@ -912,34 +913,34 @@ fn tree::Node call_callee_reference(tree::Tree* tree, type_store::NodeIndex call
 	return node;
 }
 
-fn void unknown_builtin_identifier_call_reaches_builtin_ref_callee() @test
+fn void unknown_builtin_identifier_call_is_builtin_call_expr() @test
 {
 	// `__builtin_unreachable` is not one of the specialized builtin primaries;
-	// as an ordinary builtin name used as a call, its callee must be BUILTIN_REF.
+	// as an ordinary builtin name used as a call it becomes BUILTIN_CALL_EXPR (Zig CallExpr).
 	ExpressionFixture f;
 	f.init("__builtin_unreachable()\n", "builtin_call.c", lang_opts::Standard.C17);
 	defer f.free();
 	parser_result::Result call = f.parser.expr()!!;
 	Node call_node = call.node.get(&f.parser.tree);
-	assert(call_node.kind == tree::NodeKind.CALL_EXPR);
-	assert(call_callee_reference(&f.parser.tree, call_node.call.callee).kind == tree::NodeKind.BUILTIN_REF,
-		"an unknown builtin identifier used as a call must reach a BUILTIN_REF callee");
+	assert(call_node.kind == tree::NodeKind.BUILTIN_CALL_EXPR,
+		"an unknown builtin identifier used as a call must lower to BUILTIN_CALL_EXPR");
+	assert(f.parser.tree.tok_slice(call_node.builtin_call.builtin_tok) == "__builtin_unreachable");
 	assert(f.parser.at_eof());
 	assert(f.diagnostics.messages.len() == 0, "a builtin call with a known name must not diagnose");
 }
 
-fn void library_builtin_call_reaches_builtin_ref_callee_with_implicit_declaration() @test
+fn void library_builtin_call_is_builtin_call_expr_with_implicit_declaration() @test
 {
 	// `printf` is a library name in the builtin table with no visible declaration:
-	// the callee is BUILTIN_REF and the implicit library declaration is diagnosed.
+	// the call is BUILTIN_CALL_EXPR and the implicit library declaration is diagnosed.
 	ExpressionFixture f;
 	f.init("printf(\"x\")\n", "builtin_call.c", lang_opts::Standard.C17);
 	defer f.free();
 	parser_result::Result call = f.parser.expr()!!;
 	Node call_node = call.node.get(&f.parser.tree);
-	assert(call_node.kind == tree::NodeKind.CALL_EXPR);
-	assert(call_callee_reference(&f.parser.tree, call_node.call.callee).kind == tree::NodeKind.BUILTIN_REF,
-		"a library builtin name used as a call must reach a BUILTIN_REF callee");
+	assert(call_node.kind == tree::NodeKind.BUILTIN_CALL_EXPR,
+		"a library builtin name used as a call must lower to BUILTIN_CALL_EXPR");
+	assert(f.parser.tree.tok_slice(call_node.builtin_call.builtin_tok) == "printf");
 	assert(has_expression_diagnostic(&f, "implicitly declaring library function 'printf'"),
 		"a library builtin without a declaration must diagnose the implicit declaration");
 }
@@ -1068,4 +1069,36 @@ fn void predefined_func_identifier_warns_at_file_scope() @test
 		d.free();
 	}
 	assert(ta.allocation_count() == 0);
+}
+
+fn void prefix_unary_on_invalid_operand_short_circuits() @test
+{
+	// Zig Result.checkInvalidUn: an operand whose type is already invalid (e.g. a
+	// rejected `_Atomic struct incomplete`) must not reach type queries; the operator
+	// wraps it and the result stays invalid. Unary plus returns the operand as-is.
+	String[8] inputs = { "*bad\n", "-bad\n", "!bad\n", "~bad\n", "++bad\n", "--bad\n", "__real bad\n", "__imag bad\n" };
+	tree::NodeKind[8] kinds = {
+		tree::NodeKind.DEREF_EXPR, tree::NodeKind.NEGATE_EXPR, tree::NodeKind.BOOL_NOT_EXPR,
+		tree::NodeKind.BIT_NOT_EXPR, tree::NodeKind.PRE_INC_EXPR, tree::NodeKind.PRE_DEC_EXPR,
+		tree::NodeKind.REAL_EXPR, tree::NodeKind.IMAG_EXPR };
+	foreach (i, input : inputs)
+	{
+		ExpressionFixture f;
+		f.init(input);
+		f.seed_symbol("bad", symbol_stack::SymbolKind.DEF, type_store::INVALID);
+		parser_result::Result result = f.parser.expr()!!;
+		assert(result.qt.is_invalid(), "operator on an invalid operand must stay invalid");
+		assert(result.val.is_none());
+		assert(result.node.get(&f.parser.tree).kind == kinds[i]);
+		assert(f.parser.at_eof());
+		f.free();
+	}
+
+	ExpressionFixture f;
+	f.init("+bad\n");
+	defer f.free();
+	f.seed_symbol("bad", symbol_stack::SymbolKind.DEF, type_store::INVALID);
+	parser_result::Result plus = f.parser.expr()!!;
+	assert(plus.qt.is_invalid());
+	assert(plus.node.get(&f.parser.tree).kind != tree::NodeKind.PLUS_EXPR, "unary plus returns an invalid operand unchanged");
 }

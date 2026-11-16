@@ -4,6 +4,7 @@
 // associativity, AST construction and the constant operations that can be
 // evaluated from the existing Value API.
 module aro::parser_expression;
+import aro::primitive_value;
 import aro::parser, aro::parser_result, aro::parser_primary, aro::parser_postfix, aro::tree, aro::tokens, aro::tokenizer;
 import aro::type_store, aro::value, aro::value_interner, aro::compilation, aro::bigint, aro::parser_diagnostics, aro::lang_opts;
 import std::core::dstring;
@@ -152,6 +153,73 @@ fn parser_result::Result? invalid_binary(parser::Parser* p, type_store::QualType
 	return PARSING_FAILED~;
 }
 
+<*
+ Zig Result.adjustTypes, vector part. Precondition: at least one operand is a
+ vector and both are value-converted. Two vectors must match (or have equal size,
+ in which case `b` is bitcast to `a`'s type); a scalar is splatted to the other
+ operand's vector type. On incompatible vector types `a.qt` becomes INVALID after
+ the diagnostic; a scalar that cannot become the element type is an invalid
+ binary expression. Element types are not checked further, as in Zig.
+*>
+fn void? adjust_vector_operands(parser::Parser* p, parser_result::Result* a, parser_result::Result* b,
+	bool boolean_logic, tokens::TokenIndex tok, type_store::QualType original_a, type_store::QualType original_b)
+{
+	type_store::Type? a_vec = a.qt.get(p.comp, type_store::TypeTag.VECTOR);
+	type_store::Type? b_vec = b.qt.get(p.comp, type_store::TypeTag.VECTOR);
+	if (try av = a_vec)
+	{
+		if (try bv = b_vec)
+		{
+			if (boolean_logic) { invalid_binary(p, original_a, original_b, tok)!; return; }
+			if (av.vector.eql(bv.vector, p.comp, true) && av.vector.kind == type_store::VectorKind.GENERIC) return;
+			if (a.qt.size_compare(b.qt, p.comp) == type_store::TypeSizeOrder.EQ)
+			{
+				b.qt = a.qt;
+				b.implicit_cast(p, tree::CastKind.BITCAST);
+				return;
+			}
+			p.err(parser_diagnostics::ParserDiag.INCOMPATIBLE_VEC_TYPES, tok, p.fmt_qt(a.qt), p.fmt_qt(b.qt))!;
+			a.val = value::NONE;
+			b.val = value::NONE;
+			a.qt = type_store::INVALID;
+			return;
+		}
+		if (!(b.coerce_scalar(p, av.vector.elem, tok)!)) { invalid_binary(p, original_a, original_b, tok)!; return; }
+		b.save_value(p);
+		b.qt = a.qt;
+		b.implicit_cast(p, tree::CastKind.VECTOR_SPLAT);
+		return;
+	}
+	type_store::Type bv = b_vec!!;
+	if (!(a.coerce_scalar(p, bv.vector.elem, tok)!)) { invalid_binary(p, original_a, original_b, tok)!; return; }
+	a.save_value(p);
+	a.qt = b.qt;
+	a.implicit_cast(p, tree::CastKind.VECTOR_SPLAT);
+}
+
+<* Zig Result.boolRes for vectors: comparisons yield a generic vector of signed
+   integers as wide as the operand elements. *>
+fn type_store::QualType vector_bool_result(parser::Parser* p, type_store::QualType qt)
+{
+	type_store::Vector vec = qt.get(p.comp, type_store::TypeTag.VECTOR)!!.vector;
+	if (vec.elem.is_int(p.comp) && vec.kind == type_store::VectorKind.GENERIC) return qt;
+	type_store::QualType elem = type_store::smallest_n_bit_int_target_independent(p.comp,
+		vec.elem.bit_sizeof(p.comp), Signedness.SIGNED);
+	return p.comp.type_store.put(type_store::type_vector(elem, vec.len));
+}
+
+fn bool is_bool_result_kind(tree::NodeKind kind)
+{
+	switch (kind)
+	{
+		case BOOL_OR_EXPR: case BOOL_AND_EXPR: case EQUAL_EXPR: case NOT_EQUAL_EXPR:
+		case LESS_THAN_EXPR: case LESS_THAN_EQUAL_EXPR: case GREATER_THAN_EXPR: case GREATER_THAN_EQUAL_EXPR:
+			return true;
+		default:
+			return false;
+	}
+}
+
 fn void? warn_distinct_pointer_comparison(parser::Parser* p, type_store::QualType lhs, type_store::QualType rhs, tokens::TokenIndex tok)
 {
 	return p.err(parser_diagnostics::ParserDiag.COMPARISON_DISTINCT_PTR, tok,
@@ -168,10 +236,7 @@ fn void? emit_pointer_overflow(parser::Parser* p, value::Value result, type_stor
 {
 	ulong element_size = qt.child_type(p.comp).sizeof_or_null(p.comp) ?? 1;
 	if (element_size == 0) element_size = 1;
-	ulong max_bits = p.comp.target.ptr_bit_width();
-	if (max_bits > 61) max_bits = 61;
-	ulong max_array_bytes = ((ulong)1 << max_bits) - 1;
-	ulong max_elements = max_array_bytes / element_size;
+	ulong max_elements = p.comp.max_array_bytes() / element_size;
 	usz pointer_bits = p.comp.type_store.intptr.bit_sizeof(p.comp);
 	return p.err(parser_diagnostics::ParserDiag.ARRAY_OVERFLOW, tok, p.fmt_value(result, qt), (ulong)((ulong)pointer_bits), (ulong)(element_size * 8), (ulong)element_size, (ulong)max_elements);
 }
@@ -264,16 +329,16 @@ fn value::Value? fold_pointer_arithmetic(tree::NodeKind op, value::Value lhs, va
 	type_store::QualType pointer_qt, compilation::Compilation* comp, bool* overflowed)
 {
 	if (lhs.is_none() || rhs.is_none()) return NOT_FOLDABLE~;
-	value_interner::InternerKey lhs_key = comp.interner.get(lhs.ref());
-	value_interner::InternerKey rhs_key = comp.interner.get(rhs.ref());
+	primitive_value::PrimitiveValue lhs_key = comp.interner.get(lhs.ref());
+	primitive_value::PrimitiveValue rhs_key = comp.interner.get(rhs.ref());
 	type_store::QualType ptrdiff = comp.type_store.ptrdiff;
 	ulong elem_size = pointer_qt.child_type(comp).sizeof_or_null(comp) ?? 1;
 	if (op == tree::NodeKind.ADD_EXPR)
 	{
-		bool lhs_pointer = lhs_key.tag == value_interner::InternerKeyTag.POINTER;
-		bool rhs_pointer = rhs_key.tag == value_interner::InternerKeyTag.POINTER;
+		bool lhs_pointer = lhs_key.tag == primitive_value::PrimitiveType.POINTER;
+		bool rhs_pointer = rhs_key.tag == primitive_value::PrimitiveType.POINTER;
 		if (lhs_pointer == rhs_pointer) return NOT_FOLDABLE~;
-		value_interner::KeyPointer pointer = lhs_pointer ? lhs_key.pointer : rhs_key.pointer;
+		primitive_value::KeyPointer pointer = lhs_pointer ? lhs_key.pointer : rhs_key.pointer;
 		value::Value index = lhs_pointer ? rhs : lhs;
 		if (!index.is_int(comp)) return NOT_FOLDABLE~;
 		value::Value delta = value::NONE;
@@ -286,8 +351,8 @@ fn value::Value? fold_pointer_arithmetic(tree::NodeKind op, value::Value lhs, va
 	}
 	if (op == tree::NodeKind.SUB_EXPR)
 	{
-		if (lhs_key.tag != value_interner::InternerKeyTag.POINTER) return NOT_FOLDABLE~;
-		if (rhs_key.tag == value_interner::InternerKeyTag.POINTER)
+		if (lhs_key.tag != primitive_value::PrimitiveType.POINTER) return NOT_FOLDABLE~;
+		if (rhs_key.tag == primitive_value::PrimitiveType.POINTER)
 		{
 			if (lhs_key.pointer.node != rhs_key.pointer.node) return value::NONE;
 			if (elem_size == 0) return NOT_FOLDABLE~;
@@ -388,6 +453,8 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 		parser_result::Result? maybe_operand = self.unary_expr(eval);
 		if (catch f = maybe_operand) return (f == NO_EXPRESSION ? PARSING_FAILED : f)~;
 		parser_result::Result operand = maybe_operand;
+		// Zig: an invalid operand is not checked as an lvalue and gets no pointer type.
+		if (operand.check_invalid_un(p, tree::NodeKind.ADDR_OF_EXPR, op_tok)) return operand;
 		bool is_const;
 		if (!p.tree.is_lval_extra(operand.node, &is_const) && !operand.qt.is(p.comp, type_store::TypeTag.FUNC))
 		{
@@ -412,6 +479,7 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 		parser_result::Result? maybe_operand = self.unary_expr(eval);
 		if (catch f = maybe_operand) return (f == NO_EXPRESSION ? PARSING_FAILED : f)~;
 		parser_result::Result operand = maybe_operand;
+		if (operand.check_invalid_un(p, tree::NodeKind.DEREF_EXPR, op_tok)) return operand;
 		operand.value_conversion(p);
 		if (!operand.qt.is_pointer(p.comp))
 		{
@@ -476,6 +544,15 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 			operand_qt = operand.qt;
 			expr = (type_store::NodeOptIndex)operand.node;
 		}
+		bool is_sizeof_op = op == tokenizer::TokenId.KEYWORD_SIZEOF;
+		if (operand_qt.is_invalid())
+		{
+			// Zig: an invalid operand yields an invalid result with no value.
+			tree::NodeKind invalid_kind = is_sizeof_op ? tree::NodeKind.SIZEOF_EXPR : tree::NodeKind.ALIGNOF_EXPR;
+			type_store::NodeIndex invalid_node = p.tree.add_node({ .kind = invalid_kind, .type_info = {
+				.qt = type_store::INVALID, .op_tok = op_tok, .expr = expr, .operand_qt = operand_qt } });
+			return { .node = invalid_node, .qt = type_store::INVALID, .val = value::NONE };
+		}
 		if (operand_qt.is(p.comp, type_store::TypeTag.VOID))
 		{
 			String operation = op == tokenizer::TokenId.KEYWORD_SIZEOF ? "sizeof" : "alignof";
@@ -509,6 +586,7 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 		parser_result::Result? maybe_operand = self.unary_expr(eval);
 		if (catch f = maybe_operand) return (f == NO_EXPRESSION ? PARSING_FAILED : f)~;
 		parser_result::Result operand = maybe_operand;
+		if (operand.check_invalid_un(p, is_imag ? tree::NodeKind.IMAG_EXPR : tree::NodeKind.REAL_EXPR, op_tok)) return operand;
 		operand.value_conversion(p);
 		type_store::ScalarKind scalar_kind = operand.qt.scalar_kind(p.comp);
 		if (!scalar_kind.is_arithmetic)
@@ -545,6 +623,9 @@ fn parser_result::Result? ExpressionParser.unary_expr(&self, bool eval)
 			case MINUS_MINUS: kind = tree::NodeKind.PRE_DEC_EXPR;
 			default: unreachable();
 		}
+		// Zig: unary plus returns an invalid operand as-is; the others wrap it (checkInvalidUn).
+		if (kind == tree::NodeKind.PLUS_EXPR && result.qt.is_invalid()) return result;
+		if (result.check_invalid_un(p, kind, op_tok)) return result;
 		if (kind == tree::NodeKind.PLUS_EXPR || kind == tree::NodeKind.NEGATE_EXPR || kind == tree::NodeKind.BIT_NOT_EXPR)
 		{
 			result.value_conversion(p);
@@ -702,7 +783,14 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 			else_expr.value_conversion(p);
 			// Select the conditional type from the two value arms, independently
 			// of which arm happened to be evaluated.
-			if (then_expr.qt.is(p.comp, type_store::TypeTag.VOID) || else_expr.qt.is(p.comp, type_store::TypeTag.VOID))
+			// Zig adjustTypes(.conditional): an invalid arm makes the result invalid.
+			if (then_expr.qt.is_invalid() || else_expr.qt.is_invalid())
+			{
+				then_expr.qt = type_store::INVALID;
+				then_expr.val = value::NONE;
+				else_expr.val = value::NONE;
+			}
+			else if (then_expr.qt.is(p.comp, type_store::TypeTag.VOID) || else_expr.qt.is(p.comp, type_store::TypeTag.VOID))
 			{
 				if (!then_expr.qt.is(p.comp, type_store::TypeTag.VOID))
 				{
@@ -803,10 +891,31 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 		}
 		type_store::QualType original_lhs_qt = lhs.qt;
 		type_store::QualType original_rhs_qt = rhs.qt;
+		// Zig adjustTypes / coerce: an invalid operand makes the whole expression
+		// invalid without further type checks (the operand was already diagnosed).
+		if (kind != tree::NodeKind.COMMA_EXPR && (lhs.qt.is_invalid() || rhs.qt.is_invalid()))
+		{
+			lhs.node = p.tree.add_node({ .kind = kind, .binary = { .qt = type_store::INVALID, .lhs = lhs.node, .op_tok = op_tok, .rhs = rhs.node } });
+			lhs.qt = type_store::INVALID;
+			lhs.val = value::NONE;
+			continue;
+		}
 		if (!is_assignment(op))
 		{
 			lhs.value_conversion(p);
 			rhs.value_conversion(p);
+		}
+		if (kind != tree::NodeKind.COMMA_EXPR && !is_assignment(op) &&
+			(lhs.qt.is(p.comp, type_store::TypeTag.VECTOR) || rhs.qt.is(p.comp, type_store::TypeTag.VECTOR)))
+		{
+			bool boolean_logic = kind == tree::NodeKind.BOOL_AND_EXPR || kind == tree::NodeKind.BOOL_OR_EXPR;
+			adjust_vector_operands(p, &lhs, &rhs, boolean_logic, op_tok, original_lhs_qt, original_rhs_qt)!;
+			type_store::QualType vector_qt = lhs.qt;
+			if (!vector_qt.is_invalid() && is_bool_result_kind(kind)) vector_qt = vector_bool_result(p, vector_qt);
+			lhs.node = p.tree.add_node({ .kind = kind, .binary = { .qt = vector_qt, .lhs = lhs.node, .op_tok = op_tok, .rhs = rhs.node } });
+			lhs.qt = vector_qt;
+			lhs.val = value::NONE;
+			continue;
 		}
 		if (is_assignment(op))
 		{
@@ -833,7 +942,20 @@ fn parser_result::Result? ExpressionParser.parse(&self, tokens::Precedence min_p
 				calc_lhs.node = p.tree.add_node({ .kind = tree::NodeKind.COMPOUND_ASSIGN_DUMMY_EXPR, .unary = { .qt = lhs.qt.unqualified(), .operand = lhs.node, .op_tok = op_tok } });
 				calc_lhs.qt = lhs.qt.unqualified();
 				calc_lhs.val = value::NONE;
-				if (kind == tree::NodeKind.SHL_ASSIGN_EXPR || kind == tree::NodeKind.SHR_ASSIGN_EXPR || kind == tree::NodeKind.BIT_AND_ASSIGN_EXPR || kind == tree::NodeKind.BIT_XOR_ASSIGN_EXPR || kind == tree::NodeKind.BIT_OR_ASSIGN_EXPR || kind == tree::NodeKind.MOD_ASSIGN_EXPR)
+				if (calc_lhs.qt.is(p.comp, type_store::TypeTag.VECTOR) || rhs.qt.is(p.comp, type_store::TypeTag.VECTOR))
+				{
+					calc_lhs.value_conversion(p);
+					rhs.value_conversion(p);
+					adjust_vector_operands(p, &calc_lhs, &rhs, false, op_tok, original_lhs_qt, original_rhs_qt)!;
+					if (calc_lhs.qt.is_invalid())
+					{
+						lhs.node = p.tree.add_node({ .kind = kind, .binary = { .qt = type_store::INVALID, .lhs = lhs.node, .op_tok = op_tok, .rhs = rhs.node } });
+						lhs.qt = type_store::INVALID;
+						lhs.val = value::NONE;
+						continue;
+					}
+				}
+				else if (kind == tree::NodeKind.SHL_ASSIGN_EXPR || kind == tree::NodeKind.SHR_ASSIGN_EXPR || kind == tree::NodeKind.BIT_AND_ASSIGN_EXPR || kind == tree::NodeKind.BIT_XOR_ASSIGN_EXPR || kind == tree::NodeKind.BIT_OR_ASSIGN_EXPR || kind == tree::NodeKind.MOD_ASSIGN_EXPR)
 				{
 					calc_lhs.value_conversion(p); rhs.value_conversion(p);
 					calc_lhs.usual_unary_conversion(p, op_tok)!;

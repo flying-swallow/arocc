@@ -2,7 +2,8 @@
 // Diagnostics and the full parser grammar are intentionally owned by the
 // parser layer; these helpers preserve the typed AST and constant value.
 module aro::parser_result;
-import aro::parser, aro::tree, aro::type_store, aro::value, aro::value_interner, aro::tokens, aro::parser_diagnostics, aro::float_value;
+import aro::primitive_value;
+import aro::parser, aro::tree, aro::type_store, aro::value, aro::value_interner, aro::tokens, aro::parser_diagnostics;
 import aro::compilation;
 import aro::lang_opts;
 import aro::attribute, aro::builtins;
@@ -163,6 +164,19 @@ fn void Result.init(&self, type_store::NodeIndex node, type_store::QualType qt, 
 	*self = { .node = node, .qt = qt, .val = val };
 }
 
+<*
+ Result.checkInvalidUn: an operand of invalid type short-circuits a prefix unary
+ operator. The value is dropped and the operand is wrapped in the operator's node
+ (qt stays invalid), so later type queries never see the placeholder.
+*>
+fn bool Result.check_invalid_un(&self, parser::Parser* p, tree::NodeKind kind, tokens::TokenIndex tok)
+{
+	if (!self.qt.is_invalid()) return false;
+	self.val = value::NONE;
+	self.node = p.tree.add_node({ .kind = kind, .unary = { .qt = self.qt, .operand = self.node, .op_tok = tok } });
+	return true;
+}
+
 <* Add an implicit cast node and update the result type, matching Result.implicitCast. *>
 fn void Result.implicit_cast(&self, parser::Parser* p, tree::CastKind kind)
 {
@@ -218,8 +232,8 @@ fn value::Value compute_saved_pointer_offset(parser::Parser* p, type_store::Node
 	if (offset.is_none() || !offset.is_int(p.comp)) return value::NONE;
 	if (try saved = p.tree.value_of(node))
 	{
-		if (!saved.is(value_interner::InternerKeyTag.POINTER, p.comp)) return value::NONE;
-		value_interner::InternerKey key = p.comp.interner.get(saved.ref());
+		if (!saved.is(primitive_value::PrimitiveType.POINTER, p.comp)) return value::NONE;
+		primitive_value::PrimitiveValue key = p.comp.interner.get(saved.ref());
 		value::Value base_offset = value::from_ref(key.pointer.offset);
 		value::Value combined = value::NONE;
 		if (!base_offset.is_int(p.comp) ||
@@ -391,24 +405,24 @@ fn void? Result.int_conversion_warning(&self, parser::Parser* p, tokens::TokenIn
 	}
 }
 
-fn void? Result.float_to_int_warning(&self, parser::Parser* p, tokens::TokenIndex tok, type_store::QualType src, type_store::QualType dest, value::Value old_val, float_value::FloatToIntChangeKind change_kind)
+fn void? Result.float_to_int_warning(&self, parser::Parser* p, tokens::TokenIndex tok, type_store::QualType src, type_store::QualType dest, value::Value old_val, value::FloatToIntChangeKind change_kind)
 {
 	switch (change_kind)
 	{
-		case float_value::FloatToIntChangeKind.NONE:
+		case value::FloatToIntChangeKind.NONE:
 		{
 			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_TO_INT, p.fmt_qt(src), p.fmt_qt(dest));
 		}
-		case float_value::FloatToIntChangeKind.OUT_OF_RANGE:
+		case value::FloatToIntChangeKind.OUT_OF_RANGE:
 		{
 			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_OUT_OF_RANGE, p.fmt_qt(src), p.fmt_qt(dest));
 		}
-		case float_value::FloatToIntChangeKind.OVERFLOW:
+		case value::FloatToIntChangeKind.OVERFLOW:
 		{
 			return self.conversion_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_OVERFLOW_CONVERSION, p.fmt_qt(src), p.fmt_qt(dest));
 		}
-		case float_value::FloatToIntChangeKind.NONZERO_TO_ZERO: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_ZERO_CONVERSION, src, dest, old_val);
-		case float_value::FloatToIntChangeKind.VALUE_CHANGED: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_VALUE_CHANGED, src, dest, old_val);
+		case value::FloatToIntChangeKind.NONZERO_TO_ZERO: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_ZERO_CONVERSION, src, dest, old_val);
+		case value::FloatToIntChangeKind.VALUE_CHANGED: return self.value_changed_err(p, tok, parser_diagnostics::ParserDiag.FLOAT_VALUE_CHANGED, src, dest, old_val);
 	}
 }
 
@@ -434,7 +448,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		if (src.is_real && !dst.is_real)
 		{
 			type_store::QualType real_dest = dest.to_real(p.comp);
-			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(real_dest, p.comp);
+			value::FloatToIntChangeKind change_kind = self.val.float_to_int(real_dest, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = real_dest;
 			self.implicit_cast(p, tree::CastKind.FLOAT_TO_INT);
@@ -445,14 +459,14 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		{
 			self.qt = self.qt.to_real(p.comp);
 			self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
-			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
+			value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.FLOAT_TO_INT);
 		}
 		else
 		{
-			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
+			value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = dest;
 			self.implicit_cast(p, src.is_real ? tree::CastKind.FLOAT_TO_INT : tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT);
@@ -557,7 +571,7 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 	{
 		type_store::QualType real_src = self.qt.to_real(p.comp);
 		self.qt = real_src;
-		self.val = float_value::real_part(self.val, p.comp);
+		self.val = self.val.real_part(p.comp);
 		self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
 		if (self.qt.float_rank(p.comp) != dest.float_rank(p.comp))
 		{
@@ -716,7 +730,7 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 		else
 		{
 			value::Value old_val = self.val;
-			float_value::FloatToIntChangeKind change_kind = self.val.float_to_int(type_store::BOOL, p.comp);
+			value::FloatToIntChangeKind change_kind = self.val.float_to_int(type_store::BOOL, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, self.qt, type_store::BOOL, old_val, change_kind)!;
 		}
 		if (!src.is_real)
@@ -732,6 +746,12 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 <* Assignment-style scalar/vector coercion. Returns false when no supported conversion exists. *>
 fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex tok = 0, CoercionContext context = CoercionContext.EXPRESSION)
 {
+	// Zig Result.coerce: an invalid destination makes the result invalid.
+	if (dest.is_invalid())
+	{
+		self.qt = type_store::INVALID;
+		return true;
+	}
 	self.lval_conversion(p);
 	if (self.qt.is_invalid()) return true;
 	self.atomic_to_non_atomic(p);

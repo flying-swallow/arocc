@@ -3,7 +3,7 @@ module ir_opt_tests;
 import std, aro::backend::ir, aro::backend::ir_opt, aro::code_gen_options, aro::codegen, aro::compilation;
 import aro::diagnostics, aro::lang_opts, aro::parser, aro::parser_frontend, aro::predefined_macros;
 import aro::preprocessor, aro::source, aro::target, aro::tokens, aro::tree, aro::type_store;
-import aro::value_interner, std::core::dstring;
+import aro::value_interner, aro::primitive_value, std::core::dstring;
 
 const target::Host HOST = { target::Arch.X86_64, target::OsTag.LINUX, target::Abi.GNU };
 
@@ -806,7 +806,7 @@ fn void HandIrFixture.run_mem2reg(&self)
 
 fn Ref HandIrFixture.add_int_constant(&self, long value, value_interner::InternerRef ty)
 {
-	value_interner::InternerRef constant = self.interner.put(value_interner::int_key(value));
+	value_interner::InternerRef constant = self.interner.put(primitive_value::int_key(value));
 	return self.builder.add_constant(constant, ty);
 }
 
@@ -1046,7 +1046,7 @@ fn bool is_int_constant(ir::Decl* decl, ir::Ref ref, value_interner::Interner* i
 	if ((usz)ref >= (usz)decl.instructions.len) return false;
 	ir::Inst* value = &decl.instructions[(sz)ref];
 	if (value.tag != ir::InstTag.CONSTANT) return false;
-	value_interner::InternerRef expected_ref = interner.put(value_interner::int_key(expected));
+	value_interner::InternerRef expected_ref = interner.put(primitive_value::int_key(expected));
 	return value.data.constant == expected_ref;
 }
 
@@ -1076,7 +1076,7 @@ fn void assert_returns_int(ir::Decl* decl, value_interner::Interner* interner, l
 	ir::Ref returned = return_value(decl);
 	assert(returned != ir::NONE, "%s should have a return value", context);
 	ir::Inst* value = &decl.instructions[(sz)returned];
-	value_interner::InternerRef expected_ref = interner.put(value_interner::int_key(expected));
+	value_interner::InternerRef expected_ref = interner.put(primitive_value::int_key(expected));
 	assert(value.tag == ir::InstTag.CONSTANT && value.data.constant == expected_ref,
 		"%s should return integer constant %d", context, expected);
 }

@@ -16,6 +16,7 @@
 // Files are read relative to the working directory (the Bazel runfiles root), or
 // from $INTEGER_VECTORS_DIR when set.
 module integer_vector_tests;
+import aro::primitive_value;
 import aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation, aro::lang_opts;
 import std::io, std::os::env, std::core::mem::allocators;
 
@@ -62,8 +63,8 @@ fn Value? VectorRun.parse_int(&self, String s)
 fn String VectorRun.show(&self, Value v)
 {
 	if (v.is_none()) return "none";
-	InternerKey key = self.comp.interner.get(v.ref());
-	if (!key.tag.is_int()) return string::tformat("<key tag %s>", key.tag);
+	PrimitiveValue key = self.comp.interner.get(v.ref());
+	if (key.tag.kind != NumberKind.INT) return string::tformat("<key tag %s>", key.tag);
 	BigIntConst big = key.to_big_int();
 	String hex = big.to_string_alloc(tmem, 16, false);
 	if (!big.positive) return string::tformat("-0x%s", hex[1..]);

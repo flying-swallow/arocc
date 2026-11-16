@@ -3,7 +3,7 @@
 // instruction indexes, arguments precede the entry label in the body, and
 // finish_fn transfers the current arena to the declaration.
 module ir_tests;
-import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::target, aro::value_interner;
+import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::target, aro::value_interner, aro::primitive_value;
 import aro::diagnostics, std::core::dstring;
 
 macro check(left, right)
@@ -58,11 +58,11 @@ fn void builder_transfers_blocks_and_owned_inputs() @test
 	b.add_branch(cond, then_label, else_label);
 
 	b.start_block(then_label);
-	Ref then_value = b.add_constant(f.interner.put(value_interner::int_key(11)), value_interner::REF_I32);
+	Ref then_value = b.add_constant(f.interner.put(primitive_value::int_key(11)), value_interner::REF_I32);
 	b.add_jump(join_label);
 
 	b.start_block(else_label);
-	Ref else_value = b.add_constant(f.interner.put(value_interner::int_key(22)), value_interner::REF_I32);
+	Ref else_value = b.add_constant(f.interner.put(primitive_value::int_key(22)), value_interner::REF_I32);
 	b.add_jump(join_label);
 
 	b.start_block(join_label);

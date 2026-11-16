@@ -38,7 +38,10 @@ struct HidesetIdentifier
 }
 
 <* Zig `Identifier.fromLocation`. *>
-fn HidesetIdentifier identifier_from_location(Location loc) => { .id = loc.id, .byte_offset = loc.byte_offset };
+fn HidesetIdentifier identifier_from_location(Location loc) =>
+{
+	.id = loc.id, .byte_offset = loc.byte_offset
+};
 
 <* The packed hash-map key of an identifier (equal keys <=> equal identifiers). *>
 fn ulong HidesetIdentifier.key(self) => (ulong)(uint)self.id << 32 | self.byte_offset;
@@ -116,7 +119,11 @@ fn HidesetIndex Hideset.create_node(&self, HidesetIdentifier identifier, Hideset
 {
 	sz new_idx = self.linked_list.len();
 	assert(new_idx < 0xFFFF_FFFF, "hideset index overflow");
-	self.linked_list.push({ .identifier = identifier, .len = length, .next = next });
+	self.linked_list.push(
+	{
+		.identifier = identifier, .len = length, .next = next
+	}
+	);
 	return (HidesetIndex)(uint)new_idx;
 }
 
@@ -183,7 +190,7 @@ fn HidesetIndex Hideset.intersection(&self, HidesetIndex a, HidesetIndex b)
 		a_len++;
 	}
 	usz b_len = self.len(b);
-	self.linked_list.reserve((sz)(a_len < b_len ? a_len : b_len));
+	self.linked_list.reserve((sz)(a_len < b_len ? a_len: b_len));
 
 	HidesetIndex cur = NONE;
 	HidesetIndex head = NONE;
@@ -212,7 +219,7 @@ fn bool Hideset.contains(&self, HidesetIndex list, String str)
 		HidesetItem item = self.linked_list[(sz)i];
 		String buf = self.comp.get_source(item.identifier.id).buf;
 		usz start = item.identifier.byte_offset;
-		if (str == buf[start:item.len]) return true;
+		if (str == buf[start : item.len]) return true;
 	}
 	return false;
 }

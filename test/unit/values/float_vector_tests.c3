@@ -1,9 +1,9 @@
 // Data-driven tests: every vector in test/unit/float_values/*.txt (format and
 // provenance in that directory's README.md) is checked against the plan 10 port
-// (float_value.c3, float_soft_*.c3, float_print.c3, annex_g.c3) through the
+// (primitive_float.c3, float_soft_*.c3, float_print.c3, annex_g.c3) through the
 // public Value API where one exists (value.c3's add/sub/mul/div/float_cast/
-// int_to_float/float_to_int/print/complex_conj, float_value::compare), and
-// through the InternerKey primitives otherwise (from_u64/from_i64, bigIntToFloat,
+// int_to_float/float_to_int/print/complex_conj, primitive_value::compare), and
+// through the PrimitiveValue primitives otherwise (from_u64/from_i64, bigIntToFloat,
 // parse_f128 + cast, ilogb/scalbn/max/f128_mul_add, format_f64_decimal).
 //
 // The vectors were produced by running Zig 0.17.0 on test/zig/float_probe.zig
@@ -22,7 +22,8 @@
 // Files are read relative to the working directory (the Bazel runfiles root), or
 // from $FLOAT_VECTORS_DIR when set.
 module float_vector_tests;
-import aro::float_value, aro::annex_g, aro::lang_opts, aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation;
+import aro::primitive_value;
+import aro::annex_g, aro::lang_opts, aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation;
 import std::io, std::os::env, std::core::mem::allocators, std::core::dstring;
 
 const Host HOST = { X86_64, LINUX, GNU };
@@ -94,7 +95,7 @@ fn void VectorRun.fail(&self, String line, String msg)
 // Field parsing and rendering
 // ---------------------------------------------------------------------------
 
-fn InternerKeyTag? parse_width(String s)
+fn PrimitiveType? parse_width(String s)
 {
 	switch (s)
 	{
@@ -107,7 +108,7 @@ fn InternerKeyTag? parse_width(String s)
 	}
 }
 
-fn QualType real_type(InternerKeyTag t)
+fn QualType real_type(PrimitiveType t)
 {
 	switch (t)
 	{
@@ -120,7 +121,7 @@ fn QualType real_type(InternerKeyTag t)
 }
 }
 
-fn QualType complex_type(Compilation* comp, InternerKeyTag t) => comp.type_store.put(type_store::type_complex(real_type(t)));
+fn QualType complex_type(Compilation* comp, PrimitiveType t) => comp.type_store.put(type_store::type_complex(real_type(t)));
 
 fn uint128? parse_hex128(String s)
 {
@@ -140,17 +141,17 @@ fn uint128? parse_hex128(String s)
 	return r;
 }
 
-fn InternerKey? parse_float(InternerKeyTag t, String s) => float_value::from_raw(t, parse_hex128(s)!);
+fn PrimitiveValue? parse_float(PrimitiveType t, String s) => primitive_value::float_key(t, parse_hex128(s)!);
 
-fn String show_float(InternerKey f)
+fn String show_float(PrimitiveValue f)
 {
 	switch (f.tag)
 	{
-		case F16: return string::tformat("0x%04x", f.raw());
-		case F32: return string::tformat("0x%08x", f.raw());
-		case F64: return string::tformat("0x%016x", f.raw());
-		case F80: return string::tformat("0x%020x", f.raw());
-		case F128: return string::tformat("0x%032x", f.raw());
+		case F16: return string::tformat("0x%04x", f.float_bits());
+		case F32: return string::tformat("0x%08x", f.float_bits());
+		case F64: return string::tformat("0x%016x", f.float_bits());
+		case F80: return string::tformat("0x%020x", f.float_bits());
+		case F128: return string::tformat("0x%032x", f.float_bits());
 			default: unreachable("not a float tag");
 }
 }
@@ -179,8 +180,8 @@ fn BigIntConst? parse_big(String s)
 fn String show_value_int(Compilation* comp, Value v)
 {
 	if (v.is_none()) return "none";
-	InternerKey key = comp.interner.get(v.ref());
-	if (!key.tag.is_int()) return string::tformat("<key tag %s>", key.tag);
+	PrimitiveValue key = comp.interner.get(v.ref());
+	if (key.tag.kind != NumberKind.INT) return string::tformat("<key tag %s>", key.tag);
 	return show_big(key.to_big_int());
 }
 
@@ -196,7 +197,7 @@ fn String change_kind_text(FloatToIntChangeKind k)
 	}
 }
 
-fn String show_class(InternerKey f)
+fn String show_class(PrimitiveValue f)
 {
 	String class;
 	switch (f.classify())
@@ -210,12 +211,12 @@ fn String show_class(InternerKey f)
 	return string::tformat("%s %s", class, f.signbit() ? "neg" : "pos");
 }
 
-fn Value fv(Compilation* comp, InternerKey f) => value::intern(comp, f);
-fn Value cv(Compilation* comp, InternerKey re, InternerKey im) => value::intern(comp, float_value::make_complex(re, im));
+fn Value fv(Compilation* comp, PrimitiveValue f) => value::intern(comp, f);
+fn Value cv(Compilation* comp, PrimitiveValue re, PrimitiveValue im) => value::intern(comp, primitive_value::complex_key(re, im));
 
-fn String show_complex_value(Compilation* comp, Value v, InternerKeyTag t)
+fn String show_complex_value(Compilation* comp, Value v, PrimitiveType t)
 {
-	return string::tformat("%s %s", show_float(float_value::to_float(v, t, comp)), show_float(float_value::imag(v, t, comp)));
+	return string::tformat("%s %s", show_float(v.to_float(t, comp)), show_float(v.imag(t, comp)));
 }
 
 fn String print_value(Compilation* comp, Value v, QualType qt)
@@ -253,7 +254,7 @@ fn String? VectorRun.compute(&self, String[] f)
 		case "mul":
 		case "div":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			Value lhs = fv(comp, parse_float(t, f[2])!);
 			Value rhs = fv(comp, parse_float(t, f[3])!);
 			Value res = value::NONE;
@@ -269,30 +270,30 @@ fn String? VectorRun.compute(&self, String[] f)
 			return show_float(res.to_float(t, comp));
 		case "cast":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag s = parse_width(f[1])!;
-			InternerKeyTag d = parse_width(f[2])!;
+			PrimitiveType s = parse_width(f[1])!;
+			PrimitiveType d = parse_width(f[2])!;
 			Value v = fv(comp, parse_float(s, f[3])!);
 			v.float_cast(real_type(d), comp);
 			return show_float(v.to_float(d, comp));
 		case "from_u64":
 		case "from_i64":
 			if (f.len != 3) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			BigIntConst x = parse_big(f[2])!;
-			if (op == "from_u64") return show_float(float_value::from_u64(x.to_u64()!, t));
-			return show_float(float_value::from_i64(x.to_i64()!, t));
+			if (op == "from_u64") return show_float(primitive_value::from_u64(x.to_u64()!, t));
+			return show_float(primitive_value::from_i64(x.to_i64()!, t));
 		case "big_to_f128":
 			if (f.len != 2) return BAD_VECTOR~;
-			return show_float(float_value::f128_value(float_value::big_int_to_f128(parse_big(f[1])!)));
+			return show_float(primitive_value::f128_value(primitive_value::big_int_to_f128(parse_big(f[1])!)));
 		case "int_to_float":
 			if (f.len != 3) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			Value v = value::intern_big(comp, parse_big(f[2])!);
 			v.int_to_float(real_type(t), comp);
 			return show_float(v.to_float(t, comp));
 		case "float_to_int":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			QualType dest;
 			if (f[2] == "bool")
 			{
@@ -308,20 +309,20 @@ fn String? VectorRun.compute(&self, String[] f)
 			return string::tformat("%s %s", show_value_int(comp, v), change_kind_text(kind));
 		case "compare":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
-			InternerKey a = parse_float(t, f[2])!;
-			InternerKey b = parse_float(t, f[3])!;
+			PrimitiveType t = parse_width(f[1])!;
+			PrimitiveValue a = parse_float(t, f[2])!;
+			PrimitiveValue b = parse_float(t, f[3])!;
 			Value va = fv(comp, a);
 			Value vb = fv(comp, b);
 			bool via_value = va.is_float(comp) || vb.is_float(comp);
 			DString w = dstring::temp();
 			foreach (cop : (CompareOperator[]) { EQ, NEQ, LT, LTE, GT, GTE })
 			{
-				// float_value::compare is Value.compare's float branch (no shallowCompare).
+				// primitive_value::compare is Value.compare's float branch (no shallowCompare).
 				bool r;
 				if (via_value)
 				{
-					r = float_value::compare(va, cop, vb, comp);
+					r = value::compare_float(va, cop, vb, comp);
 				}
 				else
 				{
@@ -332,37 +333,37 @@ fn String? VectorRun.compute(&self, String[] f)
 			return w.str_view();
 		case "compare_complex":
 			if (f.len != 6) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			Value l = cv(comp, parse_float(t, f[2])!, parse_float(t, f[3])!);
 			Value r = cv(comp, parse_float(t, f[4])!, parse_float(t, f[5])!);
-			return float_value::compare(l, NEQ, r, comp) ? "1" : "0";
+			return value::compare_float(l, NEQ, r, comp) ? "1" : "0";
 		case "classify":
 			if (f.len != 3) return BAD_VECTOR~;
 			return show_class(parse_float(parse_width(f[1])!, f[2])!);
 		case "format_f64":
 			if (f.len != 2) return BAD_VECTOR~;
 			DString w = dstring::temp();
-			float_value::format_f64_decimal((ulong)parse_hex128(f[1])!, &w);
+			primitive_value::format_f64_decimal((ulong)parse_hex128(f[1])!, &w);
 			return string::tformat("\"%s\"", w.str_view());
 		case "print":
 			if (f.len != 3) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			return print_value(comp, fv(comp, parse_float(t, f[2])!), real_type(t));
 		case "print_complex":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			return print_value(comp, cv(comp, parse_float(t, f[2])!, parse_float(t, f[3])!), complex_type(comp, t));
 		case "parse":
 			if (f.len != 3) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
-			F128Bits p = float_value::parse_f128(f[2])!;
-			return show_float(float_value::f128_value(p).cast(t));
+			PrimitiveType t = parse_width(f[1])!;
+			F128Bits p = primitive_value::parse_f128(f[2])!;
+			return show_float(primitive_value::f128_value(p).cast(t));
 		case "cadd":
 		case "csub":
 		case "cmul":
 		case "cdiv":
 			if (f.len != 6) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			QualType ct = complex_type(comp, t);
 			Value l = cv(comp, parse_float(t, f[2])!, parse_float(t, f[3])!);
 			Value r = cv(comp, parse_float(t, f[4])!, parse_float(t, f[5])!);
@@ -377,7 +378,7 @@ fn String? VectorRun.compute(&self, String[] f)
 			return show_complex_value(comp, res, t);
 		case "conj":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			Value v = cv(comp, parse_float(t, f[2])!, parse_float(t, f[3])!);
 			return show_complex_value(comp, value::complex_conj(v, complex_type(comp, t), comp), t);
 		case "ilogb":
@@ -385,19 +386,19 @@ fn String? VectorRun.compute(&self, String[] f)
 			return string::tformat("%d", parse_float(parse_width(f[1])!, f[2])!.ilogb());
 		case "scalbn":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKey a = parse_float(parse_width(f[1])!, f[2])!;
+			PrimitiveValue a = parse_float(parse_width(f[1])!, f[2])!;
 			return show_float(a.scalbn(f[3].to_int()!));
 		case "fmax":
 			if (f.len != 4) return BAD_VECTOR~;
-			InternerKeyTag t = parse_width(f[1])!;
+			PrimitiveType t = parse_width(f[1])!;
 			return show_float(parse_float(t, f[2])!.max(parse_float(t, f[3])!));
 		case "mul_add":
 			if (f.len != 5) return BAD_VECTOR~;
 			if (f[1] != "f128") return BAD_VECTOR~;
-			InternerKey a = parse_float(F128, f[2])!;
-			InternerKey b = parse_float(F128, f[3])!;
-			InternerKey c = parse_float(F128, f[4])!;
-			return show_float(float_value::f128_value(float_value::f128_mul_add(a.f128(), b.f128(), c.f128())));
+			PrimitiveValue a = parse_float(F128, f[2])!;
+			PrimitiveValue b = parse_float(F128, f[3])!;
+			PrimitiveValue c = parse_float(F128, f[4])!;
+			return show_float(primitive_value::f128_value(primitive_value::f128_mul_add(a.f128(), b.f128(), c.f128())));
 		default:
 			return BAD_VECTOR~;
 	}

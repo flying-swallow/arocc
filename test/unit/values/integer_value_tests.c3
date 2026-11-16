@@ -17,6 +17,7 @@
 // pointer representation 0), with a TrackingAllocator that must end with no live
 // allocations (Zig's `defer gpa.free` of scratch limbs).
 module integer_value_tests;
+import aro::primitive_value;
 import aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
 import std::io, std::core::mem::allocators;
 
@@ -51,7 +52,7 @@ fn Value i(Compilation* comp, long x) => value::int_i64(x, comp);
 <* Intern a big int from explicit little-endian limbs (must be normalized). *>
 fn Value big(Compilation* comp, bool positive, Limb[] limbs)
 {
-	return value::intern(comp, value_interner::big_int_key({ .limbs = limbs, .positive = positive }));
+	return value::intern(comp, primitive_value::big_int_key({ .limbs = limbs, .positive = positive }));
 }
 
 <* (+/-) 2^e for e < 512. *>
@@ -81,8 +82,8 @@ fn void print_val(Compilation* comp, Value v)
 		io::eprint("none");
 		return;
 	}
-	InternerKey key = comp.interner.get(v.ref());
-	if (!key.tag.is_int())
+	PrimitiveValue key = comp.interner.get(v.ref());
+	if (key.tag.kind != NumberKind.INT)
 	{
 		io::eprintf("<key tag %s>", key.tag);
 		return;

@@ -5,6 +5,8 @@
 //   execute  gcc.c-torture/execute/*.c        must compile, link and exit 0
 //   ieee     gcc.c-torture/execute/ieee/*.c   as execute
 //   dg       gcc.dg/*.c                       dg-do action + dg-error/-warning/-bogus lines
+//   asm      gcc.dg/*.c with scan-assembler   compile with -S, then the dg-final
+//                                             scan-assembler / -not / -times checks
 //
 // Checks per case: crash sweep (signals, timeouts, aro panics), golden
 // expectations (error/warning on the lines GCC lists, no errors otherwise;
@@ -13,9 +15,18 @@
 // informational, GCC stays golden).
 //
 // Results go to <out>/results.jsonl (one std::encoding::json record per line)
-// and <out>/summary.md. With a baseline (test/src/gcc/baseline.json)
-// the exit status is non-zero only for new non-PASS results; --update-baseline
-// rewrites it.
+// and <out>/summary.md. The exit status is non-zero when any case crashes.
+// Not part of `bazel test //...` (targets are tagged manual): it is a worklist
+// for migrating cases into the main unit tests, not a gate.
+//
+// asm suite: patterns are Tcl regexps (GCC's scanasm.exp runs `regexp` on the
+// whole .s file, so `.` matches newline and ^/$ anchor the file). They are
+// translated to POSIX ERE for std::encoding::experimental::regex; non-greedy
+// quantifiers, (?...) groups and backreferences make the case UNSUPPORTED.
+// aro_c3 emits Intel syntax and GCC's patterns often assume AT&T mnemonics and
+// GCC's optimizer, so failures of checks guarded by an x86 target selector are
+// reported under the separate category "x86-insn", and failures of cases that
+// depend on a dropped flag (anything but -O levels) under "dropped-option".
 //
 // Text is handled as UTF-8 bytes after the same decoding Python applies
 // (errors="replace" plus universal newlines); whitespace, splitlines and the
@@ -23,6 +34,7 @@
 module gcc_testsuite;
 import std::io, std::io::path, std::io::file, std::collections::list, std::collections::map;
 import std::sort, std::time, std::thread, std::encoding::json, std::collections::object, libc, aro_harness;
+import std::encoding::experimental::regex;
 
 const String TRIPLET = "x86_64-pc-linux-gnu";
 const String TRIPLET_ALT = "x86_64-unknown-linux-gnu";
@@ -42,12 +54,12 @@ const SuiteInfo[*] SUITES = {
 	{ "execute", "gcc.c-torture/execute", "run" },
 	{ "ieee", "gcc.c-torture/execute/ieee", "run" },
 	{ "dg", "gcc.dg", "compile" },
+	{ "asm", "gcc.dg", "compile" },
 };
 
 // gcc.dg/dg.exp DEFAULT_CFLAGS (used when a test has no dg-options).
 const String[*] DG_DEFAULT_FLAGS = { "-ansi", "-pedantic-errors" };
 const String[*] TORTURE_FLAGS = { "-w" };
-const String[*] NON_PASS = { "FAIL", "CRASH", "TIMEOUT", "UNSUPPORTED", "DIFF" };
 
 struct NamedBool
 {
@@ -85,6 +97,8 @@ const NamedBool[*] EFFECTIVE_TARGETS = {
 	{ "hard_float", true }, { "non_strict_align", true }, { "cas_int", true },
 	{ "unwrapped", true }, { "nonstatic_storage", true }, { "init_priority", true },
 	{ "builtin_eh_return", true }, { "rdynamic", true }, { "exceptions", true },
+	// The driver assembles with the system GNU as.
+	{ "gas", true }, { "elf", true }, { "glibc", true },
 };
 
 const NamedBool[*] REQUIRE_DIRECTIVES = {
@@ -110,7 +124,7 @@ const String[*] KEPT_OPTION_PREFIXES = {
 
 const String[*] STATUSES = { "PASS", "FAIL", "CRASH", "TIMEOUT", "UNSUPPORTED", "DIFF", "SKIP" };
 
-faultdef UNKNOWN_TARGET, BAD_EXPRESSION, UNRESOLVED;
+faultdef UNKNOWN_TARGET, BAD_EXPRESSION, UNRESOLVED, UNSUPPORTED_REGEX;
 
 // ---------------------------------------------------------------------------
 // Python str semantics on UTF-8 text
@@ -395,8 +409,12 @@ fn String py_join(Allocator a, String dir, String name)
 // Directive parsing
 // ---------------------------------------------------------------------------
 
-<* Split a Tcl-ish argument string into words: bare, "quoted", {braced}. Words are slices of `text`. *>
-fn String[] tcl_words(Allocator a, String text)
+<*
+ Split a Tcl-ish argument string into words: bare, "quoted", {braced}. Words are
+ slices of `text`. When `quoted` is given, it gets one entry per word: whether
+ the word was "quoted" (and so still needs tcl_subst).
+*>
+fn String[] tcl_words(Allocator a, String text, List{bool}* quoted = null)
 {
 	List{String} words;
 	words.init(a);
@@ -417,6 +435,7 @@ fn String[] tcl_words(Allocator a, String text)
 			sz j = i + 1;
 			while (j < n && text[j] != '"') j += text[j] == '\\' && j + 1 < n ? 2 : 1;
 			words.push(text[i + 1 : j - i - 1]);
+			if (quoted) quoted.push(true);
 			i = j + 1;
 		}
 		else if (c == '{')
@@ -443,6 +462,7 @@ fn String[] tcl_words(Allocator a, String text)
 			sz start = i + 1;
 			sz end = j - 1 > n ? n : j - 1;
 			words.push(end > start ? py_strip(text[start : end - start]) : "");
+			if (quoted) quoted.push(false);
 			i = j;
 		}
 		else
@@ -450,10 +470,192 @@ fn String[] tcl_words(Allocator a, String text)
 			sz j = i;
 			while (j < n && !ws_len(text, j)) j++;
 			words.push(text[i : j - i]);
+			if (quoted) quoted.push(false);
 			i = j;
 		}
 	}
 	return words.array_view();
+}
+
+fn int hex_digit(char c) @local
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+<*
+ Tcl backslash substitution of a "quoted" word: \a \b \f \n \r \t \v, \xHH,
+ \ooo (octal) and \<newline><space> (one space); any other \c is c itself, so
+ "\[ \t\]" becomes "[ <tab>]" and "\." becomes "." (GCC tests write "\\." for a
+ literal dot).
+*>
+fn String tcl_subst(Allocator a, String s)
+{
+	DString out;
+	out.init(a);
+	sz n = s.len;
+	for (sz i = 0; i < n; i++)
+	{
+		char c = s[i];
+		if (c != '\\' || i + 1 >= n)
+		{
+			out.append_char(c);
+			continue;
+		}
+		char e = s[++i];
+		switch (e)
+		{
+			case 'a': out.append_char(0x07);
+			case 'b': out.append_char(0x08);
+			case 'f': out.append_char(0x0c);
+			case 'n': out.append_char('\n');
+			case 'r': out.append_char('\r');
+			case 't': out.append_char('\t');
+			case 'v': out.append_char(0x0b);
+			case '\n':
+				while (i + 1 < n && (s[i + 1] == ' ' || s[i + 1] == '\t')) i++;
+				out.append_char(' ');
+			case 'x':
+				int v = 0;
+				sz digits = 0;
+				while (digits < 2 && i + 1 < n && hex_digit(s[i + 1]) >= 0)
+				{
+					v = v * 16 + hex_digit(s[++i]);
+					digits++;
+				}
+				out.append_char(digits ? (char)v : 'x');
+			case '0'..'7':
+				int v = e - '0';
+				for (sz k = 0; k < 2 && i + 1 < n && s[i + 1] >= '0' && s[i + 1] <= '7'; k++) v = v * 8 + (s[++i] - '0');
+				out.append_char((char)v);
+			default:
+				out.append_char(e);
+		}
+	}
+	return out.str_view();
+}
+
+<*
+ Translate a Tcl ARE (as used by GCC's scan-assembler) to the POSIX ERE that
+ std::encoding::experimental::regex accepts: \m \M \y \Y become \< \> \b \B;
+ escapes inside a bracket expression (POSIX takes them literally) become the
+ character or a [:class:]. Non-greedy quantifiers, (?...) groups, \A \Z and
+ backreferences have no ERE equivalent: UNSUPPORTED_REGEX.
+*>
+fn String? tcl_regex_to_ere(Allocator a, String pat)
+{
+	DString out;
+	out.init(a);
+	sz n = pat.len;
+	sz i = 0;
+	while (i < n)
+	{
+		char c = pat[i];
+		switch (c)
+		{
+			case '\\':
+				if (i + 1 >= n) return UNSUPPORTED_REGEX~;
+				char e = pat[i + 1];
+				switch (e)
+				{
+					case 'm': out.append(`\<`);
+					case 'M': out.append(`\>`);
+					case 'y': out.append(`\b`);
+					case 'Y': out.append(`\B`);
+					case 'v': out.append_char(0x0b);
+					case 'A':
+					case 'Z':
+					case '0'..'9':
+						return UNSUPPORTED_REGEX~;
+					default:
+						out.append_char('\\');
+						out.append_char(e);
+				}
+				i += 2;
+			case '(':
+				if (i + 1 < n && pat[i + 1] == '?') return UNSUPPORTED_REGEX~;
+				out.append_char(c);
+				i++;
+			case '*':
+			case '+':
+			case '?':
+			case '}':
+				// A quantifier followed by `?` is non-greedy in ARE.
+				if (i + 1 < n && pat[i + 1] == '?') return UNSUPPORTED_REGEX~;
+				out.append_char(c);
+				i++;
+			case '[':
+				out.append_char('[');
+				i++;
+				if (i < n && pat[i] == '^')
+				{
+					out.append_char('^');
+					i++;
+				}
+				// A leading ']' is a literal member.
+				if (i < n && pat[i] == ']')
+				{
+					out.append_char(']');
+					i++;
+				}
+				bool closed = false;
+				while (i < n)
+				{
+					char b = pat[i];
+					if (b == ']')
+					{
+						out.append_char(']');
+						i++;
+						closed = true;
+						break;
+					}
+					if (b == '[' && i + 1 < n && (pat[i + 1] == ':' || pat[i + 1] == '.' || pat[i + 1] == '='))
+					{
+						// [:class:] (and the collating forms, which the engine rejects itself).
+						char kind = pat[i + 1];
+						sz j = i + 2;
+						while (j + 1 < n && !(pat[j] == kind && pat[j + 1] == ']')) j++;
+						if (j + 1 >= n) return UNSUPPORTED_REGEX~;
+						out.append(pat[i : j + 2 - i]);
+						i = j + 2;
+						continue;
+					}
+					if (b == '\\' && i + 1 < n)
+					{
+						char e = pat[i + 1];
+						i += 2;
+						switch (e)
+						{
+							case 't': out.append_char('\t');
+							case 'n': out.append_char('\n');
+							case 'r': out.append_char('\r');
+							case 'f': out.append_char(0x0c);
+							case 'v': out.append_char(0x0b);
+							case 'd': out.append("[:digit:]");
+							case 's': out.append("[:space:]");
+							case 'w': out.append("[:alnum:]_");
+							// A literal ']' is only expressible first in POSIX.
+							case ']':
+							case 'D':
+							case 'S':
+							case 'W':
+								return UNSUPPORTED_REGEX~;
+							default: out.append_char(e);
+						}
+						continue;
+					}
+					out.append_char(b);
+					i++;
+				}
+				if (!closed) return UNSUPPORTED_REGEX~;
+			default:
+				out.append_char(c);
+				i++;
+		}
+	}
+	return out.str_view();
 }
 
 struct Directive
@@ -525,8 +727,8 @@ fn Directive[] find_directives(Allocator a, String source)
 		String body = body_end > name_end ? source[name_end : body_end - name_end] : "";
 		for (; counted < pos; counted++) if (source[counted] == '\n') line++;
 		out.push(
-		{
-			.name = source[k : name_end - k], .args = tcl_words(a, body), .line = line
+			{
+				.name = source[k : name_end - k], .args = tcl_words(a, body), .line = line
 		}
 		);
 		pos = name_end;
@@ -556,9 +758,9 @@ fn bool? eval_expr(Allocator a, String[] words)
 		if (is_op(w))
 		{
 			tokens.push(
-			{
-				.op = w[0]
-			}
+				{
+					.op = w[0]
+				}
 			);
 			has_op = true;
 		}
@@ -567,16 +769,16 @@ fn bool? eval_expr(Allocator a, String[] words)
 			String inner = w;
 			if (w.starts_with("!") && !w.starts_with("! ")) inner = string::format(a, " ! %s", w[1..]);
 			tokens.push(
-			{
-				.value = eval_expr(a, tcl_words(a, inner))!
+				{
+					.value = eval_expr(a, tcl_words(a, inner))!
 			}
 			);
 		}
 		else
 		{
 			tokens.push(
-			{
-				.value = atom(w)!
+				{
+					.value = atom(w)!
 			}
 			);
 		}
@@ -718,6 +920,27 @@ struct Expect
 	bool xfail;
 }
 
+<* dg-final scan-assembler (PRESENT), scan-assembler-not (ABSENT), scan-assembler-times (TIMES). *>
+enum AsmKind : char (String name)
+{
+	PRESENT { "scan-assembler" },
+	ABSENT { "scan-assembler-not" },
+	TIMES { "scan-assembler-times" },
+}
+
+struct AsmCheck
+{
+	AsmKind kind;
+	<* The Tcl regexp, after Tcl substitution of a "quoted" word. *>
+	String pattern;
+	<* TIMES only. *>
+	long times;
+	long line;
+	bool xfail;
+	<* Guarded by an x86 target selector: likely an AT&T / GCC-codegen check. *>
+	bool x86;
+}
+
 struct Case
 {
 	String suite;
@@ -735,6 +958,11 @@ struct Case
 	Expect[] expect;
 	<* SKIP reason, or "". *>
 	String skip;
+	<* The source mentions scan-assembler (selects the case for the asm suite). *>
+	bool has_asm_scan;
+	AsmCheck[] asm_checks;
+	<* Other dg-final scan-assembler-* forms (dem, symbol-section, bound, ...), which are not checked. *>
+	String[] asm_other;
 }
 
 fn String[] copy_strings(Allocator a, String[] items) @local
@@ -774,15 +1002,16 @@ fn Case* parse_case(Allocator a, String suite, String path, String rel, String d
 			return c;
 		}
 		String source = py_decode(tmem, raw, true);
+		c.has_asm_scan = source.contains("scan-assembler");
 		Directive[] directives = find_directives(tmem, source);
 		List{Label} labels;
 		labels.init(tmem);
 		foreach (d : directives)
 		{
 			if (d.name == "dg-line" && d.args.len) labels.push(
-			{
-				d.args[0], d.line
-			}
+				{
+					d.args[0], d.line
+				}
 			);
 		}
 		String action = c.action;
@@ -795,7 +1024,11 @@ fn Case* parse_case(Allocator a, String suite, String path, String rel, String d
 		sources.init(tmem);
 		List{Expect} expect;
 		expect.init(tmem);
-		fault f = @catch(apply_directives(directives, labels.array_view(), &action, &skip, &has_options, &options, &extra, &sources, &expect));
+		List{AsmCheck} asm_checks;
+		asm_checks.init(tmem);
+		List{String} asm_other;
+		asm_other.init(tmem);
+		fault f = @catch(apply_directives(directives, labels.array_view(), &action, &skip, &has_options, &options, &extra, &sources, &expect, &asm_checks, &asm_other));
 		if (f == UNKNOWN_TARGET)
 		{
 			skip = string::tformat("unknown effective target %s", unknown_word);
@@ -813,6 +1046,13 @@ fn Case* parse_case(Allocator a, String suite, String path, String rel, String d
 		c.sources = copy_strings(a, sources.array_view());
 		c.expect = alloc::new_array(a, Expect, expect.len());
 		foreach (i, e : expect) c.expect[i] = e;
+		c.asm_checks = alloc::new_array(a, AsmCheck, asm_checks.len());
+		foreach (i, k : asm_checks)
+		{
+			k.pattern = k.pattern.copy(a);
+			c.asm_checks[i] = k;
+		}
+		c.asm_other = copy_strings(a, asm_other.array_view());
 	};
 	return c;
 }
@@ -825,13 +1065,18 @@ fn bool? selector_applies(String[] args, usz index) @local
 }
 
 fn void? apply_directives(Directive[] directives, Label[] labels, String* action, String* skip, bool* has_options,
-	String[] * options, List{String} * extra, List{String} * sources, List{Expect} * expect) @local
+	String[] * options, List{String} * extra, List{String} * sources, List{Expect} * expect,
+	List{AsmCheck} * asm_checks, List{String} * asm_other) @local
 {
 	foreach (d : directives)
 	{
 		String name = d.name;
 		String[] args = d.args;
-		if (name == "dg-do" && args.len)
+		if (name == "dg-final" && args.len)
+		{
+			parse_asm_check(args[0], d.line, asm_checks, asm_other)!;
+		}
+		else if (name == "dg-do" && args.len)
 		{
 			*action = args[0];
 			if (args.len > 1)
@@ -907,12 +1152,55 @@ fn void? apply_directives(Directive[] directives, Label[] labels, String* action
 			long? target_line = resolve_line(args.len >= 4 ? args[3] : ".", d.line, labels);
 			if (catch target_line) continue;
 			expect.push(
-			{
-				kind, target_line, xfail
-			}
+				{
+					kind, target_line, xfail
+				}
 			);
 		}
 	}
+}
+
+<*
+ One dg-final body, e.g. ` scan-assembler-times "foo\t" 2 { target x86_64-*-* } `.
+ Forms other than scan-assembler / -not / -times that start with scan-assembler
+ go to `asm_other`; everything else (scan-tree-dump, ...) is ignored. A check
+ whose target selector is false is dropped, as GCC's dg-process-target "N".
+*>
+fn void? parse_asm_check(String body, long line, List{AsmCheck} * asm_checks, List{String} * asm_other) @local
+{
+	List{bool} quoted;
+	quoted.init(tmem);
+	String[] w = tcl_words(tmem, body, &quoted);
+	if (!w.len || !w[0].starts_with("scan-assembler")) return;
+	AsmKind kind;
+	switch (w[0])
+	{
+		case "scan-assembler": kind = PRESENT;
+		case "scan-assembler-not": kind = ABSENT;
+		case "scan-assembler-times": kind = TIMES;
+		default:
+			asm_other.push(w[0]);
+			return;
+	}
+	if (w.len < 2) return;
+	usz selector_index = kind == TIMES ? 3 : 2;
+	AsmCheck k = { .kind = kind, .line = line };
+	k.pattern = quoted[1] ? tcl_subst(tmem, w[1]) : w[1];
+	if (kind == TIMES)
+	{
+		if (w.len < 3) return;
+		k.times = w[2].to_long() ?? -1;
+	}
+	if (w.len > selector_index)
+	{
+		bool is_xfail;
+		bool ok = eval_selector(tmem, w[selector_index], &is_xfail)!;
+		if (!is_xfail && !ok) return;
+		k.xfail = is_xfail && ok;
+		String sel = w[selector_index];
+		k.x86 = !is_xfail && (sel.contains("86-") || sel.contains("x86_64"));
+	}
+	asm_checks.push(k);
 }
 
 <* aro flags for the case, plus the dg-options that were dropped. *>
@@ -1030,8 +1318,8 @@ fn Diag[] parse_diags(Allocator a, String output, String[] names)
 							if (nm == base)
 							{
 								diags.push(
-								{
-									l[p : q - p].to_long() ?? 0, sev, l[msg..]
+									{
+										l[p : q - p].to_long() ?? 0, sev, l[msg..]
 								}
 								);
 								break;
@@ -1051,17 +1339,17 @@ fn Diag[] parse_diags(Allocator a, String output, String[] names)
 			if (severity_at(l, ws + 1, &msg, false).len)
 			{
 				diags.push(
-				{
-					-1, "error", l[msg..]
-				}
+					{
+						-1, "error", l[msg..]
+					}
 				);
 				continue;
 			}
 		}
 		if (severity_at(l, 0, &msg, false).len) diags.push(
-		{
-			-1, "error", l[msg..]
-		}
+			{
+				-1, "error", l[msg..]
+			}
 		);
 	}
 	return diags.array_view();
@@ -1138,28 +1426,28 @@ fn Check check_expectations(Allocator a, Case* c, Diag[] diags, int rc)
 			case ERROR:
 				expected_error_lines.set(e.line, true);
 				if (!(sevs & SEV_ERROR)) problems.push(
-				{
-					1, e.line
-				}
+					{
+						1, e.line
+					}
 				);
 			case WARNING:
 				if (!(sevs & (SEV_WARNING | SEV_ERROR))) problems.push(
-				{
-					3, e.line
-				}
+					{
+						3, e.line
+					}
 				);
 			case MESSAGE:
 			case NOTE:
 				if (!sevs) problems.push(
-				{
-					4, e.line
-				}
+					{
+						4, e.line
+					}
 				);
 			case BOGUS:
 				if (sevs) problems.push(
-				{
-					2, e.line
-				}
+					{
+						2, e.line
+					}
 				);
 		}
 	}
@@ -1172,14 +1460,14 @@ fn Check check_expectations(Allocator a, Case* c, Diag[] diags, int rc)
 		has_unexpected = true;
 	}
 	if (has_unexpected && !expected_error_lines.has_key(0)) problems.push(
-	{
-		0, first_unexpected
-	}
+		{
+			0, first_unexpected
+		}
 	);
 	if (!c.expect.len && rc != 0 && !has_unexpected) problems.push(
-	{
-		5, 0
-	}
+		{
+			5, 0
+		}
 	);
 	if (!problems.len()) return { "PASS", "", "" };
 	// Stable sort by problem kind.
@@ -1211,8 +1499,6 @@ struct Options
 	double timeout;
 	String out;
 	String resource_dir;
-	String baseline;
-	bool update_baseline;
 	bool selftest;
 }
 
@@ -1267,9 +1553,9 @@ fn LineSev[] line_sevs(Diag[] diags) @local
 			seen = true; break;
 		}
 		if (!seen) out.push(
-		{
-			d.line, d.sev
-		}
+			{
+				d.line, d.sev
+			}
 		);
 	}
 	LineSev[] arr = out.array_view();
@@ -1315,6 +1601,13 @@ fn Object* run_case(Allocator a, Case* c, Options* args)
 		rec.set("category", c.skip);
 		return rec;
 	}
+	bool is_asm = c.suite == "asm";
+	if (is_asm && !c.asm_checks.len && !c.asm_other.len)
+	{
+		rec.set("status", "SKIP");
+		rec.set("category", "no scan-assembler check for this target");
+		return rec;
+	}
 	@pool()
 	{
 		String[] dropped;
@@ -1332,7 +1625,7 @@ fn Object* run_case(Allocator a, Case* c, Options* args)
 			libc::exit(1);
 		}
 		defer aro_harness::remove_tree(tmp);
-		String[] cmd = compile_cmd(tmem, args, c, flags, c.action, tmp);
+		String[] cmd = compile_cmd(tmem, args, c, flags, is_asm ? "asm" : c.action, tmp);
 		rec.set("cmd", string::tjoin(cmd, " "));
 		Captured res = run_captured(tmem, cmd, c.dir, args.timeout);
 		if (!res.spawned)
@@ -1384,6 +1677,34 @@ fn Object* run_case(Allocator a, Case* c, Options* args)
 			rec.set("detail", chk.detail);
 			rec.set("first_error", first_error);
 		}
+		else if (is_asm)
+		{
+			String asm_path = string::tformat("%s/a.s", tmp);
+			char[]? raw = file::load_temp(asm_path);
+			if (catch raw)
+			{
+				rec.set("status", "FAIL");
+				rec.set("category", "no-assembly");
+				return rec;
+			}
+			Check chk_asm = check_asm(tmem, c, (String)raw);
+			rec.set("asm_checks", (long)c.asm_checks.len);
+			// A failure in a case that relies on a dropped flag (other than -O levels,
+			// e.g. -fdata-sections or -g3) is not a codegen bug: group it apart.
+			if (chk_asm.status == "FAIL" && chk_asm.category != "x86-insn")
+			{
+				foreach (opt : dropped)
+				{
+					if (opt.starts_with("-O")) continue;
+					chk_asm.category = "dropped-option";
+					chk_asm.detail = string::tformat("needs %s: %s", opt, chk_asm.detail);
+					break;
+				}
+			}
+			rec.set("status", chk_asm.status);
+			rec.set("category", chk_asm.category);
+			rec.set("detail", chk_asm.detail);
+		}
 		else if (c.action == "run")
 		{
 			String exe = string::tformat("%s/a.out", tmp);
@@ -1421,7 +1742,7 @@ fn Object* run_case(Allocator a, Case* c, Options* args)
 			rec.set("status", "PASS");
 		}
 		String status = field(rec, "status");
-		if (args.zig_arocc.len && (status == "PASS" || status == "FAIL"))
+		if (args.zig_arocc.len && !is_asm && (status == "PASS" || status == "FAIL"))
 		{
 			String[] zcmd = concat_strings(tmem, { args.zig_arocc }, cmd[1..]);
 			Captured z = run_captured(tmem, zcmd, c.dir, args.timeout);
@@ -1450,6 +1771,95 @@ fn Object* run_case(Allocator a, Case* c, Options* args)
 	return rec;
 }
 
+<* `pattern` with tabs and newlines escaped, cut to 60 bytes, for a result detail. *>
+fn String printable_pattern(Allocator a, String pattern) @local
+{
+	DString out;
+	out.init(a);
+	foreach (ch : pattern)
+	{
+		if (out.len() >= 60)
+		{
+			out.append("...");
+			break;
+		}
+		switch (ch)
+		{
+			case '\t': out.append(`\t`);
+			case '\n': out.append(`\n`);
+			default: out.append_char(ch);
+		}
+	}
+	return out.str_view();
+}
+
+<*
+ Evaluate the case's scan-assembler checks on the assembly `text` (GCC's
+ dg-scan / scan-assembler-times: `regexp` / `regexp -all` on the whole file).
+ FAIL when a non-xfail check fails: category "x86-insn" when every failing check
+ is guarded by an x86 target selector, else the first failing directive's name.
+ Patterns the ERE engine cannot express are not evaluated; when nothing could be
+ evaluated the case is UNSUPPORTED ("regex", or the first unchecked form).
+*>
+fn Check check_asm(Allocator a, Case* c, String text)
+{
+	DString detail;
+	detail.init(a);
+	sz failures = 0;
+	sz evaluated = 0;
+	sz unsupported = 0;
+	String category = "";
+	bool all_x86 = true;
+	foreach (k : c.asm_checks)
+	{
+		String? ere = tcl_regex_to_ere(tmem, k.pattern);
+		if (catch ere)
+		{
+			unsupported++;
+			continue;
+		}
+		Regex? re = regex::compile(tmem, ere, EXTENDED);
+		if (catch re)
+		{
+			unsupported++;
+			continue;
+		}
+		evaluated++;
+		long got;
+		bool ok;
+		switch (k.kind)
+		{
+			case PRESENT:
+				ok = re.matches(text);
+				got = ok ? 1 : 0;
+			case ABSENT:
+				got = re.matches(text) ? 1 : 0;
+				ok = got == 0;
+			case TIMES:
+				got = (re.tfind_all(text) ?? {}).len;
+				ok = got == k.times;
+		}
+		if (ok || k.xfail) continue;
+		if (!k.x86) all_x86 = false;
+		if (!category.len && !k.x86) category = k.kind.name;
+		if (failures < 8)
+		{
+			if (failures) detail.append("; ");
+			detail.appendf("%s@%d /%s/", k.kind.name, k.line, printable_pattern(tmem, k.pattern));
+			if (k.kind == TIMES) detail.appendf(" got %d want %d", got, k.times);
+		}
+		failures++;
+	}
+	if (failures) return { "FAIL", all_x86 ? "x86-insn" : category, detail.str_view() };
+	if (!evaluated)
+	{
+		if (unsupported) return { "UNSUPPORTED", "regex", "" };
+		return { "UNSUPPORTED", c.asm_other.len ? c.asm_other[0] : "no-checks", "" };
+	}
+	if (unsupported) return { "PASS", "", string::format(a, "%d pattern(s) not evaluated", unsupported) };
+	return { "PASS", "", "" };
+}
+
 fn String[] compile_cmd(Allocator a, Options* args, Case* c, String[] flags, String action, String workdir)
 {
 	List{String} cmd;
@@ -1469,6 +1879,14 @@ fn String[] compile_cmd(Allocator a, Options* args, Case* c, String[] flags, Str
 		cmd.push(string::format(a, "%s/a.out", workdir));
 		cmd.push_all(srcs.array_view());
 		cmd.push("-lm");
+	}
+	else if (action == "asm")
+	{
+		// GCC scans the .s of the main source only.
+		cmd.push("-S");
+		cmd.push("-o");
+		cmd.push(string::format(a, "%s/a.s", workdir));
+		cmd.push(c.path);
 	}
 	else if (action == "assemble")
 	{
@@ -1590,7 +2008,7 @@ fn String join_first(List{String} * items, sz n) @local
 	return out.str_view();
 }
 
-fn String summary_text(Allocator a, Object*[] results, String[] * new_list, String[] * fixed_list, bool have_baseline)
+fn String summary_text(Allocator a, Object*[] results)
 {
 	DString o;
 	o.init(a);
@@ -1666,12 +2084,6 @@ fn String summary_text(Allocator a, Object*[] results, String[] * new_list, Stri
 			Group* grp = cats.get_ref(g.index);
 			o.appendf("- %d × %s e.g. %s\n", grp.paths.len(), grp.label, join_first(&grp.paths, 3));
 		}
-		if (have_baseline)
-		{
-			o.appendf("\n## Versus baseline: %d new non-PASS, %d fixed\n\n", new_list.len, fixed_list.len);
-			foreach (i, p : *new_list) if (i < 100) o.appendf("- NEW %s\n", p);
-			foreach (i, p : *fixed_list) if (i < 100) o.appendf("- FIXED %s\n", p);
-		}
 	};
 	// "\n".join(lines) + "\n": the section lists above end every line with "\n"
 	// and an empty trailing list leaves exactly one blank line, as Python does.
@@ -1724,40 +2136,41 @@ fn bool selftest()
 		if (!@expect(c.skip == "", "no skip")) return false;
 		if (!@expect(c.action == "run", "dg-do run")) return false;
 		if (!@expect(expect_eq(c.expect, {
-		{
-			ERROR, 2, false
-		}
-		, { ERROR, 4, true } }), "expectations")) return false;
+						{
+							ERROR, 2, false
+						}
+						, { ERROR, 4, true }
+					}), "expectations")) return false;
 		if (!@expect(parse_text(tmp, "/* { dg-do compile { target avr-*-* } } */\n").skip.len > 0, "dg-do target skip")) return false;
 		if (!@expect(parse_text(tmp, "/* { dg-require-effective-target made_up_target } */\n").skip.contains("unknown"), "unknown target")) return false;
 		if (!@expect(expect_eq(parse_text(tmp, "/* { dg-error \"x\" \"\" { target *-*-* } 0 } */\n").expect, {
-		{
-			ERROR, 0, false
-		}
-		}), "line 0")) return false;
+					{
+						ERROR, 0, false
+					}
+				}), "line 0")) return false;
 		if (!@expect(expect_eq(parse_text(tmp, "int a; /* { dg-line l1 } */\n/* { dg-error \"x\" \"\" { target *-*-* } l1 } */\n").expect, {
-		{
-			ERROR, 1, false
-		}
-		}), "dg-line")) return false;
+					{
+						ERROR, 1, false
+					}
+				}), "dg-line")) return false;
 		if (!@expect((eval_expr(tmem, { "!", "ilp32" }) ?? false) && !(eval_expr(tmem, { "ilp32", "||", "ia32" }) ?? true), "eval_expr ops")) return false;
 		if (!@expect(eval_expr(tmem, { "i?86-*-* x86_64-*-*" }) ?? false, "eval_expr list")) return false;
 		Case k = { .suite = "dg", .path = "t.c", .name = "t.c", .action = "compile" };
 		k.expect = {
-		{
-			ERROR, 3, false
-		}
+			{
+				ERROR, 3, false
+			}
 		};
 		if (!@expect(check_expectations(tmem, &k, {
-		{
-			3, "error", "m"
-		}
-		}, 1).status == "PASS", "check pass")) return false;
+						{
+							3, "error", "m"
+						}
+					}, 1).status == "PASS", "check pass")) return false;
 		if (!@expect(check_expectations(tmem, &k, {
-		{
-			4, "error", "m"
-		}
-		}, 1).category == "unexpected-error", "check unexpected")) return false;
+						{
+							4, "error", "m"
+						}
+					}, 1).category == "unexpected-error", "check unexpected")) return false;
 		if (!@expect(check_expectations(tmem, &k, {}, 0).category == "missing-error", "check missing")) return false;
 	};
 	io::printn("selftest ok");
@@ -1770,8 +2183,7 @@ fn bool selftest()
 
 const String USAGE = `usage: gcc_testsuite [-h] [--gcc-testsuite GCC_TESTSUITE] [--aro ARO] [--zig-arocc ZIG_AROCC] [--suite SUITE]
                      [--filter FILTER] [--jobs JOBS] [--timeout TIMEOUT] [--out OUT]
-                     [--resource-dir RESOURCE_DIR] [--baseline BASELINE] [--update-baseline] [--selftest]
-                     [--bazel-run-update]
+                     [--resource-dir RESOURCE_DIR] [--selftest]
 
 Run the GCC C testsuite against aro_c3, treating GCC's expectations as golden.
 
@@ -1789,18 +2201,16 @@ options:
   --out OUT
   --resource-dir RESOURCE_DIR
                         aro -resource-dir (builtin headers)
-  --baseline BASELINE
-  --update-baseline
   --selftest
-  --bazel-run-update    under "bazel run" (BUILD_WORKSPACE_DIRECTORY set): run the workspace's test/gcc
-                        and rewrite the workspace baseline (the old gcc_testsuite.sh wrapper)
+
+Under "bazel run" (BUILD_WORKSPACE_DIRECTORY set) the default testsuite root is the workspace's test/gcc.
 `;
 
 const String[*] VALUE_OPTIONS = {
 	"--gcc-testsuite", "--aro", "--zig-arocc", "--suite", "--filter", "--jobs", "--timeout", "--out",
-	"--resource-dir", "--baseline",
+	"--resource-dir",
 };
-const String[*] FLAG_OPTIONS = { "--update-baseline", "--selftest", "--bazel-run-update", "--help" };
+const String[*] FLAG_OPTIONS = { "--selftest", "--help" };
 
 <* The repository root as the Python script saw it: TEST_SRCDIR/TEST_WORKSPACE under `bazel test`, else the current directory. *>
 fn String root_dir(Allocator a)
@@ -1864,25 +2274,24 @@ struct RunCtx @local
 fn void run_one(void* p, sz i) @local
 {
 	RunCtx* ctx = p;
-	ctx.results[i] = run_case(mem, ctx.cases[i], ctx.args);
+	Clock case_start = clock::now();
+	Object* r = run_case(mem, ctx.cases[i], ctx.args);
+	ctx.results[i] = r;
+	double secs = (double)case_start.to_now() / 1e9;
+	// First line of the detail, truncated, so each case stays on one log line.
+	String detail = field(r, "detail");
+	sz? nl = detail.index_of_char('\n');
+	if (try nl) detail = detail[:nl];
+	detail = detail.trim();
+	if (detail.len > 160) detail = detail[:160];
+	String category = field(r, "category");
 	ctx.lock.lock();
+	defer ctx.lock.unlock();
 	sz n = ++ctx.done;
-	ctx.lock.unlock();
-	if (n % 500 == 0) io::eprintfn("  %d/%d (%.0fs)", n, ctx.cases.len, (double)ctx.start.to_now() / 1e9);
-}
-
-fn String status_of(HashMap{String, String} * table, String key) @local
-{
-	String v = table.get(key) ?? "PASS";
-	sz? sp = v.index_of_char(' ');
-	if (try sp) return v[:sp];
-	return v;
-}
-
-fn bool is_non_pass(String s) @local
-{
-	foreach (x : NON_PASS) if (x == s) return true;
-	return false;
+	io::printfn("[%5d/%d] %-11s %s:%s%s%s%s%s (%.2fs)", n, ctx.cases.len, field(r, "status"),
+		field(r, "suite"), field(r, "path"),
+		category.len ? "  " : "", category,
+		detail.len ? " — " : "", detail, secs);
 }
 
 fn void sort_strings(String[] items) @local
@@ -1896,14 +2305,15 @@ fn int main(String[] argv)
 	String root = root_dir(mem);
 	args.gcc_testsuite = string::format(mem, "%s/test/gcc", root);
 	args.aro = string::format(mem, "%s/bazel-bin/aro_c3", root);
-	args.suite = "compile,execute,ieee,dg";
+	args.suite = "compile,execute,ieee,dg,asm";
 	args.filter = "*";
 	args.jobs = aro_harness::cpu_count();
 	args.timeout = 60.0;
 	String out_env = aro_harness::getenv(mem, "TEST_UNDECLARED_OUTPUTS_DIR");
 	args.out = out_env.len ? out_env : string::format(mem, "%s/aro-gcc-testsuite", aro_harness::temp_root(tmem));
 	args.resource_dir = root;
-	args.baseline = string::format(mem, "%s/test/src/gcc/baseline.json", root);
+	String ws = aro_harness::workspace_dir(mem);
+	if (ws.len) args.gcc_testsuite = string::format(mem, "%s/test/gcc", ws);
 
 	for (sz i = 1; i < argv.len; i++)
 	{
@@ -1953,18 +2363,7 @@ fn int main(String[] argv)
 				args.timeout = t;
 			case "--out": args.out = value;
 			case "--resource-dir": args.resource_dir = value;
-			case "--baseline": args.baseline = value;
-			case "--update-baseline": args.update_baseline = true;
 			case "--selftest": args.selftest = true;
-			case "--bazel-run-update":
-				// gcc_testsuite.sh under `bazel run`: update the checked-in baseline.
-				String ws = aro_harness::workspace_dir(mem);
-				if (ws.len)
-				{
-					args.baseline = string::format(mem, "%s/test/src/gcc/baseline.json", ws);
-					args.gcc_testsuite = string::format(mem, "%s/test/gcc", ws);
-					args.update_baseline = true;
-				}
 		}
 	}
 	if (args.selftest) return selftest() ? 0 : 1;
@@ -1986,7 +2385,7 @@ fn int main(String[] argv)
 	{
 		SuiteInfo* info = null;
 		foreach (&s : SUITES) if (s.name == name) info = s;
-		if (!info) return fatal(string::tformat("unknown suite %s; choose from compile, execute, ieee, dg", py_repr(tmem, name)));
+		if (!info) return fatal(string::tformat("unknown suite %s; choose from compile, execute, ieee, dg, asm", py_repr(tmem, name)));
 		String dir = py_join(mem, args.gcc_testsuite, info.rel);
 		String[]? names = aro_harness::list_sorted(mem, dir);
 		if (catch names) continue;
@@ -1995,7 +2394,9 @@ fn int main(String[] argv)
 			if (!aro_harness::glob_match("*.c", n) || !aro_harness::glob_match(args.filter, n)) continue;
 			String p = string::format(mem, "%s/%s", dir, n);
 			String rel = string::format(mem, "%s/%s", info.rel, n);
-			cases.push(parse_case(mem, name, p, rel, info.action));
+			Case* c = parse_case(mem, name, p, rel, info.action);
+			if (name == "asm" && !c.has_asm_scan) continue;
+			cases.push(c);
 		}
 	}
 	// Bazel test sharding: take every Nth case.
@@ -2027,108 +2428,8 @@ fn int main(String[] argv)
 		return fatal("cannot write results.jsonl");
 	}
 
-	HashMap{String, String} current;
-	current.init(mem);
-	foreach (r : results)
-	{
-		String st = field(r, "status");
-		if (!is_non_pass(st)) continue;
-		String key = string::format(mem, "%s:%s", field(r, "suite"), field(r, "path"));
-		current.set(key, string::format(mem, "%s %s", st, field(r, "category")).trim());
-	}
-	bool have_baseline = aro_harness::any_exists(args.baseline) && !args.update_baseline;
-	String[] new_list;
-	String[] fixed_list;
-	if (have_baseline)
-	{
-		Object* base_json = load_json(args.baseline)!!;
-		HashMap{String, String} base;
-		base.init(mem);
-		base_json.@each_entry(; String k, Object* v)
-		{
-			base.set(k, v.is_string() ? v.s : "");
-		};
-		HashMap{String, bool} ran;
-		ran.init(mem);
-		List{String} changed;
-		changed.init(mem);
-		foreach (r : results)
-		{
-			String key = string::format(mem, "%s:%s", field(r, "suite"), field(r, "path"));
-			if (ran.has_key(key)) continue;
-			ran.set(key, true);
-			if (status_of(&base, key) != status_of(&current, key)) changed.push(key);
-		}
-		List{String} flaky;
-		flaky.init(mem);
-		List{String} new_l;
-		new_l.init(mem);
-		List{String} fixed_l;
-		fixed_l.init(mem);
-		foreach (k : changed)
-		{
-			// Flips to or from TIMEOUT depend on machine load; report them, don't gate.
-			if (status_of(&base, k) == "TIMEOUT" || status_of(&current, k) == "TIMEOUT")
-			{
-				flaky.push(k);
-			}
-			else if (current.has_key(k))
-			{
-				new_l.push(k);
-			}
-			else
-			{
-				fixed_l.push(k);
-			}
-		}
-		sort_strings(flaky.array_view());
-		new_list = new_l.array_view();
-		fixed_list = fixed_l.array_view();
-		sort_strings(new_list);
-		sort_strings(fixed_list);
-		if (flaky.len())
-		{
-			DString line;
-			line.init(tmem);
-			foreach (i, k : flaky)
-			{
-				if (i >= 20) break;
-				if (i) line.append(", ");
-				line.append(k);
-			}
-			io::printfn("timeout flips (not gated): %s", line.str_view());
-		}
-	}
-	String summary = summary_text(mem, results, &new_list, &fixed_list, have_baseline);
+	String summary = summary_text(mem, results);
 	if (catch file::save(string::tformat("%s/summary.md", out_dir), summary)) return fatal("cannot write summary.md");
-	if (args.update_baseline)
-	{
-		// Replace only the entries of the suites that ran; keep the others.
-		HashMap{String, String} merged;
-		merged.init(mem);
-		if (aro_harness::any_exists(args.baseline))
-		{
-			Object* old = load_json(args.baseline)!!;
-			old.@each_entry(; String k, Object* v)
-			{
-				String suite = split_char(tmem, k, ':')[0];
-				bool ran_suite = false;
-				foreach (r : results) if (field(r, "suite") == suite)
-				{
-					ran_suite = true; break;
-				}
-				if (!ran_suite) merged.set(k, v.is_string() ? v.s : "");
-			};
-		}
-		current.@each(; String k, String v)
-		{
-			merged.set(k, v);
-		};
-		String[] keys = merged.keys(mem);
-		sort_strings(keys);
-		String text = baseline_text(mem, keys, &merged);
-		if (catch file::save(args.baseline, text)) return fatal(string::tformat("cannot write %s", args.baseline));
-	}
 
 	List{String} status_names;
 	status_names.init(mem);
@@ -2156,34 +2457,7 @@ fn int main(String[] argv)
 	}
 	io::printfn("%d cases in %.0fs: %s", results.len, (double)ctx.start.to_now() / 1e9, counts.str_view());
 	io::printfn("results: %s/results.jsonl\nsummary: %s/summary.md", out_dir, out_dir);
-	if (have_baseline)
-	{
-		io::printfn("versus baseline: %d new non-PASS, %d fixed", new_list.len, fixed_list.len);
-		return new_list.len ? 1 : 0;
-	}
 	return crashes ? 1 : 0;
-}
-
-fn Object*? load_json(String p) @local
-{
-	char[] data = file::load(mem, p)!;
-	return json::parse(mem, (String)data, JSON);
-}
-
-<* baseline.json text: one sorted `"key": "value"` entry per line (json.dumps indent=0 layout, kept so the checked-in file diffs cleanly). *>
-fn String baseline_text(Allocator a, String[] sorted_keys, HashMap{String, String}* m) @local
-{
-	if (!sorted_keys.len) return string::format(a, "{}\n");
-	DString out;
-	out.init(a);
-	out.append("{\n");
-	foreach (i, k : sorted_keys)
-	{
-		if (i) out.append(",\n");
-		out.appendf("%s: %s", json::marshal(tmem, k), json::marshal(tmem, m.get(k)!!));
-	}
-	out.append("\n}\n");
-	return out.str_view();
 }
 
 // ---- Unit tests: the Python script's selftest() plus the Python string
@@ -2192,22 +2466,6 @@ fn String baseline_text(Allocator a, String[] sorted_keys, HashMap{String, Strin
 fn void selftest_passes() @test
 {
 	assert(selftest());
-}
-
-fn void baseline_round_trip() @test
-{
-	HashMap{String, String} m;
-	m.init(tmem);
-	m.set("b:z", "CRASH");
-	m.set("a:x", "FAIL \"y\"");
-	String[] keys = { "a:x", "b:z" };
-	String text = baseline_text(tmem, keys, &m);
-	test::eq(text, "{\n\"a:x\": \"FAIL \\\"y\\\"\",\n\"b:z\": \"CRASH\"\n}\n");
-	Object* back = json::parse(tmem, text, JSON)!!;
-	test::eq(back.len(), 2);
-	test::eq(field(back, "a:x"), "FAIL \"y\"");
-	test::eq(field(back, "b:z"), "CRASH");
-	test::eq(baseline_text(tmem, {}, &m), "{}\n");
 }
 
 fn void tcl_words_forms() @test
@@ -2243,9 +2501,9 @@ fn void selectors() @test
 fn void lines_and_labels() @test
 {
 	Label[] labels = {
-	{
-		"l1", 7
-	}
+		{
+			"l1", 7
+		}
 	};
 	test::eq(resolve_line(".", 3, labels)!!, 3);
 	test::eq(resolve_line(".-2", 3, labels)!!, 1);
@@ -2285,4 +2543,56 @@ fn void diagnostics() @test
 	test::eq(panic_search("@require \"x\" violated."), 0);
 	test::eq(panic_search("@require x\n violated"), -1);
 	test::eq(panic_search("a panic"), -1);
+}
+
+fn void tcl_substitution() @test
+{
+	test::eq(tcl_subst(tmem, `\[ \t\]+foo\\.x\.y`), "[ \t]+foo\\.x.y");
+	test::eq(tcl_subst(tmem, `a\x41\101\n`), "aAA\n");
+	test::eq(tcl_subst(tmem, `q\"`), `q"`);
+}
+
+fn void tcl_regex_translation() @test
+{
+	test::eq(tcl_regex_to_ere(tmem, `\mpow\M`)!!, `\<pow\>`);
+	test::eq(tcl_regex_to_ere(tmem, `[\t ]+\.globl[^\n]*x`)!!, "[\t ]+\\.globl[^\n]*x");
+	test::eq(tcl_regex_to_ere(tmem, `[\d\w-]`)!!, "[[:digit:][:alnum:]_-]");
+	test::eq(tcl_regex_to_ere(tmem, `[]a][[:space:]]`)!!, "[]a][[:space:]]");
+	assert(@catch(tcl_regex_to_ere(tmem, `a+?`)) == UNSUPPORTED_REGEX);
+	assert(@catch(tcl_regex_to_ere(tmem, `(?:a)`)) == UNSUPPORTED_REGEX);
+	assert(@catch(tcl_regex_to_ere(tmem, `(a)\1`)) == UNSUPPORTED_REGEX);
+	assert(@catch(tcl_regex_to_ere(tmem, `[ab`)) == UNSUPPORTED_REGEX);
+}
+
+fn void asm_checks_parse_and_evaluate() @test
+{
+	String tmp = aro_harness::make_temp_dir(tmem, "gcc-ts-asm-")!!;
+	defer aro_harness::remove_tree(tmp);
+	String src = "/* { dg-final { scan-assembler \"call\\[ \\t\\]+bar\" } } */\n"
+		"/* { dg-final { scan-assembler-not {\\mbaz\\M} } } */\n"
+		"/* { dg-final { scan-assembler-times \"foo\" 3 { target x86_64-*-* } } } */\n"
+		"/* { dg-final { scan-assembler \"never\" { target avr-*-* } } } */\n"
+		"/* { dg-final { scan-assembler \"never\" { xfail *-*-* } } } */\n"
+		"/* { dg-final { scan-assembler-dem \"x\" } } */\n"
+		"/* { dg-final { scan-tree-dump \"x\" \"optimized\" } } */\n";
+	Case* c = parse_text(tmp, src);
+	assert(c.has_asm_scan);
+	test::eq(c.asm_checks.len, 4);
+	test::eq(c.asm_checks[0].pattern, "call[ \t]+bar");
+	test::eq(c.asm_checks[1].kind.ordinal, AsmKind.ABSENT.ordinal);
+	test::eq(c.asm_checks[1].pattern, `\mbaz\M`);
+	test::eq(c.asm_checks[2].times, 3);
+	assert(c.asm_checks[2].x86);
+	assert(c.asm_checks[3].xfail);
+	test::eq(c.asm_other.len, 1);
+	test::eq(c.asm_other[0], "scan-assembler-dem");
+
+	String good = "\t.globl foo\nfoo:\n\tcall\tbar\n\tjmp foo\n";
+	test::eq(check_asm(tmem, c, good).status, "PASS");
+	Check bad = check_asm(tmem, c, "\tcall bar\n\tbaz\n");
+	test::eq(bad.status, "FAIL");
+	test::eq(bad.category, "scan-assembler-not");
+	assert(bad.detail.contains("got 0 want 3"));
+	// Only the x86-guarded check fails: reported separately.
+	test::eq(check_asm(tmem, c, "\tcall bar\n").category, "x86-insn");
 }

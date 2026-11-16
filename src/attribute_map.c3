@@ -153,27 +153,67 @@ fn AttrRef AttributeMap.put(&self, Attribute attribute)
 		case REPRODUCIBLE: repr.tag = REPRODUCIBLE;
 		case UNUSED: repr.tag = UNUSED;
 		case ALIGNMENT:
-			if (args.alignment.has_alignment) {
+			if (args.alignment.has_alignment)
+			{
 				repr.tag = ALIGNMENT;
 				repr.data = (uint)self.extra.len();
 				self.extra.push(attribute.tok);
 				self.extra.push(args.alignment.alignment);
-			} else {
+			} else
+			{
 				repr.tag = ALIGNMENT_NULL;
 			}
 		case DEPRECATED:
-			if (args.deprecated.has_replacement) { repr.tag = DEPRECATED_REPLACEMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); self.put_string(args.deprecated.replacement); } else if (args.deprecated.has_msg) { repr.tag = DEPRECATED_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); } else { repr.tag = DEPRECATED; }
+			if (args.deprecated.has_replacement)
+			{
+				repr.tag = DEPRECATED_REPLACEMENT; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg); self.put_string(args.deprecated.replacement);
+			} else if (args.deprecated.has_msg)
+			{
+				repr.tag = DEPRECATED_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.deprecated.msg);
+			} else
+			{
+				repr.tag = DEPRECATED;
+			}
 		case UNAVAILABLE:
-			if (args.unavailable.has_msg) { repr.tag = UNAVAILABLE_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.unavailable.msg); } else { repr.tag = UNAVAILABLE; }
+			if (args.unavailable.has_msg)
+			{
+				repr.tag = UNAVAILABLE_REASON; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.unavailable.msg);
+			} else
+			{
+				repr.tag = UNAVAILABLE;
+			}
 		case WARNING: repr.tag = WARNING; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warning);
 		case ERROR: repr.tag = ERROR; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.error_msg);
 		case WARN_UNUSED_RESULT:
-			if (args.warn_unused_result.has_msg) { repr.tag = WARN_UNUSED_RESULT_MSG; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warn_unused_result.msg); } else { repr.tag = WARN_UNUSED_RESULT; }
+			if (args.warn_unused_result.has_msg)
+			{
+				repr.tag = WARN_UNUSED_RESULT_MSG; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.warn_unused_result.msg);
+			} else
+			{
+				repr.tag = WARN_UNUSED_RESULT;
+			}
 		case NONNULL:
-			if (!args.nonnull.len) { repr.tag = NONNULL_ZERO; }
-			else { repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); if (args.nonnull.len == 1) { repr.tag = NONNULL_ONE; self.extra.push(args.nonnull[0]); } else { repr.tag = NONNULL; self.extra.push((uint)args.nonnull.len); foreach (v : args.nonnull) self.extra.push(v); } }
+			if (!args.nonnull.len)
+			{
+				repr.tag = NONNULL_ZERO;
+			}
+			else
+			{
+				repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); if (args.nonnull.len == 1)
+				{
+					repr.tag = NONNULL_ONE; self.extra.push(args.nonnull[0]);
+				} else
+				{
+					repr.tag = NONNULL; self.extra.push((uint)args.nonnull.len); foreach (v : args.nonnull) self.extra.push(v);
+				}
+			}
 		case VISIBILITY:
-			switch (args.visibility) { case DEFAULT: repr.tag = VISIBILITY_DEFAULT; case HIDDEN: repr.tag = VISIBILITY_HIDDEN; case PROTECTED: repr.tag = VISIBILITY_PROTECTED; }
+			switch (args.visibility)
+			{
+			case DEFAULT: repr.tag = VISIBILITY_DEFAULT;
+			case HIDDEN: repr.tag = VISIBILITY_HIDDEN;
+			case PROTECTED: repr.tag = VISIBILITY_PROTECTED;
+		}
 		case CLEANUP: repr.tag = CLEANUP; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.extra.push((uint)args.cleanup.function);
 		case SECTION: repr.tag = SECTION; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.put_string(args.section);
 		default: unreachable("unsupported attribute map payload");
@@ -273,8 +313,10 @@ fn void AttributeMap.set_decl_attrs(&self, NodeIndex node, AttrRef[] refs)
 *>
 fn AttrRef[] AttributeMap.attrs(&self, NodeOptIndex node)
 {
-	if (try idx = node.unpack()) {
-		if (try span = self.decl_attrs.get((uint)idx)) {
+	if (try idx = node.unpack())
+	{
+		if (try span = self.decl_attrs.get((uint)idx))
+		{
 			return ((AttrRef*)self.extra.array_view().ptr)[span.index : span.len];
 		}
 	}
@@ -285,7 +327,10 @@ fn AttrRef[] AttributeMap.attrs(&self, NodeOptIndex node)
 fn Attribute? AttributeMap.get_attribute(&self, NodeOptIndex node, AttributeTag tag)
 {
 	AttrRef[] list = self.attrs(node);
-	for (usz i = list.len; i > 0; i--) { Attribute a = self.get(list[i - 1]); if (a.args.tag == tag) return a; }
+	for (usz i = list.len; i > 0; i--)
+	{
+		Attribute a = self.get(list[i - 1]); if (a.args.tag == tag) return a;
+	}
 	return NO_ATTRIBUTE~;
 }
 
@@ -298,7 +343,13 @@ fn uint? AttributeMap.requested_alignment(&self, NodeOptIndex node, Compilation*
 {
 	bool found = false;
 	uint max_value = 0;
-	foreach (ref : self.attrs(node)) { Attribute a = self.get(ref); if (a.args.tag != ALIGNMENT) continue; uint v = a.args.alignment.has_alignment ? a.args.alignment.alignment : comp.target.default_alignment(); if (!found || max_value < v) { max_value = v; found = true; } }
+	foreach (ref : self.attrs(node))
+	{
+		Attribute a = self.get(ref); if (a.args.tag != ALIGNMENT) continue; uint v = a.args.alignment.has_alignment ? a.args.alignment.alignment : comp.target.default_alignment(); if (!found || max_value < v)
+		{
+			max_value = v; found = true;
+		}
+	}
 	if (!found) return NO_ATTRIBUTE~;
 	return max_value;
 }

@@ -2,6 +2,7 @@
 // shapes are source-derived from src/codegen.c3, codegen_nodes.c3, and
 // backend/ir.c3; this is not executable differential coverage against Zig.
 module codegen_tests;
+import aro::primitive_value;
 import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::builtins, aro::codegen, aro::compilation, aro::diagnostics, aro::preprocessor, aro::target;
 import aro::source, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
 import aro::value, aro::value_interner;
@@ -22,15 +23,15 @@ fn void CodeGenFixture.init(&self)
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
 	self.comp.init(&self.ta, null, &self.diagnostics);
-	Source src = self.comp.add_source_from_buffer("codegen.c", "answer __builtin_trap target ptr")!!;
+	Source src = self.comp.add_source_from_buffer("codegen.c", "answer __builtin_longjmp target ptr")!!;
 	self.tokens[0] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = 0, .line = 1 } };
 	self.tokens[1] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = 7, .line = 1 } };
 	self.tokens[2] = { .id = tokenizer::TokenId.IDENTIFIER,
-		.loc = { .id = src.id, .byte_offset = 22, .line = 1 } };
+		.loc = { .id = src.id, .byte_offset = 25, .line = 1 } };
 	self.tokens[3] = { .id = tokenizer::TokenId.IDENTIFIER,
-		.loc = { .id = src.id, .byte_offset = 29, .line = 1 } };
+		.loc = { .id = src.id, .byte_offset = 32, .line = 1 } };
 	self.tree.init(&self.comp, self.tokens[..]);
 	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 }
@@ -435,10 +436,11 @@ fn void gen_ir_rejects_builtin_call() @test
 {
 	CodeGenFixture f;
 	f.init();
-	f.comp.builtins.get_or_create(&f.comp, "__builtin_trap")!!;
+	// __builtin_trap now lowers to abort(); __builtin_longjmp is still unsupported.
+	f.comp.builtins.get_or_create(&f.comp, "__builtin_longjmp")!!;
 	NodeIndex call = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
 		.builtin_call = { .builtin_tok = 1, .qt = type_store::VOID, .args = {} } });
-	f.expect_expression_fatal(call, "TODO CodeGen.genBuiltinCall __builtin_trap\n");
+	f.expect_expression_fatal(call, "TODO CodeGen.genBuiltinCall __builtin_longjmp\n");
 	f.free();
 }
 
@@ -585,7 +587,7 @@ fn void gen_ir_lowers_array_decay_return_through_address_path() @test
 		if (inst.tag == ir::InstTag.RET) returned_ref = inst.data.ref;
 		if (inst.tag == ir::InstTag.CONSTANT)
 		{
-			assert(f.comp.interner.get(inst.data.constant).tag != value_interner::InternerKeyTag.POINTER,
+			assert(f.comp.interner.get(inst.data.constant).tag != primitive_value::PrimitiveType.POINTER,
 				"array decay should not lower as a pointer constant");
 		}
 	}
@@ -604,7 +606,7 @@ fn void gen_ir_lowers_string_array_decay_return_as_pointer_constant() @test
 	type_store::QualType pointer_qt = f.comp.type_store.put(type_store::type_pointer(type_store::CHAR));
 	NodeIndex literal = f.tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
 		.char_literal = { .qt = array_qt } });
-	value::Value bytes = value::intern(&f.comp, { .tag = value_interner::InternerKeyTag.BYTES,
+	value::Value bytes = value::intern(&f.comp, { .tag = primitive_value::PrimitiveType.BYTES,
 		.bytes = "abc" });
 	f.tree.set_value(literal, bytes);
 	NodeIndex decay = f.tree.add_node({ .kind = tree::NodeKind.CAST,
@@ -629,8 +631,8 @@ fn void gen_ir_lowers_string_array_decay_return_as_pointer_constant() @test
 		{
 			assert(inst.ty == value_interner::REF_PTR,
 				"string array decay constants should use the pointer IR type");
-			value_interner::InternerKey key = f.comp.interner.get(inst.data.constant);
-			if (key.tag == value_interner::InternerKeyTag.BYTES)
+			primitive_value::PrimitiveValue key = f.comp.interner.get(inst.data.constant);
+			if (key.tag == primitive_value::PrimitiveType.BYTES)
 			{
 				assert(inst.ty == value_interner::REF_PTR,
 					"a BYTES constant must not have a non-pointer IR type");
@@ -683,7 +685,7 @@ fn void gen_ir_lowers_array_decay_initializer_through_address_path() @test
 		if (inst.tag == ir::InstTag.STORE && inst.data.bin.rhs == buf_alloc) stored_buf_address = true;
 		if (inst.tag == ir::InstTag.CONSTANT)
 		{
-			assert(f.comp.interner.get(inst.data.constant).tag != value_interner::InternerKeyTag.POINTER,
+			assert(f.comp.interner.get(inst.data.constant).tag != primitive_value::PrimitiveType.POINTER,
 				"array decay initializer should not lower as a pointer constant");
 		}
 	}
@@ -729,7 +731,7 @@ fn void gen_ir_lowers_folded_pointer_add_through_address_path() @test
 		if (inst.tag == ir::InstTag.ADD) saw_pointer_add = true;
 		if (inst.tag == ir::InstTag.CONSTANT)
 		{
-			assert(f.comp.interner.get(inst.data.constant).tag != value_interner::InternerKeyTag.POINTER,
+			assert(f.comp.interner.get(inst.data.constant).tag != primitive_value::PrimitiveType.POINTER,
 				"folded pointer addition should not lower as a pointer constant");
 		}
 	}
@@ -799,11 +801,11 @@ fn void branch_and_phi_form_typed_control_flow() @test
 	b.add_branch(condition, yes_label, no_label);
 
 	b.start_block(yes_label);
-	Ref yes_value = b.add_constant(f.interner.put(value_interner::int_key(17)), value_interner::REF_I32);
+	Ref yes_value = b.add_constant(f.interner.put(primitive_value::int_key(17)), value_interner::REF_I32);
 	b.add_jump(join_label);
 
 	b.start_block(no_label);
-	Ref no_value = b.add_constant(f.interner.put(value_interner::int_key(29)), value_interner::REF_I32);
+	Ref no_value = b.add_constant(f.interner.put(primitive_value::int_key(29)), value_interner::REF_I32);
 	b.add_jump(join_label);
 
 	b.start_block(join_label);
@@ -1016,7 +1018,7 @@ fn void gen_ir_lowers_string_pointer_initializer_to_rodata_relocation() @test
 	NodeIndex literal = f.tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
 		.char_literal = { .qt = string_type } });
 	value::Value bytes = value::intern(&f.comp,
-		{ .tag = value_interner::InternerKeyTag.BYTES, .bytes = literal_bytes[..] });
+		{ .tag = primitive_value::PrimitiveType.BYTES, .bytes = literal_bytes[..] });
 	f.tree.set_value(literal, bytes);
 	NodeIndex decay = f.tree.add_node({ .kind = tree::NodeKind.CAST,
 		.cast = { .kind = tree::CastKind.ARRAY_TO_POINTER, .operand = literal,

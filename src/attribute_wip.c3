@@ -2,6 +2,7 @@
 // Parsed attributes and their expression results are scoped by State so a
 // parser can restore them after a failed or completed declarator.
 module aro::attribute_wip;
+import aro::primitive_value;
 import aro::attribute, aro::attribute_map, aro::attribute_diagnostics, aro::compilation, aro::diagnostics, aro::lang_opts;
 import aro::parser, aro::parser_result, aro::target, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::value, aro::value_interner;
 import std::collections::list;
@@ -319,8 +320,8 @@ fn String int_value_text(parser::Parser* p, parser_result::Result arg)
 {
 	DString text;
 	text.init(tmem);
-	value_interner::InternerKey key = p.comp.interner.get(arg.val.ref());
-	if (!key.tag.is_int()) return "";
+	primitive_value::PrimitiveValue key = p.comp.interner.get(arg.val.ref());
+	if (key.tag.kind != NumberKind.INT) return "";
 	text.appendf("%s", key);
 	return text.str_view();
 }
@@ -329,12 +330,12 @@ fn String int_value_text(parser::Parser* p, parser_result::Result arg)
 fn String arg_actual_kind(parser::Parser* p, parser_result::Result arg)
 {
 	if (arg.val.is_none()) return "an expression";
-	value_interner::InternerKeyTag tag = p.comp.interner.get(arg.val.ref()).tag;
-	if (tag.is_int()) return "an integer constant";
-	if (tag == value_interner::InternerKeyTag.BYTES) return "a string";
-	if (tag.is_float()) return "a floating point number";
-	if (tag.is_complex()) return "a complex floating point number";
-	if (tag == value_interner::InternerKeyTag.NULL) return "nullptr";
+	primitive_value::PrimitiveType tag = p.comp.interner.get(arg.val.ref()).tag;
+	if (tag.kind == NumberKind.INT) return "an integer constant";
+	if (tag == primitive_value::PrimitiveType.BYTES) return "a string";
+	if (tag.kind == NumberKind.FLOAT) return "a floating point number";
+	if (tag.kind == NumberKind.COMPLEX) return "a complex floating point number";
+	if (tag == primitive_value::PrimitiveType.NULL) return "nullptr";
 	return "an expression";
 }
 
@@ -373,7 +374,7 @@ fn bool? Wip.arg_string(&self, parser::Parser* p, Parsed attr, usz index, String
 		self.emit_requires_string(p, attr, arg)!;
 		return false;
 	}
-	if (p.comp.interner.get(arg.val.ref()).tag != value_interner::InternerKeyTag.BYTES)
+	if (p.comp.interner.get(arg.val.ref()).tag != primitive_value::PrimitiveType.BYTES)
 	{
 		self.emit_arg_type(p, attr, arg, "a string", arg_actual_kind(p, arg))!;
 		return false;
@@ -443,7 +444,7 @@ fn bool? Wip.arg_decl_ref(&self, parser::Parser* p, Parsed attr, usz index, tree
 fn bool? Wip.arg_enum(&self, parser::Parser* p, Parsed attr, usz index, String[] choices, uint* out)
 {
 	parser_result::Result arg = self.parsed_args(attr)[(sz)index];
-	if (arg.val.is_none() || p.comp.interner.get(arg.val.ref()).tag != value_interner::InternerKeyTag.BYTES)
+	if (arg.val.is_none() || p.comp.interner.get(arg.val.ref()).tag != primitive_value::PrimitiveType.BYTES)
 	{
 		self.emit_arg_type(p, attr, arg, "a string", arg_actual_kind(p, arg))!;
 		return false;
@@ -1030,11 +1031,16 @@ fn void? Wip.apply_alignment(&self, parser::Parser* p, Parsed attr, type_store::
 		self.invalid_target(p, attr, "functions, variables, typedefs, tags, parameters, and fields")!;
 		return;
 	}
-	if (has_alignment)
+	if (has_alignment && alignas && alignment < qt.alignof(p.comp))
 	{
-		if (alignas && alignment < qt.alignof(p.comp)) self.emit(p, attr, attribute_diagnostics::AttrDiag.MINIMUM_ALIGNMENT, (long)qt.alignof(p.comp))!;
-		self.add_alignment_to_type_map(p, node, qt, true, alignment);
+		self.emit(p, attr, attribute_diagnostics::AttrDiag.MINIMUM_ALIGNMENT, (long)qt.alignof(p.comp))!;
 	}
+	if (p.comp.langopts.emulate == MSVC && (node.kind == tree::NodeKind.ENUM_DECL || node.kind == tree::NodeKind.ENUM_FORWARD_DECL))
+	{
+		self.emit(p, attr, attribute_diagnostics::AttrDiag.MSVC_ENUM_ALIGN_IGNORED)!;
+		return;
+	}
+	self.add_alignment_to_type_map(p, node, qt, has_alignment, alignment);
 	attribute::AttributeArgs payload = { .tag = attribute::AttributeTag.ALIGNMENT, .alignment = { .has_alignment = has_alignment, .alignment = alignment } };
 	self.add_applied(p, attr, payload);
 }

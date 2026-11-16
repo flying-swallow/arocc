@@ -218,7 +218,9 @@ fn uint QualType.alignof(self, Compilation* comp)
 			switch (comp.langopts.emulate)
 			{
 				case GCC: use_requested = false; // gcc does not respect alignment on enums
-				case MSVC: return max(requested, self.base(comp).qt.alignof(comp));
+				case MSVC:
+					uint base_align = self.base(comp).qt.alignof(comp);
+					return max(requested, base_align);
 				case CLANG:
 				case NO: break;
 			}

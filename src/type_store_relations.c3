@@ -270,6 +270,9 @@ fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 					// Check if any args undergo default argument promotion.
 					foreach (param : maybe_has_params.params)
 					{
+						// Deviation: Zig reads base() of an invalid parameter (unreachable);
+						// an invalid parameter was already diagnosed, so skip it.
+						if (param.qt.is_invalid()) continue;
 						Type pt = param.qt.base(comp).ty;
 						switch (pt.tag)
 						{

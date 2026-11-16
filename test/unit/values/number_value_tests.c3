@@ -10,7 +10,8 @@
 //                parseFloat / getMSVCIntSuffixType and Preprocessor/Parser.zig
 //                primaryExpr, plus IEEE-754 encodings. No Zig executable was run.
 module number_value_tests;
-import aro::number_value, aro::number_literal, aro::value, aro::value_interner, aro::float_value, aro::bigint;
+import aro::primitive_value;
+import aro::number_value, aro::number_literal, aro::value, aro::value_interner, aro::bigint;
 import aro::compilation, aro::diagnostics, aro::target, aro::type_store, aro::lang_opts;
 import std::io, std::core::mem::allocators;
 
@@ -61,17 +62,17 @@ fn void expect_diags(NumberValue v, NumberValueDiag[] want)
 
 fn ulong u64_of(Compilation* comp, Value v) => v.to_u64(comp)!!;
 
-fn InternerKey float_of(Compilation* comp, Value v)
+fn PrimitiveValue float_of(Compilation* comp, Value v)
 {
-	InternerKey k = comp.interner.get(v.ref());
-	assert(k.tag.is_float());
+	PrimitiveValue k = comp.interner.get(v.ref());
+	assert(k.tag.kind == NumberKind.FLOAT);
 	return k;
 }
 
-fn InternerKey complex_of(Compilation* comp, Value v)
+fn PrimitiveValue complex_of(Compilation* comp, Value v)
 {
-	InternerKey k = comp.interner.get(v.ref());
-	assert(k.tag.is_complex());
+	PrimitiveValue k = comp.interner.get(v.ref());
+	assert(k.tag.kind == NumberKind.COMPLEX);
 	return k;
 }
 
@@ -423,7 +424,7 @@ fn void float_literal_types() @test
 		assert(v.qt == type_store::LONG_DOUBLE && is_one(v.val));
 
 		// [source] storage width = bitSizeof of the type; 1.5 avoids the shared `one` ref.
-		InternerKey f = float_of(comp, float_lit(comp, "1.5", BF16).val);
+		PrimitiveValue f = float_of(comp, float_lit(comp, "1.5", BF16).val);
 		assert(f.tag == F16); // Zig stores __bf16 values as f16
 		check(f.f16(), 0x3E00);
 		f = float_of(comp, float_lit(comp, "1.5", F16).val);
@@ -474,7 +475,7 @@ fn void float_literal_values() @test
 		// 0.1 at each width: f128 parse, then one rounding to the target width [source]
 		check(float_of(comp, float_lit(comp, "0.1", F).val).f32(), 0x3DCC_CCCD);
 		check(float_of(comp, float_lit(comp, "0.1", NONE).val).f64(), 0x3FB9_9999_9999_999A);
-		InternerKey f = float_of(comp, float_lit(comp, "0.1", L).val);
+		PrimitiveValue f = float_of(comp, float_lit(comp, "0.1", L).val);
 		check(f.f80().hi, 0x3FFB);
 		check(f.f80().lo, (long)0xCCCC_CCCC_CCCC_CCCD);
 		f = float_of(comp, float_lit(comp, "0.1", Q).val);
@@ -502,7 +503,7 @@ fn void imaginary_floats() @test
 		expect_diags(v, { GNU_IMAGINARY_CONSTANT });
 		assert(v.literal_qt == type_store::DOUBLE);
 		expect_complex_of(comp, v.qt, type_store::DOUBLE);
-		InternerKey c = complex_of(comp, v.val);
+		PrimitiveValue c = complex_of(comp, v.val);
 		assert(c.tag == CF64);
 		check(c.re().f64(), 0);
 		check(c.im().f64(), 0x4000_0000_0000_0000);

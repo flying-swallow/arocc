@@ -6,9 +6,10 @@
 // parser_expression owns grouping and the built-in unary operator productions.
 // Pointer/null cases still require seeded pointer values and types.
 module parser_operator_tests;
+import aro::primitive_value;
 import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::float_value, aro::value_interner;
+import aro::type_store, aro::value, aro::value_interner;
 import aro::lang_opts;
 import std::core::mem::allocators;
 
@@ -165,8 +166,8 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 			if (!eval || want_none) { assert(result.val.is_none()); }
 			else if (expect_pointer)
 			{
-				assert(result.val.is(value_interner::InternerKeyTag.POINTER, &comp));
-				value_interner::InternerKey key = comp.interner.get(result.val.ref());
+				assert(result.val.is(primitive_value::PrimitiveType.POINTER, &comp));
+				primitive_value::PrimitiveValue key = comp.interner.get(result.val.ref());
 				assert(key.pointer.node == (uint)xd);
 				assert(value::from_ref(key.pointer.offset).is_zero(&comp));
 			}
@@ -318,8 +319,8 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 			if (expect_none) { assert(result.val.is_none()); }
 			else if (seed_overflowing_offset)
 			{
-				value_interner::InternerKey result_key = comp.interner.get(result.val.ref());
-				assert(result_key.tag == value_interner::InternerKeyTag.POINTER);
+				primitive_value::PrimitiveValue result_key = comp.interner.get(result.val.ref());
+				assert(result_key.tag == primitive_value::PrimitiveType.POINTER);
 				value::Value result_offset = value::from_ref(result_key.pointer.offset);
 				usz ptrdiff_bits = comp.type_store.ptrdiff.bit_sizeof(&comp);
 				long expected_offset = ptrdiff_bits == 64 ? (long)pointer_offset : (long)(pointer_offset - ((ulong)1 << ptrdiff_bits));
@@ -547,7 +548,7 @@ fn void integer_const_expr_rejects_noninteger_result() @test
 		symbols.init(&ta);
 		symbols.push_scope();
 		StringId x = comp.intern_string("x");
-		Value one = value::intern(&comp, float_value::f64_value(0x3FF0_0000_0000_0000));
+		Value one = value::intern(&comp, primitive_value::f64_value(0x3FF0_0000_0000_0000));
 		Tree tree;
 		tree.init(&comp, pp.tokens.array_view());
 		NodeIndex declaration = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
@@ -640,7 +641,7 @@ fn void conditional_uses_common_type_of_both_arms() @test
 		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::INT } });
 		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
 		Value one = value::int_i64(1, &comp);
-		Value double_one = value::intern(&comp, float_value::f64_value(0x3FF0_0000_0000_0000));
+		Value double_one = value::intern(&comp, primitive_value::f64_value(0x3FF0_0000_0000_0000));
 		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::INT, .node = xd, .val = one });
 		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = yd, .val = double_one });
 		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
@@ -739,7 +740,7 @@ fn void float_operands_keep_arithmetic_ast_type() @test
 		tree.init(&comp, pp.tokens.array_view());
 		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
 		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
-		Value one = value::intern(&comp, float_value::f64_value(0x3FF0_0000_0000_0000));
+		Value one = value::intern(&comp, primitive_value::f64_value(0x3FF0_0000_0000_0000));
 		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = xd, .val = one });
 		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = yd, .val = one });
 		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
@@ -752,7 +753,7 @@ fn void float_operands_keep_arithmetic_ast_type() @test
 		assert(p.at_eof(), "floating operator fixture left trailing tokens");
 		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(result.qt.eql(type_store::DOUBLE, &comp));
-		assert(result.val.to_float(value_interner::InternerKeyTag.F64, &comp).raw() == 0x4000_0000_0000_0000);
+		assert(result.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4000_0000_0000_0000);
 		p.tree.free();
 		symbols.pop_scope();
 		symbols.free();
@@ -776,14 +777,14 @@ fn void complex_arithmetic_and_unary_conjugation_fold() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		type_store::QualType complex_double = comp.type_store.put(type_store::type_complex(type_store::DOUBLE));
-		Value x_value = value::intern(&comp, float_value::make_complex(
-			float_value::f64_value(0x3FF0_0000_0000_0000), float_value::f64_value(0x4000_0000_0000_0000)));
-		Value y_value = value::intern(&comp, float_value::make_complex(
-			float_value::f64_value(0x4008_0000_0000_0000), float_value::f64_value(0x4010_0000_0000_0000)));
-		Value sum_value = value::intern(&comp, float_value::make_complex(
-			float_value::f64_value(0x4010_0000_0000_0000), float_value::f64_value(0x4018_0000_0000_0000)));
-		Value conjugate_value = value::intern(&comp, float_value::make_complex(
-			float_value::f64_value(0x3FF0_0000_0000_0000), float_value::f64_value(0xC000_0000_0000_0000)));
+		Value x_value = value::intern(&comp, primitive_value::complex_key(
+			primitive_value::f64_value(0x3FF0_0000_0000_0000), primitive_value::f64_value(0x4000_0000_0000_0000)));
+		Value y_value = value::intern(&comp, primitive_value::complex_key(
+			primitive_value::f64_value(0x4008_0000_0000_0000), primitive_value::f64_value(0x4010_0000_0000_0000)));
+		Value sum_value = value::intern(&comp, primitive_value::complex_key(
+			primitive_value::f64_value(0x4010_0000_0000_0000), primitive_value::f64_value(0x4018_0000_0000_0000)));
+		Value conjugate_value = value::intern(&comp, primitive_value::complex_key(
+			primitive_value::f64_value(0x3FF0_0000_0000_0000), primitive_value::f64_value(0xC000_0000_0000_0000)));
 		Source src = comp.add_source_from_buffer("complex-operator.c", "x + y; ~x; __imag x; __real x; __imag__ y; __real__ y; __imag 2; __real 2\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
@@ -822,20 +823,20 @@ fn void complex_arithmetic_and_unary_conjugation_fold() @test
 		assert(imaginary_x.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_x.qt.eql(type_store::DOUBLE, &comp));
 		// Source-derived vector: x has real=1.0 and imaginary=2.0.
-		assert(imaginary_x.val.to_float(value_interner::InternerKeyTag.F64, &comp).raw() == 0x4000_0000_0000_0000);
+		assert(imaginary_x.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4000_0000_0000_0000);
 		p.advance();
 		parser_result::Result real_x = expression.parse()!!;
 		assert(real_x.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_x.qt.eql(type_store::DOUBLE, &comp));
-		assert(real_x.val.to_float(value_interner::InternerKeyTag.F64, &comp).raw() == 0x3FF0_0000_0000_0000);
+		assert(real_x.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x3FF0_0000_0000_0000);
 		p.advance();
 		parser_result::Result imaginary_y = expression.parse()!!;
 		assert(imaginary_y.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
-		assert(imaginary_y.val.to_float(value_interner::InternerKeyTag.F64, &comp).raw() == 0x4010_0000_0000_0000);
+		assert(imaginary_y.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4010_0000_0000_0000);
 		p.advance();
 		parser_result::Result real_y = expression.parse()!!;
 		assert(real_y.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
-		assert(real_y.val.to_float(value_interner::InternerKeyTag.F64, &comp).raw() == 0x4008_0000_0000_0000);
+		assert(real_y.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4008_0000_0000_0000);
 		p.advance();
 		parser_result::Result imaginary_int = expression.parse()!!;
 		assert(imaginary_int.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);

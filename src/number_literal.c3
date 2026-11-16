@@ -12,7 +12,7 @@
 //   number_value.c3    (11.2 `number-values`)
 //       NumberLiteralResult -> NumberValue { qt, val, ... }: Parser.zig
 //       parseNumberToken/parseInt/fixedSizeInt/bitInt/parseFloat without the
-//       parser. Floats go through float_value::parse_f128 and InternerKey.cast;
+//       parser. Floats go through primitive_value::parse_f128 and PrimitiveValue.cast;
 //       integers through value (u64) / bigint (_BitInt). Parser-level
 //       diagnostics (int_literal_too_big, ...) are *returned* as
 //       NumberValueDiag ids, because the C parser filters them
@@ -47,6 +47,7 @@
 // - Zig `Compilation.float80Type` (?QualType) is `Compilation.float80_type()`
 //   in compilation.c3, with compilation::NO_FLOAT80 for null.
 module aro::number_literal;
+import aro::primitive_value;
 import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::type_store, aro::text_literal;
 
 <* Zig `Suffix.fromString` returned null: not a valid suffix of that kind. *>
@@ -58,7 +59,7 @@ excuse INVALID_SUFFIX;
 <*
  Zig `number_literal.Parser.Diagnostic` (exact Zig text). `fmt` is C3 printf syntax; `{c}` arguments are `text_literal::Ascii` values.
 *>
-enum NumberLiteralDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
+enum NumberLiteralDiag : ushort(String fmt, MessageKind kind, DiagMeta meta)
 {
 	INVALID_BINARY_DIGIT { "invalid digit '%s' in binary constant", ERROR, {} },
 	INVALID_OCTAL_DIGIT { "invalid digit '%s' in octal constant", ERROR, {} },
@@ -80,7 +81,7 @@ enum NumberLiteralDiag : ushort (String fmt, MessageKind kind, DiagMeta meta)
 // Prefix
 
 <* Zig `number_literal.Prefix` (enum(u8) with the base as tag value). *>
-enum Prefix : char (char base)
+enum Prefix : char(char base)
 {
 	BINARY { 2 },
 	OCTAL { 8 },
@@ -166,29 +167,29 @@ fn sz Prefix.string_len(self, String buf)
 <* Zig `number_literal.Suffix`, in Zig declaration order. *>
 enum Suffix : char
 {
-	NONE, I,             // int and imaginary int
-	U, UL, ULL,          // unsigned real integers
-	IU, IUL, IULL,       // unsigned imaginary integers
-	L, IL,               // long or long double, real and imaginary
-	LL, ILL,             // long long and imaginary long long
-	F, IF,               // float and imaginary float
-	F16, IF16,           // _Float16 and imaginary _Float16
-	W,                   // __float80
-	IW,                  // imaginary __float80
-	Q, F128,             // _Float128
-	IQ, IF128,           // imaginary _Float128
-	IWB, IUWB,           // imaginary _BitInt
-	WB, UWB,             // _BitInt
-	BF16,                // __bf16
-	F32, IF32,           // _Float32 and imaginary _Float32
-	F64, IF64,           // _Float64 and imaginary _Float64
-	F32X, IF32X,         // _Float32x and imaginary _Float32x
-	F64X, IF64X,         // _Float64x and imaginary _Float64x
-	D32,                 // _Decimal32
-	D64,                 // _Decimal64
-	D128,                // _Decimal128
-	D64X,                // _Decimal64x
-	I8, UI8, I16, UI16, I32, UI32, I64, UI64, // MSVC extensions
+	NONE, I,  // int and imaginary int
+	U, UL, ULL,  // unsigned real integers
+	IU, IUL, IULL,  // unsigned imaginary integers
+	L, IL,  // long or long double, real and imaginary
+	LL, ILL,  // long long and imaginary long long
+	F, IF,  // float and imaginary float
+	F16, IF16,  // _Float16 and imaginary _Float16
+	W,  // __float80
+	IW,  // imaginary __float80
+	Q, F128,  // _Float128
+	IQ, IF128,  // imaginary _Float128
+	IWB, IUWB,  // imaginary _BitInt
+	WB, UWB,  // _BitInt
+	BF16,  // __bf16
+	F32, IF32,  // _Float32 and imaginary _Float32
+	F64, IF64,  // _Float64 and imaginary _Float64
+	F32X, IF32X,  // _Float32x and imaginary _Float32x
+	F64X, IF64X,  // _Float64x and imaginary _Float64x
+	D32,  // _Decimal32
+	D64,  // _Decimal64
+	D128,  // _Decimal128
+	D64X,  // _Decimal64x
+	I8, UI8, I16, UI16, I32, UI32, I64, UI64,  // MSVC extensions
 }
 
 <* Zig `Suffix.fromString` `suffix_kind` parameter. *>
@@ -207,14 +208,16 @@ struct SuffixCandidate
 }
 
 const SuffixCandidate[*] INT_SUFFIXES = {
-	{ U, { "U", "", "" }, 1 },
+	{
+		U, { "U", "", "" }, 1
+	}
+	,
 	{ L, { "L", "", "" }, 1 },
 	{ WB, { "WB", "", "" }, 1 },
 	{ UL, { "U", "L", "" }, 2 },
 	{ UWB, { "U", "WB", "" }, 2 },
 	{ LL, { "LL", "", "" }, 1 },
 	{ ULL, { "U", "LL", "" }, 2 },
-
 	{ I8, { "I8", "", "" }, 1 },
 	{ UI8, { "UI8", "", "" }, 1 },
 	{ I16, { "I16", "", "" }, 1 },
@@ -223,9 +226,7 @@ const SuffixCandidate[*] INT_SUFFIXES = {
 	{ UI32, { "UI32", "", "" }, 1 },
 	{ I64, { "I64", "", "" }, 1 },
 	{ UI64, { "UI64", "", "" }, 1 },
-
 	{ I, { "I", "", "" }, 1 },
-
 	{ IWB, { "I", "WB", "" }, 2 },
 	{ IU, { "I", "U", "" }, 2 },
 	{ IL, { "I", "L", "" }, 2 },
@@ -236,7 +237,10 @@ const SuffixCandidate[*] INT_SUFFIXES = {
 };
 
 const SuffixCandidate[*] FLOAT_SUFFIXES = {
-	{ F16, { "F16", "", "" }, 1 },
+	{
+		F16, { "F16", "", "" }, 1
+	}
+	,
 	{ F, { "F", "", "" }, 1 },
 	{ L, { "L", "", "" }, 1 },
 	{ W, { "W", "", "" }, 1 },
@@ -251,7 +255,6 @@ const SuffixCandidate[*] FLOAT_SUFFIXES = {
 	{ D64, { "D64", "", "" }, 1 },
 	{ D128, { "D128", "", "" }, 1 },
 	{ D64X, { "D64x", "", "" }, 1 },
-
 	{ I, { "I", "", "" }, 1 },
 	{ IL, { "I", "L", "" }, 2 },
 	{ IF16, { "I", "F16", "" }, 2 },
@@ -280,7 +283,7 @@ fn Suffix? suffix_from_string(String buf, SuffixKind kind, bool allow_msvc_exten
 
 	SuffixCandidate[] candidates = kind == FLOAT ? &FLOAT_SUFFIXES : &INT_SUFFIXES;
 	char[4] scratch;
-	foreach CANDIDATES: (&candidate : candidates)
+	foreach CANDIDATES: (&candidate: candidates)
 	{
 		sz len = 0;
 		for (sz i = 0; i < candidate.count; i++) len += candidate.parts[i].len;
@@ -304,8 +307,23 @@ fn bool Suffix.is_imaginary(self)
 {
 	switch (self)
 	{
-		case I: case IL: case IF: case IU: case IUL: case ILL: case IULL: case IWB: case IUWB:
-		case IF128: case IQ: case IW: case IF16: case IF32: case IF64: case IF32X: case IF64X:
+		case I:
+		case IL:
+		case IF:
+		case IU:
+		case IUL:
+		case ILL:
+		case IULL:
+		case IWB:
+		case IUWB:
+		case IF128:
+		case IQ:
+		case IW:
+		case IF16:
+		case IF32:
+		case IF64:
+		case IF32X:
+		case IF64X:
 			return true;
 		default:
 			return false;
@@ -321,9 +339,31 @@ fn bool Suffix.is_signed_integer(self)
 {
 	switch (self)
 	{
-		case NONE: case L: case LL: case I: case IL: case ILL: case WB: case IWB: case I8: case I16: case I32: case I64:
+		case NONE:
+		case L:
+		case LL:
+		case I:
+		case IL:
+		case ILL:
+		case WB:
+		case IWB:
+		case I8:
+		case I16:
+		case I32:
+		case I64:
 			return true;
-		case U: case UL: case ULL: case IU: case IUL: case IULL: case UWB: case IUWB: case UI8: case UI16: case UI32: case UI64:
+		case U:
+		case UL:
+		case ULL:
+		case IU:
+		case IUL:
+		case IULL:
+		case UWB:
+		case IUWB:
+		case UI8:
+		case UI16:
+		case UI32:
+		case UI64:
 			return false;
 		default:
 			unreachable("float suffix has no integer signedness");
@@ -341,7 +381,10 @@ fn bool Suffix.is_bit_int(self)
 {
 	switch (self)
 	{
-		case WB: case UWB: case IWB: case IUWB: return true;
+		case WB:
+		case UWB:
+		case IWB:
+		case IUWB: return true;
 		default: return false;
 	}
 }
@@ -357,7 +400,14 @@ fn bool Suffix.is_msvc_extension(self)
 {
 	switch (self)
 	{
-		case I8: case UI8: case I16: case UI16: case I32: case UI32: case I64: case UI64: return true;
+		case I8:
+		case UI8:
+		case I16:
+		case UI16:
+		case I32:
+		case UI32:
+		case I64:
+		case UI64: return true;
 		default: return false;
 	}
 }
@@ -371,9 +421,29 @@ fn bool Suffix.is_float_only(self)
 {
 	switch (self)
 	{
-		case F: case IF: case F16: case F128: case IF128: case Q: case IQ: case W: case IW: case IF16:
-		case F32: case IF32: case F64: case IF64: case F32X: case IF32X: case F64X: case IF64X:
-		case D32: case D64: case D128: case D64X: case BF16:
+		case F:
+		case IF:
+		case F16:
+		case F128:
+		case IF128:
+		case Q:
+		case IQ:
+		case W:
+		case IW:
+		case IF16:
+		case F32:
+		case IF32:
+		case F64:
+		case IF64:
+		case F32X:
+		case IF32X:
+		case F64X:
+		case IF64X:
+		case D32:
+		case D64:
+		case D128:
+		case D64X:
+		case BF16:
 			return true;
 		default:
 			return false;
@@ -563,12 +633,12 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
 			case 'E':
 				switch (prefix)
 				{
-					case HEX: continue;
-					case DECIMAL: return buf[:idx];
-					case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
-					case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
-				}
-				return text_literal::PARSING_FAILED~;
+				case HEX: continue;
+				case DECIMAL: return buf[:idx];
+				case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
+				case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
+			}
+			return text_literal::PARSING_FAILED~;
 			case '0'..'9':
 			case 'a'..'d':
 			case 'A'..'D':
@@ -578,13 +648,13 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
 				{
 					switch (prefix)
 					{
-						case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
-						case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
-						case DECIMAL:
-						case HEX: self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, buf[idx..])!;
-					}
-					return text_literal::PARSING_FAILED~;
+					case BINARY: self.err(NumberLiteralDiag.INVALID_BINARY_DIGIT, text_literal::ascii(c))!;
+					case OCTAL: self.err(NumberLiteralDiag.INVALID_OCTAL_DIGIT, text_literal::ascii(c))!;
+					case DECIMAL:
+					case HEX: self.err(NumberLiteralDiag.INVALID_INT_SUFFIX, buf[idx..])!;
 				}
+				return text_literal::PARSING_FAILED~;
+			}
 			case '\'':
 				break;
 			default:
@@ -675,7 +745,7 @@ fn bool contains(String haystack, String needle)
 	if (needle.len > haystack.len) return false;
 	for (sz i = 0; i + needle.len <= haystack.len; i++)
 	{
-		if (haystack[i:needle.len] == needle) return true;
+		if (haystack[i : needle.len] == needle) return true;
 	}
 	return false;
 }

@@ -2,7 +2,7 @@
 //
 // These tests decide which float widths the port may compute with native c3c
 // operations. The decision they support is recorded in the "Native capability
-// decision" block at the top of src/float_value.c3; if one of these tests
+// decision" block at the top of src/primitive_float.c3; if one of these tests
 // starts failing (new c3c, new host, new Bazel toolchain), revisit that block.
 //
 // Every operand is read through @volatile_load from a global, so the operation
@@ -308,7 +308,7 @@ fn void double_and_float_literals_are_exact() @test
 // Observed limitation: c3c folds float128 literals at double precision. 0.1 as
 // f128 should be 0x3FFB_9999_9999_9999_9999_9999_9999_999A; c3c produces the
 // widened double 0.1. Never write float128 literals (if this test starts failing,
-// c3c fixed it; the decision in float_value.c3 still stands for the other reasons).
+// c3c fixed it; the decision in primitive_float.c3 still stands for the other reasons).
 fn void float128_literals_have_double_precision() @test
 {
 	float128 x = 0.1;

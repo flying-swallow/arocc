@@ -2,13 +2,14 @@
 // the modules' callback / dispatcher APIs and do not claim full C grammar or
 // downstream semantic coverage.
 module builtin_expression_tests;
+import aro::primitive_value;
 import aro::builtin_eval, aro::builtin_defs::common, aro::builtins;
 import aro::compilation, aro::diagnostics, aro::parser, aro::parser_builtin, aro::parser_result;
 import aro::parser_expression, aro::parser_frontend;
 import aro::target, aro::lang_opts;
 import aro::attribute, aro::attribute_map;
 import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::float_value, aro::value_interner;
+import aro::type_store, aro::value, aro::value_interner;
 import aro::string_interner, aro::symbol_stack;
 import std::core::mem::allocators;
 
@@ -259,15 +260,15 @@ fn void builtin_eval_infinity_and_isinf_finite_cases() @test
 		builtins::Expanded inf_builtin = { .tag = common::TAG___BUILTIN_INF,
 			.attributes = { .const_evaluable = true } };
 		value::Value inf = builtin_eval::eval(inf_builtin, &p, {});
-		assert(!inf.is_none() && float_value::is_inf(inf, &comp));
+		assert(!inf.is_none() && inf.is_inf(&comp));
 		builtins::Expanded inff_builtin = { .tag = common::TAG___BUILTIN_INFF,
 			.attributes = { .const_evaluable = true } };
 		builtins::Expanded infl_builtin = { .tag = common::TAG___BUILTIN_INFL,
 			.attributes = { .const_evaluable = true } };
-		value_interner::InternerKey f_inf = comp.interner.get(builtin_eval::eval(inff_builtin, &p, {}).ref());
-		value_interner::InternerKey ld_inf = comp.interner.get(builtin_eval::eval(infl_builtin, &p, {}).ref());
-		assert(f_inf.is_inf() && f_inf.tag == float_value::tag_for_bits(type_store::FLOAT.bit_sizeof(&comp)));
-		assert(ld_inf.is_inf() && ld_inf.tag == float_value::tag_for_bits(type_store::LONG_DOUBLE.bit_sizeof(&comp)));
+		primitive_value::PrimitiveValue f_inf = comp.interner.get(builtin_eval::eval(inff_builtin, &p, {}).ref());
+		primitive_value::PrimitiveValue ld_inf = comp.interner.get(builtin_eval::eval(infl_builtin, &p, {}).ref());
+		assert(f_inf.is_inf() && f_inf.tag == primitive_value::float_tag_of_width(type_store::FLOAT.bit_sizeof(&comp)));
+		assert(ld_inf.is_inf() && ld_inf.tag == primitive_value::float_tag_of_width(type_store::LONG_DOUBLE.bit_sizeof(&comp)));
 		NodeIndex finite_arg = tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
 			.literal = { .qt = type_store::INT } });
 		tree.set_value(finite_arg, value::int_i64(7, &comp));
@@ -346,7 +347,7 @@ fn void builtin_eval_bswap16_32_64_and_missing_value() @test
 
 <* Source-derived target long-double formats for __builtin_infl. *>
 fn void check_infl_target_format(Compilation* comp, parser::Parser* p, String triple,
-	ulong width, value_interner::InternerKeyTag tag, uint128 raw)
+	ulong width, primitive_value::PrimitiveType tag, uint128 raw)
 {
 	comp.target = target::parse_triple(triple, HOST)!!;
 	comp.langopts.set_target_options(&comp.target);
@@ -356,8 +357,8 @@ fn void check_infl_target_format(Compilation* comp, parser::Parser* p, String tr
 		.attributes = { .const_evaluable = true } };
 	value::Value result = builtin_eval::eval(infl_builtin, p, {});
 	assert(!result.is_none());
-	value_interner::InternerKey inf = comp.interner.get(result.ref());
-	assert(inf.tag == tag && inf.raw() == raw);
+	primitive_value::PrimitiveValue inf = comp.interner.get(result.ref());
+	assert(inf.tag == tag && inf.float_bits() == raw);
 }
 
 fn void builtin_eval_infl_target_long_double_formats() @test
@@ -374,12 +375,12 @@ fn void builtin_eval_infl_target_long_double_formats() @test
 		p.tree = tree;
 
 		check_infl_target_format(&comp, &p, "avr-freestanding-none", 32,
-			value_interner::InternerKeyTag.F32, 0x7F80_0000);
+			primitive_value::PrimitiveType.F32, 0x7F80_0000);
 		check_infl_target_format(&comp, &p, "msp430-other-none", 64,
-			value_interner::InternerKeyTag.F64, 0x7FF0_0000_0000_0000);
-		// InternerKey.raw() zero-extends the 80-bit x87 payload into uint128.
+			primitive_value::PrimitiveType.F64, 0x7FF0_0000_0000_0000);
+		// PrimitiveValue.float_bits() zero-extends the 80-bit x87 payload into uint128.
 		check_infl_target_format(&comp, &p, "x86_64-linux-gnu", 80,
-			value_interner::InternerKeyTag.F80, ((uint128)0x7FFF << 64) | (uint128)0x8000_0000_0000_0000);
+			primitive_value::PrimitiveType.F80, ((uint128)0x7FFF << 64) | (uint128)0x8000_0000_0000_0000);
 
 		tree.free();
 		comp.free();
@@ -411,27 +412,27 @@ fn void builtin_eval_nan_sign_predicates_and_constant_p_cases() @test
 		tree.set_value(string_node, value::intern(&comp, { .tag = BYTES, .bytes = "0x123" }));
 		NodeIndex[] string_arg = { string_node };
 		value::Value nan = builtin_eval::eval(nan_builtin, &p, string_arg);
-		value_interner::InternerKey nan_float = comp.interner.get(nan.ref());
+		primitive_value::PrimitiveValue nan_float = comp.interner.get(nan.ref());
 		assert(nan_float.is_nan());
-		assert(nan_float.raw() == (float_value::std_nan(value_interner::InternerKeyTag.F64).raw() | 0x123));
+		assert(nan_float.float_bits() == (primitive_value::std_nan(primitive_value::PrimitiveType.F64).float_bits() | 0x123));
 		NodeIndex octal_string = tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
 			.char_literal = { .qt = type_store::CHAR } });
 		tree.set_value(octal_string, value::intern(&comp, { .tag = BYTES, .bytes = "010" }));
 		NodeIndex[] octal_arg = { octal_string };
-		value_interner::InternerKey octal_nan = comp.interner.get(builtin_eval::eval(nan_builtin, &p, octal_arg).ref());
-		assert(octal_nan.raw() == (float_value::std_nan(value_interner::InternerKeyTag.F64).raw() | 8));
+		primitive_value::PrimitiveValue octal_nan = comp.interner.get(builtin_eval::eval(nan_builtin, &p, octal_arg).ref());
+		assert(octal_nan.float_bits() == (primitive_value::std_nan(primitive_value::PrimitiveType.F64).float_bits() | 8));
 		NodeIndex binary_string = tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
 			.char_literal = { .qt = type_store::CHAR } });
 		tree.set_value(binary_string, value::intern(&comp, { .tag = BYTES, .bytes = "0b101101" }));
 		NodeIndex[] binary_arg = { binary_string };
-		value_interner::InternerKey binary_nan = comp.interner.get(builtin_eval::eval(nan_builtin, &p, binary_arg).ref());
-		assert(binary_nan.raw() == 0x7FF8_0000_0000_002D);
+		primitive_value::PrimitiveValue binary_nan = comp.interner.get(builtin_eval::eval(nan_builtin, &p, binary_arg).ref());
+		assert(binary_nan.float_bits() == 0x7FF8_0000_0000_002D);
 		NodeIndex wide_payload_string = tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
 			.char_literal = { .qt = type_store::CHAR } });
 		tree.set_value(wide_payload_string, value::intern(&comp, { .tag = BYTES, .bytes = "0xABC123456789ABCD" }));
 		NodeIndex[] wide_payload_arg = { wide_payload_string };
-		value_interner::InternerKey truncated_nan = comp.interner.get(builtin_eval::eval(nan_builtin, &p, wide_payload_arg).ref());
-		assert(truncated_nan.raw() == 0x7FF9_2345_6789_ABCD);
+		primitive_value::PrimitiveValue truncated_nan = comp.interner.get(builtin_eval::eval(nan_builtin, &p, wide_payload_arg).ref());
+		assert(truncated_nan.float_bits() == 0x7FF9_2345_6789_ABCD);
 		assert(builtin_eval::eval(nan_builtin, &p, {}).is_none());
 		NodeIndex unavailable_nan_string = tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
 			.char_literal = { .qt = type_store::CHAR } });
@@ -445,8 +446,8 @@ fn void builtin_eval_nan_sign_predicates_and_constant_p_cases() @test
 		builtins::Expanded isnan_builtin = { .tag = common::TAG___BUILTIN_ISNAN, .attributes = { .const_evaluable = true } };
 		assert(builtin_eval::eval(isnan_builtin, &p, nan_arg).to_i64(&comp)!! == 1);
 
-		value::Value pos_inf = float_value::intern_float(float_value::inf(value_interner::InternerKeyTag.F64), &comp);
-		value::Value neg_inf = float_value::intern_float(float_value::from_raw(value_interner::InternerKeyTag.F64, 0xFFF0_0000_0000_0000), &comp);
+		value::Value pos_inf = value::intern(&comp, primitive_value::inf(primitive_value::PrimitiveType.F64));
+		value::Value neg_inf = value::intern(&comp, primitive_value::float_key(primitive_value::PrimitiveType.F64, 0xFFF0_0000_0000_0000));
 		NodeIndex pos_node = tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL, .literal = { .qt = type_store::DOUBLE } });
 		NodeIndex neg_node = tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL, .literal = { .qt = type_store::DOUBLE } });
 		tree.set_value(pos_node, pos_inf); tree.set_value(neg_node, neg_inf);

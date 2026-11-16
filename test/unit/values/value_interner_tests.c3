@@ -6,6 +6,7 @@
 // from AutoArrayHashMap indices. Integer keys use limb arrays directly so these
 // tests do not depend on bigint arithmetic.
 module value_interner_tests;
+import aro::primitive_value;
 import std, aro::value_interner, aro::bigint;
 
 macro check(left, right)
@@ -33,20 +34,20 @@ fn void Fixture.free(&self)
 }
 
 <* A raw int key over `limbs` (not normalized, so tests can feed padded input). *>
-fn InternerKey big(Limb[] limbs, bool positive) => { .tag = positive ? InternerKeyTag.INT_POSITIVE : InternerKeyTag.INT_NEGATIVE, .limbs = limbs };
+fn PrimitiveValue big(Limb[] limbs, bool positive) => { .tag = positive ? PrimitiveType.INT_POSITIVE : PrimitiveType.INT_NEGATIVE, .limbs = limbs };
 
-fn InternerKey fl16(ushort b) => value_interner::float_key(F16, b);
-fn InternerKey fl32(uint b) => value_interner::float_key(F32, b);
-fn InternerKey fl64(ulong b) => value_interner::float_key(F64, b);
-fn InternerKey fl80(ulong lo, ushort hi) => value_interner::float_key(F80, (uint128)hi << 64 | lo);
-fn InternerKey fl128(ulong lo, ulong hi) => value_interner::float_key(F128, (uint128)hi << 64 | lo);
-fn InternerKey cx(InternerKey re, InternerKey im) => value_interner::complex_key(re, im);
+fn PrimitiveValue fl16(ushort b) => primitive_value::float_key(F16, b);
+fn PrimitiveValue fl32(uint b) => primitive_value::float_key(F32, b);
+fn PrimitiveValue fl64(ulong b) => primitive_value::float_key(F64, b);
+fn PrimitiveValue fl80(ulong lo, ushort hi) => primitive_value::float_key(F80, (uint128)hi << 64 | lo);
+fn PrimitiveValue fl128(ulong lo, ulong hi) => primitive_value::float_key(F128, (uint128)hi << 64 | lo);
+fn PrimitiveValue cx(PrimitiveValue re, PrimitiveValue im) => primitive_value::complex_key(re, im);
 
 <* Round trip: put, get, and the result equals the key and re-puts to the same ref. *>
-fn InternerRef round_trip(Interner* in, InternerKey key)
+fn InternerRef round_trip(Interner* in, PrimitiveValue key)
 {
 	InternerRef r = in.put(key);
-	InternerKey got = in.get(r);
+	PrimitiveValue got = in.get(r);
 	assert(got.eql(key), "round trip changed the key");
 	check(in.put(got), r);
 	return r;
@@ -100,14 +101,14 @@ fn void zero_and_one() @test
 	Interner* in = &f.in;
 	Limb[1] zero = { 0 };
 	Limb[1] one = { 1 };
-	check(in.put(value_interner::int_key(0)), value_interner::REF_ZERO);
-	check(in.put(value_interner::int_key(0)), value_interner::REF_ZERO);
+	check(in.put(primitive_value::int_key(0)), value_interner::REF_ZERO);
+	check(in.put(primitive_value::int_key(0)), value_interner::REF_ZERO);
 	check(in.put(big(&zero, true)), value_interner::REF_ZERO);
-	check(in.put(value_interner::int_key(1)), value_interner::REF_ONE);
-	check(in.put(value_interner::int_key(1)), value_interner::REF_ONE);
+	check(in.put(primitive_value::int_key(1)), value_interner::REF_ONE);
+	check(in.put(primitive_value::int_key(1)), value_interner::REF_ONE);
 	check(in.put(big(&one, true)), value_interner::REF_ONE);
 	// -1 is not one.
-	InternerRef m1 = in.put(value_interner::int_key(-1));
+	InternerRef m1 = in.put(primitive_value::int_key(-1));
 	test::eq(m1.is_static(), false);
 	check(in.put(big(&one, false)), m1);
 
@@ -125,12 +126,12 @@ fn void zero_and_one() @test
 	check(in.len(), 1);
 
 	// Zig quirk: get(value_interner::REF_ONE) / get(value_interner::REF_ZERO) are the *ints*.
-	InternerKey k = in.get(value_interner::REF_ONE);
-	check(k.tag, InternerKeyTag.INT_POSITIVE);
+	PrimitiveValue k = in.get(value_interner::REF_ONE);
+	check(k.tag, PrimitiveType.INT_POSITIVE);
 	check(k.limbs.len, 1);
 	check(k.limbs[0], 1);
 	k = in.get(value_interner::REF_ZERO);
-	check(k.tag, InternerKeyTag.INT_POSITIVE);
+	check(k.tag, PrimitiveType.INT_POSITIVE);
 	// Zig-normalized zero: one zero limb.
 	check(k.limbs.len, 1);
 	check(k.limbs[0], 0);
@@ -142,7 +143,7 @@ fn void zero_and_one() @test
 	test::eq(nz80.is_static(), false);
 	test::eq(nz != nz80, true);
 	// Complex zero is not static.
-	InternerKey cz = cx(fl32(0), fl32(0));
+	PrimitiveValue cz = cx(fl32(0), fl32(0));
 	test::eq(in.put(cz).is_static(), false);
 	f.free();
 }
@@ -162,20 +163,20 @@ fn void deduplication() @test
 
 	// Ints dedupe by value across u64 / i64 / big_int forms.
 	Limb[1] five = { 5 };
-	InternerRef r5 = in.put(value_interner::int_key(5));
+	InternerRef r5 = in.put(primitive_value::int_key(5));
 	check(r5, 2);
-	check(in.put(value_interner::int_key(5)), r5);
+	check(in.put(primitive_value::int_key(5)), r5);
 	check(in.put(big(&five, true)), r5);
 	Limb[2] five_padded = { 5, 0 }; // non-normalized input still dedupes
 	check(in.put(big(&five_padded, true)), r5);
 	InternerRef rm5 = in.put(big(&five, false));
-	check(in.put(value_interner::int_key(-5)), rm5);
+	check(in.put(primitive_value::int_key(-5)), rm5);
 	test::eq(rm5 != r5, true);
 
 	ulong two32 = 0x1_0000_0000;
 	Limb[1] l32 = { two32 };
-	InternerRef r32 = in.put(value_interner::int_key(two32));
-	check(in.put(value_interner::int_key((long)two32)), r32);
+	InternerRef r32 = in.put(primitive_value::int_key(two32));
+	check(in.put(primitive_value::int_key((long)two32)), r32);
 	check(in.put(big(&l32, true)), r32);
 
 	// Bytes, records, aggregates.
@@ -208,7 +209,7 @@ fn void deduplication() @test
 	InternerRef n2 = in.put(fl32(0x7FC0_0000));
 	test::eq(n1 != n2, true);
 	check(in.len(), before + 2);
-	InternerKey cn = cx(fl64(0x3FF0_0000_0000_0000), fl64(0x7FF8_0000_0000_0000));
+	PrimitiveValue cn = cx(fl64(0x3FF0_0000_0000_0000), fl64(0x7FF8_0000_0000_0000));
 	test::eq(in.put(cn) != in.put(cn), true);
 	f.free();
 }
@@ -216,33 +217,33 @@ fn void deduplication() @test
 fn void hash_eql_consistency() @test
 {
 	Limb[1] five = { 5 };
-	InternerKey[*] same = { value_interner::int_key(5), value_interner::int_key(5), big(&five, true) };
+	PrimitiveValue[*] same = { primitive_value::int_key(5), primitive_value::int_key(5), big(&five, true) };
 	foreach (k : same)
 	{
 		test::eq(k.eql(same[0]), true);
 		check(k.hash(), same[0].hash());
 	}
 	Limb[1] min_mag = { 0x8000_0000_0000_0000 };
-	InternerKey lmin = value_interner::int_key(long::min);
-	InternerKey bmin = big(&min_mag, false);
+	PrimitiveValue lmin = primitive_value::int_key(long::min);
+	PrimitiveValue bmin = big(&min_mag, false);
 	test::eq(lmin.eql(bmin), true);
 	check(lmin.hash(), bmin.hash());
-	test::eq(value_interner::int_key(0x8000_0000_0000_0000).eql(lmin), false);
-	test::eq(value_interner::int_key(5).eql({ .tag = INT_TY, .ty_bits = 5 }), false);
-	test::eq((value_interner::InternerKey){ .tag = BYTES, .bytes = "ab" }.eql({ .tag = BYTES, .bytes = "ab" }), true);
-	check((value_interner::InternerKey){ .tag = BYTES, .bytes = "abcdefghij" }.hash(), (value_interner::InternerKey){ .tag = BYTES, .bytes = "abcdefghij" }.hash());
-	test::eq((value_interner::InternerKey){ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }.eql({ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }), true);
-	test::eq((value_interner::InternerKey){ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }.eql({ .tag = POINTER, .pointer = { .node = 4, .offset = value_interner::REF_ZERO } }), false);
+	test::eq(primitive_value::int_key(0x8000_0000_0000_0000).eql(lmin), false);
+	test::eq(primitive_value::int_key(5).eql({ .tag = INT_TY, .ty_bits = 5 }), false);
+	test::eq((primitive_value::PrimitiveValue){ .tag = BYTES, .bytes = "ab" }.eql({ .tag = BYTES, .bytes = "ab" }), true);
+	check((primitive_value::PrimitiveValue){ .tag = BYTES, .bytes = "abcdefghij" }.hash(), (primitive_value::PrimitiveValue){ .tag = BYTES, .bytes = "abcdefghij" }.hash());
+	test::eq((primitive_value::PrimitiveValue){ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }.eql({ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }), true);
+	test::eq((primitive_value::PrimitiveValue){ .tag = POINTER, .pointer = { .node = 3, .offset = value_interner::REF_ZERO } }.eql({ .tag = POINTER, .pointer = { .node = 4, .offset = value_interner::REF_ZERO } }), false);
 
 	// to_big_int forms.
-	BigIntConst c = value_interner::int_key(long::min).to_big_int();
+	BigIntConst c = primitive_value::int_key(long::min).to_big_int();
 	check(c.limbs.len, 1);
 	test::eq(c.limbs[0] == 0x8000_0000_0000_0000, true);
 	test::eq(c.positive, false);
-	c = value_interner::int_key(ulong::max).to_big_int();
+	c = primitive_value::int_key(ulong::max).to_big_int();
 	test::eq(c.limbs[0] == ulong::max, true);
 	test::eq(c.positive, true);
-	c = value_interner::int_key(-3).to_big_int();
+	c = primitive_value::int_key(-3).to_big_int();
 	check(c.limbs[0], 3);
 	test::eq(c.positive, false);
 	c = big(&five, false).to_big_int();
@@ -251,32 +252,32 @@ fn void hash_eql_consistency() @test
 
 fn void key_int_helpers() @test
 {
-	test::eq(value_interner::int_key(5).tag == InternerKeyTag.INT_POSITIVE, true);
-	test::eq(value_interner::int_key(-5).tag == InternerKeyTag.INT_NEGATIVE, true);
-	test::eq(value_interner::int_key(ulong::max).limbs[0] == ulong::max, true);
-	test::eq(value_interner::int_key(long::min).limbs[0] == 0x8000_0000_0000_0000, true);
-	test::eq(value_interner::int_key(0).int_is_zero(), true);
-	test::eq(value_interner::int_key(-1).int_is_zero(), false);
-	test::eq(value_interner::big_int_key({ .limbs = {}, .positive = true }).int_is_zero(), true);
+	test::eq(primitive_value::int_key(5).tag == PrimitiveType.INT_POSITIVE, true);
+	test::eq(primitive_value::int_key(-5).tag == PrimitiveType.INT_NEGATIVE, true);
+	test::eq(primitive_value::int_key(ulong::max).limbs[0] == ulong::max, true);
+	test::eq(primitive_value::int_key(long::min).limbs[0] == 0x8000_0000_0000_0000, true);
+	test::eq(primitive_value::int_key(0).int_is_zero(), true);
+	test::eq(primitive_value::int_key(-1).int_is_zero(), false);
+	test::eq(primitive_value::big_int_key({ .limbs = {}, .positive = true }).int_is_zero(), true);
 	// int128 values wider than 64 bits take two limbs.
-	InternerKey wide = value_interner::int_key(-((int128)1 << 64) - 3);
+	PrimitiveValue wide = primitive_value::int_key(-((int128)1 << 64) - 3);
 	check(wide.limbs.len, 2);
 	check(wide.limbs[0], 3);
 	check(wide.limbs[1], 1);
-	test::eq(wide.tag == InternerKeyTag.INT_NEGATIVE, true);
+	test::eq(wide.tag == PrimitiveType.INT_NEGATIVE, true);
 
 	// 64-bit views.
-	test::eq(value_interner::int_key(-1).int_fits_64(), true);
-	test::eq(value_interner::int_key(-1).int_low_u64() == ulong::max, true);
-	test::eq(value_interner::int_key(long::min).int_fits_64(), true);
-	test::eq(value_interner::int_key((int128)long::min - 1).int_fits_64(), false);
-	test::eq(value_interner::int_key(ulong::max).int_fits_64(), true);
-	test::eq(value_interner::uint_key((uint128)1 << 64).int_fits_64(), false);
+	test::eq(primitive_value::int_key(-1).int_fits_64(), true);
+	test::eq(primitive_value::int_key(-1).int_low_u64() == ulong::max, true);
+	test::eq(primitive_value::int_key(long::min).int_fits_64(), true);
+	test::eq(primitive_value::int_key((int128)long::min - 1).int_fits_64(), false);
+	test::eq(primitive_value::int_key(ulong::max).int_fits_64(), true);
+	test::eq(primitive_value::uint_key((uint128)1 << 64).int_fits_64(), false);
 
 	Limb[2] two64 = { 0, 1 }; // 2^64
-	test::eq(string::tformat("%s", value_interner::int_key(-42)), "-42");
-	test::eq(string::tformat("%s", value_interner::int_key(ulong::max)), "18446744073709551615");
-	test::eq(string::tformat("%s", value_interner::big_int_key({ .limbs = &two64, .positive = false })), "-18446744073709551616");
+	test::eq(string::tformat("%s", primitive_value::int_key(-42)), "-42");
+	test::eq(string::tformat("%s", primitive_value::int_key(ulong::max)), "18446744073709551615");
+	test::eq(string::tformat("%s", primitive_value::big_int_key({ .limbs = &two64, .positive = false })), "-18446744073709551616");
 }
 
 fn void int_storage_forms() @test
@@ -286,33 +287,33 @@ fn void int_storage_forms() @test
 	Interner* in = &f.in;
 
 	// Every non-static int is stored as owned limbs, tagged by sign.
-	InternerRef r = in.put(value_interner::int_key(0xFFFF_FFFF));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.INT_POSITIVE);
-	InternerKey k = in.get(r);
+	InternerRef r = in.put(primitive_value::int_key(0xFFFF_FFFF));
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.INT_POSITIVE);
+	PrimitiveValue k = in.get(r);
 	check(k.limbs.len, 1);
 	test::eq(k.limbs[0] == 0xFFFF_FFFF, true);
 
-	r = in.put(value_interner::int_key(-0x8000_0000));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.INT_NEGATIVE);
+	r = in.put(primitive_value::int_key(-0x8000_0000));
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.INT_NEGATIVE);
 	k = in.get(r);
 	check(k.limbs[0], 0x8000_0000);
 	test::eq(k.to_big_int().positive, false);
 
-	r = in.put(value_interner::int_key(0x1_0000_0000));
+	r = in.put(primitive_value::int_key(0x1_0000_0000));
 	k = in.get(r);
-	check(k.tag, InternerKeyTag.INT_POSITIVE);
+	check(k.tag, PrimitiveType.INT_POSITIVE);
 	check(k.limbs.len, 1);
 	test::eq(k.limbs[0] == 0x1_0000_0000, true);
 
-	r = in.put(value_interner::int_key(long::min));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.INT_NEGATIVE);
+	r = in.put(primitive_value::int_key(long::min));
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.INT_NEGATIVE);
 	test::eq(in.get(r).limbs[0] == 0x8000_0000_0000_0000, true);
 
 	// Small values given as raw limbs dedupe with int_key.
 	Limb[1] small = { 0xFFFF_FFFF };
-	check(in.put(big(&small, true)), in.put(value_interner::int_key(0xFFFF_FFFF)));
+	check(in.put(big(&small, true)), in.put(primitive_value::int_key(0xFFFF_FFFF)));
 	Limb[1] smin = { 0x8000_0000 };
-	check(in.put(big(&smin, false)), in.put(value_interner::int_key(-0x8000_0000)));
+	check(in.put(big(&smin, false)), in.put(primitive_value::int_key(-0x8000_0000)));
 	// Negative zero is zero.
 	Limb[1] zero = { 0 };
 	check(in.put(big(&zero, false)), value_interner::REF_ZERO);
@@ -322,8 +323,8 @@ fn void int_storage_forms() @test
 	InternerRef pw = round_trip(in, big(&wide, true));
 	InternerRef nw = round_trip(in, big(&wide, false));
 	test::eq(pw != nw, true);
-	check(in.items[(sz)(uint)pw].tag, InternerKeyTag.INT_POSITIVE);
-	check(in.items[(sz)(uint)nw].tag, InternerKeyTag.INT_NEGATIVE);
+	check(in.items[(sz)(uint)pw].tag, PrimitiveType.INT_POSITIVE);
+	check(in.items[(sz)(uint)nw].tag, PrimitiveType.INT_NEGATIVE);
 	k = in.get(nw);
 	check(k.limbs.len, 3);
 	test::eq(k.limbs[2] == 0x8000_0000_0000_0000, true);
@@ -343,13 +344,13 @@ fn void every_key_tag_round_trip() @test
 	Interner* in = &f.in;
 
 	InternerRef r = round_trip(in, { .tag = INT_TY, .ty_bits = 24 });
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.INT_TY);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.INT_TY);
 	check(in.items[(sz)(uint)r].data, 24);
 	// float_ty / complex_ty only accept the static widths (Zig `toRef` else => unreachable).
 
 	// Array: PackedU64 split of len, low half first.
 	r = round_trip(in, { .tag = ARRAY_TY, .array_ty = { .len = 0x1_2345_6789_ABCD, .child = value_interner::REF_I8 } });
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.ARRAY_TY);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.ARRAY_TY);
 	uint d = in.items[(sz)(uint)r].data;
 	test::eq(in.extra[(sz)d] == 0x6789_ABCD, true);
 	check(in.extra[(sz)d + 1], 0x1_2345);
@@ -358,86 +359,86 @@ fn void every_key_tag_round_trip() @test
 	round_trip(in, { .tag = ARRAY_TY, .array_ty = { .len = ulong::max, .child = r } });
 
 	r = round_trip(in, { .tag = VECTOR_TY, .vector_ty = { .len = 0xFFFF_FFFF, .child = value_interner::REF_F64 } });
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.VECTOR_TY);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.VECTOR_TY);
 	check(in.get(r).vector_ty.child, value_interner::REF_F64);
 
 	InternerRef[4] elems = { value_interner::REF_I8, value_interner::REF_PTR, r, value_interner::REF_I8 };
 	r = round_trip(in, { .tag = RECORD_TY, .record_ty = &elems });
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.RECORD_TY);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.RECORD_TY);
 	check(in.get(r).record_ty.len, 4);
 	check(in.get(r).record_ty[2], elems[2]);
 	InternerRef empty_rec = round_trip(in, { .tag = RECORD_TY, .record_ty = {} });
 	check(in.get(empty_rec).record_ty.len, 0);
 
 	r = round_trip(in, { .tag = BYTES, .bytes = "abc\0def" });
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.BYTES);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.BYTES);
 	check(in.get(r).bytes.len, 7);
 	InternerRef empty_bytes = round_trip(in, { .tag = BYTES, .bytes = "" });
 	test::eq(empty_bytes != empty_rec, true);
 	check(in.get(empty_bytes).bytes.len, 0);
 
 	r = round_trip(in, { .tag = POINTER, .pointer = { .node = 42, .offset = value_interner::REF_ONE } });
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.POINTER);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.POINTER);
 	check(in.get(r).pointer.node, 42);
 	check(in.get(r).pointer.offset, value_interner::REF_ONE);
 
-	round_trip(in, value_interner::int_key(-123456));
-	round_trip(in, value_interner::int_key(ulong::max));
+	round_trip(in, primitive_value::int_key(-123456));
+	round_trip(in, primitive_value::int_key(ulong::max));
 
 	// Floats: every width, bit patterns preserved exactly.
 	r = round_trip(in, fl16(0xC000));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.F16);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.F16);
 	check(in.limbs[(sz)in.items[(sz)(uint)r].data][0], 0xC000);
 	r = round_trip(in, fl32(0x4049_0FDB));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.F32);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.F32);
 	r = round_trip(in, fl64(0x4009_21FB_5444_2D18));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.F64);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.F64);
 	d = in.items[(sz)(uint)r].data;
 	check(in.limbs[(sz)d].len, 1);
 	test::eq(in.limbs[(sz)d][0] == 0x4009_21FB_5444_2D18, true);
 	r = round_trip(in, fl80(0xC90F_DAA2_2168_C235, 0xC000));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.F80);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.F80);
 	d = in.items[(sz)(uint)r].data;
 	check(in.limbs[(sz)d].len, 2);
 	check(in.limbs[(sz)d][1], 0xC000);
-	InternerKey g = in.get(r);
-	check(g.tag, InternerKeyTag.F80);
+	PrimitiveValue g = in.get(r);
+	check(g.tag, PrimitiveType.F80);
 	test::eq(g.f80().lo == 0xC90F_DAA2_2168_C235, true);
 	check(g.f80().hi, 0xC000);
 	r = round_trip(in, fl128(0x8469_898C_C517_01B8, 0x4000_921F_B544_42D1));
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.F128);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.F128);
 	g = in.get(r);
 	test::eq(g.f128().lo == 0x8469_898C_C517_01B8 && g.f128().hi == 0x4000_921F_B544_42D1, true);
 	// Same bits in different widths are different keys.
 	test::eq(in.put(fl16(0x4000)) != in.put(fl32(0x4000)), true);
 
 	// Complex: every width.
-	InternerKey c16 = cx(fl16(0x3C00), fl16(0xC000));
+	PrimitiveValue c16 = cx(fl16(0x3C00), fl16(0xC000));
 	r = round_trip(in, c16);
-	check(in.items[(sz)(uint)r].tag, InternerKeyTag.CF16);
+	check(in.items[(sz)(uint)r].tag, PrimitiveType.CF16);
 	// Real component's limbs first, then the imaginary's.
 	Limb[] cl = in.limbs[(sz)in.items[(sz)(uint)r].data];
 	check(cl.len, 2);
 	check(cl[0], 0x3C00);
 	check(cl[1], 0xC000);
-	InternerKey c32 = cx(fl32(0x3F80_0000), fl32(0x4000_0000));
+	PrimitiveValue c32 = cx(fl32(0x3F80_0000), fl32(0x4000_0000));
 	r = round_trip(in, c32);
 	check(in.get(r).im().f32(), 0x4000_0000);
-	InternerKey c64 = cx(fl64(0x3FF0_0000_0000_0001), fl64(0xBFF0_0000_0000_0002));
+	PrimitiveValue c64 = cx(fl64(0x3FF0_0000_0000_0001), fl64(0xBFF0_0000_0000_0002));
 	r = round_trip(in, c64);
 	d = in.items[(sz)(uint)r].data;
 	test::eq(in.limbs[(sz)d][1] == 0xBFF0_0000_0000_0002, true);
-	InternerKey c80 = cx(fl80(0x8000_0000_0000_0001, 0x3FFF), fl80(0xC000_0000_0000_0000, 0xBFFE));
+	PrimitiveValue c80 = cx(fl80(0x8000_0000_0000_0001, 0x3FFF), fl80(0xC000_0000_0000_0000, 0xBFFE));
 	r = round_trip(in, c80);
 	d = in.items[(sz)(uint)r].data;
 	check(in.limbs[(sz)d].len, 4);
 	check(in.limbs[(sz)d][1], 0x3FFF);
 	check(in.limbs[(sz)d][3], 0xBFFE);
-	InternerKey g80 = in.get(r);
+	PrimitiveValue g80 = in.get(r);
 	test::eq(g80.im().f80().lo == 0xC000_0000_0000_0000, true);
-	InternerKey c128 = cx(fl128(1, 0x3FFF_0000_0000_0000), fl128(2, 0x8000_0000_0000_0003));
+	PrimitiveValue c128 = cx(fl128(1, 0x3FFF_0000_0000_0000), fl128(2, 0x8000_0000_0000_0003));
 	r = round_trip(in, c128);
-	InternerKey g128 = in.get(r);
+	PrimitiveValue g128 = in.get(r);
 	test::eq(g128.re().f128().lo == 1 && g128.im().f128().hi == 0x8000_0000_0000_0003, true);
 	d = in.items[(sz)(uint)r].data;
 	check(in.limbs[(sz)d][2], 2);
@@ -453,13 +454,13 @@ fn void distinct_pointer_bases() @test
 	InternerRef p1 = in.put({ .tag = POINTER, .pointer = { .node = 1, .offset = value_interner::REF_ZERO } });
 	InternerRef p2 = in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = value_interner::REF_ZERO } });
 	test::eq(p1 != p2, true);
-	InternerRef off8 = in.put(value_interner::int_key(8));
+	InternerRef off8 = in.put(primitive_value::int_key(8));
 	InternerRef p1_8 = in.put({ .tag = POINTER, .pointer = { .node = 1, .offset = off8 } });
 	InternerRef p2_8 = in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = off8 } });
 	test::eq(p1_8 != p1, true);
 	test::eq(p1_8 != p2_8, true);
 	check(in.put({ .tag = POINTER, .pointer = { .node = 1, .offset = value_interner::REF_ZERO } }), p1);
-	check(in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = in.put(value_interner::int_key(8)) } }), p2_8);
+	check(in.put({ .tag = POINTER, .pointer = { .node = 2, .offset = in.put(primitive_value::int_key(8)) } }), p2_8);
 	// Node 0 is an ordinary base, distinct from the null constant and from int zero.
 	InternerRef p0 = in.put({ .tag = POINTER, .pointer = { .node = 0, .offset = value_interner::REF_ZERO } });
 	test::eq(p0 != value_interner::REF_NULL && p0 != value_interner::REF_ZERO, true);
@@ -498,7 +499,7 @@ fn void slices_stable_across_growth() @test
 	for (uint i = 0; i < 5000; i++)
 	{
 		in.put({ .tag = INT_TY, .ty_bits = (ushort)(200 + i % 60000) });
-		in.put(value_interner::int_key((int128)0x1_0000_0000 + i));
+		in.put(primitive_value::int_key((int128)0x1_0000_0000 + i));
 		Limb[2] li = { i, 1 };
 		in.put(big(&li, true));
 		for (int j = 0; j < 8; j++) buf[j] = (char)('a' + (i >> (4 * j)) % 16);
@@ -524,7 +525,7 @@ fn void slices_stable_across_growth() @test
 	{
 		Limb[2] li = { i, 1 };
 		in.put(big(&li, true));
-		in.put(value_interner::int_key((int128)0x1_0000_0000 + i));
+		in.put(primitive_value::int_key((int128)0x1_0000_0000 + i));
 	}
 	check(in.len(), n);
 	f.free();
@@ -547,9 +548,9 @@ fn void leak_checks() @test
 			in.put({ .tag = RECORD_TY, .record_ty = &elems });
 			in.put({ .tag = RECORD_TY, .record_ty = {} });
 			in.put({ .tag = BYTES, .bytes = "" });
-			in.put(value_interner::int_key((int128)0x1_0000_0000 * (int128)(i + 1)));
+			in.put(primitive_value::int_key((int128)0x1_0000_0000 * (int128)(i + 1)));
 			in.put(fl32(0x7FC0_0000)); // NaN: a new entry each time
-			InternerKey c = cx(fl128((ulong)i, 0), fl128(0, 1));
+			PrimitiveValue c = cx(fl128((ulong)i, 0), fl128(0, 1));
 			in.put(c);
 		}
 		in.free();

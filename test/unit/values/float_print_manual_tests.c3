@@ -1,7 +1,7 @@
 // Tests for src/float_print.c3 that depend on other plan 10 stage-1 agents:
 //   - print_float / print_complex for f16, f32, f80, f128 (and cf16/cf32/cf80/
-//     cf128) need InternerKey.cast (10.3 `conversions`, built on 10.2's
-//     to_f128/from_f128) and, for the f16/f32/cf32 scaling, InternerKey.mul/div at
+//     cf128) need PrimitiveValue.cast (10.3 `conversions`, built on 10.2's
+//     to_f128/from_f128) and, for the f16/f32/cf32 scaling, PrimitiveValue.mul/div at
 //     F64 (10.1 `narrow-float`);
 //   - the Value-level `compare` needs to_float / imag (10.3).
 // Until those land the stubs hit `unreachable`, so the target is tagged
@@ -15,12 +15,13 @@
 // - "fixture <name>": value dumps / diagnostics in test/cases/<name>.c.
 // - "source-derived": Value.zig compare + std.math.compare, by hand.
 module float_print_manual_tests;
-import aro::float_value, aro::value_interner, aro::value, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
+import aro::primitive_value;
+import aro::value_interner, aro::value, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 struct RealVector
 {
-	InternerKeyTag tag;
+	PrimitiveType tag;
 	ulong hi;
 	ulong lo;
 	String text;
@@ -28,7 +29,7 @@ struct RealVector
 
 struct ComplexVector
 {
-	InternerKeyTag tag;
+	PrimitiveType tag;
 	ulong re_hi;
 	ulong re_lo;
 	ulong im_hi;
@@ -36,19 +37,19 @@ struct ComplexVector
 	String text;
 }
 
-fn InternerKey raw(InternerKeyTag tag, ulong hi, ulong lo) => float_value::from_raw(tag, (uint128)hi << 64 | (uint128)lo);
+fn PrimitiveValue raw(PrimitiveType tag, ulong hi, ulong lo) => primitive_value::float_key(tag, (uint128)hi << 64 | (uint128)lo);
 
-fn String fmt_float(InternerKey f)
+fn String fmt_float(PrimitiveValue f)
 {
 	DString w = dstring::temp();
-	float_value::print_float(f, &w);
+	primitive_value::print_float(f, &w);
 	return w.str_view();
 }
 
-fn String fmt_complex(InternerKey c)
+fn String fmt_complex(PrimitiveValue c)
 {
 	DString w = dstring::temp();
-	float_value::print_complex(c, &w);
+	primitive_value::print_complex(c, &w);
 	return w.str_view();
 }
 
@@ -180,8 +181,8 @@ fn void print_complex_matches_zig() @test
 	{
 		@pool()
 		{
-			InternerKeyTag s = v.tag.scalar();
-			String got = fmt_complex(float_value::make_complex(raw(s, v.re_hi, v.re_lo), raw(s, v.im_hi, v.im_lo)));
+			PrimitiveType s = v.tag.scalar();
+			String got = fmt_complex(primitive_value::complex_key(raw(s, v.re_hi, v.re_lo), raw(s, v.im_hi, v.im_lo)));
 			if (got != v.text) io::printfn("mismatch %s: got \"%s\" want \"%s\"", v.tag, got, v.text);
 			test::eq(got, v.text);
 		};
@@ -193,22 +194,22 @@ fn void print_fixture_goldens() @test
 	@pool()
 	{
 		// fixture "float to int": 'float' to 'int' changes value from 1.2 to 1
-		test::eq(fmt_float(float_value::f32_value(0x3F99_999A)), "1.2");
+		test::eq(fmt_float(primitive_value::f32_value(0x3F99_999A)), "1.2");
 		// fixture "float to int": 'float' to 'int' changes non-zero value from 0.5 to 0
-		test::eq(fmt_float(float_value::f32_value(0x3F00_0000)), "0.5");
+		test::eq(fmt_float(primitive_value::f32_value(0x3F00_0000)), "0.5");
 		// fixture "float to int": 'float' to '_Bool' changes value from 1.5 to true
-		test::eq(fmt_float(float_value::f32_value(0x3FC0_0000)), "1.5");
+		test::eq(fmt_float(primitive_value::f32_value(0x3FC0_0000)), "1.5");
 		// fixture "assignment": 'float' to '_Bool' changes value from 5.5 to true
-		test::eq(fmt_float(float_value::f32_value(0x40B0_0000)), "5.5");
+		test::eq(fmt_float(primitive_value::f32_value(0x40B0_0000)), "5.5");
 		// fixture "ast/vectors": float_literal: 'float' (value: 1.4) / (value: 2.4)
-		test::eq(fmt_float(float_value::f32_value(0x3FB3_3333)), "1.4");
-		test::eq(fmt_float(float_value::f32_value(0x4019_999A)), "2.4");
+		test::eq(fmt_float(primitive_value::f32_value(0x3FB3_3333)), "1.4");
+		test::eq(fmt_float(primitive_value::f32_value(0x4019_999A)), "2.4");
 		// fixture "ast/complex init": array_init_expr: '_Complex float' (value: 1 + 2i)
-		test::eq(fmt_complex(float_value::make_complex(float_value::f32_value(0x3F80_0000), float_value::f32_value(0x4000_0000))), "1 + 2i");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::f32_value(0x3F80_0000), primitive_value::f32_value(0x4000_0000))), "1 + 2i");
 		// fixture "ast/__float80": imaginary_literal: '_Complex long double' (value: 0 + 1i)
-		test::eq(fmt_complex(float_value::make_complex(float_value::zero(F80), float_value::one(F80))), "0 + 1i");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::zero(F80), primitive_value::one(F80))), "0 + 1i");
 		// fixture "ast/float eval method": (real_to_complex_float) '_Complex float' (value: 0 + 0i)
-		test::eq(fmt_complex(float_value::make_complex(float_value::zero(F32), float_value::zero(F32))), "0 + 0i");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::zero(F32), primitive_value::zero(F32))), "0 + 0i");
 	};
 }
 
@@ -235,36 +236,36 @@ macro @with_comp(; @body(Compilation* comp))
 	test::eq((long)ta.allocation_count(), 0);
 }
 
-fn Value fv(Compilation* comp, InternerKey f) => value::intern(comp, f);
-fn Value cv(Compilation* comp, InternerKey re, InternerKey im) => value::intern(comp, float_value::make_complex(re, im));
+fn Value fv(Compilation* comp, PrimitiveValue f) => value::intern(comp, f);
+fn Value cv(Compilation* comp, PrimitiveValue re, PrimitiveValue im) => value::intern(comp, primitive_value::complex_key(re, im));
 
 fn void value_compare() @test
 {
 	@with_comp(; Compilation* comp)
 	{
-		Value half = fv(comp, float_value::f64_value(0x3FE0_0000_0000_0000));
-		Value two_f = fv(comp, float_value::f32_value(0x4000_0000));
-		Value nan = fv(comp, float_value::std_nan(F64));
+		Value half = fv(comp, primitive_value::f64_value(0x3FE0_0000_0000_0000));
+		Value two_f = fv(comp, primitive_value::f32_value(0x4000_0000));
+		Value nan = fv(comp, primitive_value::std_nan(F64));
 		Value three = value::int_u64(3, comp);
 		// float vs float of other widths, and vs int (both go through f128).
-		assert(float_value::compare(half, LT, two_f, comp));
-		assert(float_value::compare(two_f, LT, three, comp));
-		assert(float_value::compare(three, GT, half, comp));
-		assert(!float_value::compare(half, EQ, two_f, comp));
+		assert(value::compare_float(half, LT, two_f, comp));
+		assert(value::compare_float(two_f, LT, three, comp));
+		assert(value::compare_float(three, GT, half, comp));
+		assert(!value::compare_float(half, EQ, two_f, comp));
 		// value::ONE is the int key a float 1.0 interns to.
-		assert(float_value::compare(value::ONE, GT, half, comp));
+		assert(value::compare_float(value::ONE, GT, half, comp));
 		// NaN: unordered, only != holds (also against itself through compare).
-		assert(!float_value::compare(nan, LT, three, comp) && !float_value::compare(nan, GTE, three, comp));
-		assert(float_value::compare(nan, NEQ, half, comp));
+		assert(!value::compare_float(nan, LT, three, comp) && !value::compare_float(nan, GTE, three, comp));
+		assert(value::compare_float(nan, NEQ, half, comp));
 		// complex: only !=; NaN parts make values unequal.
-		InternerKey one = float_value::one(F64);
-		Value c12 = cv(comp, one, float_value::f64_value(0x4000_0000_0000_0000));
-		Value c10 = cv(comp, one, float_value::f64_value(0));
-		Value c_nan = cv(comp, one, float_value::std_nan(F64));
-		Value c_nan2 = cv(comp, one, float_value::default_nan(F64));
-		assert(float_value::compare(c12, NEQ, c10, comp));
-		assert(!float_value::compare(c10, NEQ, value::ONE, comp)); // 1 + 0i vs int 1
-		assert(float_value::compare(c_nan, NEQ, c_nan2, comp));
-		assert(float_value::compare(c12, NEQ, value::ONE, comp));
+		PrimitiveValue one = primitive_value::one(F64);
+		Value c12 = cv(comp, one, primitive_value::f64_value(0x4000_0000_0000_0000));
+		Value c10 = cv(comp, one, primitive_value::f64_value(0));
+		Value c_nan = cv(comp, one, primitive_value::std_nan(F64));
+		Value c_nan2 = cv(comp, one, primitive_value::default_nan(F64));
+		assert(value::compare_float(c12, NEQ, c10, comp));
+		assert(!value::compare_float(c10, NEQ, value::ONE, comp)); // 1 + 0i vs int 1
+		assert(value::compare_float(c_nan, NEQ, c_nan2, comp));
+		assert(value::compare_float(c12, NEQ, value::ONE, comp));
 	};
 }

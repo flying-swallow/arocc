@@ -5,7 +5,7 @@
 module aro::code_gen_options;
 
 <* Zig `CodeGenOptions.PicLevel` (enum(u8)); `value` is the integer Zig prints with @backingInt. *>
-enum PicLevel : char (char value)
+enum PicLevel : char(char value)
 {
 	<* Do not generate position-independent code *>
 	NONE { 0 },
@@ -16,7 +16,7 @@ enum PicLevel : char (char value)
 }
 
 <* Zig `CodeGenOptions.OptimizationLevel`; `name` is the -O spelling (Zig tag name). *>
-enum OptimizationLevel : char (String name)
+enum OptimizationLevel : char(String name)
 {
 	O0 { "0" },
 	O1 { "1" },
@@ -77,7 +77,7 @@ struct DebugFormat
 }
 
 <* Zig `CodeGenOptions.DwarfVersion` (enum(u3)). *>
-enum DwarfVersion : char (char value)
+enum DwarfVersion : char(char value)
 {
 	V0 { 0 },
 	V2 { 2 },
@@ -127,7 +127,7 @@ const CodeGenOptions DEFAULT = {
  accepts (std.meta.stringToEnum) and what @tagName prints in
  __code_model_<name>__ / __AARCH64_CMODEL_<NAME>__.
 *>
-enum CodeModel : char (String name)
+enum CodeModel : char(String name)
 {
 	DEFAULT { "default" },
 	EXTREME { "extreme" },

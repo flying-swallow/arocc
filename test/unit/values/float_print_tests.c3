@@ -1,8 +1,8 @@
 // Tests for src/float_print.c3 that need no other plan 10 stage-1 code:
-// InternerKey.compare, the Value-level isInf/isNan/isInfSign, the Zig `{d}`
+// PrimitiveValue.compare, the Value-level isInf/isNan/isInfSign, the Zig `{d}`
 // formatter for f64 (format_f64_decimal), the @round helper and the f64 / cf64
 // arms of Value.print. The f16/f32/f80/f128 print arms and the Value-level
-// compare need InternerKey.cast, f64 mul/div and to_float/imag from agents 10.1 and
+// compare need PrimitiveValue.cast, f64 mul/div and to_float/imag from agents 10.1 and
 // 10.3; they are in float_print_manual_tests.c3 (target tagged "manual").
 //
 // Provenance of expected values:
@@ -14,7 +14,8 @@
 // - "fixture <name>": value dumps / diagnostics in test/cases/<name>.c.
 // - "source-derived": IEEE 754 ordering rules and std.math.compare, by hand.
 module float_print_tests;
-import aro::float_value, aro::value_interner, aro::value, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
+import aro::primitive_value;
+import aro::value_interner, aro::value, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 struct F64Vector
@@ -46,21 +47,21 @@ macro @with_comp(; @body(Compilation* comp))
 fn String fmt_f64(ulong bits)
 {
 	DString w = dstring::temp();
-	float_value::format_f64_decimal(bits, &w);
+	primitive_value::format_f64_decimal(bits, &w);
 	return w.str_view();
 }
 
-fn String fmt_float(InternerKey f)
+fn String fmt_float(PrimitiveValue f)
 {
 	DString w = dstring::temp();
-	float_value::print_float(f, &w);
+	primitive_value::print_float(f, &w);
 	return w.str_view();
 }
 
-fn String fmt_complex(InternerKey c)
+fn String fmt_complex(PrimitiveValue c)
 {
 	DString w = dstring::temp();
-	float_value::print_complex(c, &w);
+	primitive_value::print_complex(c, &w);
 	return w.str_view();
 }
 
@@ -476,7 +477,7 @@ fn void format_appends() @test
 	@pool()
 	{
 		DString w = dstring::temp("x=");
-		float_value::format_f64_decimal(0x3FF8_0000_0000_0000, &w);
+		primitive_value::format_f64_decimal(0x3FF8_0000_0000_0000, &w);
 		test::eq(w.str_view(), "x=1.5");
 	};
 }
@@ -490,16 +491,16 @@ fn void print_float_f64_fixture_goldens() @test
 	@pool()
 	{
 		// fixture "ast/generic ast": float_literal: 'double' (value: 32.5)
-		test::eq(fmt_float(float_value::f64_value(0x4040_4000_0000_0000)), "32.5");
+		test::eq(fmt_float(primitive_value::f64_value(0x4040_4000_0000_0000)), "32.5");
 		// fixture "const decl folding": ... 'double' to '_Bool' changes value from 4.2 to true
-		test::eq(fmt_float(float_value::f64_value(0x4010_CCCC_CCCC_CCCD)), "4.2");
+		test::eq(fmt_float(primitive_value::f64_value(0x4010_CCCC_CCCC_CCCD)), "4.2");
 		// fixture "float to int": ... 'double' to 'int' changes value from 2.5 to 2
-		test::eq(fmt_float(float_value::f64_value(0x4004_0000_0000_0000)), "2.5");
+		test::eq(fmt_float(primitive_value::f64_value(0x4004_0000_0000_0000)), "2.5");
 		// fixture "_BitInt change size": 'double' ... changes value from 1.2 to 1
-		test::eq(fmt_float(float_value::f64_value(0x3FF3_3333_3333_3333)), "1.2");
+		test::eq(fmt_float(primitive_value::f64_value(0x3FF3_3333_3333_3333)), "1.2");
 		// zig 0.17.0 run: f64 is printed unrounded (no scaling)
-		test::eq(fmt_float(float_value::f64_value(0x3FD5_5555_5555_5555)), "0.3333333333333333");
-		test::eq(fmt_float(float_value::f64_value(0x7FF8_0000_0000_0000)), "nan");
+		test::eq(fmt_float(primitive_value::f64_value(0x3FD5_5555_5555_5555)), "0.3333333333333333");
+		test::eq(fmt_float(primitive_value::f64_value(0x7FF8_0000_0000_0000)), "nan");
 	};
 }
 
@@ -508,11 +509,11 @@ fn void print_complex_cf64() @test
 	@pool()
 	{
 		// zig 0.17.0 run of the Value.print .complex arm (inline else branch).
-		test::eq(fmt_complex(float_value::make_complex(float_value::f64_value(0x3FF0_0000_0000_0000), float_value::f64_value(0x4000_0000_0000_0000))), "1 + 2i");
-		test::eq(fmt_complex(float_value::make_complex(float_value::f64_value(0), float_value::f64_value(0xBFF0_0000_0000_0000))), "0 + -1i");
-		test::eq(fmt_complex(float_value::make_complex(float_value::f64_value(0x3FB9_9999_9999_999A), float_value::f64_value(0xFFF8_0000_0000_0000))), "0.1 + -nani");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::f64_value(0x3FF0_0000_0000_0000), primitive_value::f64_value(0x4000_0000_0000_0000))), "1 + 2i");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::f64_value(0), primitive_value::f64_value(0xBFF0_0000_0000_0000))), "0 + -1i");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::f64_value(0x3FB9_9999_9999_999A), primitive_value::f64_value(0xFFF8_0000_0000_0000))), "0.1 + -nani");
 		// fixture "ast/complex init": array_init_expr: '_Complex double' (value: 1 + 2i)
-		test::eq(fmt_complex(float_value::make_complex(float_value::one(F64), float_value::f64_value(0x4000_0000_0000_0000))), "1 + 2i");
+		test::eq(fmt_complex(primitive_value::complex_key(primitive_value::one(F64), primitive_value::f64_value(0x4000_0000_0000_0000))), "1 + 2i");
 	};
 }
 
@@ -537,35 +538,35 @@ fn void round_half_away_from_zero() @test
 		{ 0x4415_AF1D_78B5_8C40, 0x4415_AF1D_78B5_8C40 },
 		{ 0x412E_8480_0000_0001, 0x412E_8480_0000_0000 },
 	};
-	foreach (c : cases) test::eq(float_value::f64_round_half_away(c[0]), c[1]);
+	foreach (c : cases) test::eq(primitive_value::f64_round_half_away(c[0]), c[1]);
 	// zig 0.17.0 run: a quiet NaN passes through.
-	test::eq(float_value::f64_round_half_away(0x7FF8_0000_0000_0001), (ulong)0x7FF8_0000_0000_0001);
+	test::eq(primitive_value::f64_round_half_away(0x7FF8_0000_0000_0001), (ulong)0x7FF8_0000_0000_0001);
 }
 
 // -----------------------------------------------------------------------------
-// InternerKey.compare (source-derived: IEEE ordering, std.math.compare)
+// PrimitiveValue.compare (source-derived: IEEE ordering, std.math.compare)
 // -----------------------------------------------------------------------------
 
 <* Ascending non-NaN values of one width: -inf, -1, -min subnormal, -0, +0, +min subnormal, 1, 2, +inf. *>
-fn InternerKey[9] ladder(InternerKeyTag tag)
+fn PrimitiveValue[9] ladder(PrimitiveType tag)
 {
-	InternerKey min_sub = float_value::from_raw(tag, 1);
-	InternerKey one = float_value::one(tag);
+	PrimitiveValue min_sub = primitive_value::float_key(tag, 1);
+	PrimitiveValue one = primitive_value::one(tag);
 	// 2.0: biased exponent bias + 1 (one with the exponent field incremented).
-	FloatFormat fmt = float_value::format_of(tag);
+	FloatFormat fmt = tag.format;
 	uint shift = (uint)fmt.frac_bits + (fmt.explicit_int ? 1 : 0);
-	InternerKey two = float_value::from_raw(tag, one.raw() + ((uint128)1 << shift));
+	PrimitiveValue two = primitive_value::float_key(tag, one.float_bits() + ((uint128)1 << shift));
 	return {
-		float_value::inf(tag, true), one.neg(), min_sub.neg(), float_value::zero(tag, true),
-		float_value::zero(tag), min_sub, one, two, float_value::inf(tag),
+		primitive_value::inf(tag, true), one.neg(), min_sub.neg(), primitive_value::zero(tag, true),
+		primitive_value::zero(tag), min_sub, one, two, primitive_value::inf(tag),
 	};
 }
 
 fn void compare_orders_every_width() @test
 {
-	foreach (tag : value_interner::FLOAT_TAGS)
+	foreach (tag : primitive_value::FLOAT_TAGS)
 	{
-		InternerKey[9] l = ladder(tag);
+		PrimitiveValue[9] l = ladder(tag);
 		foreach (i, a : l)
 		{
 			foreach (j, b : l)
@@ -586,10 +587,10 @@ fn void compare_orders_every_width() @test
 
 fn void compare_nan_is_unordered() @test
 {
-	foreach (tag : value_interner::FLOAT_TAGS)
+	foreach (tag : primitive_value::FLOAT_TAGS)
 	{
-		InternerKey nan = float_value::std_nan(tag);
-		InternerKey[3] others = { nan, float_value::default_nan(tag), float_value::one(tag) };
+		PrimitiveValue nan = primitive_value::std_nan(tag);
+		PrimitiveValue[3] others = { nan, primitive_value::default_nan(tag), primitive_value::one(tag) };
 		foreach (o : others)
 		{
 			foreach (op : CompareOperator::values)
@@ -606,15 +607,15 @@ fn void compare_wide_mantissa_bits() @test
 	// f128 values that differ only in the low limb; f80 values that differ only
 	// in the low fraction bit; an f80 pseudo-denormal equals the normal of
 	// biased exponent 1 with the same significand (x87 reads them identically).
-	InternerKey a = float_value::f128_value({ .lo = 1, .hi = 0x3FFF_0000_0000_0000 });
-	InternerKey b = float_value::f128_value({ .lo = 2, .hi = 0x3FFF_0000_0000_0000 });
+	PrimitiveValue a = primitive_value::f128_value({ .lo = 1, .hi = 0x3FFF_0000_0000_0000 });
+	PrimitiveValue b = primitive_value::f128_value({ .lo = 2, .hi = 0x3FFF_0000_0000_0000 });
 	assert(a.compare(LT, b) && b.neg().compare(LT, a.neg()));
-	InternerKey c = float_value::f80_value({ .lo = 0x8000_0000_0000_0000, .hi = 0x3FFF });
-	InternerKey d = float_value::f80_value({ .lo = 0x8000_0000_0000_0001, .hi = 0x3FFF });
+	PrimitiveValue c = primitive_value::f80_value({ .lo = 0x8000_0000_0000_0000, .hi = 0x3FFF });
+	PrimitiveValue d = primitive_value::f80_value({ .lo = 0x8000_0000_0000_0001, .hi = 0x3FFF });
 	assert(c.compare(LT, d) && d.compare(GT, c));
-	InternerKey pseudo = float_value::f80_value({ .lo = 0x8000_0000_0000_0005, .hi = 0 });
-	InternerKey normal = float_value::f80_value({ .lo = 0x8000_0000_0000_0005, .hi = 1 });
-	InternerKey largest_sub = float_value::f80_value({ .lo = 0x7FFF_FFFF_FFFF_FFFF, .hi = 0 });
+	PrimitiveValue pseudo = primitive_value::f80_value({ .lo = 0x8000_0000_0000_0005, .hi = 0 });
+	PrimitiveValue normal = primitive_value::f80_value({ .lo = 0x8000_0000_0000_0005, .hi = 1 });
+	PrimitiveValue largest_sub = primitive_value::f80_value({ .lo = 0x7FFF_FFFF_FFFF_FFFF, .hi = 0 });
 	assert(pseudo.compare(EQ, normal));
 	assert(largest_sub.compare(LT, pseudo));
 }
@@ -623,56 +624,56 @@ fn void compare_wide_mantissa_bits() @test
 // Value-level predicates (source-derived from Value.zig isInf/isNan/isInfSign)
 // -----------------------------------------------------------------------------
 
-fn Value fv(Compilation* comp, InternerKey f) => value::intern(comp, f);
-fn Value cv(Compilation* comp, InternerKey re, InternerKey im) => value::intern(comp, float_value::make_complex(re, im));
+fn Value fv(Compilation* comp, PrimitiveValue f) => value::intern(comp, f);
+fn Value cv(Compilation* comp, PrimitiveValue re, PrimitiveValue im) => value::intern(comp, primitive_value::complex_key(re, im));
 
 fn void value_predicates() @test
 {
 	@with_comp(; Compilation* comp)
 	{
 		Value none = value::NONE;
-		assert(!float_value::is_inf(none, comp) && !float_value::is_nan(none, comp));
-		assert(float_value::is_inf_sign(none, comp) == UNKNOWN);
+		assert(!none.is_inf(comp) && !none.is_nan(comp));
+		assert(none.is_inf_sign(comp) == UNKNOWN);
 
 		// An int key (e.g. a float 0.0 interned as REF_ZERO) is neither.
 		Value i = value::int_u64(7, comp);
-		assert(!float_value::is_inf(i, comp) && !float_value::is_nan(i, comp));
-		assert(float_value::is_inf_sign(i, comp) == UNKNOWN);
-		assert(float_value::is_inf_sign(value::ZERO, comp) == UNKNOWN);
+		assert(!i.is_inf(comp) && !i.is_nan(comp));
+		assert(i.is_inf_sign(comp) == UNKNOWN);
+		assert(value::ZERO.is_inf_sign(comp) == UNKNOWN);
 
-		foreach (tag : value_interner::FLOAT_TAGS)
+		foreach (tag : primitive_value::FLOAT_TAGS)
 		{
-			Value pinf = fv(comp, float_value::inf(tag));
-			Value ninf = fv(comp, float_value::inf(tag, true));
-			Value nan = fv(comp, float_value::default_nan(tag));
-			InternerKey two_k = float_value::one(tag).add_free_two();
+			Value pinf = fv(comp, primitive_value::inf(tag));
+			Value ninf = fv(comp, primitive_value::inf(tag, true));
+			Value nan = fv(comp, primitive_value::default_nan(tag));
+			PrimitiveValue two_k = primitive_value::one(tag).add_free_two();
 			Value fin = fv(comp, two_k);
-			assert(float_value::is_inf(pinf, comp) && float_value::is_inf(ninf, comp));
-			assert(!float_value::is_inf(nan, comp) && !float_value::is_inf(fin, comp));
-			assert(float_value::is_nan(nan, comp) && !float_value::is_nan(pinf, comp) && !float_value::is_nan(fin, comp));
-			assert(float_value::is_inf_sign(pinf, comp) == POSITIVE);
-			assert(float_value::is_inf_sign(ninf, comp) == NEGATIVE);
-			assert(float_value::is_inf_sign(nan, comp) == FINITE);
-			assert(float_value::is_inf_sign(fin, comp) == FINITE);
+			assert(pinf.is_inf(comp) && ninf.is_inf(comp));
+			assert(!nan.is_inf(comp) && !fin.is_inf(comp));
+			assert(nan.is_nan(comp) && !pinf.is_nan(comp) && !fin.is_nan(comp));
+			assert(pinf.is_inf_sign(comp) == POSITIVE);
+			assert(ninf.is_inf_sign(comp) == NEGATIVE);
+			assert(nan.is_inf_sign(comp) == FINITE);
+			assert(fin.is_inf_sign(comp) == FINITE);
 
 			// Complex: either part decides isInf / isNan; isInfSign is UNKNOWN.
-			InternerKey z = float_value::zero(tag);
-			Value c_re_inf = cv(comp, float_value::inf(tag, true), z);
-			Value c_im_nan = cv(comp, z, float_value::std_nan(tag));
+			PrimitiveValue z = primitive_value::zero(tag);
+			Value c_re_inf = cv(comp, primitive_value::inf(tag, true), z);
+			Value c_im_nan = cv(comp, z, primitive_value::std_nan(tag));
 			Value c_fin = cv(comp, two_k, two_k.neg());
-			assert(float_value::is_inf(c_re_inf, comp) && !float_value::is_nan(c_re_inf, comp));
-			assert(float_value::is_nan(c_im_nan, comp) && !float_value::is_inf(c_im_nan, comp));
-			assert(!float_value::is_inf(c_fin, comp) && !float_value::is_nan(c_fin, comp));
-			assert(float_value::is_inf_sign(c_re_inf, comp) == UNKNOWN);
+			assert(c_re_inf.is_inf(comp) && !c_re_inf.is_nan(comp));
+			assert(c_im_nan.is_nan(comp) && !c_im_nan.is_inf(comp));
+			assert(!c_fin.is_inf(comp) && !c_fin.is_nan(comp));
+			assert(c_re_inf.is_inf_sign(comp) == UNKNOWN);
 		}
 		assert(IsInfKind.UNKNOWN.value == 0x7FFF_FFFF && IsInfKind.NEGATIVE.value == -1);
 	};
 }
 
 <* 2.0 of the same width, built on bits (the exponent field of 1.0 plus one). *>
-fn InternerKey InternerKey.add_free_two(self)
+fn PrimitiveValue PrimitiveValue.add_free_two(self)
 {
-	FloatFormat fmt = float_value::format_of(self.tag);
+	FloatFormat fmt = self.tag.format;
 	uint shift = (uint)fmt.frac_bits + (fmt.explicit_int ? 1 : 0);
-	return float_value::from_raw(self.tag, self.raw() + ((uint128)1 << shift));
+	return primitive_value::float_key(self.tag, self.float_bits() + ((uint128)1 << shift));
 }

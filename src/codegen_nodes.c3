@@ -1,6 +1,7 @@
 // Port of AST statement/expression lowering from src/aro/CodeGen.zig.
 module aro::codegen;
-import aro::backend::ir, aro::builtins, aro::compilation, aro::diagnostics;
+import aro::primitive_value;
+import aro::backend::ir, aro::builtins, aro::builtin_properties, aro::builtin_defs::common, aro::compilation, aro::diagnostics;
 import aro::bigint;
 import aro::tree, aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
 import aro::target;
@@ -669,10 +670,85 @@ fn void? CodeGen.gen_bool_expr(&self, type_store::NodeIndex base, ir::Ref true_l
 	self.add_branch(cmp, true_label, false_label)!;
 }
 
+<*
+ Lower a builtin call. Upstream Zig leaves this a TODO; the C3 port lowers the
+ integer/libc subset the native backend can express and keeps the TODO
+ diagnostic for the rest (floats, overflow, va_*, atomics, alloca, setjmp).
+*>
 fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_store::NodeIndex[] arg_nodes, type_store::QualType qt)
 {
-	self.fail(string::tformat("TODO CodeGen.genBuiltinCall %s\n", builtins::name_from_tag(builtin.tag)))!;
+	builtin_properties::BuiltinTag tag = builtin.tag;
+	if (tag == common::TAG___BUILTIN_EXPECT || tag == common::TAG___BUILTIN_EXPECT_WITH_PROBABILITY)
+	{
+		ir::Ref result = self.gen_expr(arg_nodes[0])!;
+		foreach (arg : arg_nodes[1..]) self.gen_expr(arg)!;
+		return result;
+	}
+	if (tag == common::TAG___BUILTIN_PREFETCH)
+	{
+		foreach (arg : arg_nodes) self.gen_expr(arg)!;
+		return ir::NONE;
+	}
+	if (tag == common::TAG___BUILTIN_TRAP || tag == common::TAG___BUILTIN_UNREACHABLE)
+	{
+		ir::Ref abort_fn = self.builder.add_symbol("abort", value_interner::REF_PTR);
+		self.builder.add_call(abort_fn, {}, value_interner::REF_VOID);
+		return ir::NONE;
+	}
+	if (tag == common::TAG___BUILTIN_OBJECT_SIZE || tag == common::TAG___BUILTIN_DYNAMIC_OBJECT_SIZE)
+	{
+		// Not folded by the parser: GCC's "unknown" answer. The object operand is
+		// not evaluated (eval_args = false).
+		long kind = 0;
+		if (try kind_val = self.tree.value_of(arg_nodes[1]))
+		{
+			if (try k = kind_val.to_i64(self.comp)) kind = k;
+		}
+		ulong bits = qt.bit_sizeof(self.comp);
+		ulong unknown = kind & 2 ? 0 : (bits >= 64 ? ~(ulong)0 : (1UL << bits) - 1);
+		return self.builder.add_constant(value::int_u64(unknown, self.comp).ref(), self.gen_type(qt)!);
+	}
+	if (tag == common::TAG___BUILTIN_BSWAP16 || tag == common::TAG___BUILTIN_BSWAP32 || tag == common::TAG___BUILTIN_BSWAP64)
+	{
+		return self.gen_bswap(self.gen_expr(arg_nodes[0])!, qt);
+	}
+	bool is_lib = builtin.attributes.lib_function_with_builtin_prefix || builtin.attributes.lib_function_without_prefix;
+	bool excluded = builtin.attributes.custom_typecheck || builtin.attributes.returns_twice ||
+		tag == common::TAG___BUILTIN_ALLOCA || tag == common::TAG___BUILTIN_ALLOCA_UNINITIALIZED ||
+		tag == common::TAG___BUILTIN_ALLOCA_WITH_ALIGN || tag == common::TAG___BUILTIN_ALLOCA_WITH_ALIGN_UNINITIALIZED ||
+		tag == common::TAG___BUILTIN_LONGJMP;
+	if (is_lib && !excluded)
+	{
+		// Forward to the library function: `__builtin_memcpy` calls `memcpy`.
+		String name = builtins::name_from_tag(tag);
+		if (name.starts_with("__builtin_")) name = name["__builtin_".len..];
+		ir::Ref fn_ref = self.builder.add_symbol(name, value_interner::REF_PTR);
+		ir::Ref[] args = alloc::new_array(&self.builder.arena, ir::Ref, arg_nodes.len);
+		foreach (i, arg_node : arg_nodes) args[i] = self.gen_expr(arg_node)!;
+		return self.builder.add_call(fn_ref, args, self.gen_type(qt)!);
+	}
+	self.fail(string::tformat("TODO CodeGen.genBuiltinCall %s\n", builtins::name_from_tag(tag)))!;
 	return ir::NONE;
+}
+
+<* Byte-reverse `operand` (16, 32 or 64 bits wide, per `qt`) with shifts and masks. *>
+fn ir::Ref? CodeGen.gen_bswap(&self, ir::Ref operand, type_store::QualType qt)
+{
+	uint bytes = (uint)qt.sizeof(self.comp);
+	value_interner::InternerRef ty = self.gen_type(qt)!;
+	ir::Ref result = ir::NONE;
+	for (uint i = 0; i < bytes; i++)
+	{
+		// Byte i (from the low end) moves to byte bytes-1-i.
+		uint src_shift = i * 8;
+		uint dst_shift = (bytes - 1 - i) * 8;
+		ir::Ref byte = operand;
+		if (src_shift) byte = self.add_bin(ir::InstTag.BIT_LSHR, byte, self.builder.add_constant(value::int_u64(src_shift, self.comp).ref(), ty), qt)!;
+		byte = self.add_bin(ir::InstTag.BIT_AND, byte, self.builder.add_constant(value::int_u64(0xff, self.comp).ref(), ty), qt)!;
+		if (dst_shift) byte = self.add_bin(ir::InstTag.BIT_SHL, byte, self.builder.add_constant(value::int_u64(dst_shift, self.comp).ref(), ty), qt)!;
+		result = result == ir::NONE ? byte : self.add_bin(ir::InstTag.BIT_OR, result, byte, qt)!;
+	}
+	return result;
 }
 
 fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
@@ -1011,17 +1087,17 @@ fn void CodeGen.write_integer_bytes(&self, char[] data, usz start, usz byte_coun
 <* Serialize a floating constant's raw target-format bits, including ABI padding. *>
 fn void CodeGen.write_float_bytes(&self, char[] data, usz start, usz byte_count, ulong bit_count, value::Value val)
 {
-	value_interner::InternerKeyTag tag;
+	primitive_value::PrimitiveType tag;
 	switch (bit_count)
 	{
-		case 16: tag = value_interner::InternerKeyTag.F16;
-		case 32: tag = value_interner::InternerKeyTag.F32;
-		case 64: tag = value_interner::InternerKeyTag.F64;
-		case 80: tag = value_interner::InternerKeyTag.F80;
-		case 128: tag = value_interner::InternerKeyTag.F128;
+		case 16: tag = primitive_value::PrimitiveType.F16;
+		case 32: tag = primitive_value::PrimitiveType.F32;
+		case 64: tag = primitive_value::PrimitiveType.F64;
+		case 80: tag = primitive_value::PrimitiveType.F80;
+		case 128: tag = primitive_value::PrimitiveType.F128;
 		default: unreachable("unsupported floating storage width");
 	}
-	uint128 bits = val.to_float(tag, self.comp).raw();
+	uint128 bits = val.to_float(tag, self.comp).float_bits();
 	ulong low = (ulong)bits;
 	ulong high = (ulong)(bits >> 64);
 	usz repr_bytes = (usz)((bit_count + 7) / 8);
@@ -1053,8 +1129,8 @@ fn String? CodeGen.string_global(&self, type_store::NodeIndex node)
 		self.fail("TODO CodeGen.genVar string value\n")!;
 		return compilation::FATAL_ERROR~;
 	}
-	value_interner::InternerKey key = self.comp.interner.get(val.ref());
-	if (key.tag != value_interner::InternerKeyTag.BYTES)
+	primitive_value::PrimitiveValue key = self.comp.interner.get(val.ref());
+	if (key.tag != primitive_value::PrimitiveType.BYTES)
 	{
 		self.fail("TODO CodeGen.genVar string value\n")!;
 		return compilation::FATAL_ERROR~;
@@ -1108,8 +1184,8 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 		{
 			return self.fail(string::tformat("TODO CodeGen.genVar initializer %s\n", init_node.kind.name));
 		}
-		value_interner::InternerKey key = self.comp.interner.get(val.ref());
-		if (key.tag != value_interner::InternerKeyTag.BYTES)
+		primitive_value::PrimitiveValue key = self.comp.interner.get(val.ref());
+		if (key.tag != primitive_value::PrimitiveType.BYTES)
 		{
 			return self.fail(string::tformat("TODO CodeGen.genVar initializer %s\n", init_node.kind.name));
 		}
@@ -1162,11 +1238,11 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 		return self.fail(string::tformat("TODO CodeGen.genVar initializer %s\n", init_node.kind.name));
 	}
 	if (data.len == 0) return self.fail("TODO CodeGen.genVar zero-sized initializer\n");
-	value_interner::InternerKey key = self.comp.interner.get(val.ref());
+	primitive_value::PrimitiveValue key = self.comp.interner.get(val.ref());
 
 	if (qt.is(self.comp, type_store::TypeTag.POINTER))
 	{
-		if (key.tag == value_interner::InternerKeyTag.BYTES)
+		if (key.tag == primitive_value::PrimitiveType.BYTES)
 		{
 			if (string_node.get(self.tree).kind != tree::NodeKind.STRING_LITERAL_EXPR)
 			{
@@ -1176,13 +1252,13 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 			*has_relocation = true;
 			return;
 		}
-		if (key.tag == value_interner::InternerKeyTag.NULL ||
-			(key.tag.is_int() && val.is_zero(self.comp)))
+		if (key.tag == primitive_value::PrimitiveType.NULL ||
+			(key.tag.kind == NumberKind.INT && val.is_zero(self.comp)))
 		{
 			self.write_unsigned_bytes(data, 0, data.len, self.comp.target.null_repr());
 			return;
 		}
-		if (key.tag != value_interner::InternerKeyTag.POINTER)
+		if (key.tag != primitive_value::PrimitiveType.POINTER)
 		{
 			return self.fail("TODO CodeGen.genVar pointer initializer\n");
 		}
@@ -1236,7 +1312,7 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 	if (scalar == type_store::ScalarKind.BOOL || scalar == type_store::ScalarKind.ENUM ||
 		scalar == type_store::ScalarKind.INT)
 	{
-		if (key.tag.is_int() && !key.int_fits_64())
+		if (key.tag.kind == NumberKind.INT && !key.int_fits_64())
 		{
 			return self.fail("TODO CodeGen.genVar big integer initializer\n");
 		}

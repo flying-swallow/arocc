@@ -2,6 +2,7 @@
 // engine supplies nested expression parsing, while compound literal
 // initialization is an optional outer-grammar seam.
 module aro::parser_primary;
+import aro::primitive_value;
 import aro::parser, aro::parser_result, aro::parser_diagnostics, aro::tree;
 import aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::value_interner;
 import aro::number_value, aro::text_literal, aro::text_literal_semantics;
@@ -158,7 +159,7 @@ fn type_store::NodeIndex PrimaryParser.make_predefined_identifier(&self, tokens:
 	bytes.append_string(contents);
 	bytes.append_char('\0');
 	char[] data = (char[])bytes.str_view();
-	value::Value val = value::intern(p.comp, { .tag = value_interner::InternerKeyTag.BYTES,
+	value::Value val = value::intern(p.comp, { .tag = primitive_value::PrimitiveType.BYTES,
 		.bytes = data });
 	type_store::QualType char_qt = type_store::CHAR;
 	char_qt.is_const = true;
@@ -591,6 +592,8 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 	}
 	if (!has_selected)
 	{
+		// Deviation: Zig prints the invalid type (unreachable); it was already diagnosed.
+		if (control.qt.is_invalid()) return PARSING_FAILED~;
 		p.err(parser_diagnostics::ParserDiag.GENERIC_NO_MATCH, generic_tok, p.fmt_qt(control.qt))!;
 		return PARSING_FAILED~;
 	}

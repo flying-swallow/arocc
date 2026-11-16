@@ -1,6 +1,7 @@
 // x86_64 backend: the ported Zig encoding table, register/condition data, and
 // IR -> assembly lowering on hand-built IR.
 module x86_64_tests;
+import aro::primitive_value;
 import std, aro::backend::elf, aro::backend::ir, aro::backend::object, aro::backend::x86_64, aro::target, aro::value_interner;
 import std::core::mem::allocators;
 
@@ -635,7 +636,7 @@ fn void object_emits_bytes_constant_and_pc32_relocation() @test
 	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
 	f.builder.start_fn();
 	ir::Ref callee = f.builder.add_symbol("consume_string", value_interner::REF_FUNC);
-	value_interner::InternerRef value = f.interner.put({ .tag = value_interner::InternerKeyTag.BYTES,
+	value_interner::InternerRef value = f.interner.put({ .tag = primitive_value::PrimitiveType.BYTES,
 		.bytes = "object" });
 	ir::Ref bytes_ref = f.builder.add_constant(value, value_interner::REF_PTR);
 	ir::Ref[1] args = { bytes_ref };
@@ -907,7 +908,7 @@ fn void identical_string_constants_share_one_assembly_label() @test
 	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
 	f.builder.start_fn();
 	ir::Ref callee = f.builder.add_symbol("consume_strings", value_interner::REF_FUNC);
-	value_interner::InternerRef bytes = f.interner.put({ .tag = value_interner::InternerKeyTag.BYTES,
+	value_interner::InternerRef bytes = f.interner.put({ .tag = primitive_value::PrimitiveType.BYTES,
 		.bytes = "shared" });
 	ir::Ref first = f.builder.add_constant(bytes, value_interner::REF_PTR);
 	ir::Ref second = f.builder.add_constant(bytes, value_interner::REF_PTR);
@@ -955,7 +956,7 @@ fn void select_lowers_to_conditional_assembly() @test
 	f.builder.start_fn();
 	ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
 	ir::Ref yes = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32);
-	value_interner::InternerRef no_value = f.interner.put(value_interner::int_key(29));
+	value_interner::InternerRef no_value = f.interner.put(primitive_value::int_key(29));
 	ir::Ref no = f.builder.add_constant(no_value, value_interner::REF_I32);
 	ir::Ref selected = f.builder.add_select(cond, yes, no, value_interner::REF_I32);
 	f.builder.add_return(selected);

@@ -1,6 +1,6 @@
 // Plan 10 stage 2: value.c3's float/complex wiring. Checks that the generic
 // Value operations (add/sub/mul/div/negate/compare/print and the Zig-named
-// wrappers) forward float and complex operands to aro::float_value, and that the
+// wrappers) forward float and complex operands to aro::primitive_value, and that the
 // integer paths are unaffected.
 //
 // Expected values are source-derived (IEEE 754 by hand, from the Zig source of
@@ -8,7 +8,8 @@
 // The bit-pattern vectors from the Zig 0.17.0 probe are checked by
 // //test/unit/values:float_vector_tests.
 module float_value_tests;
-import aro::float_value, aro::value, aro::value_interner, aro::type_store, aro::target, aro::compilation;
+import aro::primitive_value;
+import aro::value, aro::value_interner, aro::type_store, aro::target, aro::compilation;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 macro check(left, right)
@@ -37,10 +38,10 @@ macro @with_comp(; @body(Compilation* comp))
 	check(ta.allocation_count(), 0);
 }
 
-fn Value fv(Compilation* comp, InternerKey f) => value::intern(comp, f);
-fn Value f32v(Compilation* comp, uint bits) => fv(comp, float_value::f32_value(bits));
-fn Value f64v(Compilation* comp, ulong bits) => fv(comp, float_value::f64_value(bits));
-fn Value c64v(Compilation* comp, ulong re, ulong im) => value::intern(comp, float_value::make_complex(float_value::f64_value(re), float_value::f64_value(im)));
+fn Value fv(Compilation* comp, PrimitiveValue f) => value::intern(comp, f);
+fn Value f32v(Compilation* comp, uint bits) => fv(comp, primitive_value::f32_value(bits));
+fn Value f64v(Compilation* comp, ulong bits) => fv(comp, primitive_value::f64_value(bits));
+fn Value c64v(Compilation* comp, ulong re, ulong im) => value::intern(comp, primitive_value::complex_key(primitive_value::f64_value(re), primitive_value::f64_value(im)));
 fn QualType complex_of(Compilation* comp, QualType qt) => comp.type_store.put(type_store::type_complex(qt));
 
 fn void check_value(Value got, Value want)
@@ -52,10 +53,10 @@ fn void check_value(Value got, Value want)
 	}
 }
 
-fn void check_float_bits(Compilation* comp, Value v, InternerKeyTag tag, uint128 bits)
+fn void check_float_bits(Compilation* comp, Value v, PrimitiveType tag, uint128 bits)
 {
-	InternerKey k = comp.interner.get(v.ref());
-	if (!k.tag.is_float() || k.tag != tag || k.raw() != bits)
+	PrimitiveValue k = comp.interner.get(v.ref());
+	if (k.tag.kind != NumberKind.FLOAT || k.tag != tag || k.float_bits() != bits)
 	{
 		io::printfn("got key %s, want %s bits %032x", k.tag, tag, bits);
 		test::eq(1, 0);
@@ -137,9 +138,9 @@ fn void value_arithmetic_dispatches_complex() @test
 		// Annex G (embedded Zig test): (inf + NaN i) * 2 -> real inf, imag NaN
 		Value a = c64v(comp, D_INF, 0x7FF8_0000_0000_0000);
 		assert(!r.mul(a, f64v(comp, D_TWO), cd, comp));
-		InternerKey k = comp.interner.get(r.ref());
-		assert(k.tag.is_complex());
-		InternerKey[2] parts = k.parts();
+		PrimitiveValue k = comp.interner.get(r.ref());
+		assert(k.tag.kind == NumberKind.COMPLEX);
+		PrimitiveValue[2] parts = k.parts();
 		assert(parts[0].is_positive_inf());
 		assert(parts[1].is_nan());
 		// 2 + 2i divided by 0: both parts inf (embedded Zig test)
@@ -190,11 +191,11 @@ fn void value_wrappers() @test
 		check_value(v, f64v(comp, D_THREE));
 		v.float_cast(type_store::FLOAT, comp);
 		check_value(v, f32v(comp, 0x4040_0000));
-		check(v.to_float(F64, comp).raw(), D_THREE);
+		check(v.to_float(F64, comp).float_bits(), D_THREE);
 		Value c = c64v(comp, D_ONE_HALF, D_TWO);
 		check_value(c.real_part(comp), f64v(comp, D_ONE_HALF));
 		check_value(c.imaginary_part(comp), f64v(comp, D_TWO));
-		check(c.imag(F64, comp).raw(), D_TWO);
+		check(c.imag(F64, comp).float_bits(), D_TWO);
 		check_value(value::complex_conj(c, complex_of(comp, type_store::DOUBLE), comp), c64v(comp, D_ONE_HALF, 0xC000_0000_0000_0000));
 		Value inf = f64v(comp, 0xFFF0_0000_0000_0000);
 		assert(inf.is_inf(comp));

@@ -25,83 +25,83 @@ excuse MALFORMED;
 <* TypeDescription.Prefix. *>
 enum Prefix : char
 {
-	L,   // long (Li = long int, Ld = long double)
+	L,  // long (Li = long int, Ld = long double)
 	LL,  // long long (LLi; LLd = __float128)
-	LLL, // __int128_t (LLLi)
-	Z,   // int32_t (requires a native 32-bit integer type)
-	W,   // int64_t (requires a native 64-bit integer type)
-	N,   // 'int' if the target is LP64, 'L' otherwise
-	O,   // long for OpenCL targets, long long otherwise
-	S,   // signed
-	U,   // unsigned
-	I,   // required to constant fold to an integer constant expression
+	LLL,  // __int128_t (LLLi)
+	Z,  // int32_t (requires a native 32-bit integer type)
+	W,  // int64_t (requires a native 64-bit integer type)
+	N,  // 'int' if the target is LP64, 'L' otherwise
+	O,  // long for OpenCL targets, long long otherwise
+	S,  // signed
+	U,  // unsigned
+	I,  // required to constant fold to an integer constant expression
 }
 
 <* TypeDescription.Spec tag. code: the param_str spelling. *>
-enum SpecTag : char (String code)
+enum SpecTag : char(String code)
 {
-	VOID            { "v" },
-	BOOL            { "b" },
-	CHAR            { "c" },
-	SHORT           { "s" },
-	INT             { "i" },
-	HALF            { "h" },  // __fp16 (OpenCL half)
-	FLOAT16         { "x" },  // _Float16
-	BF16            { "y" },  // __bf16
-	MFP8            { "m" },  // __mfp8
-	FLOAT           { "f" },
-	DOUBLE          { "d" },
-	SIZE            { "z" },  // size_t
-	WCHAR           { "w" },  // wchar_t
-	CF_STRING       { "F" },  // constant CFString
-	VA_LIST         { "a" },  // __builtin_va_list
-	VA_LIST_REF     { "A" },  // "reference" to __builtin_va_list
-	VECTOR          { "V" },  // count = element count, followed by the element type
+	VOID { "v" },
+	BOOL { "b" },
+	CHAR { "c" },
+	SHORT { "s" },
+	INT { "i" },
+	HALF { "h" },  // __fp16 (OpenCL half)
+	FLOAT16 { "x" },  // _Float16
+	BF16 { "y" },  // __bf16
+	MFP8 { "m" },  // __mfp8
+	FLOAT { "f" },
+	DOUBLE { "d" },
+	SIZE { "z" },  // size_t
+	WCHAR { "w" },  // wchar_t
+	CF_STRING { "F" },  // constant CFString
+	VA_LIST { "a" },  // __builtin_va_list
+	VA_LIST_REF { "A" },  // "reference" to __builtin_va_list
+	VECTOR { "V" },  // count = element count, followed by the element type
 	SCALABLE_VECTOR { "q" },  // count = element count
-	TARGET_TYPE     { "Q" },  // target_type selects the type
-	EXT_VECTOR      { "E" },  // count = element count
-	COMPLEX         { "X" },  // complex_base selects the base type
-	PTRDIFF         { "Y" },  // ptrdiff_t
-	FILE            { "P" },  // FILE
-	JMP_BUF         { "J" },  // jmp_buf
-	SIGJMP_BUF      { "SJ" }, // sigjmp_buf
-	UCONTEXT        { "K" },  // ucontext_t
-	PID             { "p" },  // pid_t
+	TARGET_TYPE { "Q" },  // target_type selects the type
+	EXT_VECTOR { "E" },  // count = element count
+	COMPLEX { "X" },  // complex_base selects the base type
+	PTRDIFF { "Y" },  // ptrdiff_t
+	FILE { "P" },  // FILE
+	JMP_BUF { "J" },  // jmp_buf
+	SIGJMP_BUF { "SJ" },  // sigjmp_buf
+	UCONTEXT { "K" },  // ucontext_t
+	PID { "p" },  // pid_t
 }
 
 <* Spec.Q payload. code: the character after 'Q'. *>
-enum TargetType : char (char code)
+enum TargetType : char(char code)
 {
-	AARCH64_SVCOUNT_T          { 'a' },
-	AMDGPU_BUFFER_RSRC_T       { 'b' },
+	AARCH64_SVCOUNT_T { 'a' },
+	AMDGPU_BUFFER_RSRC_T { 'b' },
 	AMDGPU_FEATURE_PREDICATE_T { 'c' },
-	AMDGPU_TEXTURE_T           { 't' },
+	AMDGPU_TEXTURE_T { 't' },
 }
 
 <* Spec.X payload. *>
 enum ComplexBase : char
 {
-	FLOAT,       // Xf
-	DOUBLE,      // Xd
-	LONG_DOUBLE, // XLd
+	FLOAT,  // Xf
+	DOUBLE,  // Xd
+	LONG_DOUBLE,  // XLd
 }
 
 <* TypeDescription.Spec. Only the payload matching `tag` is meaningful. *>
 struct Spec
 {
 	SpecTag tag;
-	uint count;              // VECTOR, SCALABLE_VECTOR, EXT_VECTOR
+	uint count;  // VECTOR, SCALABLE_VECTOR, EXT_VECTOR
 	TargetType target_type;  // TARGET_TYPE
-	ComplexBase complex_base; // COMPLEX
+	ComplexBase complex_base;  // COMPLEX
 }
 
 <* TypeDescription.Suffix tag. *>
 enum SuffixTag : char
 {
 	POINTER,  // '*', optionally followed by one address-space digit
-	CONST,    // 'C'
-	VOLATILE, // 'D'
-	RESTRICT, // 'R'
+	CONST,  // 'C'
+	VOLATILE,  // 'D'
+	RESTRICT,  // 'R'
 }
 
 struct Suffix
@@ -112,7 +112,10 @@ struct Suffix
 	char addr_space;
 }
 
-enum ComponentKind : char { PREFIX, SPEC, SUFFIX }
+enum ComponentKind : char
+{
+	PREFIX, SPEC, SUFFIX
+}
 
 <* TypeDescription.Component. Only the field matching `kind` is meaningful. *>
 struct Component
@@ -149,7 +152,10 @@ struct ComponentIterator
 	usz idx;
 }
 
-fn ComponentIterator component_iterator(String str) => { .str = str, .idx = 0 };
+fn ComponentIterator component_iterator(String str) =>
+{
+	.str = str, .idx = 0
+};
 
 <* Next component; END at the end or after the trailing varargs '.'. *>
 fn Component? ComponentIterator.next(&self)
@@ -173,28 +179,96 @@ fn Component? ComponentIterator.next(&self)
 			if (self.at(self.idx) == 'J')
 			{
 				self.idx++;
-				return spec_component({ .tag = SIGJMP_BUF });
+				return spec_component(
+				{
+					.tag = SIGJMP_BUF
+				}
+				);
 			}
 			return prefix_component(S);
 		case 'U': return prefix_component(U);
 		case 'I': return prefix_component(I);
 
-		case 'v': return spec_component({ .tag = VOID });
-		case 'b': return spec_component({ .tag = BOOL });
-		case 'c': return spec_component({ .tag = CHAR });
-		case 's': return spec_component({ .tag = SHORT });
-		case 'i': return spec_component({ .tag = INT });
-		case 'h': return spec_component({ .tag = HALF });
-		case 'x': return spec_component({ .tag = FLOAT16 });
-		case 'y': return spec_component({ .tag = BF16 });
-		case 'm': return spec_component({ .tag = MFP8 });
-		case 'f': return spec_component({ .tag = FLOAT });
-		case 'd': return spec_component({ .tag = DOUBLE });
-		case 'z': return spec_component({ .tag = SIZE });
-		case 'w': return spec_component({ .tag = WCHAR });
-		case 'F': return spec_component({ .tag = CF_STRING });
-		case 'a': return spec_component({ .tag = VA_LIST });
-		case 'A': return spec_component({ .tag = VA_LIST_REF });
+		case 'v': return spec_component(
+		{
+			.tag = VOID
+		}
+		);
+		case 'b': return spec_component(
+		{
+			.tag = BOOL
+		}
+		);
+		case 'c': return spec_component(
+		{
+			.tag = CHAR
+		}
+		);
+		case 's': return spec_component(
+		{
+			.tag = SHORT
+		}
+		);
+		case 'i': return spec_component(
+		{
+			.tag = INT
+		}
+		);
+		case 'h': return spec_component(
+		{
+			.tag = HALF
+		}
+		);
+		case 'x': return spec_component(
+		{
+			.tag = FLOAT16
+		}
+		);
+		case 'y': return spec_component(
+		{
+			.tag = BF16
+		}
+		);
+		case 'm': return spec_component(
+		{
+			.tag = MFP8
+		}
+		);
+		case 'f': return spec_component(
+		{
+			.tag = FLOAT
+		}
+		);
+		case 'd': return spec_component(
+		{
+			.tag = DOUBLE
+		}
+		);
+		case 'z': return spec_component(
+		{
+			.tag = SIZE
+		}
+		);
+		case 'w': return spec_component(
+		{
+			.tag = WCHAR
+		}
+		);
+		case 'F': return spec_component(
+		{
+			.tag = CF_STRING
+		}
+		);
+		case 'a': return spec_component(
+		{
+			.tag = VA_LIST
+		}
+		);
+		case 'A': return spec_component(
+		{
+			.tag = VA_LIST_REF
+		}
+		);
 		case 'V':
 		case 'q':
 		case 'E':
@@ -209,24 +283,60 @@ fn Component? ComponentIterator.next(&self)
 			}
 			if (self.idx == start) return MALFORMED~;
 			SpecTag tag = c == 'V' ? VECTOR : c == 'q' ? SCALABLE_VECTOR : EXT_VECTOR;
-			return spec_component({ .tag = tag, .count = (uint)count });
+			return spec_component(
+			{
+				.tag = tag, .count = (uint)count
+			}
+			);
 		case 'X':
 			char next = self.at(self.idx);
-			self.idx++; // Zig: defer self.idx += 1
+			self.idx++;  // Zig: defer self.idx += 1
 			switch (next)
 			{
-				case 'f': return spec_component({ .tag = COMPLEX, .complex_base = FLOAT });
-				case 'd': return spec_component({ .tag = COMPLEX, .complex_base = DOUBLE });
-				case 'L':
-					self.idx++;
-					return spec_component({ .tag = COMPLEX, .complex_base = LONG_DOUBLE });
-				default: return MALFORMED~;
+			case 'f': return spec_component(
+			{
+				.tag = COMPLEX, .complex_base = FLOAT
 			}
-		case 'Y': return spec_component({ .tag = PTRDIFF });
-		case 'P': return spec_component({ .tag = FILE });
-		case 'J': return spec_component({ .tag = JMP_BUF });
-		case 'K': return spec_component({ .tag = UCONTEXT });
-		case 'p': return spec_component({ .tag = PID });
+			);
+			case 'd': return spec_component(
+			{
+				.tag = COMPLEX, .complex_base = DOUBLE
+			}
+			);
+			case 'L':
+				self.idx++;
+				return spec_component(
+				{
+					.tag = COMPLEX, .complex_base = LONG_DOUBLE
+				}
+				);
+			default: return MALFORMED~;
+		}
+		case 'Y': return spec_component(
+		{
+			.tag = PTRDIFF
+		}
+		);
+		case 'P': return spec_component(
+		{
+			.tag = FILE
+		}
+		);
+		case 'J': return spec_component(
+		{
+			.tag = JMP_BUF
+		}
+		);
+		case 'K': return spec_component(
+		{
+			.tag = UCONTEXT
+		}
+		);
+		case 'p': return spec_component(
+		{
+			.tag = PID
+		}
+		);
 		case '.':
 			// Can only appear at the end of the param string; marks a varargs function.
 			if (self.at(self.idx) != 0) return MALFORMED~;
@@ -236,18 +346,42 @@ fn Component? ComponentIterator.next(&self)
 			if (char_is_digit(next))
 			{
 				self.idx++;
-				return suffix_component({ .tag = POINTER, .has_addr_space = true, .addr_space = next - '0' });
+				return suffix_component(
+				{
+					.tag = POINTER, .has_addr_space = true, .addr_space = next - '0'
+				}
+				);
 			}
-			return suffix_component({ .tag = POINTER });
-		case 'C': return suffix_component({ .tag = CONST });
-		case 'D': return suffix_component({ .tag = VOLATILE });
-		case 'R': return suffix_component({ .tag = RESTRICT });
+			return suffix_component(
+			{
+				.tag = POINTER
+			}
+			);
+		case 'C': return suffix_component(
+		{
+			.tag = CONST
+		}
+		);
+		case 'D': return suffix_component(
+		{
+			.tag = VOLATILE
+		}
+		);
+		case 'R': return suffix_component(
+		{
+			.tag = RESTRICT
+		}
+		);
 		case 'Q':
 			char next = self.at(self.idx);
-			self.idx++; // Zig: defer self.idx += 1
+			self.idx++;  // Zig: defer self.idx += 1
 			foreach (tt : TargetType::values)
 			{
-				if (tt.code == next) return spec_component({ .tag = TARGET_TYPE, .target_type = tt });
+				if (tt.code == next) return spec_component(
+				{
+					.tag = TARGET_TYPE, .target_type = tt
+				}
+				);
 			}
 			return MALFORMED~;
 		default:
@@ -259,9 +393,18 @@ fn Component? ComponentIterator.next(&self)
 fn char ComponentIterator.at(&self, usz i) @inline => i < self.str.len ? self.str[i] : 0;
 
 fn bool char_is_digit(char c) @local @inline => c >= '0' && c <= '9';
-fn Component prefix_component(Prefix p) @local @inline => { .kind = PREFIX, .prefix = p };
-fn Component spec_component(Spec s) @local @inline => { .kind = SPEC, .spec = s };
-fn Component suffix_component(Suffix s) @local @inline => { .kind = SUFFIX, .suffix = s };
+fn Component prefix_component(Prefix p) @local @inline =>
+{
+	.kind = PREFIX, .prefix = p
+};
+fn Component spec_component(Spec s) @local @inline =>
+{
+	.kind = SPEC, .spec = s
+};
+fn Component suffix_component(Suffix s) @local @inline =>
+{
+	.kind = SUFFIX, .suffix = s
+};
 
 <* Like next() but does not advance. *>
 fn Component? ComponentIterator.peek(&self)
@@ -282,7 +425,10 @@ struct TypeIterator
 	usz idx;
 }
 
-fn TypeIterator type_iterator(String param_str) => { .param_str = param_str, .idx = 0 };
+fn TypeIterator type_iterator(String param_str) =>
+{
+	.param_str = param_str, .idx = 0
+};
 
 <*
  Next type description; END when the string is exhausted (or only the
@@ -386,7 +532,7 @@ enum BuilderSpec : char @local
 	COMPLEX_FLOAT,
 	COMPLEX_DOUBLE,
 	COMPLEX_LONG_DOUBLE,
-	OTHER, // Builder `.other = qt`
+	OTHER,  // Builder `.other = qt`
 }
 
 <* The parts of TypeStore.Builder that createType uses. *>
@@ -412,137 +558,137 @@ fn void TypeBuilder.combine(&b, BuilderSpec new)
 		case SIGNED:
 			switch (cur)
 			{
-				case NONE: res = SIGNED;
-				case CHAR: res = SCHAR;
-				case SHORT: res = SSHORT;
-				case SHORT_INT: res = SSHORT_INT;
-				case INT: res = SINT;
-				case LONG: res = SLONG;
-				case LONG_INT: res = SLONG_INT;
-				case LONG_LONG: res = SLONG_LONG;
-				case LONG_LONG_INT: res = SLONG_LONG_INT;
-				case INT128: res = SINT128;
-				default: break;
-			}
+			case NONE: res = SIGNED;
+			case CHAR: res = SCHAR;
+			case SHORT: res = SSHORT;
+			case SHORT_INT: res = SSHORT_INT;
+			case INT: res = SINT;
+			case LONG: res = SLONG;
+			case LONG_INT: res = SLONG_INT;
+			case LONG_LONG: res = SLONG_LONG;
+			case LONG_LONG_INT: res = SLONG_LONG_INT;
+			case INT128: res = SINT128;
+			default: break;
+		}
 		case UNSIGNED:
 			switch (cur)
 			{
-				case NONE: res = UNSIGNED;
-				case CHAR: res = UCHAR;
-				case SHORT: res = USHORT;
-				case SHORT_INT: res = USHORT_INT;
-				case INT: res = UINT;
-				case LONG: res = ULONG;
-				case LONG_INT: res = ULONG_INT;
-				case LONG_LONG: res = ULONG_LONG;
-				case LONG_LONG_INT: res = ULONG_LONG_INT;
-				case INT128: res = UINT128;
-				default: break;
-			}
+			case NONE: res = UNSIGNED;
+			case CHAR: res = UCHAR;
+			case SHORT: res = USHORT;
+			case SHORT_INT: res = USHORT_INT;
+			case INT: res = UINT;
+			case LONG: res = ULONG;
+			case LONG_INT: res = ULONG_INT;
+			case LONG_LONG: res = ULONG_LONG;
+			case LONG_LONG_INT: res = ULONG_LONG_INT;
+			case INT128: res = UINT128;
+			default: break;
+		}
 		case CHAR:
 			switch (cur)
 			{
-				case NONE: res = CHAR;
-				case UNSIGNED: res = UCHAR;
-				case SIGNED: res = SCHAR;
-				default: break;
-			}
+			case NONE: res = CHAR;
+			case UNSIGNED: res = UCHAR;
+			case SIGNED: res = SCHAR;
+			default: break;
+		}
 		case SHORT:
 			switch (cur)
 			{
-				case NONE: res = SHORT;
-				case UNSIGNED: res = USHORT;
-				case SIGNED: res = SSHORT;
-				case INT: res = SHORT_INT;
-				case SINT: res = SSHORT_INT;
-				case UINT: res = USHORT_INT;
-				default: break;
-			}
+			case NONE: res = SHORT;
+			case UNSIGNED: res = USHORT;
+			case SIGNED: res = SSHORT;
+			case INT: res = SHORT_INT;
+			case SINT: res = SSHORT_INT;
+			case UINT: res = USHORT_INT;
+			default: break;
+		}
 		case INT:
 			switch (cur)
 			{
-				case NONE: res = INT;
-				case SIGNED: res = SINT;
-				case UNSIGNED: res = UINT;
-				case SHORT: res = SHORT_INT;
-				case SSHORT: res = SSHORT_INT;
-				case USHORT: res = USHORT_INT;
-				case LONG: res = LONG_INT;
-				case SLONG: res = SLONG_INT;
-				case ULONG: res = ULONG_INT;
-				case LONG_LONG: res = LONG_LONG_INT;
-				case SLONG_LONG: res = SLONG_LONG_INT;
-				case ULONG_LONG: res = ULONG_LONG_INT;
-				default: break;
-			}
+			case NONE: res = INT;
+			case SIGNED: res = SINT;
+			case UNSIGNED: res = UINT;
+			case SHORT: res = SHORT_INT;
+			case SSHORT: res = SSHORT_INT;
+			case USHORT: res = USHORT_INT;
+			case LONG: res = LONG_INT;
+			case SLONG: res = SLONG_INT;
+			case ULONG: res = ULONG_INT;
+			case LONG_LONG: res = LONG_LONG_INT;
+			case SLONG_LONG: res = SLONG_LONG_INT;
+			case ULONG_LONG: res = ULONG_LONG_INT;
+			default: break;
+		}
 		case LONG:
 			switch (cur)
 			{
-				case NONE: res = LONG;
-				case DOUBLE: res = LONG_DOUBLE;
-				case UNSIGNED: res = ULONG;
-				case SIGNED: res = SLONG;
-				case INT: res = LONG_INT;
-				case UINT: res = ULONG_INT;
-				case SINT: res = SLONG_INT;
-				case LONG: res = LONG_LONG;
-				case SLONG: res = SLONG_LONG;
-				case ULONG: res = ULONG_LONG;
-				case LONG_INT: res = LONG_LONG_INT;
-				case ULONG_INT: res = ULONG_LONG_INT;
-				case SLONG_INT: res = SLONG_LONG_INT;
-				case COMPLEX: res = COMPLEX_LONG;
-				case COMPLEX_DOUBLE: res = COMPLEX_LONG_DOUBLE;
-				default: break;
-			}
+			case NONE: res = LONG;
+			case DOUBLE: res = LONG_DOUBLE;
+			case UNSIGNED: res = ULONG;
+			case SIGNED: res = SLONG;
+			case INT: res = LONG_INT;
+			case UINT: res = ULONG_INT;
+			case SINT: res = SLONG_INT;
+			case LONG: res = LONG_LONG;
+			case SLONG: res = SLONG_LONG;
+			case ULONG: res = ULONG_LONG;
+			case LONG_INT: res = LONG_LONG_INT;
+			case ULONG_INT: res = ULONG_LONG_INT;
+			case SLONG_INT: res = SLONG_LONG_INT;
+			case COMPLEX: res = COMPLEX_LONG;
+			case COMPLEX_DOUBLE: res = COMPLEX_LONG_DOUBLE;
+			default: break;
+		}
 		case LONG_LONG:
 			switch (cur)
 			{
-				case NONE: res = LONG_LONG;
-				case UNSIGNED: res = ULONG_LONG;
-				case SIGNED: res = SLONG_LONG;
-				case INT: res = LONG_LONG_INT;
-				case SINT: res = SLONG_LONG_INT;
-				case LONG: res = LONG_LONG;
-				case SLONG: res = SLONG_LONG;
-				case ULONG: res = ULONG_LONG;
-				case COMPLEX: res = COMPLEX_LONG; // sic: Zig maps complex + long long to complex_long
-				default: break;
-			}
+			case NONE: res = LONG_LONG;
+			case UNSIGNED: res = ULONG_LONG;
+			case SIGNED: res = SLONG_LONG;
+			case INT: res = LONG_LONG_INT;
+			case SINT: res = SLONG_LONG_INT;
+			case LONG: res = LONG_LONG;
+			case SLONG: res = SLONG_LONG;
+			case ULONG: res = ULONG_LONG;
+			case COMPLEX: res = COMPLEX_LONG;  // sic: Zig maps complex + long long to complex_long
+			default: break;
+		}
 		case INT128:
 			switch (cur)
 			{
-				case NONE: res = INT128;
-				case UNSIGNED: res = UINT128;
-				case SIGNED: res = SINT128;
-				default: break;
-			}
+			case NONE: res = INT128;
+			case UNSIGNED: res = UINT128;
+			case SIGNED: res = SINT128;
+			default: break;
+		}
 		case FLOAT:
 			switch (cur)
 			{
-				case NONE: res = FLOAT;
-				case COMPLEX: res = COMPLEX_FLOAT;
-				default: break;
-			}
+			case NONE: res = FLOAT;
+			case COMPLEX: res = COMPLEX_FLOAT;
+			default: break;
+		}
 		case DOUBLE:
 			switch (cur)
 			{
-				case NONE: res = DOUBLE;
-				case LONG: res = LONG_DOUBLE;
-				case COMPLEX_LONG: res = COMPLEX_LONG_DOUBLE;
-				case COMPLEX: res = COMPLEX_DOUBLE;
-				default: break;
-			}
+			case NONE: res = DOUBLE;
+			case LONG: res = LONG_DOUBLE;
+			case COMPLEX_LONG: res = COMPLEX_LONG_DOUBLE;
+			case COMPLEX: res = COMPLEX_DOUBLE;
+			default: break;
+		}
 		case COMPLEX:
 			switch (cur)
 			{
-				case NONE: res = COMPLEX;
-				case FLOAT: res = COMPLEX_FLOAT;
-				case DOUBLE: res = COMPLEX_DOUBLE;
-				case LONG_DOUBLE: res = COMPLEX_LONG_DOUBLE;
-				case LONG: res = COMPLEX_LONG;
-				default: break;
-			}
+			case NONE: res = COMPLEX;
+			case FLOAT: res = COMPLEX_FLOAT;
+			case DOUBLE: res = COMPLEX_DOUBLE;
+			case LONG_DOUBLE: res = COMPLEX_LONG_DOUBLE;
+			case LONG: res = COMPLEX_LONG;
+			default: break;
+		}
 		default:
 			// void, bool, __fp16, __bf16, __mfp8, _Float16.
 			if (cur == NONE) res = new;
@@ -559,7 +705,7 @@ fn void TypeBuilder.combine(&b, BuilderSpec new)
 <* Builder.fromType: basic types lose typedefs and qualifiers, others are kept as `.other`. *>
 fn void TypeBuilder.set_from_type(&b, Compilation* comp, QualType qt)
 {
-	if (b.type != NONE) b.bad = true; // Zig: assert(builder.type == .none)
+	if (b.type != NONE) b.bad = true;  // Zig: assert(builder.type == .none)
 	b.type = OTHER;
 	if (qt.is_invalid())
 	{
@@ -589,7 +735,7 @@ fn QualType TypeBuilder.finish(&b, Compilation* comp)
 	QualType qt;
 	switch (b.type)
 	{
-		case NONE: return type_store::INVALID; // Zig: missing_type_specifier through the undefined Parser
+		case NONE: return type_store::INVALID;  // Zig: missing_type_specifier through the undefined Parser
 		case VOID: qt = type_store::VOID;
 		case BOOL: qt = type_store::BOOL;
 		case CHAR: qt = type_store::CHAR;
@@ -629,8 +775,8 @@ fn QualType TypeBuilder.finish(&b, Compilation* comp)
 		case DOUBLE: qt = type_store::DOUBLE;
 		case LONG_DOUBLE: qt = type_store::LONG_DOUBLE;
 		case FLOAT128: qt = type_store::FLOAT128;
-		case COMPLEX: qt = type_store::DOUBLE.to_complex(comp); // Zig also warns plain_complex
-		case COMPLEX_LONG: qt = type_store::LONG.to_complex(comp); // Zig also warns complex_int
+		case COMPLEX: qt = type_store::DOUBLE.to_complex(comp);  // Zig also warns plain_complex
+		case COMPLEX_LONG: qt = type_store::LONG.to_complex(comp);  // Zig also warns complex_int
 		case COMPLEX_FLOAT: qt = type_store::FLOAT.to_complex(comp);
 		case COMPLEX_DOUBLE: qt = type_store::DOUBLE.to_complex(comp);
 		case COMPLEX_LONG_DOUBLE: qt = type_store::LONG_DOUBLE.to_complex(comp);
@@ -645,7 +791,7 @@ fn QualType TypeBuilder.finish(&b, Compilation* comp)
 		{
 			case ARRAY:
 			case POINTER: qt.is_restrict = true;
-			default: break; // Zig: restrict_non_pointer through the undefined Parser; dropped here
+			default: break;  // Zig: restrict_non_pointer through the undefined Parser; dropped here
 		}
 	}
 	return qt;
@@ -683,7 +829,7 @@ fn QualType create_type(Compilation* comp, TypeDescription desc, TypeIterator* i
 {
 	TypeBuilder b = { .other = type_store::INVALID };
 	Suffix[] actual_suffix = desc.suffixes();
-	TypeDescription child_desc; // owns a vector element's suffixes
+	TypeDescription child_desc;  // owns a vector element's suffixes
 
 	bool require_native_int32 = false;
 	bool require_native_int64 = false;
@@ -704,7 +850,7 @@ fn QualType create_type(Compilation* comp, TypeDescription desc, TypeIterator* i
 				if (comp.target.os.tag != OPENCL) b.combine(LONG);
 			case S: b.combine(SIGNED);
 			case U: b.combine(UNSIGNED);
-			case I: break; // TODO in Zig: compile-time constant integer
+			case I: break;  // TODO in Zig: compile-time constant integer
 		}
 	}
 	TypeStore* ts = &comp.type_store;
@@ -725,12 +871,12 @@ fn QualType create_type(Compilation* comp, TypeDescription desc, TypeIterator* i
 			{
 				switch (b.type)
 				{
-					case INT128:
-					case SINT128:
-					case UINT128: break;
-					default: b.combine(INT);
-				}
+				case INT128:
+				case SINT128:
+				case UINT128: break;
+				default: b.combine(INT);
 			}
+		}
 		case HALF: b.combine(FP16);
 		case FLOAT16: b.combine(FLOAT16);
 		case BF16: b.combine(BF16);
@@ -760,7 +906,7 @@ fn QualType create_type(Compilation* comp, TypeDescription desc, TypeIterator* i
 			b.set_from_type(comp, va_list);
 		case VECTOR:
 			if (desc.suffix_len) return type_store::INVALID;
-			if (it == null) return type_store::INVALID; // nested vector: Zig passes `undefined`
+			if (it == null) return type_store::INVALID;  // nested vector: Zig passes `undefined`
 			TypeDescription? next = it.next();
 			if (catch next) return type_store::INVALID;
 			child_desc = next;
@@ -770,19 +916,19 @@ fn QualType create_type(Compilation* comp, TypeDescription desc, TypeIterator* i
 			QualType elem_qt = create_type(comp, elem_desc, null);
 			b.type = OTHER;
 			b.other = ts.put(type_store::type_vector(elem_qt, desc.spec.count));
-		case SCALABLE_VECTOR: return type_store::INVALID; // TODO in Zig: scalable vector
-		case TARGET_TYPE: return type_store::INVALID; // TODO in Zig: target builtin type
-		case EXT_VECTOR: return type_store::INVALID; // TODO in Zig: ext_vector (OpenCL vector)
+		case SCALABLE_VECTOR: return type_store::INVALID;  // TODO in Zig: scalable vector
+		case TARGET_TYPE: return type_store::INVALID;  // TODO in Zig: target builtin type
+		case EXT_VECTOR: return type_store::INVALID;  // TODO in Zig: ext_vector (OpenCL vector)
 		case COMPLEX:
 			b.combine(COMPLEX);
 			switch (desc.spec.complex_base)
 			{
-				case FLOAT: b.combine(FLOAT);
-				case DOUBLE: b.combine(DOUBLE);
-				case LONG_DOUBLE:
-					b.combine(LONG);
-					b.combine(DOUBLE);
-			}
+			case FLOAT: b.combine(FLOAT);
+			case DOUBLE: b.combine(DOUBLE);
+			case LONG_DOUBLE:
+				b.combine(LONG);
+				b.combine(DOUBLE);
+		}
 		case PTRDIFF:
 			if (desc.suffix_len) return type_store::INVALID;
 			b.set_from_type(comp, ts.ptrdiff);

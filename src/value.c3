@@ -1,15 +1,10 @@
 // Port of the integer, byte and pointer parts of src/aro/Value.zig.
 //
-// OWNER: plan 09 stage 1 agent 09.3 `value-ops`. Stage 0 (contract) fixed `Value`
-// and the signatures below. Float/complex operations (floatToInt, intToFloat,
-// floatCast, toFloat, imag, realPart/imaginaryPart, isInf/isNan/isInfSign,
-// complexConj, the float branches of add/sub/mul/div/compare and the float /
-// complex arms of print) live in aro::float_value (plan 10: float_value.c3,
-// float_print.c3, annex_g.c3); the operations below forward to it, and thin
-// wrappers with the Zig names are at the end of this file. `printString` (the
-// `.bytes` arm of print) is not ported yet.
-// Exception: `is_zero` inspects float/complex bit patterns directly (Zig
-// `data == 0`), because it needs no float arithmetic.
+// Float/complex operations (floatToInt, intToFloat, floatCast, toFloat, imag,
+// realPart/imaginaryPart, isInf/isNan/isInfSign, complexConj and the float
+// branches of add/sub/mul/div/compare) are in value_float.c3 (same module); the
+// pure bit-level float code they call is aro::primitive_value. `printString`
+// (the `.bytes` arm of print) is not ported yet.
 //
 // Invariants implementers must keep:
 //   - none vs null vs zero are three different values: `value::NONE` (no constant
@@ -32,7 +27,8 @@
 //   - Bytes values never take part in arithmetic: add/sub yield NONE.
 //   - Running out of memory panics; Zig's `!Value` (OOM only) is plain `Value`.
 module aro::value;
-import aro::compilation, aro::value_interner, aro::bigint, aro::type_store, aro::lang_opts, aro::float_value;
+import aro::primitive_value;
+import aro::compilation, aro::value_interner, aro::bigint, aro::type_store, aro::lang_opts;
 import aro::text_literal_semantics;
 import std::core::dstring;
 
@@ -68,7 +64,7 @@ fn Value from_ref(InternerRef r) => { .opt_ref = r.to_opt() };
 fn BigIntMutable mutable_over(Limb[] limbs) => { .limbs = limbs, .len = 1, .positive = true };
 
 <* Intern a big int result. *>
-fn Value intern_big(Compilation* comp, BigIntConst big) => intern(comp, value_interner::big_int_key(big));
+fn Value intern_big(Compilation* comp, BigIntConst big) => intern(comp, primitive_value::big_int_key(big));
 
 macro usz @bits_of(QualType qt, Compilation* comp) => (usz)qt.bit_sizeof(comp);
 
@@ -77,23 +73,23 @@ macro usz @bits_of(QualType qt, Compilation* comp) => (usz)qt.bit_sizeof(comp);
 // ---------------------------------------------------------------------------
 
 <* Value.intern: put `k` in comp.interner. *>
-fn Value intern(Compilation* comp, InternerKey k)
+fn Value intern(Compilation* comp, PrimitiveValue k)
 {
 	InternerRef r = comp.interner.put(k);
 	return from_ref(r);
 }
 
 <* Value.int for unsigned / comptime_int arguments (`.u64` key). *>
-fn Value int_u64(ulong i, Compilation* comp) => intern(comp, value_interner::int_key(i));
+fn Value int_u64(ulong i, Compilation* comp) => intern(comp, primitive_value::int_key(i));
 
 <* Value.int for signed arguments (`.i64` key). *>
-fn Value int_i64(long i, Compilation* comp) => intern(comp, value_interner::int_key(i));
+fn Value int_i64(long i, Compilation* comp) => intern(comp, primitive_value::int_key(i));
 
 <* Value.pointer *>
 fn Value pointer(KeyPointer r, Compilation* comp) => intern(comp, { .tag = POINTER, .pointer = { .node = r.node, .offset = r.offset } });
 
 <* Value.is: false for none, else whether the key has `tag`. *>
-fn bool Value.is(self, InternerKeyTag tag, Compilation* comp)
+fn bool Value.is(self, PrimitiveType tag, Compilation* comp)
 {
 	if (self.is_none()) return false;
 	return comp.interner.get(self.ref()).tag == tag;
@@ -103,14 +99,14 @@ fn bool Value.is(self, InternerKeyTag tag, Compilation* comp)
 fn bool Value.is_float(self, Compilation* comp)
 {
 	if (self.is_none()) return false;
-	return comp.interner.get(self.ref()).tag.is_float();
+	return comp.interner.get(self.ref()).tag.kind == NumberKind.FLOAT;
 }
 
 <* False for none, else whether the key is an integer. *>
 fn bool Value.is_int(self, Compilation* comp)
 {
 	if (self.is_none()) return false;
-	return comp.interner.get(self.ref()).tag.is_int();
+	return comp.interner.get(self.ref()).tag.kind == NumberKind.INT;
 }
 
 <* Value.isArithmetic: int, float or complex. *>
@@ -152,7 +148,7 @@ fn usz Value.min_signed_bits(self, Compilation* comp)
 <* Value.toBigInt: the int value as a BigIntConst (small values live in `space`). *>
 fn BigIntConst Value.to_big_int(self, Compilation* comp)
 {
-	InternerKey key = comp.interner.get(self.ref());
+	PrimitiveValue key = comp.interner.get(self.ref());
 	return key.to_big_int();
 }
 
@@ -174,7 +170,7 @@ enum IntCastChangeKind : char
 fn IntCastChangeKind Value.int_cast(&self, QualType dest_ty, Compilation* comp)
 {
 	if (self.is_none()) return NONE;
-	InternerKey key = comp.interner.get(self.ref());
+	PrimitiveValue key = comp.interner.get(self.ref());
 	if (key.tag == POINTER || key.tag == BYTES) return NONE;
 
 	usz dest_bits = @bits_of(dest_ty, comp);
@@ -208,41 +204,19 @@ fn bool Value.is_zero(self, Compilation* comp)
 	if (r == value_interner::REF_ZERO) return true;
 	if (r == value_interner::REF_ONE) return false;
 	if (r == value_interner::REF_NULL) return comp.target.null_repr() == 0;
-	InternerKey key = comp.interner.get(r);
+	PrimitiveValue key = comp.interner.get(r);
 	switch (key.tag.kind)
 	{
 		case FLOAT:
-			return float_bits_zero(key);
+			return key.is_zero();
 		case INT:
 			return key.int_is_zero();
 		case COMPLEX:
-			return complex_bits_zero(key);
+			return key.re().is_zero() && key.im().is_zero();
 		case NOT_NUMBER:
 			if (key.tag == BYTES || key.tag == POINTER) return false;
 			unreachable("is_zero of a non-value key");
 	}
-}
-
-<* IEEE/x87 `x == 0`: every bit except the sign bit is clear (+0.0 and -0.0). *>
-fn bool f80_bits_zero(F80Bits b) => b.lo == 0 && (b.hi & 0x7FFF) == 0;
-fn bool f128_bits_zero(F128Bits b) => b.lo == 0 && (b.hi & 0x7FFF_FFFF_FFFF_FFFF) == 0;
-
-fn bool float_bits_zero(InternerKey f)
-{
-	switch (f.tag)
-	{
-		case F16: return (f.f16() & 0x7FFF) == 0;
-		case F32: return (f.f32() & 0x7FFF_FFFF) == 0;
-		case F64: return (f.f64() & 0x7FFF_FFFF_FFFF_FFFF) == 0;
-		case F80: return f80_bits_zero(f.f80());
-		case F128: return f128_bits_zero(f.f128());
-		default: unreachable("not a float key");
-	}
-}
-
-fn bool complex_bits_zero(InternerKey c)
-{
-	return float_bits_zero(c.re()) && float_bits_zero(c.im());
 }
 
 <* Value.boolCast: becomes ZERO or ONE; none stays none. *>
@@ -266,8 +240,8 @@ fn bool Value.to_bool(self, Compilation* comp) => !self.is_zero(comp);
 fn BigIntConst? Value.int_big(self, Compilation* comp)
 {
 	if (self.is_none()) return NO_INT~;
-	InternerKey key = comp.interner.get(self.ref());
-	if (!key.tag.is_int()) return NO_INT~;
+	PrimitiveValue key = comp.interner.get(self.ref());
+	if (key.tag.kind != NumberKind.INT) return NO_INT~;
 	return key.to_big_int();
 }
 
@@ -320,7 +294,7 @@ fn usz? Value.to_usz(self, Compilation* comp)
 *>
 fn char[] Value.to_bytes(self, Compilation* comp)
 {
-	InternerKey key = comp.interner.get(self.ref());
+	PrimitiveValue key = comp.interner.get(self.ref());
 	assert(key.tag == BYTES, "to_bytes of a non-bytes value");
 	return key.bytes;
 }
@@ -337,10 +311,10 @@ fn char[] Value.to_bytes(self, Compilation* comp)
 fn bool Value.add(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float) return float_value::add(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_arith(res, lhs, rhs, qt, comp, ADD);
 
-	InternerKey lhs_key = comp.interner.get(lhs.ref());
-	InternerKey rhs_key = comp.interner.get(rhs.ref());
+	PrimitiveValue lhs_key = comp.interner.get(lhs.ref());
+	PrimitiveValue rhs_key = comp.interner.get(rhs.ref());
 	if (lhs_key.tag == BYTES || rhs_key.tag == BYTES)
 	{
 		*res = NONE;
@@ -390,10 +364,10 @@ fn bool Value.decrement(&res, Value val, QualType qt, Compilation* comp) => res.
 fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ulong elem_size = 0)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float) return float_value::sub(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_arith(res, lhs, rhs, qt, comp, SUB);
 
-	InternerKey lhs_key = comp.interner.get(lhs.ref());
-	InternerKey rhs_key = comp.interner.get(rhs.ref());
+	PrimitiveValue lhs_key = comp.interner.get(lhs.ref());
+	PrimitiveValue rhs_key = comp.interner.get(rhs.ref());
 	if (lhs_key.tag == BYTES || rhs_key.tag == BYTES)
 	{
 		*res = NONE;
@@ -446,7 +420,7 @@ fn bool Value.sub(&res, Value lhs, Value rhs, QualType qt, Compilation* comp, ul
 fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float) return float_value::mul(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_arith(res, lhs, rhs, qt, comp, MUL);
 
 	BigIntConst lhs_bigint = lhs.to_big_int(comp);
 	BigIntConst rhs_bigint = rhs.to_big_int(comp);
@@ -473,7 +447,7 @@ fn bool Value.mul(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 fn bool Value.div(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 {
 	ScalarKind scalar_kind = qt.scalar_kind(comp);
-	if (scalar_kind.is_float) return float_value::div(res, lhs, rhs, qt, comp);
+	if (scalar_kind.is_float) return float_arith(res, lhs, rhs, qt, comp, DIV);
 
 	BigIntConst lhs_bigint = lhs.to_big_int(comp);
 	BigIntConst rhs_bigint = rhs.to_big_int(comp);
@@ -684,16 +658,16 @@ fn bool? shallow_compare(Value lhs, CompareOperator op, Value rhs)
 	return NOT_COMPARABLE~;
 }
 
-<* Value.compare (float/complex branches: float_value::compare). *>
+<* Value.compare (float/complex branches: compare_float in value_float.c3). *>
 fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 {
 	if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
 
-	InternerKey lhs_key = comp.interner.get(lhs.ref());
-	InternerKey rhs_key = comp.interner.get(rhs.ref());
-	if (lhs_key.tag.is_float() || rhs_key.tag.is_float() || lhs_key.tag.is_complex() || rhs_key.tag.is_complex())
+	PrimitiveValue lhs_key = comp.interner.get(lhs.ref());
+	PrimitiveValue rhs_key = comp.interner.get(rhs.ref());
+	if (lhs_key.tag.kind == NumberKind.FLOAT || rhs_key.tag.kind == NumberKind.FLOAT || lhs_key.tag.kind == NumberKind.COMPLEX || rhs_key.tag.kind == NumberKind.COMPLEX)
 	{
-		return float_value::compare(lhs, op, rhs, comp);
+		return compare_float(lhs, op, rhs, comp);
 	}
 
 	BigIntConst lhs_bigint = lhs_key.to_big_int();
@@ -710,8 +684,8 @@ fn bool? compare_pointers(Value lhs, CompareOperator op, Value rhs, Compilation*
 {
 	if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
 
-	InternerKey lhs_key = comp.interner.get(lhs.ref());
-	InternerKey rhs_key = comp.interner.get(rhs.ref());
+	PrimitiveValue lhs_key = comp.interner.get(lhs.ref());
+	PrimitiveValue rhs_key = comp.interner.get(rhs.ref());
 
 	if (lhs_key.tag == POINTER && rhs_key.tag == POINTER)
 	{
@@ -781,50 +755,12 @@ fn Value elem(Value arr, Value index, Compilation* comp)
 	if (catch index_opt) return NONE;
 	uint index_int = index_opt;
 	if (arr.is_none()) return NONE;
-	InternerKey key = comp.interner.get(arr.ref());
+	PrimitiveValue key = comp.interner.get(arr.ref());
 	if (key.tag != BYTES) return NONE;
 	char[] b = key.bytes;
 	if ((sz)index_int > b.len) return NONE;
 	return int_u64(b[index_int], comp);
 }
-
-// ---------------------------------------------------------------------------
-// Float / complex operations (plan 10). Thin wrappers with the Zig names over
-// aro::float_value, which holds the implementations.
-// ---------------------------------------------------------------------------
-
-<* Value.floatToInt *>
-fn FloatToIntChangeKind Value.float_to_int(&v, QualType dest_ty, Compilation* comp) => float_value::float_to_int(v, dest_ty, comp);
-
-<* Value.intToFloat *>
-fn void Value.int_to_float(&v, QualType dest_ty, Compilation* comp) => float_value::int_to_float(v, dest_ty, comp);
-
-<* Value.floatCast *>
-fn void Value.float_cast(&v, QualType dest_ty, Compilation* comp) => float_value::float_cast(v, dest_ty, comp);
-
-<* Value.toFloat(T) with T given as a width tag. *>
-fn InternerKey Value.to_float(self, InternerKeyTag dest, Compilation* comp) => float_value::to_float(self, dest, comp);
-
-<* Value.imag(T) with T given as a width tag. *>
-fn InternerKey Value.imag(self, InternerKeyTag dest, Compilation* comp) => float_value::imag(self, dest, comp);
-
-<* Value.realPart *>
-fn Value Value.real_part(self, Compilation* comp) => float_value::real_part(self, comp);
-
-<* Value.imaginaryPart *>
-fn Value Value.imaginary_part(self, Compilation* comp) => float_value::imaginary_part(self, comp);
-
-<* Value.complexConj *>
-fn Value complex_conj(Value val, QualType qt, Compilation* comp) => float_value::complex_conj(val, qt, comp);
-
-<* Value.isInf *>
-fn bool Value.is_inf(self, Compilation* comp) => float_value::is_inf(self, comp);
-
-<* Value.isNan *>
-fn bool Value.is_nan(self, Compilation* comp) => float_value::is_nan(self, comp);
-
-<* Value.isInfSign *>
-fn IsInfKind Value.is_inf_sign(self, Compilation* comp) => float_value::is_inf_sign(self, comp);
 
 // ---------------------------------------------------------------------------
 // Printing
@@ -851,17 +787,17 @@ fn bool Value.print(self, QualType qt, Compilation* comp, DString* w, NestedPrin
 		w.append_string(self.is_zero(comp) ? "false" : "true");
 		return false;
 	}
-	InternerKey key = comp.interner.get(self.ref());
+	PrimitiveValue key = comp.interner.get(self.ref());
 	switch (key.tag.kind)
 	{
 		case INT:
 			w.appendf("%s", key);
 			return false;
 		case FLOAT:
-			float_value::print_float(key, w);
+			primitive_value::print_float(key, w);
 			return false;
 		case COMPLEX:
-			float_value::print_complex(key, w);
+			primitive_value::print_complex(key, w);
 			return false;
 		case NOT_NUMBER:
 			break;

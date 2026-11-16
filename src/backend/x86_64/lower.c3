@@ -16,6 +16,7 @@
 // - calls use the SysV integer argument registers (at most 6 arguments).
 // Floating point, i128 and aggregates fail with a TODO, like the Zig Renderer.
 module aro::backend::x86_64;
+import aro::primitive_value;
 import aro::backend::ir, aro::value_interner, std::collections::list, std::core::dstring;
 
 <* One output line: an instruction or a label definition. *>
@@ -122,7 +123,7 @@ fn bool is_void_type(value_interner::InternerRef ty) => ty == value_interner::RE
 fn ushort? Lowering.bits(&self, value_interner::InternerRef ty)
 {
 	if (ty == value_interner::REF_PTR) return 64;
-	value_interner::InternerKey key = self.ir.interner.get(ty);
+	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
 	switch (key.tag)
 	{
 		case INT_TY:
@@ -189,7 +190,7 @@ fn ushort? Lowering.load(&self, ir::Ref ref, Register reg)
 
 fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 {
-	value_interner::InternerKey key = self.ir.interner.get(inst.data.constant);
+	primitive_value::PrimitiveValue key = self.ir.interner.get(inst.data.constant);
 	switch (key.tag)
 	{
 		case NULL:

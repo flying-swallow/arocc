@@ -30,12 +30,24 @@ struct DeclaratorParser
 	IDeclaratorGrammar grammar;
 }
 
+<* Zig Declarator.declarator_type: what the declarator itself built, kept apart
+   from `qt` because validate may replace `qt` with INVALID. *>
+enum DeclaratorType : char
+{
+	OTHER,
+	FUNC,
+	ARRAY,
+	POINTER,
+	BLOCK,
+}
+
 <* A parsed declarator exposes token presence separately because token index
    zero is valid. The name spelling remains available through Parser.tree.
    `old_style_ident_tok` is the first pre-C23 identifier-list name, if any. *>
 struct ParsedDeclarator
 {
 	type_store::QualType qt;
+	DeclaratorType declarator_type;
 	bool has_name;
 	tokens::TokenIndex name_tok;
 	bool has_old_style_ident;
@@ -46,6 +58,9 @@ struct DeclaratorShape
 {
 	type_store::QualType qt;
 	tokens::TokenIndex after_pointers_tok;
+	<* Zig combine_tok / suffix_start / expected_ident: first token of the outermost
+	   suffix chain, where Declarator.validate reports. *>
+	tokens::TokenIndex suffix_tok;
 	bool has_name;
 	tokens::TokenIndex name_tok;
 	bool has_old_style_ident;
@@ -375,20 +390,6 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 	return p.comp.type_store.put(type_store::type_func(ret, kind, params.array_view()));
 }
 
-fn bool DeclaratorParser.has_combine_placeholder(&self, type_store::QualType qt)
-{
-	// QualType.is() unwraps typedef/typeof wrappers via base(). Check each layer
-	// before get_type(), which cannot inspect parser placeholders.
-	if (qt.is_invalid() || qt.is_auto() || qt.index == type_store::IDX_DECLARATOR_COMBINE) return true;
-	type_store::Type ty = qt.get_type(self.parser.comp);
-	switch (ty.tag)
-	{
-		case TYPEOF: return self.has_combine_placeholder(ty.type_of.base);
-		case TYPEDEF: return self.has_combine_placeholder(ty.type_def.base);
-		default: return false;
-	}
-}
-
 <* Suffixes are parsed in source order and composed from the inside out: in
    `f[3](int)`, the function suffix is the direct child of the array suffix. *>
 fn type_store::QualType? DeclaratorParser.suffixes(&self, type_store::QualType base, DeclaratorShape* shape)
@@ -408,22 +409,10 @@ fn type_store::QualType? DeclaratorParser.suffixes(&self, type_store::QualType b
 	}
 	if (self.at(tokenizer::TokenId.L_PAREN))
 	{
-		tokens::TokenIndex opener = p.tok_i;
+		// Return-type rules (array/function returns, qualifiers) are checked once the
+		// whole type is known, by DeclaratorParser.validate.
 		type_store::QualType suffix = self.function_suffix(base, shape)!;
 		type_store::QualType inner = self.suffixes(base, shape)!;
-		// A partially composed type may hide the combine placeholder below its
-		// outer type, including through typedef/typeof wrappers.
-		if (!self.has_combine_placeholder(inner))
-		{
-			if (inner.is(p.comp, type_store::TypeTag.FUNC))
-			{
-				p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_FUNC, opener)!;
-			}
-			else if (inner.is(p.comp, type_store::TypeTag.ARRAY))
-			{
-				p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_ARRAY, opener)!;
-			}
-		}
 		type_store::Type func = suffix.get(p.comp, type_store::TypeTag.FUNC)!;
 		func.func.return_type = inner;
 		return p.comp.type_store.put(func).with_qualifiers(suffix);
@@ -463,6 +452,7 @@ fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType bas
 		// The group precedes the outer suffixes, so its old-style record wins.
 		shape.has_old_style_ident = inner.has_old_style_ident;
 		shape.old_style_ident_tok = inner.old_style_ident_tok;
+		shape.suffix_tok = p.tok_i;
 		type_store::QualType maybe_outer = self.suffixes(prefix, &shape)!;
 		shape.qt = self.splice(inner.qt, maybe_outer);
 		shape.has_name = inner.has_name;
@@ -470,9 +460,159 @@ fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType bas
 		return shape;
 	}
 
+	shape.suffix_tok = p.tok_i;
 	type_store::QualType maybe_suffixes = self.suffixes(prefix, &shape)!;
 	shape.qt = maybe_suffixes;
 	return shape;
+}
+
+<* Zig Declarator.ValidationResult. *>
+enum ValidationResult : char
+{
+	NESTED_INVALID,
+	NESTED_AUTO,
+	DECLARATOR_COMBINE,
+	NORMAL,
+}
+
+<*
+ Zig Declarator.validate: check the composed declarator type and replace it with
+ INVALID when an invalid (or misplaced auto) type is nested inside it. A function
+ declarator keeps its type.
+*>
+fn type_store::QualType? DeclaratorParser.validate(&self, type_store::QualType qt, DeclaratorType declarator_type,
+	tokens::TokenIndex source_tok)
+{
+	switch (self.validate_extra(qt, source_tok)!)
+	{
+		case NORMAL:
+		case DECLARATOR_COMBINE:
+			return qt;
+		case NESTED_INVALID:
+			if (declarator_type == FUNC) return qt;
+		case NESTED_AUTO:
+			if (declarator_type == FUNC || qt.is_auto()) return qt;
+	}
+	return type_store::INVALID;
+}
+
+<* The outermost layer the declarator added (its own Type, not through typedefs). *>
+fn DeclaratorType DeclaratorParser.declarator_type_of(&self, type_store::QualType qt) @local
+{
+	if (qt.is_invalid() || qt.is_auto() || qt.index == type_store::IDX_DECLARATOR_COMBINE) return OTHER;
+	switch (qt.get_type(self.parser.comp).tag)
+	{
+		case FUNC: return FUNC;
+		case ARRAY: return ARRAY;
+		case POINTER: return POINTER;
+		case BLOCK: return BLOCK;
+		default: return OTHER;
+	}
+}
+
+<*
+ Zig Declarator.validateExtra. Like Zig it reads each layer's own Type (not its
+ base), so typedef/typeof wrappers end the walk.
+*>
+fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType cur, tokens::TokenIndex source_tok)
+{
+	parser::Parser* p = self.parser;
+	if (cur.is_invalid()) return NESTED_INVALID;
+	if (cur.is_auto()) return NESTED_AUTO;
+	if (cur.index == type_store::IDX_DECLARATOR_COMBINE) return DECLARATOR_COMBINE;
+
+	type_store::Type ty = cur.get_type(p.comp);
+	switch (ty.tag)
+	{
+		case POINTER:
+			return self.validate_extra(ty.pointer.child, source_tok);
+		case ATOMIC:
+			return self.validate_extra(ty.atomic, source_tok);
+		case ARRAY:
+			type_store::QualType elem_qt = ty.array.elem;
+			ValidationResult child_res = self.validate_extra(elem_qt, source_tok)!;
+			if (child_res != NORMAL) return child_res;
+
+			if (elem_qt.has_incomplete_size(p.comp))
+			{
+				p.err(parser_diagnostics::ParserDiag.ARRAY_INCOMPLETE_ELEM, source_tok, p.fmt_qt(elem_qt))!;
+				return NESTED_INVALID;
+			}
+			if (ty.array.len.kind == type_store::ArrayLenKind.FIXED || ty.array.len.kind == type_store::ArrayLenKind.STATIC)
+			{
+				ulong elem_size = elem_qt.sizeof_or_null(p.comp) ?? 1;
+				if (elem_size == 0) elem_size = 1;
+				if (ty.array.len.len > p.comp.max_array_bytes() / elem_size)
+				{
+					p.err(parser_diagnostics::ParserDiag.ARRAY_TOO_LARGE, source_tok)!;
+					return NESTED_INVALID;
+				}
+			}
+			if (elem_qt.is(p.comp, type_store::TypeTag.FUNC))
+			{
+				p.err(parser_diagnostics::ParserDiag.ARRAY_FUNC_ELEM, source_tok)!;
+				return NESTED_INVALID;
+			}
+			if (try elem_array = elem_qt.get(p.comp, type_store::TypeTag.ARRAY))
+			{
+				if (elem_array.array.len.kind == type_store::ArrayLenKind.STATIC)
+				{
+					p.err(parser_diagnostics::ParserDiag.STATIC_NON_OUTERMOST_ARRAY, source_tok)!;
+				}
+				if (elem_qt.is_qualified() && elem_qt.get_type(p.comp).tag != type_store::TypeTag.TYPEDEF)
+				{
+					p.err(parser_diagnostics::ParserDiag.QUALIFIER_NON_OUTERMOST_ARRAY, source_tok)!;
+				}
+			}
+			else if (p.comp.langopts.emulate != lang_opts::Compiler.MSVC)
+			{
+				if (try elem_size = elem_qt.sizeof_or_null(p.comp))
+				{
+					ulong elem_align = elem_qt.alignof(p.comp);
+					if (elem_align != 0 && elem_size % elem_align != 0)
+					{
+						p.err(parser_diagnostics::ParserDiag.ARRAY_ELEM_SIZE_NOT_MULTIPLE, source_tok,
+							p.fmt_qt(elem_qt), elem_size, elem_align)!;
+						return NESTED_INVALID;
+					}
+				}
+			}
+			return NORMAL;
+		case FUNC:
+			type_store::QualType ret_qt = ty.func.return_type;
+			ValidationResult child_res = self.validate_extra(ret_qt, source_tok)!;
+			if (child_res != NORMAL) return child_res;
+
+			if (ret_qt.is(p.comp, type_store::TypeTag.ARRAY)) p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_ARRAY, source_tok)!;
+			if (ret_qt.is(p.comp, type_store::TypeTag.FUNC)) p.err(parser_diagnostics::ParserDiag.FUNC_CANNOT_RETURN_FUNC, source_tok)!;
+			if (ret_qt.is_const) p.err(parser_diagnostics::ParserDiag.QUAL_ON_RET_TYPE, source_tok, "const")!;
+			if (ret_qt.is_volatile) p.err(parser_diagnostics::ParserDiag.QUAL_ON_RET_TYPE, source_tok, "volatile")!;
+			bool c23 = p.comp.langopts.standard.at_least(C23);
+			type_store::QualType return_qt = c23 ? ret_qt.non_atomic(p.comp).unqualified() : ret_qt;
+			if (try float_type = return_qt.get(p.comp, type_store::TypeTag.FLOAT))
+			{
+				if (float_type.float_ty == type_store::TypeFloat.FP16 &&
+					!(p.comp.langopts.allow_half_args_and_returns || p.comp.target.has_half_precision_float_abi()))
+				{
+					p.err(parser_diagnostics::ParserDiag.SUGGEST_POINTER_FOR_INVALID_FP16, source_tok, "function return value")!;
+				}
+			}
+			// C23 function types return the unqualified, non-atomic type (6.7.7.4p4).
+			if (c23) p.comp.type_store.set_func_return_type(cur, return_qt);
+			return NORMAL;
+		case BLOCK:
+			type_store::QualType func_qt = ty.block.func;
+			ValidationResult child_res = self.validate_extra(func_qt, source_tok)!;
+			if (child_res != NORMAL) return child_res;
+			if (!func_qt.is(p.comp, type_store::TypeTag.FUNC))
+			{
+				p.err(parser_diagnostics::ParserDiag.BLOCK_TO_NON_FUNCTION, source_tok)!;
+				return NESTED_INVALID;
+			}
+			return NORMAL;
+		default:
+			return NORMAL;
+	}
 }
 
 <* Parse a named or abstract declarator around `base`. Pass
@@ -486,8 +626,12 @@ fn ParsedDeclarator? DeclaratorParser.parse_declarator(&self, type_store::QualTy
 		self.parser.err(parser_diagnostics::ParserDiag.EXPECTED_IDENT_OR_L_PAREN, shape.after_pointers_tok)!;
 		return PARSING_FAILED~;
 	}
+	type_store::QualType composed = self.splice(shape.qt, base);
+	DeclaratorType declarator_type = self.declarator_type_of(composed);
+	type_store::QualType qt = self.validate(composed, declarator_type, shape.suffix_tok)!;
 	return {
-		.qt = self.splice(shape.qt, base),
+		.qt = qt,
+		.declarator_type = declarator_type,
 		.has_name = shape.has_name,
 		.name_tok = shape.name_tok,
 		.has_old_style_ident = shape.has_old_style_ident,

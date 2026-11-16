@@ -1,10 +1,10 @@
 // Software floating point core: generic unpack / round_pack for all five
 // formats, f80/f128 arithmetic, f128 fused multiply-add, and the exact f128 hub
-// conversions that InternerKey.cast is built on.
+// conversions that PrimitiveValue.cast is built on.
 //
 // OWNER: plan 10 stage 1 agent 10.2 `wide-float`. Stage 0 fixed the signatures.
 //
-// Contract (see the header of float_value.c3 for the shared rules):
+// Contract (see the header of primitive_float.c3 for the shared rules):
 //   - No native float types (c3c has no f80, and native float128 is rejected).
 //     uint128 integer arithmetic is allowed for significands.
 //   - Reference for f128: Zig 0.17.0 compiler-rt (lib/compiler_rt/addf3.zig,
@@ -70,8 +70,7 @@
 //     An exact power-of-two mantissa ratio is computed one binade lower as
 //     (2^113 - 1) plus a round-up, which makes min_normal / 2 come out right.
 //     Status flags of f128_div describe the correctly rounded operation.
-module aro::float_value;
-import aro::value_interner;
+module aro::primitive_value;
 
 <*
  A float bit pattern split into class, sign and an exact (sig, exp) pair.
@@ -89,10 +88,10 @@ struct Unpacked
 	uint128 sig;
 }
 
-<* Split a value of any width (f80 non-canonical encodings classify as in float_value.c3). *>
-fn Unpacked InternerKey.unpack(self)
+<* Split a value of any width (f80 non-canonical encodings classify as in primitive_float.c3). *>
+fn Unpacked PrimitiveValue.unpack(self)
 {
-	FloatFormat fmt = format_of(self.tag);
+	FloatFormat fmt = self.tag.format;
 	Unpacked u = { .cls = self.classify(), .sign = self.signbit() };
 	switch (u.cls)
 	{
@@ -195,9 +194,9 @@ fn WideRounded wide_round_at(uint128 sig, long exp, bool sticky, long lsb, Round
  target precision (or a value far below the subnormal range), so that the
  sticky delta can never decide a tie on its own.
 *>
-fn InternerKey round_pack(InternerKeyTag tag, bool sign, int exp, uint128 sig, bool sticky, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
+fn PrimitiveValue round_pack(PrimitiveType tag, bool sign, int exp, uint128 sig, bool sticky, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
 {
-	FloatFormat fmt = format_of(tag);
+	FloatFormat fmt = tag.format;
 	long p = (long)fmt.frac_bits + 1;
 	long emin = 1 - (long)fmt.bias;
 	long emax = fmt.bias;
@@ -260,8 +259,8 @@ fn InternerKey round_pack(InternerKeyTag tag, bool sign, int exp, uint128 sig, b
 	{
 		bits = m;
 	}
-	if (sign) bits |= sign_mask(tag);
-	return from_raw(tag, bits);
+	if (sign) bits |= tag.sign_mask();
+	return float_key(tag, bits);
 }
 
 <*
@@ -272,7 +271,7 @@ fn InternerKey round_pack(InternerKeyTag tag, bool sign, int exp, uint128 sig, b
  f80 follows __extendxftf2 bit for bit (see the file header for what it does
  with non-canonical encodings).
 *>
-fn F128Bits InternerKey.to_f128(self)
+fn F128Bits PrimitiveValue.to_f128(self)
 {
 	switch (self.tag)
 	{
@@ -302,7 +301,7 @@ fn F128Bits InternerKey.to_f128(self)
 			}
 			return wide_f128_from(abs_result | sign);
 		default:
-			FloatFormat fmt = format_of(self.tag);
+			FloatFormat fmt = self.tag.format;
 			Unpacked u = self.unpack();
 			uint128 sign = u.sign ? (uint128)1 << 127 : 0;
 			switch (u.cls)
@@ -323,9 +322,9 @@ fn F128Bits InternerKey.to_f128(self)
  Exception (reference): dest F80 keeps the NaN's quiet bit as is and may turn a
  signaling NaN into an infinity (__trunctfxf2, see the file header).
 *>
-fn InternerKey from_f128(F128Bits x, InternerKeyTag dest, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
+fn PrimitiveValue from_f128(F128Bits x, PrimitiveType dest, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
 {
-	InternerKey k = f128_value(x);
+	PrimitiveValue k = f128_value(x);
 	if (dest == F128) return k;
 	Unpacked u = k.unpack();
 	switch (u.cls)
@@ -338,12 +337,12 @@ fn InternerKey from_f128(F128Bits x, InternerKeyTag dest, RoundingMode rm = NEAR
 				ushort hi = u.sign ? 0xFFFF : 0x7FFF;
 				return f80_value({ .lo = lo, .hi = hi });
 			}
-			FloatFormat fmt = format_of(dest);
+			FloatFormat fmt = dest.format;
 			uint128 quiet_bit = (uint128)1 << (fmt.frac_bits - 1);
 			uint128 payload = (u.sig >> (112 - fmt.frac_bits)) & (quiet_bit - 1);
-			uint128 bits = inf(dest).raw() | quiet_bit | payload;
-			if (u.sign) bits |= sign_mask(dest);
-			return from_raw(dest, bits);
+			uint128 bits = inf(dest).float_bits() | quiet_bit | payload;
+			if (u.sign) bits |= dest.sign_mask();
+			return float_key(dest, bits);
 		case INFINITE:
 			return inf(dest, u.sign);
 		case ZERO:
@@ -425,7 +424,7 @@ fn WideU256 wide_sub256(WideU256 a, WideU256 b) @local
 }
 
 <* Round (-1)^sign * x * 2^exp (+ sticky) to `tag`, compressing x to 128 bits first. *>
-fn InternerKey wide_round_pack256(InternerKeyTag tag, bool sign, long exp, WideU256 x, bool sticky, FloatStatus* status) @local
+fn PrimitiveValue wide_round_pack256(PrimitiveType tag, bool sign, long exp, WideU256 x, bool sticky, FloatStatus* status) @local
 {
 	long n = wide_bitlen256(x);
 	long e = exp;
@@ -443,7 +442,7 @@ fn InternerKey wide_round_pack256(InternerKeyTag tag, bool sign, long exp, WideU
 // -----------------------------------------------------------------------------
 
 <* a + b for finite a, b (zeros allowed), rounded to nearest even. *>
-fn InternerKey wide_add_core(InternerKeyTag tag, Unpacked a, Unpacked b, FloatStatus* status) @local
+fn PrimitiveValue wide_add_core(PrimitiveType tag, Unpacked a, Unpacked b, FloatStatus* status) @local
 {
 	bool az = a.cls == ZERO;
 	bool bz = b.cls == ZERO;
@@ -492,7 +491,7 @@ fn InternerKey wide_add_core(InternerKeyTag tag, Unpacked a, Unpacked b, FloatSt
 }
 
 <* a * b for finite nonzero a, b. *>
-fn InternerKey wide_mul_core(InternerKeyTag tag, Unpacked a, Unpacked b, FloatStatus* status) @local
+fn PrimitiveValue wide_mul_core(PrimitiveType tag, Unpacked a, Unpacked b, FloatStatus* status) @local
 {
 	WideU256 p = wide_mul256(a.sig, b.sig);
 	return wide_round_pack256(tag, a.sign != b.sign, (long)a.exp + b.exp, p, false, status);
@@ -677,7 +676,7 @@ fn F80Bits f80_div(F80Bits a, F80Bits b, FloatStatus* status = null)
 // -----------------------------------------------------------------------------
 
 <* compiler-rt: the first NaN operand (a, then b) quieted; INVALID when either is signaling. *>
-fn bool wide_f128_nan_rules(InternerKey a, InternerKey b, F128Bits* out, FloatStatus* status) @local
+fn bool wide_f128_nan_rules(PrimitiveValue a, PrimitiveValue b, F128Bits* out, FloatStatus* status) @local
 {
 	bool an = a.is_nan();
 	bool bn = b.is_nan();
@@ -693,8 +692,8 @@ fn bool wide_f128_nan_rules(InternerKey a, InternerKey b, F128Bits* out, FloatSt
 <* Zig f128 `a + b` (compiler-rt __addtf3). *>
 fn F128Bits f128_add(F128Bits a, F128Bits b, FloatStatus* status = null)
 {
-	InternerKey ka = f128_value(a);
-	InternerKey kb = f128_value(b);
+	PrimitiveValue ka = f128_value(a);
+	PrimitiveValue kb = f128_value(b);
 	F128Bits out;
 	if (wide_f128_nan_rules(ka, kb, &out, status)) return out;
 	Unpacked ua = ka.unpack();
@@ -721,8 +720,8 @@ fn F128Bits f128_sub(F128Bits a, F128Bits b, FloatStatus* status = null)
 <* Zig f128 `a * b` (compiler-rt __multf3). *>
 fn F128Bits f128_mul(F128Bits a, F128Bits b, FloatStatus* status = null)
 {
-	InternerKey ka = f128_value(a);
-	InternerKey kb = f128_value(b);
+	PrimitiveValue ka = f128_value(a);
+	PrimitiveValue kb = f128_value(b);
 	F128Bits out;
 	if (wide_f128_nan_rules(ka, kb, &out, status)) return out;
 	Unpacked ua = ka.unpack();
@@ -744,8 +743,8 @@ fn F128Bits f128_mul(F128Bits a, F128Bits b, FloatStatus* status = null)
 <* Zig f128 `a / b` (compiler-rt __divtf3). *>
 fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 {
-	InternerKey ka = f128_value(a);
-	InternerKey kb = f128_value(b);
+	PrimitiveValue ka = f128_value(a);
+	PrimitiveValue kb = f128_value(b);
 	F128Bits out;
 	if (wide_f128_nan_rules(ka, kb, &out, status)) return out;
 	Unpacked ua = ka.unpack();
@@ -776,7 +775,7 @@ fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 		return inf(F128, sign).f128();
 	}
 	WideQuotient q = wide_div_exact(ua, ub);
-	InternerKey correct = round_pack(F128, sign, (int)q.exp, q.q, q.sticky, NEAREST_EVEN, status);
+	PrimitiveValue correct = round_pack(F128, sign, (int)q.exp, q.q, q.sticky, NEAREST_EVEN, status);
 	// Reproduce __divtf3's subnormal path. Its quotient estimate is strictly
 	// below a/b, so an exact power-of-two ratio comes out as (2^113 - 1) one
 	// binade lower with the round bit set; otherwise q113 is the truncated
@@ -817,7 +816,7 @@ fn F128Bits f128_div(F128Bits a, F128Bits b, FloatStatus* status = null)
 // -----------------------------------------------------------------------------
 
 <* Exact IEEE fma for finite nonzero x, y, z (status flags of f128_mul_add). *>
-fn InternerKey wide_fma_exact(Unpacked x, Unpacked y, Unpacked z, FloatStatus* status) @local
+fn PrimitiveValue wide_fma_exact(Unpacked x, Unpacked y, Unpacked z, FloatStatus* status) @local
 {
 	WideU256 p = wide_mul256(x.sig, y.sig);
 	bool ps = x.sign != y.sign;

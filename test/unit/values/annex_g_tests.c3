@@ -13,7 +13,7 @@
 //   - The "native_reference_*" tests check a local native-float reference port of
 //     annex_g.zig (module annex_g_tests::nref, with exact ports of Zig 0.17.0
 //     std.math.ldexp / ilogb on bits) against the f16/f32/f64 vectors. They
-//     exercise the algorithm structure independently of the InternerKey arithmetic
+//     exercise the algorithm structure independently of the PrimitiveValue arithmetic
 //     that plan 10 agents 10.1/10.2 implement.
 //
 // Reference quirks pinned by the vectors (match them, do not "fix" them):
@@ -29,14 +29,15 @@
 //     sets recalc, so x and y stay NaN (f64 (1e308 + NaN i) * (1e308 + 1i)).
 //   - NaN signs follow the width's hardware/compiler-rt rules (SSE / x87
 //     negative default NaN; f128 compiler-rt positive default NaN and `a - NaN`
-//     flips the NaN's sign, see float_value.c3).
+//     flips the NaN's sign, see primitive_float.c3).
 //
-// Because the InternerKey arithmetic (float_soft_narrow.c3, float_soft_wide.c3) was
+// Because the PrimitiveValue arithmetic (float_soft_narrow.c3, float_soft_wide.c3) was
 // still a stage-0 stub when this file was written, the target is tagged
 // "manual"; the integrator should drop the tag once 10.1/10.2 have landed.
 module annex_g_tests;
+import aro::primitive_value;
 import std::io;
-import aro::value_interner, aro::float_value, aro::annex_g;
+import aro::value_interner, aro::annex_g;
 
 enum Op : char
 {
@@ -47,7 +48,7 @@ enum Op : char
 struct Vec
 {
 	Op op;
-	InternerKeyTag tag;
+	PrimitiveType tag;
 	uint128 a;
 	uint128 b;
 	uint128 c;
@@ -258,20 +259,20 @@ fn void report(sz i, Vec v, uint128 x, uint128 y)
 		(ulong)(v.x >> 64), (ulong)v.x, (ulong)(v.y >> 64), (ulong)v.y);
 }
 
-<* Runs every vector of width `tag` through aro::annex_g on InternerKey. *>
-fn void run_keyfloat(InternerKeyTag tag)
+<* Runs every vector of width `tag` through aro::annex_g on PrimitiveValue. *>
+fn void run_keyfloat(PrimitiveType tag)
 {
 	sz n = 0;
 	foreach (i, v : VECTORS)
 	{
 		if (v.tag != tag) continue;
 		n++;
-		InternerKey a = float_value::from_raw(tag, v.a);
-		InternerKey b = float_value::from_raw(tag, v.b);
-		InternerKey c = float_value::from_raw(tag, v.c);
-		InternerKey d = float_value::from_raw(tag, v.d);
+		PrimitiveValue a = primitive_value::float_key(tag, v.a);
+		PrimitiveValue b = primitive_value::float_key(tag, v.b);
+		PrimitiveValue c = primitive_value::float_key(tag, v.c);
+		PrimitiveValue d = primitive_value::float_key(tag, v.d);
 		// Not `cond ? mul(..) : div(..)`: c3c 0.8.5 -O0 lost the imaginary part of r that way.
-		InternerKey r;
+		PrimitiveValue r;
 		if (v.op == MUL)
 		{
 			r = annex_g::complex_float_mul(a, b, c, d);
@@ -280,17 +281,17 @@ fn void run_keyfloat(InternerKeyTag tag)
 		{
 			r = annex_g::complex_float_div(a, b, c, d);
 		}
-		assert(r.tag == float_value::complex_tag_of(tag));
-		InternerKey[2] p = r.parts();
-		if (p[0].raw() != v.x || p[1].raw() != v.y) report(i, v, p[0].raw(), p[1].raw());
-		check128(p[0].raw(), v.x);
-		check128(p[1].raw(), v.y);
+		assert(r.tag == tag.complex());
+		PrimitiveValue[2] p = r.parts();
+		if (p[0].float_bits() != v.x || p[1].float_bits() != v.y) report(i, v, p[0].float_bits(), p[1].float_bits());
+		check128(p[0].float_bits(), v.x);
+		check128(p[1].float_bits(), v.y);
 	}
 	assert(n == 37);
 }
 
 // ---------------------------------------------------------------------------
-// aro::annex_g over InternerKey, every width (needs 10.1 / 10.2 arithmetic)
+// aro::annex_g over PrimitiveValue, every width (needs 10.1 / 10.2 arithmetic)
 // ---------------------------------------------------------------------------
 
 fn void keyfloat_vectors_f16() @test { run_keyfloat(F16); }
@@ -306,8 +307,8 @@ const ulong F64_TWO = 0x4000_0000_0000_0000;
 fn void embedded_zig_mul() @test
 {
 	// Naive algorithm would produce NaN + NaNi instead of inf + NaNi
-	InternerKey[2] r = annex_g::complex_float_mul(float_value::f64_value(F64_INF), float_value::f64_value(F64_NAN),
-		float_value::f64_value(F64_TWO), float_value::f64_value(0)).parts();
+	PrimitiveValue[2] r = annex_g::complex_float_mul(primitive_value::f64_value(F64_INF), primitive_value::f64_value(F64_NAN),
+		primitive_value::f64_value(F64_TWO), primitive_value::f64_value(0)).parts();
 	assert(r[0].is_inf());
 	assert(r[1].is_nan());
 }
@@ -315,13 +316,13 @@ fn void embedded_zig_mul() @test
 fn void embedded_zig_div() @test
 {
 	// Naive algorithm would produce NaN + NaNi instead of inf + NaNi
-	InternerKey[2] r = annex_g::complex_float_div(float_value::f64_value(F64_INF), float_value::f64_value(F64_NAN),
-		float_value::f64_value(F64_TWO), float_value::f64_value(0)).parts();
+	PrimitiveValue[2] r = annex_g::complex_float_div(primitive_value::f64_value(F64_INF), primitive_value::f64_value(F64_NAN),
+		primitive_value::f64_value(F64_TWO), primitive_value::f64_value(0)).parts();
 	assert(r[0].is_inf());
 	assert(r[1].is_nan());
 
-	r = annex_g::complex_float_div(float_value::f64_value(F64_TWO), float_value::f64_value(F64_TWO),
-		float_value::f64_value(0), float_value::f64_value(0)).parts();
+	r = annex_g::complex_float_div(primitive_value::f64_value(F64_TWO), primitive_value::f64_value(F64_TWO),
+		primitive_value::f64_value(0), primitive_value::f64_value(0)).parts();
 	assert(r[0].is_inf());
 	assert(r[1].is_inf());
 }
@@ -350,7 +351,7 @@ fn uint128[2] run_f64(bool m, uint128 a, uint128 b, uint128 c, uint128 d)
 	return { r[0], r[1] };
 }
 
-fn void run_native(RunFn f, InternerKeyTag tag)
+fn void run_native(RunFn f, PrimitiveType tag)
 {
 	sz n = 0;
 	foreach (i, v : VECTORS)

@@ -3,6 +3,7 @@
 // callbacks because they depend on outer grammar state. GNU statement
 // expressions use a separate callback for their compound-statement body.
 module aro::parser_postfix;
+import aro::primitive_value;
 import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::parser_diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::compilation, aro::lang_opts;
 import aro::string_interner, aro::bigint;
@@ -281,7 +282,7 @@ fn void? promote_call_argument(parser_result::Result* arg, parser::Parser* p, to
 *>
 fn value::Value string_subscript_value(parser::Parser* p, parser_result::Result base, parser_result::Result index)
 {
-	if (base.val.is_none() || !base.val.is(value_interner::InternerKeyTag.BYTES, p.comp)) return value::NONE;
+	if (base.val.is_none() || !base.val.is(primitive_value::PrimitiveType.BYTES, p.comp)) return value::NONE;
 	if (base.node.get(&p.tree).kind != tree::NodeKind.STRING_LITERAL_EXPR) return value::NONE;
 	if (index.val.is_none() || !index.val.is_int(p.comp)) return value::NONE;
 	if (try arr = base.qt.get(p.comp, type_store::TypeTag.ARRAY))
@@ -903,6 +904,24 @@ fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
 
 			func.save_value(p);
 			type_store::QualType return_qt = !function_qt.is_invalid() && args_ok ? call_fn.return_type : type_store::INVALID;
+			// Zig CallExpr.init/finish: a call whose callee is a builtin_ref (through
+			// parens) is always a builtin_call_expr, never a call_expr; codegen has
+			// no lvalue for a builtin_ref.
+			type_store::NodeIndex builtin_cur = lhs.node;
+			tree::Node builtin_node = builtin_cur.get(&p.tree);
+			while (builtin_node.kind == tree::NodeKind.PAREN_EXPR)
+			{
+				builtin_cur = builtin_node.unary.operand;
+				builtin_node = builtin_cur.get(&p.tree);
+			}
+			if (builtin_node.kind == tree::NodeKind.BUILTIN_REF)
+			{
+				type_store::NodeIndex builtin_call_node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
+					.builtin_tok = builtin_node.builtin_ref.name_tok, .qt = return_qt, .args = args.array_view(),
+				} });
+				lhs.init(builtin_call_node, return_qt);
+				continue;
+			}
 			type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.CALL_EXPR, .call = {
 				.l_paren_tok = l_paren, .qt = return_qt, .callee = func.node, .args = args.array_view(),
 			} });

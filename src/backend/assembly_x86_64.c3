@@ -1,5 +1,6 @@
 // x86-64 GNU assembler data emitter, ported from src/assembly_backend/x86_64.zig.
 module aro::backend::assembly_x86_64;
+import aro::primitive_value;
 import aro::tree, aro::tokens, aro::source, aro::compilation, aro::diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::text_literal_semantics, aro::code_gen_options;
 import std::core::dstring;
@@ -53,21 +54,21 @@ fn void serialize_int(DString* output, ulong value, StorageUnit unit)
 	output.appendf("  .%s  0x%x\n", directive(unit), truncate(value, unit));
 }
 
-fn void serialize_float(DString* output, value_interner::InternerKey value)
+fn void serialize_float(DString* output, primitive_value::PrimitiveValue value)
 {
 	switch (value.tag)
 	{
-		case value_interner::InternerKeyTag.F16:
+		case primitive_value::PrimitiveType.F16:
 			serialize_int(output, value.f16(), SHORT);
-		case value_interner::InternerKeyTag.F32:
+		case primitive_value::PrimitiveType.F32:
 			serialize_int(output, value.f32(), LONG);
-		case value_interner::InternerKeyTag.F64:
+		case primitive_value::PrimitiveType.F64:
 			serialize_int(output, value.f64(), QUAD);
-		case value_interner::InternerKeyTag.F80:
+		case primitive_value::PrimitiveType.F80:
 			serialize_int(output, value.f80().lo, QUAD);
 			serialize_int(output, value.f80().hi, SHORT);
 			output.append_string("  .zero 6\n");
-		case value_interner::InternerKeyTag.F128:
+		case primitive_value::PrimitiveType.F128:
 			serialize_int(output, value.f128().lo, QUAD);
 			serialize_int(output, value.f128().hi, QUAD);
 		default:
@@ -120,8 +121,8 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 				}
 				else
 				{
-					value_interner::InternerKey key = comp.interner.get(value.ref());
-					assert(key.tag.is_int(), "integer initializer did not have an integer key");
+					primitive_value::PrimitiveValue key = comp.interner.get(value.ref());
+					assert(key.tag.kind == NumberKind.INT, "integer initializer did not have an integer key");
 					data.appendf("%s", key);
 				}
 				data.append_char('\n');
@@ -131,14 +132,14 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 		}
 		if (scalar_kind.is_float)
 		{
-			value_interner::InternerKeyTag tag;
+			primitive_value::PrimitiveType tag;
 			switch (bit_size)
 			{
-				case 16: tag = value_interner::InternerKeyTag.F16;
-				case 32: tag = value_interner::InternerKeyTag.F32;
-				case 64: tag = value_interner::InternerKeyTag.F64;
-				case 80: tag = value_interner::InternerKeyTag.F80;
-				case 128: tag = value_interner::InternerKeyTag.F128;
+				case 16: tag = primitive_value::PrimitiveType.F16;
+				case 32: tag = primitive_value::PrimitiveType.F32;
+				case 64: tag = primitive_value::PrimitiveType.F64;
+				case 80: tag = primitive_value::PrimitiveType.F80;
+				case 128: tag = primitive_value::PrimitiveType.F128;
 				default: unreachable("unsupported floating storage width");
 			}
 			// to_float handles canonical 0.0/1.0 refs, which the interner
@@ -149,8 +150,8 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 		if (scalar_kind.is_pointer) return todo_node(tree, "Codegen pointer", node);
 		if (qt.is(comp, type_store::TypeTag.ARRAY))
 		{
-			value_interner::InternerKey key = comp.interner.get(value.ref());
-			assert(key.tag == value_interner::InternerKeyTag.BYTES, "array initializer did not have a bytes key");
+			primitive_value::PrimitiveValue key = comp.interner.get(value.ref());
+			assert(key.tag == primitive_value::PrimitiveType.BYTES, "array initializer did not have a bytes key");
 			String directive_name = (ulong)key.bytes.len > bit_size / 8 ? "ascii" : "string";
 			data.appendf("  .%s ", directive_name);
 			text_literal_semantics::print_string(key.bytes, qt, comp, data, text_literal_semantics::PrintStringStyle.QUOTED);

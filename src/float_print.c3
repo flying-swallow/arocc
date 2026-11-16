@@ -1,32 +1,15 @@
-// Float comparisons, Value-level NaN/Inf predicates and float/complex printing:
-// port of Value.zig compare (float/complex branches), isInf, isNan, isInfSign and
-// the .float / .complex arms of Value.print.
-//
-// OWNER: plan 10 stage 1 agent 10.4 `compare-print`. Stage 0 fixed the signatures.
-// (The bit-level predicates InternerKey.is_nan/is_inf/... are stage-0 code in
-// float_value.c3 so every agent can use them; this file owns everything that
-// reads a Value or produces text.)
+// Float comparison and float/complex printing on bit patterns: std.math.compare
+// (PrimitiveValue.compare) and the .float / .complex arms of Value.print.
+// The Value-level compare / isInf / isNan / isInfSign are in value_float.c3.
 //
 // Contract:
-//   - No native floats (only float_soft_narrow.c3 may use them): work on InternerKey
-//     bits and the dispatching InternerKey.mul/div/cast.
+//   - No native floats (only float_soft_narrow.c3 may use them): work on PrimitiveValue
+//     bits and the dispatching PrimitiveValue.mul/div/cast.
 //   - Output is appended to a DString, like type_print.c3.
-//
-// Dependencies on other plan 10 agents: `compare` (Value level) needs to_float /
-// imag (10.3); print_float / print_complex need InternerKey.cast (10.3) for every
-// width except f64, and InternerKey.mul / InternerKey.div at F64 (10.1) for the f16 /
-// f32 / cf32 scaling. Everything else here is self-contained bit code.
-module aro::float_value;
-import aro::value_interner, aro::value, aro::compilation, aro::bigint, std::core::dstring;
-
-<* Zig Value.IsInfKind (enum(i32)) *>
-enum IsInfKind : int (int value)
-{
-	NEGATIVE { -1 },
-	FINITE { 0 },
-	POSITIVE { 1 },
-	UNKNOWN { 0x7FFF_FFFF },
-}
+//   - print_float / print_complex need PrimitiveValue.cast for every width except
+//     f64, and PrimitiveValue.mul / div at F64 for the f16 / f32 / cf32 scaling.
+module aro::primitive_value;
+import aro::bigint, std::core::dstring;
 
 // =============================================================================
 // Comparisons and predicates
@@ -38,9 +21,9 @@ enum IsInfKind : int (int value)
  (exponent 0, integer bit 1) has the value of biased exponent 1 with the same
  significand, so it is moved there.
 *>
-fn int128 compare_key(InternerKey f)
+fn int128 compare_key(PrimitiveValue f)
 {
-	uint128 mag = f.raw() & ~sign_mask(f.tag);
+	uint128 mag = f.float_bits() & ~f.tag.sign_mask();
 	if (f.tag == F80 && f.biased_exponent() == 0 && ((mag >> 63) & 1) != 0) mag += (uint128)1 << 64;
 	return f.signbit() ? -(int128)mag : (int128)mag;
 }
@@ -50,7 +33,7 @@ fn int128 compare_key(InternerKey f)
  -0 == +0, any comparison with a NaN is false except NEQ, which is true.
  @require self.tag == rhs.tag : "operands must have the same width"
 *>
-fn bool InternerKey.compare(self, CompareOperator op, InternerKey rhs)
+fn bool PrimitiveValue.compare(self, CompareOperator op, PrimitiveValue rhs)
 {
 	if (self.is_nan() || rhs.is_nan()) return op == NEQ;
 	int128 a = compare_key(self);
@@ -64,78 +47,6 @@ fn bool InternerKey.compare(self, CompareOperator op, InternerKey rhs)
 		case GT: return a > b;
 		case NEQ: return a != b;
 	}
-}
-
-<*
- Float/complex branch of Value.compare, called after shallowCompare gave no
- answer and when at least one key is FLOAT or COMPLEX:
-   either FLOAT: compare to_float(lhs, F128) with to_float(rhs, F128) using `op`.
-   else either COMPLEX: assert(op == NEQ); return !(re equal) || !(im equal),
-   comparing to_float(.., F128) and imag(.., F128) with EQ (so NaN parts make
-   the values unequal).
-*>
-fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
-{
-	InternerKeyTag lhs_tag = comp.interner.get(lhs.ref()).tag;
-	InternerKeyTag rhs_tag = comp.interner.get(rhs.ref()).tag;
-	if (lhs_tag.is_float() || rhs_tag.is_float())
-	{
-		return to_float(lhs, F128, comp).compare(op, to_float(rhs, F128, comp));
-	}
-	assert(lhs_tag.is_complex() || rhs_tag.is_complex(), "float_value::compare needs a float or complex operand");
-	assert(op == NEQ, "complex values only compare with !=");
-	bool real_equal = to_float(lhs, F128, comp).compare(EQ, to_float(rhs, F128, comp));
-	bool imag_equal = imag(lhs, F128, comp).compare(EQ, imag(rhs, F128, comp));
-	return !real_equal || !imag_equal;
-}
-
-<* Value.isInf: none -> false; float -> isInf; complex -> either part isInf; else false. *>
-fn bool is_inf(Value v, Compilation* comp)
-{
-	if (v.is_none()) return false;
-	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag.kind)
-	{
-		case FLOAT:
-			return key.is_inf();
-		case COMPLEX:
-			InternerKey[2] parts = key.parts();
-			return parts[0].is_inf() || parts[1].is_inf();
-		default:
-			return false;
-	}
-}
-
-<* Value.isNan: none -> false; float -> isNan; complex -> either part isNan; else false. *>
-fn bool is_nan(Value v, Compilation* comp)
-{
-	if (v.is_none()) return false;
-	InternerKey key = comp.interner.get(v.ref());
-	switch (key.tag.kind)
-	{
-		case FLOAT:
-			return key.is_nan();
-		case COMPLEX:
-			InternerKey[2] parts = key.parts();
-			return parts[0].is_nan() || parts[1].is_nan();
-		default:
-			return false;
-	}
-}
-
-<*
- Value.isInfSign: none -> UNKNOWN; float -> POSITIVE / NEGATIVE / FINITE (NaN is
- FINITE); any other key (int included, e.g. a float 0.0 interned as REF_ZERO)
- -> UNKNOWN.
-*>
-fn IsInfKind is_inf_sign(Value v, Compilation* comp)
-{
-	if (v.is_none()) return UNKNOWN;
-	InternerKey key = comp.interner.get(v.ref());
-	if (!key.tag.is_float()) return UNKNOWN;
-	if (key.is_positive_inf()) return POSITIVE;
-	if (key.is_negative_inf()) return NEGATIVE;
-	return FINITE;
 }
 
 // =============================================================================
@@ -501,8 +412,8 @@ fn ulong f64_round_half_away(ulong bits)
 	return sign | (mag & ~mask);
 }
 
-<* Zig @as(f64, @floatCast(x)); f64 itself is passed through (InternerKey.cast of the same tag is the identity). *>
-fn InternerKey print_to_f64(InternerKey f)
+<* Zig @as(f64, @floatCast(x)); f64 itself is passed through (PrimitiveValue.cast of the same tag is the identity). *>
+fn PrimitiveValue print_to_f64(PrimitiveValue f)
 {
 	// if, not `?:`: see CONVENTIONS.md (c3c by-value aggregate ternary).
 	if (f.tag == F64) return f;
@@ -510,16 +421,16 @@ fn InternerKey print_to_f64(InternerKey f)
 }
 
 <* Zig @round(@as(f64, @floatCast(x)) * scale) / scale, every step an f64 operation. *>
-fn ulong print_scaled(InternerKey f, ulong scale_bits)
+fn ulong print_scaled(PrimitiveValue f, ulong scale_bits)
 {
-	InternerKey scale = f64_value(scale_bits);
-	InternerKey scaled = print_to_f64(f).mul(scale);
-	InternerKey rounded = f64_value(f64_round_half_away(scaled.f64()));
+	PrimitiveValue scale = f64_value(scale_bits);
+	PrimitiveValue scaled = print_to_f64(f).mul(scale);
+	PrimitiveValue rounded = f64_value(f64_round_half_away(scaled.f64()));
 	return rounded.div(scale).f64();
 }
 
 <* The bits Value.print formats for one float of a `.float` key or a complex component. *>
-fn ulong print_bits(InternerKey f, bool scale_narrow)
+fn ulong print_bits(PrimitiveValue f, bool scale_narrow)
 {
 	if (scale_narrow)
 	{
@@ -538,11 +449,11 @@ fn ulong print_bits(InternerKey f, bool scale_narrow)
    f16: x = (f64)h; print @round(x * 1000) / 1000;
    f32: x = (f64)f; print @round(x * 1000000) / 1000000;
    f64/f80/f128: print (f64)x (@floatCast: may overflow to inf).
- The scaling is f64 arithmetic (InternerKey.mul / InternerKey.div at F64, each
+ The scaling is f64 arithmetic (PrimitiveValue.mul / PrimitiveValue.div at F64, each
  rounded); Zig @round rounds to an integer, halfway cases away from zero (a
  bit-level helper in this file). Printing goes through format_f64_decimal.
 *>
-fn void print_float(InternerKey f, DString* w)
+fn void print_float(PrimitiveValue f, DString* w)
 {
 	format_f64_decimal(print_bits(f, true), w);
 }
@@ -552,9 +463,9 @@ fn void print_float(InternerKey f, DString* w)
  imaginary part prints as "1 + -2i"). cf32 parts are rounded like f32 above;
  every other width (cf16 included - no 1000 scaling) is plain (f64)x.
 *>
-fn void print_complex(InternerKey c, DString* w)
+fn void print_complex(PrimitiveValue c, DString* w)
 {
-	InternerKey[2] parts = c.parts();
+	PrimitiveValue[2] parts = c.parts();
 	bool scale = c.tag == CF32;
 	format_f64_decimal(print_bits(parts[0], scale), w);
 	w.append_string(" + ");

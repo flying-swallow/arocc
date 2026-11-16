@@ -275,9 +275,9 @@ fn type_store::NodeIndex? AsmParser.parse_statement(&self)
 		p.advance();
 		if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		return p.tree.add_node(
-		{
-			.kind = tree::NodeKind.ASM_STMT, .asm_stmt = { .asm_tok = asm_tok, .asm_str = asm_str, .quals = quals }
-		}
+			{
+				.kind = tree::NodeKind.ASM_STMT, .asm_stmt = { .asm_tok = asm_tok, .asm_str = asm_str, .quals = quals }
+			}
 		);
 	}
 	if (p.is_at(tokenizer::TokenId.COLON) || p.is_at(tokenizer::TokenId.COLON_COLON))
@@ -350,10 +350,10 @@ fn type_store::NodeIndex? AsmParser.parse_statement(&self)
 			}
 			tokens::TokenIndex label_tok = p.tok_i;
 			labels.push(p.tree.add_node(
-			{
-				.kind = tree::NodeKind.ADDR_OF_LABEL, .addr_of_label = { .label_tok = label_tok, .qt = type_store::VOID_POINTER }
-			}
-			));
+					{
+						.kind = tree::NodeKind.ADDR_OF_LABEL, .addr_of_label = { .label_tok = label_tok, .qt = type_store::VOID_POINTER }
+					}
+				));
 			p.advance();
 			if (!@ok(p.eat(tokenizer::TokenId.COMMA))) break;
 		}
@@ -367,8 +367,8 @@ fn type_store::NodeIndex? AsmParser.parse_statement(&self)
 	if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, asm_tok + 1)) return PARSING_FAILED~;
 	if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 	return p.tree.add_node(
-	{
-		.kind = tree::NodeKind.ASM_STMT, .asm_stmt = { .asm_tok = asm_tok, .asm_str = asm_str, .outputs = outputs.array_view(), .inputs = inputs.array_view(), .clobbers = clobbers.array_view(), .labels = labels.array_view(), .quals = quals }
+		{
+			.kind = tree::NodeKind.ASM_STMT, .asm_stmt = { .asm_tok = asm_tok, .asm_str = asm_str, .outputs = outputs.array_view(), .inputs = inputs.array_view(), .clobbers = clobbers.array_view(), .labels = labels.array_view(), .quals = quals }
 	}
 	);
 }

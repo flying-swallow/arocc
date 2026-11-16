@@ -224,6 +224,14 @@ fn void Compilation.free(&self)
 
 fn StringId Compilation.intern_string(&self, String str) => self.string_interner.intern(str);
 
+<* Compilation.maxArrayBytes: the largest object size, in bytes, an array may have. *>
+fn ulong Compilation.max_array_bytes(&self)
+{
+	ulong max_bits = self.target.ptr_bit_width();
+	if (max_bits > 61) max_bits = 61;
+	return ((ulong)1 << max_bits) - 1;
+}
+
 fn String StringId.lookup(self, Compilation* comp) => self.lookup_extra(&comp.string_interner);
 
 <* Warnings sent to the diagnostics output (Zig tests read `diagnostics.warnings`). *>

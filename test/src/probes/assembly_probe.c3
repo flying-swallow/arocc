@@ -1,7 +1,8 @@
 // A data-only selector for direct AST-to-assembly migration fixtures. The
 // input files select a hand-built Tree scenario; they are not parsed as C.
 module assembly_probe;
-import aro::backend::assembly, aro::compilation, aro::diagnostics, aro::float_value;
+import aro::primitive_value;
+import aro::backend::assembly, aro::compilation, aro::diagnostics;
 import aro::source, aro::target, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
 import aro::value, aro::value_interner, std::io;
 
@@ -68,12 +69,12 @@ fn NodeIndex ProbeFixture.int_literal(&self, tokens::TokenIndex tok, type_store:
 }
 
 fn NodeIndex ProbeFixture.float_literal(&self, tokens::TokenIndex tok, type_store::QualType qt,
-	value_interner::InternerKeyTag tag, uint128 bits)
+	primitive_value::PrimitiveType tag, uint128 bits)
 {
 	NodeIndex node = self.tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL,
 		.literal = { .literal_tok = tok, .qt = qt } });
 	self.tree.set_value(node, value::intern(&self.comp,
-		float_value::from_raw(tag, bits)));
+		primitive_value::float_key(tag, bits)));
 	return node;
 }
 

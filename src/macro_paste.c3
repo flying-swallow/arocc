@@ -95,7 +95,7 @@ fn void? Preprocessor.stringify(&self, TokenWithExpansionLocs[] toks)
 	{
 		TokenWithExpansionLocs tok = toks[^1];
 		self.err(tok, PpDiag.INVALID_PP_STRINGIFY_ESCAPE)!;
-		self.char_buf.size -= 3; // erase unpaired backslash, appended end quote and NUL
+		self.char_buf.size -= 3;  // erase unpaired backslash, appended end quote and NUL
 		self.char_buf.push('"');
 	}
 	self.char_buf.push('\n');
@@ -176,10 +176,14 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 			TokenId first = rhs_toks[0].id;
 			if (last != MACRO_WS && last != COMMENT && first != MACRO_WS && first != COMMENT)
 			{
-				lhs_toks.push({ .id = MACRO_WS, .loc = lhs.loc });
+				lhs_toks.push(
+					{
+						.id = MACRO_WS, .loc = lhs.loc
+					}
+				);
 			}
 		}
-		lhs.expansion_locs.free(); // Zig leaks this array
+		lhs.expansion_locs.free();  // Zig leaks this array
 		buf_copy_tokens(gpa, lhs_toks, rhs_toks, {});
 		return;
 	}
@@ -204,19 +208,19 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 	}
 	defer lhs.expansion_locs.free();
 
-	List{char}* gen = &self.comp.generated_buf;
+	List{char} * gen = &self.comp.generated_buf;
 	sz start = gen.len();
 	gen.reserve(1);
-	gen.entries[start] = 0; // expanded_slice of a generated token needs the sentinel
+	gen.entries[start] = 0;  // expanded_slice of a generated token needs the sentinel
 	sz end = start + self.expanded_slice(lhs).len + self.expanded_slice(rhs).len;
-	gen.reserve(end + 2 - start); // +2 for a newline and null terminator
-	gen.entries[start] = 0; // growing may have dropped the sentinel the tokenizer needs
+	gen.reserve(end + 2 - start);  // +2 for a newline and null terminator
+	gen.entries[start] = 0;  // growing may have dropped the sentinel the tokenizer needs
 	// We cannot use the earlier slices since they might be invalidated by `reserve`
 	gen.push_all((char[])self.expanded_slice(lhs));
 	gen.push_all((char[])self.expanded_slice(rhs));
 	gen.push('\n');
 	gen.push(0);
-	gen.size -= 1; // remove redundant null terminator (it stays in the spare capacity)
+	gen.size -= 1;  // remove redundant null terminator (it stays in the spare capacity)
 
 	// Try to tokenize the result.
 	Tokenizer tmp_tokenizer;
@@ -233,7 +237,7 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 
 	if (next.id != NL && next.id != EOF)
 	{
-		String pasted = (String)self.comp.generated_buf.array_view()[start:end - start];
+		String pasted = (String)self.comp.generated_buf.array_view()[start : end - start];
 		self.err(lhs, PpDiag.PASTING_FORMED_INVALID, pasted)!;
 		lhs_toks.push(tokens::from_raw(next));
 	}
