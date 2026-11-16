@@ -127,8 +127,8 @@ fn bool same_token_text(parser::Parser* p, tokens::TokenIndex a, tokens::TokenIn
  explicit INVALID sentinel nor necessarily a live TypeStore index. *>
 fn bool has_decodable_type(type_store::QualType qt, parser::Parser* p)
 {
-	if (qt.is_invalid() || qt.is_auto() || qt.index == type_store::IDX_DECLARATOR_COMBINE) return false;
-	return qt.index >= type_store::FIRST_BUILTIN_INDEX || (usz)qt.index < p.comp.type_store.len();
+	if (qt.is_invalid() || qt.is_auto() || qt.is_declarator_combine()) return false;
+	return qt.builtin || (usz)qt.index < p.comp.type_store.len();
 }
 
 fn bool StatementParser.mark_label_used(&self, parser::Parser* p, tokens::TokenIndex name)

@@ -26,6 +26,12 @@ enum InstTag : char (String name)
 	JMP_VAL { "jmp_val" },
 	CALL { "call" },
 	ALLOC { "alloc" },
+	<* Runtime-sized stack allocation (VLA); emitted in place, freed by STACK_RESTORE or function return. *>
+	DYN_ALLOC { "dyn_alloc" },
+	<* Current stack pointer, for a later STACK_RESTORE. *>
+	STACK_SAVE { "stack_save" },
+	<* Reset the stack pointer to a STACK_SAVE result, freeing DYN_ALLOCs made since. *>
+	STACK_RESTORE { "stack_restore" },
 	PHI { "phi" },
 	STORE { "store" },
 	BIT_OR { "bit_or" },
@@ -64,6 +70,7 @@ enum InstTag : char (String name)
 
 struct BinData { Ref lhs; Ref rhs; }
 struct AllocData { uint size; uint align; bool is_volatile; }
+struct DynAllocData { Ref size; uint align; }
 struct BranchData { Ref cond; Ref then_label; Ref else_label; }
 struct SwitchData { Ref target; value_interner::InternerRef[] values; Ref[] labels; Ref default_label; }
 struct CallData { Ref func; Ref[] args; }
@@ -119,6 +126,7 @@ struct InstData
 		value_interner::InternerRef constant;
 		Ref ref;
 		AllocData alloc;
+		DynAllocData dyn_alloc;
 		BinData bin;
 		BranchData branch;
 		SwitchData switch_data;
@@ -264,6 +272,19 @@ fn Ref Builder.add_alloc(&self, uint size, uint align, bool is_volatile = false)
 	self.insert_body((sz)(self.arg_count + self.alloc_count + 1), ref);
 	self.alloc_count++;
 	return ref;
+}
+
+<* `size` is an i64 byte count; the result is emitted at the current position, not hoisted. *>
+fn Ref Builder.add_dyn_alloc(&self, Ref size, uint align)
+	=> self.add_inst(DYN_ALLOC, { .dyn_alloc = { .size = size, .align = align } }, value_interner::REF_PTR);
+
+fn Ref Builder.add_stack_save(&self)
+	=> self.add_inst(STACK_SAVE, { .none = 0 }, value_interner::REF_PTR);
+
+fn void Builder.add_stack_restore(&self, Ref saved)
+{
+	if (self.block_terminated()) return;
+	self.add_inst(STACK_RESTORE, { .ref = saved }, value_interner::REF_VOID);
 }
 
 fn Ref Builder.add_inst(&self, InstTag tag, InstData data, value_interner::InternerRef ty)

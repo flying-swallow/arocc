@@ -71,13 +71,20 @@ struct Lowering
 	bool block_terminated;
 }
 
-struct LiveInterval { ir::Ref ref; uint start; uint end; }
+struct LiveInterval
+{
+	ir::Ref ref; uint start; uint end;
+}
 
 fn bool is_terminator(ir::InstTag tag)
 {
 	switch (tag)
 	{
-		case JMP: case BRANCH: case SWITCH: case RET: case JMP_VAL: return true;
+		case JMP:
+		case BRANCH:
+		case SWITCH:
+		case RET:
+		case JMP_VAL: return true;
 		default: return false;
 	}
 }
@@ -89,7 +96,9 @@ fn bool is_allocatable_value(ir::Inst inst)
 	{
 		// These values are materialized directly by load(), rather than by a
 		// store() at a definition point.
-		case CONSTANT: case SYMBOL: case ALLOC: return false;
+		case CONSTANT:
+		case SYMBOL:
+		case ALLOC: return false;
 		default: return true;
 	}
 }
@@ -142,11 +151,19 @@ fn ushort? Lowering.bits(&self, value_interner::InternerRef ty)
 fn void Lowering.emit(&self, Mnemonic mnemonic, Operand a = {}, Operand b = {}, Operand c = {})
 {
 	Line line = { .mnemonic = mnemonic, .ops = { a, b, c } };
-	foreach (op : line.ops) { if (op.kind != NONE) line.op_count++; }
+	foreach (op : line.ops)
+	{
+		if (op.kind != NONE) line.op_count++;
+	}
 	self.lines.push(line);
 }
 
-fn void Lowering.emit_label(&self, String label) => self.lines.push({ .is_label = true, .label = label });
+fn void Lowering.emit_label(&self, String label) => self.lines.push(
+{
+	.is_label = true, .label = label
+}
+
+);
 
 fn Operand Lowering.slot(&self, ir::Ref ref, ushort bits) => mem_op(RBP, -self.slots[(sz)ref], bits);
 
@@ -200,12 +217,19 @@ fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 			String label = "";
 			foreach (str : self.strings)
 			{
-				if (str.constant == inst.data.constant) { label = str.label; break; }
+				if (str.constant == inst.data.constant)
+				{
+					label = str.label; break;
+				}
 			}
 			if (label.len == 0)
 			{
 				label = string::tformat(".L.str.%d", self.strings.len());
-				self.strings.push({ .constant = inst.data.constant, .label = label, .bytes = key.bytes });
+				self.strings.push(
+				{
+					.constant = inst.data.constant, .label = label, .bytes = key.bytes
+				}
+				);
 			}
 			self.emit(LEA, reg_op(reg.to_bits(64)), label_mem_op(label));
 			return 64;
@@ -217,13 +241,13 @@ fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 			// Truncate to the operand width, keeping the signed reading the assembler expects.
 			switch (w)
 			{
-				case 8: value = (long)(ichar)value;
-				case 16: value = (long)(short)value;
-				case 32: value = (long)(int)value;
-				default: break;
-			}
-			self.emit(MOV, reg_op(reg.to_bits(w)), imm_op(value));
-			return w;
+			case 8: value = (long)(ichar)value;
+			case 16: value = (long)(short)value;
+			case 32: value = (long)(int)value;
+			default: break;
+		}
+		self.emit(MOV, reg_op(reg.to_bits(w)), imm_op(value));
+		return w;
 		case F16:
 		case F32:
 		case F64:
@@ -388,7 +412,7 @@ fn void Lowering.note_phi_edge_intervals(&self, uint from, uint to,
 {
 	if (block_labels[(sz)from] == ir::NONE) return;
 	usz term_pos = self.terminator_position(block_starts[(sz)from], block_ends[(sz)from]);
-	uint edge_pos = (uint)(term_pos < block_ends[(sz)from] ? term_pos : block_ends[(sz)from]);
+	uint edge_pos = (uint)(term_pos < block_ends[(sz)from]? term_pos: block_ends[(sz)from]);
 	usz pos = block_starts[(sz)to];
 	usz end = block_ends[(sz)to];
 	while (pos < end && self.inst(self.decl.body[pos]).tag != LABEL) pos++;
@@ -534,15 +558,42 @@ fn void Lowering.allocate(&self)
 		usz base = (usz)block * words;
 		switch (inst.tag)
 		{
-			case LOAD: case BIT_NOT: case NEGATE: case TRUNC: case ZEXT: case SEXT:
+			case LOAD:
+			case BIT_NOT:
+			case NEGATE:
+			case TRUNC:
+			case ZEXT:
+			case SEXT:
+			case STACK_RESTORE:
 				self.mark_use(inst.data.ref, block, at, candidates, block_defs, block_uses, words, starts, ends);
+			case DYN_ALLOC:
+				self.mark_use(inst.data.dyn_alloc.size, block, at, candidates, block_defs, block_uses, words, starts, ends);
 			case RET:
 				if (inst.data.ref != ir::NONE) self.mark_use(inst.data.ref, block, at, candidates, block_defs, block_uses, words, starts, ends);
 			case STORE:
-			case BIT_OR: case BIT_XOR: case BIT_AND: case BIT_SHL: case BIT_ASHR: case BIT_LSHR:
-			case CMP_EQ: case CMP_NE: case CMP_SLT: case CMP_SLTE: case CMP_SGT: case CMP_SGTE:
-			case CMP_ULT: case CMP_ULTE: case CMP_UGT: case CMP_UGTE:
-			case ADD: case SUB: case MUL: case SDIV: case UDIV: case SREM: case UREM:
+			case BIT_OR:
+			case BIT_XOR:
+			case BIT_AND:
+			case BIT_SHL:
+			case BIT_ASHR:
+			case BIT_LSHR:
+			case CMP_EQ:
+			case CMP_NE:
+			case CMP_SLT:
+			case CMP_SLTE:
+			case CMP_SGT:
+			case CMP_SGTE:
+			case CMP_ULT:
+			case CMP_ULTE:
+			case CMP_UGT:
+			case CMP_UGTE:
+			case ADD:
+			case SUB:
+			case MUL:
+			case SDIV:
+			case UDIV:
+			case SREM:
+			case UREM:
 				self.mark_use(inst.data.bin.lhs, block, at, candidates, block_defs, block_uses, words, starts, ends);
 				self.mark_use(inst.data.bin.rhs, block, at, candidates, block_defs, block_uses, words, starts, ends);
 			case BRANCH:
@@ -556,8 +607,16 @@ fn void Lowering.allocate(&self)
 			case CALL:
 				self.mark_use(inst.data.call.func, block, at, candidates, block_defs, block_uses, words, starts, ends);
 				foreach (arg : inst.data.call.args) self.mark_use(arg, block, at, candidates, block_defs, block_uses, words, starts, ends);
-			case CONSTANT: case ARG: case SYMBOL: case LABEL: case LABEL_ADDR: case JMP: case JMP_VAL:
-			case ALLOC: case PHI:
+			case CONSTANT:
+			case ARG:
+			case SYMBOL:
+			case LABEL:
+			case LABEL_ADDR:
+			case JMP:
+			case JMP_VAL:
+			case ALLOC:
+			case PHI:
+			case STACK_SAVE:
 				break;
 		}
 		if (candidates[(sz)ref])
@@ -584,8 +643,12 @@ fn void Lowering.allocate(&self)
 			for (usz word = 0; word < words; word++)
 			{
 				ulong next_in = block_uses[base + word] | (next_out[word] & ~block_defs[base + word]);
-				if (live_out[base + word] != next_out[word]) { live_out[base + word] = next_out[word]; changed = true; }
-				if (live_in[base + word] != next_in) { live_in[base + word] = next_in; changed = true; }
+				if (live_out[base + word] != next_out[word]){ live_out[base + word] = next_out[word]; changed = true;
+				}
+				if (live_in[base + word] != next_in)
+				{
+					live_in[base + word] = next_in; changed = true;
+				}
 			}
 		}
 	}
@@ -651,7 +714,10 @@ fn void Lowering.allocate(&self)
 		usz free_reg = active.len;
 		for (usz reg = 0; reg < active.len; reg++)
 		{
-			if (active[reg] == ir::NONE) { free_reg = reg; break; }
+			if (active[reg] == ir::NONE)
+			{
+				free_reg = reg; break;
+			}
 		}
 		if (free_reg < active.len)
 		{
@@ -680,7 +746,8 @@ fn void Lowering.allocate(&self)
 		bool used = false;
 		for (usz ref = 0; ref < count; ref++)
 		{
-			if (self.value_in_reg[ref] && self.value_regs[ref] == SYSV_CALLEE_PRESERVED_REGS[reg]) { used = true; break; }
+			if (self.value_in_reg[ref] && self.value_regs[ref] == SYSV_CALLEE_PRESERVED_REGS[reg]){ used = true; break;
+			}
 		}
 		if (!used) continue;
 		self.used_callee_regs[reg] = true;
@@ -697,7 +764,10 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 	usz start = usz::max;
 	foreach (usz i, ref : self.decl.body)
 	{
-		if (ref == target) { start = i + 1; break; }
+		if (ref == target)
+		{
+			start = i + 1; break;
+		}
 	}
 	if (start == usz::max) return;
 	// Phase 1: inputs into the copy area. Phase 2: copy area into the PHI slots.
@@ -739,7 +809,10 @@ fn void? Lowering.jump_to(&self, ir::Ref target)
 
 fn bool Lowering.is_defined(&self, String name)
 {
-	foreach (&decl : self.ir.decls) { if (decl.name == name && decl.is_definition()) return true; }
+	foreach (&decl : self.ir.decls)
+	{
+		if (decl.name == name && decl.is_definition()) return true;
+	}
 	return false;
 }
 
@@ -811,8 +884,14 @@ fn void? Lowering.extend(&self, ir::Ref ref, bool signed)
 	{
 		if (from == 32)
 		{
-			if (signed) { self.emit(MOVSXD, reg_op(RAX), reg_op(EAX)); }
-			else { self.emit(MOV, reg_op(EAX), reg_op(EAX)); }
+			if (signed)
+			{
+				self.emit(MOVSXD, reg_op(RAX), reg_op(EAX));
+			}
+			else
+			{
+				self.emit(MOV, reg_op(EAX), reg_op(EAX));
+			}
 		}
 		else
 		{
@@ -922,8 +1001,10 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, usz arg_index)
 			if (self.current_label != ir::NONE && !self.block_terminated) self.edge_copies(ref)!;
 			self.current_label = ref;
 			self.emit_label(self.labels[(sz)ref]);
-		case ALLOC: case PHI: break;
-		case CONSTANT: case SYMBOL: break;
+		case ALLOC:
+		case PHI: break;
+		case CONSTANT:
+		case SYMBOL: break;
 		case JMP: self.jump_to(inst.data.ref)!;
 		case BRANCH: self.branch(ref)!;
 		case SWITCH: self.switch_inst(ref)!;
@@ -972,7 +1053,25 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, usz arg_index)
 		case ZEXT: self.extend(ref, false)!;
 		case SEXT: self.extend(ref, true)!;
 		case SELECT: self.select(ref)!;
-		case LABEL_ADDR: case JMP_VAL: self.fail("TODO: lowering computed goto")!;
+		case DYN_ALLOC:
+			// Every frame slot is rbp-relative and the epilogue is `leave`, so rsp may
+			// move at runtime. Round to 16 bytes to keep calls aligned.
+			long align = inst.data.dyn_alloc.align > 16 ? (long)inst.data.dyn_alloc.align : 16;
+			self.load(inst.data.dyn_alloc.size, RAX)!;
+			self.emit(ADD, reg_op(RAX), imm_op(align - 1));
+			self.emit(AND, reg_op(RAX), imm_op(-align));
+			self.emit(SUB, reg_op(RSP), reg_op(RAX));
+			if (align > 16) self.emit(AND, reg_op(RSP), imm_op(-align));
+			self.emit(MOV, reg_op(RAX), reg_op(RSP));
+			self.store(ref, RAX)!;
+		case STACK_SAVE:
+			self.emit(MOV, reg_op(RAX), reg_op(RSP));
+			self.store(ref, RAX)!;
+		case STACK_RESTORE:
+			self.load(inst.data.ref, RAX)!;
+			self.emit(MOV, reg_op(RSP), reg_op(RAX));
+		case LABEL_ADDR:
+		case JMP_VAL: self.fail("TODO: lowering computed goto")!;
 	}
 }
 
@@ -1004,7 +1103,11 @@ fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 		if (inst.tag == ARG) arg_index++;
 		switch (inst.tag)
 		{
-			case JMP: case BRANCH: case SWITCH: case RET: case JMP_VAL: self.block_terminated = true;
+			case JMP:
+			case BRANCH:
+			case SWITCH:
+			case RET:
+			case JMP_VAL: self.block_terminated = true;
 			case LABEL: self.block_terminated = false;
 			default: break;
 		}

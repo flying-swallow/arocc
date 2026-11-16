@@ -215,8 +215,8 @@ fn void init_named_types(Compilation* comp)
 
 fn QualType generate_ns_constant_string_type(Compilation* comp)
 {
-	QualType const_int_ptr = { .is_const = true, .index = IDX_INT_POINTER };
-	QualType const_char_ptr = { .is_const = true, .index = IDX_CHAR_POINTER };
+	QualType const_int_ptr = { .is_const = true, .builtin = true, .index = BuiltinType.INT_POINTER.ordinal };
+	QualType const_char_ptr = { .is_const = true, .builtin = true, .index = BuiltinType.CHAR_POINTER.ordinal };
 	RecordField[4] fields = {
 		field(comp, "isa", const_int_ptr),
 		field(comp, "flags", INT),

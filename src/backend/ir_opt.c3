@@ -19,14 +19,42 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 {
 	switch (inst.tag)
 	{
-		case LOAD: case BIT_NOT: case NEGATE: case TRUNC: case ZEXT: case SEXT:
+		case LOAD:
+		case BIT_NOT:
+		case NEGATE:
+		case TRUNC:
+		case ZEXT:
+		case SEXT:
+		case STACK_RESTORE:
 			@body(&inst.data.ref);
+		case DYN_ALLOC:
+			@body(&inst.data.dyn_alloc.size);
 		case RET:
 			if (inst.data.ref != ir::NONE) @body(&inst.data.ref);
-		case STORE: case BIT_OR: case BIT_XOR: case BIT_AND: case BIT_SHL: case BIT_ASHR: case BIT_LSHR:
-		case CMP_EQ: case CMP_NE: case CMP_SLT: case CMP_SLTE: case CMP_SGT: case CMP_SGTE:
-		case CMP_ULT: case CMP_ULTE: case CMP_UGT: case CMP_UGTE:
-		case ADD: case SUB: case MUL: case SDIV: case UDIV: case SREM: case UREM:
+		case STORE:
+		case BIT_OR:
+		case BIT_XOR:
+		case BIT_AND:
+		case BIT_SHL:
+		case BIT_ASHR:
+		case BIT_LSHR:
+		case CMP_EQ:
+		case CMP_NE:
+		case CMP_SLT:
+		case CMP_SLTE:
+		case CMP_SGT:
+		case CMP_SGTE:
+		case CMP_ULT:
+		case CMP_ULTE:
+		case CMP_UGT:
+		case CMP_UGTE:
+		case ADD:
+		case SUB:
+		case MUL:
+		case SDIV:
+		case UDIV:
+		case SREM:
+		case UREM:
 			@body(&inst.data.bin.lhs);
 			@body(&inst.data.bin.rhs);
 		case BRANCH:
@@ -39,11 +67,24 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 			@body(&inst.data.switch_data.target);
 		case CALL:
 			@body(&inst.data.call.func);
-			foreach (i, arg : inst.data.call.args) { @body(&inst.data.call.args[i]); }
+			foreach (i, arg : inst.data.call.args)
+			{
+				@body(&inst.data.call.args[i]);
+			}
 		case PHI:
-			foreach (i, input : inst.data.phi) { @body(&inst.data.phi[i].value); }
-		case CONSTANT: case ARG: case SYMBOL: case LABEL: case LABEL_ADDR:
-		case JMP: case JMP_VAL: case ALLOC:
+			foreach (i, input : inst.data.phi)
+			{
+				@body(&inst.data.phi[i].value);
+			}
+		case CONSTANT:
+		case ARG:
+		case SYMBOL:
+		case LABEL:
+		case LABEL_ADDR:
+		case JMP:
+		case JMP_VAL:
+		case ALLOC:
+		case STACK_SAVE:
 			break;
 	}
 }
@@ -58,17 +99,58 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 			@body(&inst.data.branch.then_label);
 			@body(&inst.data.branch.else_label);
 		case SWITCH:
-			foreach (i, label : inst.data.switch_data.labels) { @body(&inst.data.switch_data.labels[i]); }
+			foreach (i, label : inst.data.switch_data.labels)
+			{
+				@body(&inst.data.switch_data.labels[i]);
+			}
 			@body(&inst.data.switch_data.default_label);
 		case PHI:
-			foreach (i, input : inst.data.phi) { @body(&inst.data.phi[i].label); }
-		case CONSTANT: case ARG: case SYMBOL: case LABEL: case LABEL_ADDR:
-		case JMP_VAL: case CALL: case ALLOC: case STORE:
-		case BIT_OR: case BIT_XOR: case BIT_AND: case BIT_SHL: case BIT_ASHR: case BIT_LSHR:
-		case CMP_EQ: case CMP_NE: case CMP_SLT: case CMP_SLTE: case CMP_SGT: case CMP_SGTE:
-		case CMP_ULT: case CMP_ULTE: case CMP_UGT: case CMP_UGTE:
-		case ADD: case SUB: case MUL: case SDIV: case UDIV: case SREM: case UREM:
-		case RET: case LOAD: case BIT_NOT: case NEGATE: case TRUNC: case ZEXT: case SEXT:
+			foreach (i, input : inst.data.phi)
+			{
+				@body(&inst.data.phi[i].label);
+			}
+		case CONSTANT:
+		case ARG:
+		case SYMBOL:
+		case LABEL:
+		case LABEL_ADDR:
+		case JMP_VAL:
+		case CALL:
+		case ALLOC:
+		case STORE:
+		case DYN_ALLOC:
+		case STACK_SAVE:
+		case STACK_RESTORE:
+		case BIT_OR:
+		case BIT_XOR:
+		case BIT_AND:
+		case BIT_SHL:
+		case BIT_ASHR:
+		case BIT_LSHR:
+		case CMP_EQ:
+		case CMP_NE:
+		case CMP_SLT:
+		case CMP_SLTE:
+		case CMP_SGT:
+		case CMP_SGTE:
+		case CMP_ULT:
+		case CMP_ULTE:
+		case CMP_UGT:
+		case CMP_UGTE:
+		case ADD:
+		case SUB:
+		case MUL:
+		case SDIV:
+		case UDIV:
+		case SREM:
+		case UREM:
+		case RET:
+		case LOAD:
+		case BIT_NOT:
+		case NEGATE:
+		case TRUNC:
+		case ZEXT:
+		case SEXT:
 		case SELECT:
 			break;
 	}
@@ -78,8 +160,11 @@ fn bool is_terminator(ir::InstTag tag)
 {
 	switch (tag)
 	{
-		case ir::InstTag.JMP: case ir::InstTag.BRANCH: case ir::InstTag.SWITCH:
-		case ir::InstTag.RET: case ir::InstTag.JMP_VAL:
+		case ir::InstTag.JMP:
+		case ir::InstTag.BRANCH:
+		case ir::InstTag.SWITCH:
+		case ir::InstTag.RET:
+		case ir::InstTag.JMP_VAL:
 			return true;
 		default: return false;
 	}
@@ -89,8 +174,12 @@ fn bool is_value_tag(ir::InstTag tag)
 {
 	switch (tag)
 	{
-		case ir::InstTag.LABEL: case ir::InstTag.STORE: case ir::InstTag.JMP:
-		case ir::InstTag.BRANCH: case ir::InstTag.SWITCH: case ir::InstTag.RET:
+		case ir::InstTag.LABEL:
+		case ir::InstTag.STORE:
+		case ir::InstTag.JMP:
+		case ir::InstTag.BRANCH:
+		case ir::InstTag.SWITCH:
+		case ir::InstTag.RET:
 		case ir::InstTag.JMP_VAL:
 			return false;
 		default: return true;
@@ -143,7 +232,10 @@ fn void Cfg.free(&self)
 	*self = {};
 }
 
-struct DfsFrame { uint block; sz next_succ; }
+struct DfsFrame
+{
+	uint block; sz next_succ;
+}
 
 fn void cfg_append_edge(Cfg* cfg, uint from, uint to)
 {
@@ -239,19 +331,34 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 		switch (inst.tag)
 		{
 			case ir::InstTag.JMP:
-				if ((usz)inst.data.ref < inst_count && cfg.block_of_ref[(sz)inst.data.ref] != NONE_BLOCK) { cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)inst.data.ref]); }
+				if ((usz)inst.data.ref < inst_count && cfg.block_of_ref[(sz)inst.data.ref] != NONE_BLOCK)
+				{
+					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)inst.data.ref]);
+				}
 			case ir::InstTag.BRANCH:
 				ir::Ref then_ref = inst.data.branch.then_label;
 				ir::Ref else_ref = inst.data.branch.else_label;
-				if ((usz)then_ref < inst_count && cfg.block_of_ref[(sz)then_ref] != NONE_BLOCK) { cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)then_ref]); }
-				if ((usz)else_ref < inst_count && cfg.block_of_ref[(sz)else_ref] != NONE_BLOCK) { cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)else_ref]); }
+				if ((usz)then_ref < inst_count && cfg.block_of_ref[(sz)then_ref] != NONE_BLOCK)
+				{
+					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)then_ref]);
+				}
+				if ((usz)else_ref < inst_count && cfg.block_of_ref[(sz)else_ref] != NONE_BLOCK)
+				{
+					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)else_ref]);
+				}
 			case ir::InstTag.SWITCH:
 				foreach (label : inst.data.switch_data.labels)
 				{
-					if ((usz)label < inst_count && cfg.block_of_ref[(sz)label] != NONE_BLOCK) { cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)label]); }
+					if ((usz)label < inst_count && cfg.block_of_ref[(sz)label] != NONE_BLOCK)
+					{
+						cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)label]);
+					}
 				}
 				ir::Ref default_ref = inst.data.switch_data.default_label;
-				if ((usz)default_ref < inst_count && cfg.block_of_ref[(sz)default_ref] != NONE_BLOCK) { cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)default_ref]); }
+				if ((usz)default_ref < inst_count && cfg.block_of_ref[(sz)default_ref] != NONE_BLOCK)
+				{
+					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)default_ref]);
+				}
 			default: break;
 		}
 	}
@@ -260,7 +367,10 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 	{
 		bool[] visited = alloc::new_array(allocator, bool, (sz)block_count);
 		defer alloc::free(allocator, visited.ptr);
-		for (usz i = 0; i < block_count; i++) { visited[i] = false; cfg.reachable[i] = false; }
+		for (usz i = 0; i < block_count; i++)
+		{
+			visited[i] = false; cfg.reachable[i] = false;
+		}
 		list::List{DfsFrame} stack;
 		stack.init(allocator);
 		defer stack.free();
@@ -269,11 +379,15 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 		defer postorder.free();
 		visited[0] = true;
 		cfg.reachable[0] = true;
-		stack.push({ .block = 0, .next_succ = 0 });
+		stack.push(
+		{
+			.block = 0, .next_succ = 0
+		}
+		);
 		while (stack.len())
 		{
 			DfsFrame* frame = &stack.entries[stack.len() - 1];
-			list::List{uint}* succs = &cfg.blocks[(sz)frame.block].succs;
+			list::List{uint} * succs = &cfg.blocks[(sz)frame.block].succs;
 			if (frame.next_succ < succs.len())
 			{
 				uint child = succs.entries[frame.next_succ];
@@ -282,7 +396,11 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 				{
 					visited[(sz)child] = true;
 					cfg.reachable[(sz)child] = true;
-					stack.push({ .block = child, .next_succ = 0 });
+					stack.push(
+					{
+						.block = child, .next_succ = 0
+					}
+					);
 				}
 				continue;
 			}
@@ -330,8 +448,14 @@ fn void Cfg.compute_dominators(&self)
 			foreach (pred : block.preds)
 			{
 				if (!self.reachable[(sz)pred] || self.idom[(sz)pred] == NONE_BLOCK) continue;
-				if (new_idom == NONE_BLOCK) { new_idom = pred; }
-				else { new_idom = cfg_intersect(self, new_idom, pred); }
+				if (new_idom == NONE_BLOCK)
+				{
+					new_idom = pred;
+				}
+				else
+				{
+					new_idom = cfg_intersect(self, new_idom, pred);
+				}
 			}
 			if (new_idom != NONE_BLOCK && self.idom[(sz)block_index] != new_idom)
 			{
@@ -427,7 +551,10 @@ fn Uses compute_uses(ir::Decl* decl, Allocator allocator)
 		ir::Inst* inst = &decl.instructions[(sz)user_ref];
 		@each_value_operand(inst; ir::Ref* slot)
 		{
-				if (*slot != ir::NONE && (usz)*slot < (usz)decl.instructions.len) { uses.users[(sz)*slot].push(user_ref); }
+			if (*slot != ir::NONE && (usz)*slot < (usz)decl.instructions.len)
+			{
+				uses.users[(sz)*slot].push(user_ref);
+			}
 		};
 	}
 	return uses;
@@ -442,7 +569,7 @@ fn void replace_all_uses(ir::Decl* decl, ir::Ref old, ir::Ref new)
 		ir::Inst* inst = &decl.instructions[(sz)user_ref];
 		@each_value_operand(inst; ir::Ref* slot)
 		{
-			if (*slot == old) *slot = new;
+			if (*slot == old) * slot = new;
 		};
 	}
 }
@@ -503,7 +630,8 @@ fn ir::Inst copy_inst_payload(ir::Decl* decl, ir::Inst inst)
 {
 	switch (inst.tag)
 	{
-		case ir::InstTag.LABEL: case ir::InstTag.SYMBOL:
+		case ir::InstTag.LABEL:
+		case ir::InstTag.SYMBOL:
 			inst.data.label = inst.data.label.copy(&decl.arena);
 		case ir::InstTag.PHI:
 			ir::PhiInput[] inputs = alloc::new_array(&decl.arena, ir::PhiInput, inst.data.phi.len);
@@ -533,7 +661,12 @@ fn ir::Ref DeclEditor.append(&self, ir::Inst inst)
 }
 
 fn ir::Ref DeclEditor.add_constant(&self, value_interner::InternerRef value, value_interner::InternerRef ty)
-	=> self.append({ .tag = ir::InstTag.CONSTANT, .data.constant = value, .ty = ty });
+=> self.append(
+{
+	.tag = ir::InstTag.CONSTANT, .data.constant = value, .ty = ty
+}
+
+);
 
 fn void DeclEditor.insert_body(&self, sz at, ir::Ref ref)
 {
@@ -553,11 +686,19 @@ fn void DeclEditor.remove_body_where(&self, BodyPredicate predicate, void* conte
 		if (predicate(ref, context)) continue;
 		self.body.entries[write++] = ref;
 	}
-	while (self.body.len() > write) { self.body.pop()!!; }
+	while (self.body.len() > write)
+	{
+		self.body.pop()!!;
+	}
 }
 
 fn ir::Ref DeclEditor.new_label(&self, String name)
-	=> self.append({ .tag = ir::InstTag.LABEL, .data.label = name, .ty = value_interner::REF_VOID });
+=> self.append(
+{
+	.tag = ir::InstTag.LABEL, .data.label = name, .ty = value_interner::REF_VOID
+}
+
+);
 
 fn void DeclEditor.commit(&self)
 {
@@ -581,8 +722,8 @@ fn void remove_decl(ir::Ir* graph, usz index)
 	graph.decls.remove_at((sz)index);
 }
 
-fn void mark_decl_symbol(HashMap{String, uint}* decl_indices, bool[] reachable,
-	list::List{uint}* pending, String symbol)
+fn void mark_decl_symbol(HashMap{String, uint} * decl_indices, bool[] reachable,
+	list::List{uint} * pending, String symbol)
 {
 	if (try index = decl_indices.get(symbol))
 	{
@@ -661,9 +802,12 @@ fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program, bool keep
 }
 
 fn void dead_function_elim(ir::Ir* graph, bool whole_program, bool keep_external_definitions)
-	=> eliminate_dead_declarations(graph, whole_program, keep_external_definitions);
+=> eliminate_dead_declarations(graph, whole_program, keep_external_definitions);
 
-struct BodyRemovalContext { bool[] remove; }
+struct BodyRemovalContext
+{
+	bool[] remove;
+}
 
 fn bool body_ref_marked_for_removal(ir::Ref ref, void* context)
 {
@@ -782,7 +926,7 @@ fn void editor_replace_all_uses(DeclEditor* editor, ir::Ref old, ir::Ref replace
 		ir::Inst* inst = &editor.insts.entries[(sz)user_ref];
 		@each_value_operand(inst; ir::Ref* slot)
 		{
-			if (*slot == old) *slot = replacement;
+			if (*slot == old) * slot = replacement;
 		};
 	}
 }
@@ -927,7 +1071,7 @@ fn bool editor_cleanup_unused_mem2reg_phis(DeclEditor* editor, ir::Ref[] phi_for
 		@each_value_operand(user; ir::Ref* slot)
 		{
 			if (*slot != ir::NONE && (usz)*slot < (usz)editor.insts.len() &&
-				is_mem2reg_phi[(sz)*slot] && !remove[(sz)*slot])
+			is_mem2reg_phi[(sz)*slot] && !remove[(sz)*slot])
 			{
 				live[(sz)*slot] = true;
 			}
@@ -943,12 +1087,12 @@ fn bool editor_cleanup_unused_mem2reg_phis(DeclEditor* editor, ir::Ref[] phi_for
 		foreach (phi_ref : phi_for_block)
 		{
 			if (phi_ref == ir::NONE || (usz)phi_ref >= (usz)editor.insts.len() ||
-				remove[(sz)phi_ref] || !live[(sz)phi_ref]) continue;
+			remove[(sz)phi_ref] || !live[(sz)phi_ref]) continue;
 			ir::Inst* phi = &editor.insts.entries[(sz)phi_ref];
 			@each_value_operand(phi; ir::Ref* slot)
 			{
 				if (*slot != ir::NONE && (usz)*slot < (usz)editor.insts.len() &&
-					is_mem2reg_phi[(sz)*slot] && !remove[(sz)*slot] && !live[(sz)*slot])
+				is_mem2reg_phi[(sz)*slot] && !remove[(sz)*slot] && !live[(sz)*slot])
 				{
 					live[(sz)*slot] = true;
 					changed = true;
@@ -1022,7 +1166,8 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	uint expected_size;
 	switch (access_key.tag)
 	{
-		case primitive_value::PrimitiveType.INT_TY: case primitive_value::PrimitiveType.FLOAT_TY:
+		case primitive_value::PrimitiveType.INT_TY:
+		case primitive_value::PrimitiveType.FLOAT_TY:
 			if (access_key.ty_bits == 0) return false;
 			expected_size = ((uint)access_key.ty_bits + 7) / 8;
 		case primitive_value::PrimitiveType.PTR_TY:
@@ -1052,7 +1197,10 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	defer alloc::free(allocator, def_blocks.ptr);
 	bool[] phi_sites = alloc::new_array(allocator, bool, (sz)cfg.blocks.len);
 	defer alloc::free(allocator, phi_sites.ptr);
-	for (usz i = 0; i < cfg.blocks.len; i++) { def_blocks[i] = false; phi_sites[i] = false; }
+	for (usz i = 0; i < cfg.blocks.len; i++)
+	{
+		def_blocks[i] = false; phi_sites[i] = false;
+	}
 	foreach (user_ref : uses.users[(sz)alloc_ref])
 	{
 		ir::Inst* user = &decl.instructions[(sz)user_ref];
@@ -1097,7 +1245,11 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 			if (!cfg.reachable[(sz)pred]) continue;
 			inputs[input_index++] = { .label = cfg.blocks[(sz)pred].label, .value = ir::NONE };
 		}
-		ir::Ref phi_ref = editor.append({ .tag = ir::InstTag.PHI, .data.phi = inputs, .ty = access_type });
+		ir::Ref phi_ref = editor.append(
+		{
+			.tag = ir::InstTag.PHI, .data.phi = inputs, .ty = access_type
+		}
+		);
 		alloc::free(allocator, inputs.ptr);
 		phi_for_block[block_index] = phi_ref;
 		sz label_pos = 0;
@@ -1175,7 +1327,10 @@ fn bool mem2reg(ir::Ir* ir, ir::Decl* decl, Allocator a)
 	return changed;
 }
 
-enum ConstPropTag : char { TOP, CONSTANT, BOTTOM }
+enum ConstPropTag : char
+{
+	TOP, CONSTANT, BOTTOM
+}
 
 struct ConstPropValue
 {
@@ -1207,10 +1362,19 @@ fn bool const_prop_int_width(ir::Ir* graph, value_interner::InternerRef ty, usho
 	return true;
 }
 
-fn ConstPropValue const_prop_bottom() => { .tag = ConstPropTag.BOTTOM };
-fn ConstPropValue const_prop_top() => { .tag = ConstPropTag.TOP };
+fn ConstPropValue const_prop_bottom() =>
+{
+	.tag = ConstPropTag.BOTTOM
+};
+fn ConstPropValue const_prop_top() =>
+{
+	.tag = ConstPropTag.TOP
+};
 fn ConstPropValue const_prop_constant(ushort width, ulong bits)
-	=> { .tag = ConstPropTag.CONSTANT, .bits = bits & const_prop_mask(width) };
+=>
+{
+	.tag = ConstPropTag.CONSTANT, .bits = bits & const_prop_mask(width)
+};
 
 <* Join two lattice values. TOP contributes no information; conflicting constants become BOTTOM. *>
 fn ConstPropValue const_prop_join(ConstPropValue lhs, ConstPropValue rhs)
@@ -1245,16 +1409,19 @@ fn ConstPropValue const_prop_binary(ir::Ir* graph, ir::Decl* decl, ir::Inst* ins
 	if (lhs.tag == ConstPropTag.TOP || rhs.tag == ConstPropTag.TOP) return const_prop_top();
 	ushort width;
 	bool is_compare = inst.tag == ir::InstTag.CMP_EQ || inst.tag == ir::InstTag.CMP_NE ||
-		inst.tag == ir::InstTag.CMP_SLT || inst.tag == ir::InstTag.CMP_SLTE ||
-		inst.tag == ir::InstTag.CMP_SGT || inst.tag == ir::InstTag.CMP_SGTE ||
-		inst.tag == ir::InstTag.CMP_ULT || inst.tag == ir::InstTag.CMP_ULTE ||
-		inst.tag == ir::InstTag.CMP_UGT || inst.tag == ir::InstTag.CMP_UGTE;
+	inst.tag == ir::InstTag.CMP_SLT || inst.tag == ir::InstTag.CMP_SLTE ||
+	inst.tag == ir::InstTag.CMP_SGT || inst.tag == ir::InstTag.CMP_SGTE ||
+	inst.tag == ir::InstTag.CMP_ULT || inst.tag == ir::InstTag.CMP_ULTE ||
+	inst.tag == ir::InstTag.CMP_UGT || inst.tag == ir::InstTag.CMP_UGTE;
 	if (is_compare)
 	{
 		if ((usz)inst.data.bin.lhs >= (usz)decl.instructions.len ||
-			!const_prop_int_width(graph, decl.instructions[(sz)inst.data.bin.lhs].ty, &width)) return const_prop_bottom();
+		!const_prop_int_width(graph, decl.instructions[(sz)inst.data.bin.lhs].ty, &width)) return const_prop_bottom();
 	}
-	else if (!const_prop_int_width(graph, inst.ty, &width)) { return const_prop_bottom(); }
+	else if (!const_prop_int_width(graph, inst.ty, &width))
+	{
+		return const_prop_bottom();
+	}
 	ulong mask = const_prop_mask(width);
 	ulong a = lhs.bits & mask;
 	ulong b = rhs.bits & mask;
@@ -1276,7 +1443,10 @@ fn ConstPropValue const_prop_binary(ir::Ir* graph, ir::Decl* decl, ir::Inst* ins
 			result = a >> (uint)shift_amount;
 		case ir::InstTag.BIT_ASHR:
 			if (shift_amount >= width) return const_prop_bottom();
-			if (shift_amount == 0) { result = a; }
+			if (shift_amount == 0)
+			{
+				result = a;
+			}
 			else
 			{
 				result = a >> (uint)shift_amount;
@@ -1292,14 +1462,21 @@ fn ConstPropValue const_prop_binary(ir::Ir* graph, ir::Decl* decl, ir::Inst* ins
 		case ir::InstTag.UREM:
 			if (b == 0) return const_prop_bottom();
 			result = a % b;
-		case ir::InstTag.SDIV: case ir::InstTag.SREM:
+		case ir::InstTag.SDIV:
+		case ir::InstTag.SREM:
 			if (b == 0) return const_prop_bottom();
 			long signed_a = const_prop_signed(a, width);
 			long signed_b = const_prop_signed(b, width);
 			ulong signed_min = (ulong)1 << (width - 1);
 			if (a == signed_min && b == mask) return const_prop_bottom();
-			if (inst.tag == ir::InstTag.SDIV) { result = (ulong)(signed_a / signed_b); }
-			else { result = (ulong)(signed_a % signed_b); }
+			if (inst.tag == ir::InstTag.SDIV)
+			{
+				result = (ulong)(signed_a / signed_b);
+			}
+			else
+			{
+				result = (ulong)(signed_a % signed_b);
+			}
 		case ir::InstTag.CMP_EQ: return const_prop_constant(1, (ulong)(a == b ? 1 : 0));
 		case ir::InstTag.CMP_NE: return const_prop_constant(1, (ulong)(a != b ? 1 : 0));
 		case ir::InstTag.CMP_SLT: return const_prop_constant(1, (ulong)(const_prop_signed(a, width) < const_prop_signed(b, width) ? 1 : 0));
@@ -1343,30 +1520,49 @@ fn ConstPropValue const_prop_eval(ir::Ir* graph, ir::Decl* decl, Cfg* cfg, bool[
 				return cond.bits != 0 ? then_value : else_value;
 			}
 			return const_prop_join(then_value, else_value);
-		case ir::InstTag.BIT_NOT: case ir::InstTag.NEGATE:
+		case ir::InstTag.BIT_NOT:
+		case ir::InstTag.NEGATE:
 			ConstPropValue operand = const_prop_ref(values, decl, inst.data.ref);
 			if (operand.tag != ConstPropTag.CONSTANT) return operand;
 			ushort width;
 			if (!const_prop_int_width(graph, inst.ty, &width)) return const_prop_bottom();
 			if (inst.tag == ir::InstTag.BIT_NOT) return const_prop_constant(width, ~operand.bits);
 			return const_prop_constant(width, 0 - operand.bits);
-		case ir::InstTag.TRUNC: case ir::InstTag.ZEXT: case ir::InstTag.SEXT:
+		case ir::InstTag.TRUNC:
+		case ir::InstTag.ZEXT:
+		case ir::InstTag.SEXT:
 			ConstPropValue cast_operand = const_prop_ref(values, decl, inst.data.ref);
 			if (cast_operand.tag != ConstPropTag.CONSTANT) return cast_operand;
 			ushort src_width;
 			ushort dst_width;
 			if (!const_prop_int_width(graph, decl.instructions[(sz)inst.data.ref].ty, &src_width) ||
-				!const_prop_int_width(graph, inst.ty, &dst_width)) return const_prop_bottom();
+			!const_prop_int_width(graph, inst.ty, &dst_width)) return const_prop_bottom();
 			ulong cast_bits = cast_operand.bits & const_prop_mask(src_width);
 			if (inst.tag == ir::InstTag.SEXT) cast_bits = (ulong)const_prop_signed(cast_bits, src_width);
 			return const_prop_constant(dst_width, cast_bits);
-		case ir::InstTag.ADD: case ir::InstTag.SUB: case ir::InstTag.MUL:
-		case ir::InstTag.BIT_AND: case ir::InstTag.BIT_OR: case ir::InstTag.BIT_XOR:
-		case ir::InstTag.BIT_SHL: case ir::InstTag.BIT_ASHR: case ir::InstTag.BIT_LSHR:
-		case ir::InstTag.SDIV: case ir::InstTag.UDIV: case ir::InstTag.SREM: case ir::InstTag.UREM:
-		case ir::InstTag.CMP_EQ: case ir::InstTag.CMP_NE:
-		case ir::InstTag.CMP_SLT: case ir::InstTag.CMP_SLTE: case ir::InstTag.CMP_SGT: case ir::InstTag.CMP_SGTE:
-		case ir::InstTag.CMP_ULT: case ir::InstTag.CMP_ULTE: case ir::InstTag.CMP_UGT: case ir::InstTag.CMP_UGTE:
+		case ir::InstTag.ADD:
+		case ir::InstTag.SUB:
+		case ir::InstTag.MUL:
+		case ir::InstTag.BIT_AND:
+		case ir::InstTag.BIT_OR:
+		case ir::InstTag.BIT_XOR:
+		case ir::InstTag.BIT_SHL:
+		case ir::InstTag.BIT_ASHR:
+		case ir::InstTag.BIT_LSHR:
+		case ir::InstTag.SDIV:
+		case ir::InstTag.UDIV:
+		case ir::InstTag.SREM:
+		case ir::InstTag.UREM:
+		case ir::InstTag.CMP_EQ:
+		case ir::InstTag.CMP_NE:
+		case ir::InstTag.CMP_SLT:
+		case ir::InstTag.CMP_SLTE:
+		case ir::InstTag.CMP_SGT:
+		case ir::InstTag.CMP_SGTE:
+		case ir::InstTag.CMP_ULT:
+		case ir::InstTag.CMP_ULTE:
+		case ir::InstTag.CMP_UGT:
+		case ir::InstTag.CMP_UGTE:
 			return const_prop_binary(graph, decl, inst, values);
 		default: return const_prop_bottom();
 	}
@@ -1380,7 +1576,7 @@ fn bool const_prop_update(ConstPropValue[] values, ir::Ref ref, ConstPropValue i
 	return true;
 }
 
-fn void const_prop_enqueue_inst(list::List{ir::Ref}* worklist, bool[] queued, ir::Ref ref)
+fn void const_prop_enqueue_inst(list::List{ir::Ref} * worklist, bool[] queued, ir::Ref ref)
 {
 	if ((usz)ref >= (usz)queued.len || queued[(sz)ref]) return;
 	queued[(sz)ref] = true;
@@ -1388,7 +1584,7 @@ fn void const_prop_enqueue_inst(list::List{ir::Ref}* worklist, bool[] queued, ir
 }
 
 fn void const_prop_enqueue_block(ir::Decl* decl, Cfg* cfg, uint block_index,
-	list::List{ir::Ref}* worklist, bool[] queued)
+	list::List{ir::Ref} * worklist, bool[] queued)
 {
 	CfgBlock* block = &cfg.blocks[(sz)block_index];
 	for (sz pos = block.start + 1; pos < block_executable_end(decl, block); pos++)
@@ -1398,7 +1594,7 @@ fn void const_prop_enqueue_block(ir::Decl* decl, Cfg* cfg, uint block_index,
 }
 
 fn bool const_prop_mark_edge(Cfg* cfg, bool[] executable_edges, bool[] executable_blocks,
-	uint from, ir::Ref label, list::List{ir::Ref}* worklist, bool[] queued)
+	uint from, ir::Ref label, list::List{ir::Ref} * worklist, bool[] queued)
 {
 	if ((usz)label >= (usz)cfg.block_of_ref.len) return false;
 	uint to = cfg.block_of_ref[(sz)label];
@@ -1431,7 +1627,10 @@ fn bool const_prop_mark_edge(Cfg* cfg, bool[] executable_edges, bool[] executabl
 			{
 				const_prop_enqueue_inst(worklist, queued, ref);
 			}
-			else { break; }
+			else
+			{
+				break;
+			}
 		}
 	}
 	return true;
@@ -1465,9 +1664,16 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 	{
 		values[i] = const_prop_top();
 		ir::Inst* inst = &decl.instructions[(sz)i];
-		if (inst.tag == ir::InstTag.CONSTANT) { values[i] = const_prop_constant_inst(graph, inst); }
+		if (inst.tag == ir::InstTag.CONSTANT)
+		{
+			values[i] = const_prop_constant_inst(graph, inst);
+		}
 		else if (inst.tag == ir::InstTag.ARG || inst.tag == ir::InstTag.LOAD || inst.tag == ir::InstTag.CALL ||
-			inst.tag == ir::InstTag.ALLOC || inst.tag == ir::InstTag.SYMBOL) { values[i] = const_prop_bottom(); }
+			inst.tag == ir::InstTag.ALLOC || inst.tag == ir::InstTag.SYMBOL || inst.tag == ir::InstTag.DYN_ALLOC ||
+			inst.tag == ir::InstTag.STACK_SAVE)
+		{
+			values[i] = const_prop_bottom();
+		}
 	}
 	Uses uses = compute_uses(decl, allocator);
 	defer uses.free();
@@ -1549,7 +1755,7 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 			else if (target.tag == ConstPropTag.BOTTOM)
 			{
 				foreach (label : inst.data.switch_data.labels)
-					const_prop_mark_edge(&cfg, executable_edges, executable_blocks, block_index, label, &worklist, queued);
+				const_prop_mark_edge(&cfg, executable_edges, executable_blocks, block_index, label, &worklist, queued);
 				const_prop_mark_edge(&cfg, executable_edges, executable_blocks, block_index,
 					inst.data.switch_data.default_label, &worklist, queued);
 			}
@@ -1628,14 +1834,26 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 		ushort width;
 		if (!const_prop_int_width(graph, inst.ty, &width)) continue;
 		value_interner::InternerRef constant_ref;
-		if (width == 1) { constant_ref = value.bits == 0 ? value_interner::REF_ZERO : value_interner::REF_ONE; }
-		else { constant_ref = graph.interner.put(primitive_value::int_key(const_prop_signed(value.bits, width))); }
+		if (width == 1)
+		{
+			constant_ref = value.bits == 0 ? value_interner::REF_ZERO : value_interner::REF_ONE;
+		}
+		else
+		{
+			constant_ref = graph.interner.put(primitive_value::int_key(const_prop_signed(value.bits, width)));
+		}
 		ir::Ref constant_inst = editor.add_constant(constant_ref, inst.ty);
 		editor_replace_all_uses(&editor, ref, constant_inst);
 		changed = true;
 	}
-	if (changed) { editor.commit(); }
-	else { editor.free(); }
+	if (changed)
+	{
+		editor.commit();
+	}
+	else
+	{
+		editor.free();
+	}
 	return changed;
 }
 
@@ -1643,21 +1861,41 @@ fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst)
 {
 	switch (inst.tag)
 	{
-		case ir::InstTag.BIT_OR: case ir::InstTag.BIT_XOR: case ir::InstTag.BIT_AND:
-		case ir::InstTag.BIT_SHL: case ir::InstTag.BIT_ASHR: case ir::InstTag.BIT_LSHR:
-		case ir::InstTag.CMP_EQ: case ir::InstTag.CMP_NE:
-		case ir::InstTag.CMP_SLT: case ir::InstTag.CMP_SLTE: case ir::InstTag.CMP_SGT: case ir::InstTag.CMP_SGTE:
-		case ir::InstTag.CMP_ULT: case ir::InstTag.CMP_ULTE: case ir::InstTag.CMP_UGT: case ir::InstTag.CMP_UGTE:
-		case ir::InstTag.ADD: case ir::InstTag.SUB: case ir::InstTag.MUL:
-		case ir::InstTag.TRUNC: case ir::InstTag.ZEXT: case ir::InstTag.SEXT:
-		case ir::InstTag.BIT_NOT: case ir::InstTag.NEGATE: case ir::InstTag.SELECT:
+		case ir::InstTag.BIT_OR:
+		case ir::InstTag.BIT_XOR:
+		case ir::InstTag.BIT_AND:
+		case ir::InstTag.BIT_SHL:
+		case ir::InstTag.BIT_ASHR:
+		case ir::InstTag.BIT_LSHR:
+		case ir::InstTag.CMP_EQ:
+		case ir::InstTag.CMP_NE:
+		case ir::InstTag.CMP_SLT:
+		case ir::InstTag.CMP_SLTE:
+		case ir::InstTag.CMP_SGT:
+		case ir::InstTag.CMP_SGTE:
+		case ir::InstTag.CMP_ULT:
+		case ir::InstTag.CMP_ULTE:
+		case ir::InstTag.CMP_UGT:
+		case ir::InstTag.CMP_UGTE:
+		case ir::InstTag.ADD:
+		case ir::InstTag.SUB:
+		case ir::InstTag.MUL:
+		case ir::InstTag.TRUNC:
+		case ir::InstTag.ZEXT:
+		case ir::InstTag.SEXT:
+		case ir::InstTag.BIT_NOT:
+		case ir::InstTag.NEGATE:
+		case ir::InstTag.SELECT:
 		case ir::InstTag.PHI:
 			return true;
 		case ir::InstTag.LOAD:
 			if ((usz)inst.data.ref >= (usz)decl.instructions.len) return false;
 			if (decl.instructions[(sz)inst.data.ref].tag != ir::InstTag.ALLOC) return false;
 			return !decl.instructions[(sz)inst.data.ref].data.alloc.is_volatile;
-		case ir::InstTag.SDIV: case ir::InstTag.UDIV: case ir::InstTag.SREM: case ir::InstTag.UREM:
+		case ir::InstTag.SDIV:
+		case ir::InstTag.UDIV:
+		case ir::InstTag.SREM:
+		case ir::InstTag.UREM:
 			if ((usz)inst.data.bin.rhs >= (usz)decl.instructions.len) return false;
 			ir::Inst* divisor = &decl.instructions[(sz)inst.data.bin.rhs];
 			// Integer zero is canonicalized by the interner to REF_ZERO. These
@@ -1683,7 +1921,7 @@ fn bool dead_instruction_elim(ir::Decl* decl, Allocator allocator)
 		{
 			if ((usz)ref >= (usz)decl.instructions.len) continue;
 			ir::Inst* inst = &decl.instructions[(sz)ref];
-			list::List{ir::Ref}* users = &uses.users[(sz)ref];
+			list::List{ir::Ref} * users = &uses.users[(sz)ref];
 			if (inst.tag == ir::InstTag.ALLOC)
 			{
 				if (inst.data.alloc.is_volatile) continue;
@@ -1767,7 +2005,7 @@ fn void InlineCallGraph.free(&self)
 	*self = {};
 }
 
-fn uint inline_decl_index(HashMap{String, usz}* decl_indices, String name)
+fn uint inline_decl_index(HashMap{String, usz} * decl_indices, String name)
 {
 	if (try index = decl_indices.get(name)) return (uint)index;
 	return NONE_BLOCK;
@@ -1829,18 +2067,26 @@ fn InlineCallGraph build_inline_call_graph(ir::Ir* graph, Allocator allocator)
 	{
 		if (visited[(sz)root]) continue;
 		visited[(sz)root] = true;
-		dfs.push({ .block = root, .next_succ = 0 });
+		dfs.push(
+		{
+			.block = root, .next_succ = 0
+		}
+		);
 		while (dfs.len())
 		{
 			DfsFrame* frame = &dfs.entries[dfs.len() - 1];
-			list::List{uint}* successors = &calls.edges[(sz)frame.block];
+			list::List{uint} * successors = &calls.edges[(sz)frame.block];
 			if (frame.next_succ < successors.len())
 			{
 				uint child = successors.entries[frame.next_succ++];
 				if (!visited[(sz)child])
 				{
 					visited[(sz)child] = true;
-					dfs.push({ .block = child, .next_succ = 0 });
+					dfs.push(
+					{
+						.block = child, .next_succ = 0
+					}
+					);
 				}
 				continue;
 			}
@@ -1875,7 +2121,7 @@ fn InlineCallGraph build_inline_call_graph(ir::Ir* graph, Allocator allocator)
 	usz write = 0;
 	for (uint component = component_count; component > 0; component--)
 	{
-	for (uint i = 0; i < n; i++) if (calls.scc[(sz)i] == component - 1) calls.bottom_up[write++] = i;
+		for (uint i = 0; i < n; i++) if (calls.scc[(sz)i] == component - 1) calls.bottom_up[write++] = i;
 	}
 	return calls;
 }
@@ -1902,6 +2148,8 @@ fn bool inline_unsupported_control(ir::Decl* decl)
 	foreach (inst : decl.instructions)
 	{
 		if (inst.tag == ir::InstTag.LABEL_ADDR || inst.tag == ir::InstTag.JMP_VAL) return true;
+		// Dynamic stack allocation lives until the callee returns; inlining would leak it into the caller's frame.
+		if (inst.tag == ir::InstTag.DYN_ALLOC || inst.tag == ir::InstTag.STACK_SAVE) return true;
 	}
 	return false;
 }
@@ -1936,7 +2184,7 @@ fn sz inline_entry_alloc_position(DeclEditor* editor)
 {
 	sz pos = 0;
 	while (pos < editor.body.len() && (usz)editor.body.entries[pos] < (usz)editor.insts.len() &&
-		editor.insts.entries[(sz)editor.body.entries[pos]].tag == ir::InstTag.ARG) pos++;
+	editor.insts.entries[(sz)editor.body.entries[pos]].tag == ir::InstTag.ARG) pos++;
 	if (pos >= editor.body.len()) return pos;
 	if (editor.insts.entries[(sz)editor.body.entries[pos]].tag != ir::InstTag.LABEL) return pos;
 	pos++;
@@ -1993,13 +2241,22 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		ir::Ref term_ref = callee.body[term_pos];
 		if ((usz)term_ref >= (usz)callee.instructions.len || callee.instructions[(sz)term_ref].tag != ir::InstTag.RET) continue;
 		return_count++;
-		if (callee.instructions[(sz)term_ref].data.ref == ir::NONE) { returns_void = true; } else { returns_value = true; }
+		if (callee.instructions[(sz)term_ref].data.ref == ir::NONE)
+		{
+			returns_void = true;
+		} else
+		{
+			returns_value = true;
+		}
 	}
 	if (returns_value && returns_void) return false;
 	if (call_is_used && (!returns_value || return_count == 0)) return false;
 
 	sz call_pos = -1;
-	for (sz i = 0; i < caller.body.len; i++) if (caller.body[i] == call_ref) { call_pos = i; break; }
+	for (sz i = 0; i < caller.body.len; i++) if (caller.body[i] == call_ref)
+	{
+		call_pos = i; break;
+	}
 	if (call_pos < 0) return false;
 	ir::Ref caller_block_label = ir::NONE;
 	for (sz i = call_pos; i >= 0; i--)
@@ -2039,7 +2296,7 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 	// exception covers emitted internal-linkage definitions.
 	String continuation_name = string::format(allocator, "inl.%s.%d.cont", caller.name, call_ref);
 	ir::Ref continuation_label = editor.new_label(continuation_name);
-	alloc::free(allocator, continuation_name.ptr); // new_label copied it into the decl arena
+	alloc::free(allocator, continuation_name.ptr);  // new_label copied it into the decl arena
 	ir::Ref[] mapping = alloc::new_array(allocator, ir::Ref, (sz)callee.instructions.len);
 	defer alloc::free(allocator, mapping.ptr);
 	for (usz i = 0; i < (usz)mapping.len; i++) mapping[i] = ir::NONE;
@@ -2050,7 +2307,10 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		if ((usz)ref >= (usz)callee.instructions.len || callee.instructions[(sz)ref].tag != ir::InstTag.ARG) break;
 		mapping[(sz)ref] = call.data.call.args[(sz)arg_index++];
 	}
-	if (arg_index != callee_arg_count) { editor.free(); return false; }
+	if (arg_index != callee_arg_count)
+	{
+		editor.free(); return false;
+	}
 	foreach (i, source_inst : callee.instructions)
 	{
 		if (source_inst.tag == ir::InstTag.ARG) continue;
@@ -2059,7 +2319,7 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		{
 			String label_name = string::format(allocator, "inl.%s.%d.%d", caller.name, call_ref, (uint)i);
 			cloned.data.label = label_name;
-			mapping[i] = editor.append(cloned); // copies the label into the decl arena
+			mapping[i] = editor.append(cloned);  // copies the label into the decl arena
 			alloc::free(allocator, label_name.ptr);
 			continue;
 		}
@@ -2110,9 +2370,16 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		{
 			if (inline_is_block_terminator(callee, &callee_cfg, source_ref, pos))
 			{
-				if (active_callee_label == ir::NONE) { editor.free(); return false; }
+				if (active_callee_label == ir::NONE)
+				{
+					editor.free(); return false;
+				}
 				ir::Ref ret_value = source.data.ref == ir::NONE ? ir::NONE : inline_mapped_ref(mapping, source.data.ref);
-				if (ret_value != ir::NONE) return_inputs.push({ .label = active_callee_label, .value = ret_value });
+				if (ret_value != ir::NONE) return_inputs.push(
+				{
+					.label = active_callee_label, .value = ret_value
+				}
+				);
 			}
 			ir::Inst* cloned = &editor.insts.entries[(sz)cloned_ref];
 			cloned.tag = ir::InstTag.JMP;
@@ -2121,7 +2388,10 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		}
 		cloned_body.push(cloned_ref);
 	}
-	if (callee_entry == ir::NONE) { editor.free(); return false; }
+	if (callee_entry == ir::NONE)
+	{
+		editor.free(); return false;
+	}
 
 	ir::Ref result_phi = ir::NONE;
 	if (returns_value && return_inputs.len() > 1)
@@ -2129,7 +2399,11 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		ir::PhiInput[] inputs = alloc::new_array(allocator, ir::PhiInput, return_inputs.len());
 		defer alloc::free(allocator, inputs.ptr);
 		inputs[..] = return_inputs.array_view()[..];
-		result_phi = editor.append({ .tag = ir::InstTag.PHI, .data.phi = inputs, .ty = call.ty });
+		result_phi = editor.append(
+		{
+			.tag = ir::InstTag.PHI, .data.phi = inputs, .ty = call.ty
+		}
+		);
 	}
 	else if (returns_value && return_inputs.len() == 1)
 	{
@@ -2141,7 +2415,11 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		return false;
 	}
 
-	ir::Ref caller_jump = editor.append({ .tag = ir::InstTag.JMP, .data.ref = callee_entry, .ty = value_interner::REF_NORETURN });
+	ir::Ref caller_jump = editor.append(
+	{
+		.tag = ir::InstTag.JMP, .data.ref = callee_entry, .ty = value_interner::REF_NORETURN
+	}
+	);
 	list::List{ir::Ref} new_body;
 	new_body.init(allocator);
 	for (sz i = 0; i < call_pos; i++) new_body.push(editor.body.entries[i]);
@@ -2182,7 +2460,8 @@ fn bool inline_calls(ir::Ir* graph, OptOptions opts, Allocator allocator)
 	switch (opts.level)
 	{
 		case code_gen_options::OptimizationLevel.O2: threshold = 40;
-		case code_gen_options::OptimizationLevel.O3: case code_gen_options::OptimizationLevel.FAST: threshold = 120;
+		case code_gen_options::OptimizationLevel.O3:
+		case code_gen_options::OptimizationLevel.FAST: threshold = 120;
 		default: return false;
 	}
 	InlineCallGraph calls = build_inline_call_graph(graph, allocator);
@@ -2238,7 +2517,10 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 	defer alloc::free(allocator, placed.ptr);
 	uint[] body_position = alloc::new_array(allocator, uint, (sz)inst_count);
 	defer alloc::free(allocator, body_position.ptr);
-	for (usz i = 0; i < inst_count; i++) { placed[i] = false; body_position[i] = NONE_BLOCK; }
+	for (usz i = 0; i < inst_count; i++)
+	{
+		placed[i] = false; body_position[i] = NONE_BLOCK;
+	}
 	for (usz i = 0; i < body_len; i++)
 	{
 		ir::Ref ref = decl.body[i];
@@ -2249,7 +2531,8 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 	}
 	usz arg_end = 0;
 	while (arg_end < body_len && decl.instructions[(sz)decl.body[arg_end]].tag == ir::InstTag.ARG) arg_end++;
-	if (arg_end == body_len || decl.instructions[(sz)decl.body[arg_end]].tag != ir::InstTag.LABEL) {
+	if (arg_end == body_len || decl.instructions[(sz)decl.body[arg_end]].tag != ir::InstTag.LABEL)
+	{
 		return verify_error(errors, decl.name, "function body must place ARG instructions before its entry LABEL");
 	}
 	bool[] label_seen = alloc::new_array(allocator, bool, (sz)inst_count);
@@ -2262,7 +2545,8 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 	{
 		ir::Ref ref = decl.body[i];
 		ir::Inst* inst = &decl.instructions[(sz)ref];
-		if (i == arg_end && inst.tag != ir::InstTag.LABEL) {
+		if (i == arg_end && inst.tag != ir::InstTag.LABEL)
+		{
 			return verify_error(errors, decl.name, "entry block must begin with a LABEL");
 		}
 		if (inst.tag == ir::InstTag.LABEL)
@@ -2274,7 +2558,8 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 			block_terminated = false;
 			continue;
 		}
-		if (inst.tag == ir::InstTag.ARG || inst.tag == ir::InstTag.CONSTANT || inst.tag == ir::InstTag.SYMBOL) {
+		if (inst.tag == ir::InstTag.ARG || inst.tag == ir::InstTag.CONSTANT || inst.tag == ir::InstTag.SYMBOL)
+		{
 			return verify_error(errors, decl.name, "ARG, CONSTANT, and SYMBOL instructions cannot appear in a block body");
 		}
 		// Instructions after a terminator are dead placements. The optimizer will
@@ -2356,14 +2641,23 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 					if (def_tag == ir::InstTag.CONSTANT || def_tag == ir::InstTag.SYMBOL) continue;
 					if (def_tag == ir::InstTag.ARG)
 					{
-						if (!placed[(sz)value_ref] || body_position[(sz)value_ref] >= (uint)arg_end) { return verify_error(errors, decl.name, "PHI operand refers to an unplaced ARG"); }
+						if (!placed[(sz)value_ref] || body_position[(sz)value_ref] >= (uint)arg_end)
+						{
+							return verify_error(errors, decl.name, "PHI operand refers to an unplaced ARG");
+						}
 						continue;
 					}
 					uint pred = cfg.block_of_ref[(sz)input.label];
 					uint def_block = cfg.block_of_ref[(sz)value_ref];
 					if (!cfg.reachable[(sz)pred]) continue;
-					if (def_block == NONE_BLOCK || !cfg.dominates(def_block, pred)) { return verify_error(errors, decl.name, "PHI value definition does not dominate the end of its predecessor block"); }
-					if (def_block == pred && body_position[(sz)value_ref] >= (uint)block_terminator_position(decl, &cfg.blocks[(sz)pred])) { return verify_error(errors, decl.name, "PHI value definition appears after its predecessor terminator"); }
+					if (def_block == NONE_BLOCK || !cfg.dominates(def_block, pred))
+					{
+						return verify_error(errors, decl.name, "PHI value definition does not dominate the end of its predecessor block");
+					}
+					if (def_block == pred && body_position[(sz)value_ref] >= (uint)block_terminator_position(decl, &cfg.blocks[(sz)pred]))
+					{
+						return verify_error(errors, decl.name, "PHI value definition appears after its predecessor terminator");
+					}
 				}
 				continue;
 			}

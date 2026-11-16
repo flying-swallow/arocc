@@ -1942,3 +1942,144 @@ fn void uses_and_replace_all_uses_cover_select_and_phi() @test
 		"branch label operands must remain unchanged");
 	f.free();
 }
+
+// Reduced from gcc.c-torture/execute/pr43220.c: a block-scoped VLA is freed
+// when its compound statement ends.
+fn void lowers_block_vla_with_stack_save_and_restore() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int n) { int r; { int a[n]; a[n - 1] = 7; r = a[n - 1]; } return r; }");
+	String actual = f.dump();
+	test::eq(actual,
+		"i32 @f(i32 %0) {\n"
+		"entry.0:\n"
+		"    ptr_ty %1 = alloc size 4 align 4\n"
+		"    ptr_ty %2 = alloc size 4 align 4\n"
+		"    store ptr_ty %1, i32 %0\n"
+		"    ptr_ty %3 = stack_save\n"
+		"    i32 %4 = load ptr_ty %1\n"
+		"    i64 %5 = sext i32 %4\n"
+		"    i64 %6 = mul i64 %5, i64 4\n"
+		"    ptr_ty %7 = dyn_alloc i64 %6 align 4\n"
+		"    i32 %8 = load ptr_ty %1\n"
+		"    i32 %9 = sub i32 %8, i32 1\n"
+		"    i64 %10 = sext i32 %9\n"
+		"    i64 %11 = mul i64 %10, i64 4\n"
+		"    ptr_ty %12 = add ptr_ty %7, i64 %11\n"
+		"    store ptr_ty %12, i32 7\n"
+		"    i32 %13 = load ptr_ty %1\n"
+		"    i32 %14 = sub i32 %13, i32 1\n"
+		"    i64 %15 = sext i32 %14\n"
+		"    i64 %16 = mul i64 %15, i64 4\n"
+		"    ptr_ty %17 = add ptr_ty %7, i64 %16\n"
+		"    i32 %18 = load ptr_ty %17\n"
+		"    store ptr_ty %2, i32 %18\n"
+		"    stack_restore ptr_ty %3\n"
+		"    i32 %19 = load ptr_ty %2\n"
+		"    ret i32 %19\n"
+		"}\n\n");
+	alloc::free(&f.ta, actual.ptr);
+	f.run_o1();
+	f.verify_graph();
+	ir::Decl* func = find_function(&f.graph, "f");
+	assert(count_body_tag(func, ir::InstTag.STACK_SAVE) == 1, "O1 keeps the VLA scope's stack save");
+	assert(count_body_tag(func, ir::InstTag.DYN_ALLOC) == 1, "O1 keeps the VLA allocation");
+	assert(count_body_tag(func, ir::InstTag.STACK_RESTORE) == 1, "O1 keeps the VLA scope's stack restore");
+	f.free();
+}
+
+// A backward goto out of a VLA scope restores in place; a forward one goes
+// through a stub emitted once its label is known.
+fn void lowers_goto_out_of_vla_scope() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"int g(int n) {\n"
+		"  int k = 0;\n"
+		"top:\n"
+		"  { int a[n]; a[0] = k; k++; if (k < 3) goto top; if (k == 3) goto out; }\n"
+		"out:\n"
+		"  return k;\n"
+		"}\n");
+	String actual = f.dump();
+	test::eq(actual,
+		"i32 @g(i32 %0) {\n"
+		"entry.0:\n"
+		"    ptr_ty %1 = alloc size 4 align 4\n"
+		"    ptr_ty %2 = alloc size 4 align 4\n"
+		"    store ptr_ty %1, i32 %0\n"
+		"    store ptr_ty %2, i32 0\n"
+		"    jmp label.1\n"
+		"label.1:\n"
+		"    ptr_ty %3 = stack_save\n"
+		"    i32 %4 = load ptr_ty %1\n"
+		"    i64 %5 = sext i32 %4\n"
+		"    i64 %6 = mul i64 %5, i64 4\n"
+		"    ptr_ty %7 = dyn_alloc i64 %6 align 4\n"
+		"    i32 %8 = load ptr_ty %2\n"
+		"    i64 %9 = sext i32 0\n"
+		"    i64 %10 = mul i64 %9, i64 4\n"
+		"    ptr_ty %11 = add ptr_ty %7, i64 %10\n"
+		"    store ptr_ty %11, i32 %8\n"
+		"    i32 %12 = load ptr_ty %2\n"
+		"    i32 %13 = add i32 %12, i32 1\n"
+		"    store ptr_ty %2, i32 %13\n"
+		"    i32 %14 = load ptr_ty %2\n"
+		"    i1 %15 = cmp_slt i32 %14, i32 3\n"
+		"    branch i1 %15, if.then.2, if.end.4\n"
+		"if.then.2:\n"
+		"    stack_restore ptr_ty %3\n"
+		"    jmp label.1\n"
+		"goto.after.3:\n"
+		"    jmp if.end.4\n"
+		"if.end.4:\n"
+		"    i32 %16 = load ptr_ty %2\n"
+		"    i1 %17 = cmp_eq i32 %16, i32 3\n"
+		"    branch i1 %17, if.then.5, if.end.7\n"
+		"if.then.5:\n"
+		"    jmp goto.vla.9\n"
+		"goto.after.6:\n"
+		"    jmp if.end.7\n"
+		"if.end.7:\n"
+		"    stack_restore ptr_ty %3\n"
+		"    jmp label.8\n"
+		"label.8:\n"
+		"    i32 %18 = load ptr_ty %2\n"
+		"    ret i32 %18\n"
+		"goto.vla.9:\n"
+		"    stack_restore ptr_ty %3\n"
+		"    jmp label.8\n"
+		"}\n\n");
+	alloc::free(&f.ta, actual.ptr);
+	f.run_o1();
+	f.verify_graph();
+	f.free();
+}
+
+fn void break_out_of_loop_body_vla_restores_stack() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("void h(int n) { while (n) { int a[n]; a[0] = n; if (n == 2) break; n--; } }");
+	ir::Decl* func = find_function(&f.graph, "h");
+	// One restore at the body's end and one before the break.
+	assert(count_body_tag(func, ir::InstTag.STACK_RESTORE) == 2, "break out of a VLA scope restores the stack");
+	f.free();
+}
+
+fn void o2_does_not_inline_callee_with_vla() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"static int fill(int n) { int a[n]; a[0] = n; return a[0]; }\n"
+		"int caller(int n) { return fill(n); }\n");
+	f.run_o2();
+	f.verify_graph();
+	ir::Decl* func = find_function(&f.graph, "caller");
+	assert(count_body_tag(func, ir::InstTag.CALL) == 1, "a callee with a VLA is not inlined");
+	assert(count_body_tag(func, ir::InstTag.DYN_ALLOC) == 0, "the caller does not inherit the VLA");
+	f.free();
+}

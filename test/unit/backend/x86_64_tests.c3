@@ -995,3 +995,58 @@ fn void select_lowers_to_conditional_assembly() @test
 		"\t.size choose_with_select, .-choose_with_select\n\n"
 		"\t.section .note.GNU-stack,\"\",@progbits\n");
 }
+
+fn void build_dynamic_alloc_fixture(Fixture* f)
+{
+	f.builder.start_fn();
+	ir::Ref size = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref saved = f.builder.add_stack_save();
+	ir::Ref ptr = f.builder.add_dyn_alloc(size, 32);
+	f.builder.add_store(ptr, size);
+	f.builder.add_stack_restore(saved);
+	f.builder.add_inst(RET, { .ref = ir::NONE }, value_interner::REF_NORETURN);
+	f.builder.finish_fn("vla");
+}
+
+fn void lowers_dynamic_alloc_and_stack_restore() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_dynamic_alloc_fixture(&f);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	test::eq(text,
+		"\t.intel_syntax noprefix\n"
+		"\t.text\n"
+		"\t.globl vla\n"
+		"\t.p2align 4\n"
+		"\t.type vla, @function\n"
+		"vla:\n"
+		"\tpush rbp\n"
+		"\tmov rbp, rsp\n"
+		"\tsub rsp, 32\n"
+		"\tmov qword ptr [rbp - 8], rdi\n"
+		".Lvla.entry.0:\n"
+		"\tmov rax, rsp\n"
+		"\tmov qword ptr [rbp - 16], rax\n"
+		"\tmov rax, qword ptr [rbp - 8]\n"
+		"\tadd rax, 31\n"
+		"\tand rax, -32\n"
+		"\tsub rsp, rax\n"
+		"\tand rsp, -32\n"
+		"\tmov rax, rsp\n"
+		"\tmov qword ptr [rbp - 24], rax\n"
+		"\tmov rax, qword ptr [rbp - 8]\n"
+		"\tmov rcx, qword ptr [rbp - 24]\n"
+		"\tmov qword ptr [rcx], rax\n"
+		"\tmov rax, qword ptr [rbp - 16]\n"
+		"\tmov rsp, rax\n"
+		"\tleave\n"
+		"\tret\n"
+		"\t.size vla, .-vla\n\n"
+		"\t.section .note.GNU-stack,\"\",@progbits\n");
+}

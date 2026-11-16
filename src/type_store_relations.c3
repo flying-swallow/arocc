@@ -219,7 +219,7 @@ fn bool QualType.eql_qualified(self, QualType b, Compilation* comp)
 fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 {
 	if (self.is_invalid() || b_qt.is_invalid()) return false;
-	if (self.index == b_qt.index) return true;
+	if (self.unqualified() == b_qt.unqualified()) return true;
 
 	BaseType a_base = self.base(comp);
 	Type a_type = a_base.ty;
@@ -313,7 +313,7 @@ fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 		case VECTOR: return a_type.vector.eql(b_type.vector, comp, false);
 		case STRUCT:
 		case UNION:
-		case ENUM: return a_base.qt.index == b_base.qt.index;
+		case ENUM: return a_base.qt.unqualified() == b_base.qt.unqualified();
 		case BLOCK:
 			return a_type.block.nullability == b_type.block.nullability && a_type.block.func.eql(b_type.block.func, comp);
 		case TYPEOF:
@@ -366,10 +366,7 @@ fn QualType QualType.make_int_unsigned(self, Compilation* comp)
 	switch (ty.tag)
 	{
 		case INT:
-			return
-			{
-				.index = ty.int_ty.unsigned_of.index
-			};
+			return int_qt(ty.int_ty.unsigned_of);
 		case BIT_INT:
 			return comp.type_store.put(type_bit_int(ty.bit_int.bits, UNSIGNED));
 		default: unreachable("not a real integer type");

@@ -172,7 +172,7 @@ fn void canonical_builtins() @test
 		QualType ci = cq(type_store::INT);
 		assert(ci.is_qualified() && ci.unqualified() == type_store::INT);
 		assert(type_store::LONG.with_qualifiers(ci) == cq(type_store::LONG));
-		check((uint)type_store::INVALID >> 3, type_store::MAX_INDEX);
+		assert(type_store::INVALID.builtin && type_store::INVALID.index == type_store::BuiltinType.INVALID.ordinal);
 	};
 }
 

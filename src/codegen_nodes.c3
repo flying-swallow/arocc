@@ -2,7 +2,7 @@
 module aro::codegen;
 import aro::primitive_value;
 import aro::backend::ir, aro::builtins, aro::builtin_properties, aro::builtin_defs::common, aro::compilation, aro::diagnostics;
-import aro::bigint;
+import aro::bigint, aro::tokens;
 import aro::tree, aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
 import aro::target;
 import aro::string_interner;
@@ -65,9 +65,20 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 				self.gen_var(node.variable, node_index)!;
 				return ir::NONE;
 			}
-			uint size = (uint)node.variable.qt.sizeof(self.comp);
+			ulong? fixed_size = node.variable.qt.sizeof_or_null(self.comp);
 			uint alignment = (uint)node.variable.qt.alignof(self.comp);
-			ir::Ref alloc = self.builder.add_alloc(size, alignment, node.variable.qt.is_volatile);
+			ir::Ref alloc;
+			if (catch fixed_size)
+			{
+				// VLA: allocate at runtime, freed when the enclosing compound statement ends.
+				self.enter_vla_scope();
+				ir::Ref vla_size = self.gen_type_size(node.variable.qt)!;
+				alloc = self.builder.add_dyn_alloc(vla_size, alignment);
+			}
+			else
+			{
+				alloc = self.builder.add_alloc((uint)fixed_size, alignment, node.variable.qt.is_volatile);
+			}
 			string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(node.variable.name_tok));
 			self.symbols.push(
 			{
@@ -79,14 +90,27 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 				self.gen_initializer(alloc, node.variable.qt, node.variable.initializer.unwrap())!;
 			}
 		case LABELED_STMT:
-			ir::Ref label = self.builder.make_label("label");
-			self.builder.start_block(label);
+			sz label_index = self.goto_label(node.labeled_stmt.label_tok);
+			GotoLabel* label = &self.goto_labels[label_index];
+			label.defined = true;
+			label.saves_start = self.snapshot_vla_saves();
+			label.saves_len = self.vla_scopes.len();
+			self.builder.start_block(label.label);
 			self.gen_stmt(node.labeled_stmt.body)!;
 		case COMPOUND_STMT:
 			// Preserve the Zig implementation's current (no-op) scope-length reset.
 			sz old_symbol_count = self.symbols.len();
 			while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
+			type_store::NodeIndex old_compound = self.current_compound;
+			defer self.current_compound = old_compound;
+			self.current_compound = node_index;
+			sz vla_depth = self.vla_scopes.len();
 			foreach (stmt : node.compound_stmt.body) self.gen_stmt(stmt)!;
+			if (self.vla_scopes.len() > vla_depth)
+			{
+				self.builder.add_stack_restore(self.vla_scopes[vla_depth].saved);
+				while (self.vla_scopes.len() > vla_depth) self.vla_scopes.pop()!!;
+			}
 		case IF_STMT:
 			ir::Ref then_label = self.builder.make_label("if.then");
 			if (node.if_stmt.else_body.is_null())
@@ -119,6 +143,9 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 			self.wip_switch = &wip_switch;
 			ir::Ref old_break_label = self.break_label;
 			defer self.break_label = old_break_label;
+			sz old_break_vla_depth = self.break_vla_depth;
+			defer self.break_vla_depth = old_break_vla_depth;
+			self.break_vla_depth = self.vla_scopes.len();
 			ir::Ref end_label = self.builder.make_label("switch.end");
 			self.break_label = end_label;
 			ir::Ref cond = self.gen_expr(node.switch_stmt.cond)!;
@@ -160,8 +187,14 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case WHILE_STMT:
 			ir::Ref old_break_label = self.break_label;
 			defer self.break_label = old_break_label;
+			sz old_break_vla_depth = self.break_vla_depth;
+			defer self.break_vla_depth = old_break_vla_depth;
+			self.break_vla_depth = self.vla_scopes.len();
 			ir::Ref old_continue_label = self.continue_label;
 			defer self.continue_label = old_continue_label;
+			sz old_continue_vla_depth = self.continue_vla_depth;
+			defer self.continue_vla_depth = old_continue_vla_depth;
+			self.continue_vla_depth = self.vla_scopes.len();
 			ir::Ref cond_label = self.builder.make_label("while.cond");
 			ir::Ref body_label = self.builder.make_label("while.then");
 			ir::Ref end_label = self.builder.make_label("while.end");
@@ -176,8 +209,14 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case DO_WHILE_STMT:
 			ir::Ref old_break_label = self.break_label;
 			defer self.break_label = old_break_label;
+			sz old_break_vla_depth = self.break_vla_depth;
+			defer self.break_vla_depth = old_break_vla_depth;
+			self.break_vla_depth = self.vla_scopes.len();
 			ir::Ref old_continue_label = self.continue_label;
 			defer self.continue_label = old_continue_label;
+			sz old_continue_vla_depth = self.continue_vla_depth;
+			defer self.continue_vla_depth = old_continue_vla_depth;
+			self.continue_vla_depth = self.vla_scopes.len();
 			ir::Ref body_label = self.builder.make_label("do.then");
 			ir::Ref cond_label = self.builder.make_label("do.cond");
 			ir::Ref end_label = self.builder.make_label("do.end");
@@ -191,8 +230,14 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case FOR_STMT:
 			ir::Ref old_break_label = self.break_label;
 			defer self.break_label = old_break_label;
+			sz old_break_vla_depth = self.break_vla_depth;
+			defer self.break_vla_depth = old_break_vla_depth;
+			self.break_vla_depth = self.vla_scopes.len();
 			ir::Ref old_continue_label = self.continue_label;
 			defer self.continue_label = old_continue_label;
+			sz old_continue_vla_depth = self.continue_vla_depth;
+			defer self.continue_vla_depth = old_continue_vla_depth;
+			self.continue_vla_depth = self.vla_scopes.len();
 			if (!node.for_stmt.init.is_null()) self.gen_stmt(node.for_stmt.init.unwrap())!;
 			if (node.for_stmt.cond.is_null())
 			{
@@ -221,8 +266,10 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 			self.builder.add_jump(cond_label);
 			self.builder.start_block(end_label);
 		case CONTINUE_STMT:
+			self.restore_vla_depth(self.continue_vla_depth);
 			self.builder.add_jump(self.continue_label);
 		case BREAK_STMT:
+			self.restore_vla_depth(self.break_vla_depth);
 			self.builder.add_jump(self.break_label);
 		case RETURN_STMT:
 			switch (node.return_stmt.operand)
@@ -250,6 +297,8 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		}
 		self.builder.add_jump(self.return_label);
 		case GOTO_STMT:
+			self.gen_goto(self.goto_label(node.goto_stmt.label_tok));
+			self.builder.start_block(self.builder.make_label("goto.after"));
 		case COMPUTED_GOTO_STMT:
 		case NULLPTR_LITERAL:
 		case ASM_STMT:
@@ -627,9 +676,16 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 			return self.gen_lval(cond.to_bool(self.comp) ? node.conditional.then_expr: node.conditional.else_expr);
 		case COMPOUND_ASSIGN_DUMMY_EXPR:
 			return self.compound_assign_dummy;
+		case ARRAY_ACCESS_EXPR:
+			type_store::NodeIndex base = node.array_access.base;
+			type_store::NodeIndex index = node.array_access.index;
+			// `i[p]` is `p[i]`.
+			if (!base.qt(self.tree).is_pointer(self.comp)) @swap(base, index);
+			ir::Ref base_ptr = self.gen_expr(base)!;
+			ir::Ref offset = self.gen_expr(index)!;
+			return self.gen_ptr_arithmetic(base_ptr, offset, index.qt(self.tree), base.qt(self.tree), false);
 		case MEMBER_ACCESS_EXPR:
 		case MEMBER_ACCESS_PTR_EXPR:
-		case ARRAY_ACCESS_EXPR:
 			self.fail(string::tformat("TODO CodeGen.genLval %s\n", node.kind.name))!;
 			return ir::NONE;
 		default:
@@ -957,7 +1013,10 @@ fn ir::Ref? CodeGen.gen_comparison(&self, tree::NodeBinary bin, ir::InstTag tag)
 fn ir::Ref? CodeGen.gen_ptr_arithmetic(&self, ir::Ref ptr, ir::Ref offset, type_store::QualType offset_type,
 	type_store::QualType pointer_type, bool subtract)
 {
-	ulong size = pointer_type.child_type(self.comp).sizeof_or_null(self.comp) ?? 1;
+	type_store::QualType child = pointer_type.child_type(self.comp);
+	ulong? child_size = child.sizeof_or_null(self.comp);
+	ulong size = child_size ?? 1;
+	if (catch child_size) { if (self.is_vla(child)) size = 0; }
 	ulong offset_bits = offset_type.bit_sizeof(self.comp);
 	ir::Ref wide_offset = offset;
 	if (offset_bits < 64)
@@ -972,7 +1031,8 @@ fn ir::Ref? CodeGen.gen_ptr_arithmetic(&self, ir::Ref ptr, ir::Ref offset, type_
 	if (subtract) wide_offset = self.builder.add_inst(ir::InstTag.NEGATE, { .ref = wide_offset }, value_interner::REF_I64);
 	if (size != 1)
 	{
-		ir::Ref size_inst = self.builder.add_constant(value::int_u64(size, self.comp).ref(), value_interner::REF_I64);
+		// size 0 marks a VLA element: its byte size is only known at runtime.
+		ir::Ref size_inst = size == 0 ? self.gen_type_size(child)! : self.builder.add_constant(value::int_u64(size, self.comp).ref(), value_interner::REF_I64);
 		wide_offset = self.builder.add_inst(ir::InstTag.MUL,
 			{ .bin = { .lhs = wide_offset, .rhs = size_inst } }, value_interner::REF_I64);
 	}
@@ -983,12 +1043,15 @@ fn ir::Ref? CodeGen.gen_ptr_arithmetic(&self, ir::Ref ptr, ir::Ref offset, type_
 fn ir::Ref? CodeGen.gen_ptr_difference(&self, ir::Ref lhs, ir::Ref rhs, type_store::QualType pointer_type,
 	type_store::QualType result_type)
 {
-	ulong size = pointer_type.child_type(self.comp).sizeof_or_null(self.comp) ?? 1;
+	type_store::QualType child = pointer_type.child_type(self.comp);
+	ulong? child_size = child.sizeof_or_null(self.comp);
+	ulong size = child_size ?? 1;
+	if (catch child_size) { if (self.is_vla(child)) size = 0; }
 	ir::Ref difference = self.builder.add_inst(ir::InstTag.SUB,
 		{ .bin = { .lhs = lhs, .rhs = rhs } }, value_interner::REF_I64);
 	if (size != 1)
 	{
-		ir::Ref size_inst = self.builder.add_constant(value::int_u64(size, self.comp).ref(), value_interner::REF_I64);
+		ir::Ref size_inst = size == 0 ? self.gen_type_size(child)! : self.builder.add_constant(value::int_u64(size, self.comp).ref(), value_interner::REF_I64);
 		difference = self.builder.add_inst(ir::InstTag.SDIV,
 			{ .bin = { .lhs = difference, .rhs = size_inst } }, value_interner::REF_I64);
 	}
@@ -1461,4 +1524,143 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 		return;
 	}
 	return self.fail(string::tformat("TODO CodeGen.genVar initializer %s\n", init_node.kind.name));
+}
+
+// ---------------------------------------------------------------------------
+// VLAs and goto (C3 extension: Zig CodeGen has neither)
+// ---------------------------------------------------------------------------
+
+<* Widen an integer value of type `qt` to i64 (sign- or zero-extending, or truncating). *>
+fn ir::Ref CodeGen.widen_to_i64(&self, ir::Ref value, type_store::QualType qt)
+{
+	ulong bits = qt.bit_sizeof(self.comp);
+	if (bits < 64)
+	{
+		ir::InstTag extend = qt.signedness(self.comp) == SIGNED ? ir::InstTag.SEXT : ir::InstTag.ZEXT;
+		return self.builder.add_inst(extend, { .ref = value }, value_interner::REF_I64);
+	}
+	if (bits > 64) return self.builder.add_inst(ir::InstTag.TRUNC, { .ref = value }, value_interner::REF_I64);
+	return value;
+}
+
+<*
+ Byte size of `qt` as an i64 value. A VLA's length expression is evaluated the
+ first time its type is sized (its declaration) and the result is reused.
+*>
+fn ir::Ref? CodeGen.gen_type_size(&self, type_store::QualType qt)
+{
+	if (try size = qt.sizeof_or_null(self.comp))
+	{
+		return self.builder.add_constant(value::int_u64(size, self.comp).ref(), value_interner::REF_I64);
+	}
+	type_store::BaseType base = qt.base(self.comp);
+	if (base.ty.tag != ARRAY || base.ty.array.len.kind != VARIABLE)
+	{
+		self.fail("TODO VLAs")!;
+		unreachable();
+	}
+	uint key = (uint)base.qt.unqualified();
+	if (try cached = self.vla_sizes.get(key)) return cached;
+	type_store::NodeIndex len_expr = base.ty.array.len.expr;
+	// The parser keeps the bound as written (Zig parity), so a bare `n` is still an lvalue.
+	type_store::QualType len_qt = len_expr.qt(self.tree);
+	ir::Ref len_value = self.tree.is_lval(len_expr)
+		? self.add_un(ir::InstTag.LOAD, self.gen_lval(len_expr)!, len_qt)!
+		: self.gen_expr(len_expr)!;
+	ir::Ref len = self.widen_to_i64(len_value, len_qt);
+	ir::Ref elem_size = self.gen_type_size(base.ty.array.elem)!;
+	ir::Ref total = self.builder.add_inst(ir::InstTag.MUL, { .bin = { .lhs = len, .rhs = elem_size } }, value_interner::REF_I64);
+	self.vla_sizes.set(key, total);
+	return total;
+}
+
+<* A runtime-length array type (possibly of runtime-length arrays). *>
+fn bool CodeGen.is_vla(&self, type_store::QualType qt)
+{
+	type_store::BaseType base = qt.base(self.comp);
+	return base.ty.tag == ARRAY && base.ty.array.len.kind == VARIABLE;
+}
+
+<* Save the stack pointer before the first VLA of the current compound statement. *>
+fn void CodeGen.enter_vla_scope(&self)
+{
+	if (self.vla_scopes.len() > 0 && self.vla_scopes[self.vla_scopes.len() - 1].compound == self.current_compound) return;
+	self.vla_scopes.push({ .compound = self.current_compound, .saved = self.builder.add_stack_save() });
+}
+
+<* Free the VLAs of scopes opened past `depth` before jumping out of them. *>
+fn void CodeGen.restore_vla_depth(&self, sz depth)
+{
+	if (self.vla_scopes.len() > depth) self.builder.add_stack_restore(self.vla_scopes[depth].saved);
+}
+
+<* Copy the live VLA saves into the pool; returns the start of the copy. *>
+fn sz CodeGen.snapshot_vla_saves(&self)
+{
+	sz start = self.vla_save_pool.len();
+	foreach (scope : self.vla_scopes) self.vla_save_pool.push(scope.saved);
+	return start;
+}
+
+<* The label named by `tok`, created on first use (goto before label). *>
+fn sz CodeGen.goto_label(&self, tokens::TokenIndex tok)
+{
+	string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(tok));
+	if (try index = self.goto_label_index.get((uint)name)) return index;
+	sz index = self.goto_labels.len();
+	self.goto_labels.push({ .label = self.builder.make_label("label") });
+	self.goto_label_index.set((uint)name, index);
+	return index;
+}
+
+<* The first of `saves` that is not live at the target, i.e. the outermost scope the jump leaves. *>
+fn ir::Ref CodeGen.first_left_save(&self, sz saves_start, sz saves_len, GotoLabel* target)
+{
+	for (sz i = 0; i < saves_len; i++)
+	{
+		ir::Ref save = self.vla_save_pool[saves_start + i];
+		bool live = false;
+		for (sz j = 0; j < target.saves_len; j++)
+		{
+			if (self.vla_save_pool[target.saves_start + j] == save) { live = true; break; }
+		}
+		if (!live) return save;
+	}
+	return ir::NONE;
+}
+
+fn void CodeGen.gen_goto(&self, sz label_index)
+{
+	GotoLabel* target = &self.goto_labels[label_index];
+	if (self.vla_scopes.len() == 0)
+	{
+		self.builder.add_jump(target.label);
+		return;
+	}
+	sz saves_start = self.snapshot_vla_saves();
+	sz saves_len = self.vla_scopes.len();
+	if (target.defined)
+	{
+		ir::Ref save = self.first_left_save(saves_start, saves_len, target);
+		if (save != ir::NONE) self.builder.add_stack_restore(save);
+		self.builder.add_jump(target.label);
+		return;
+	}
+	// Forward goto: which scopes it leaves is known once the label is defined.
+	ir::Ref stub = self.builder.make_label("goto.vla");
+	self.pending_gotos.push({ .stub = stub, .label_index = label_index, .saves_start = saves_start, .saves_len = saves_len });
+	self.builder.add_jump(stub);
+}
+
+<* Emit the restore-then-jump stub of each forward goto out of VLA scopes. *>
+fn void CodeGen.emit_pending_gotos(&self)
+{
+	foreach (pending : self.pending_gotos)
+	{
+		self.builder.start_block(pending.stub);
+		GotoLabel* target = &self.goto_labels[pending.label_index];
+		ir::Ref save = self.first_left_save(pending.saves_start, pending.saves_len, target);
+		if (save != ir::NONE) self.builder.add_stack_restore(save);
+		self.builder.add_jump(target.label);
+	}
 }

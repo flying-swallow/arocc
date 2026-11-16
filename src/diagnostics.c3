@@ -9,7 +9,7 @@
 // Phase-specific message tables (Parser, Preprocessor, ...) are ported with
 // their callers as enums with associated values (see `DiagMeta`).
 module aro::diagnostics;
-import aro::source, aro::compilation, aro::lang_opts, aro::parser, aro::tokens, std::io, std::collections::list;
+import aro::ansi, aro::source, aro::compilation, aro::lang_opts, aro::parser, aro::tokens, std::io, std::collections::list;
 
 <* Zig `Message.Kind`; the label is the `{t}` spelling used in output. Order matters (max for -Wpedantic). *>
 enum MessageKind : char(String label)
@@ -330,20 +330,6 @@ enum ColorMode : char
 {
 	NO_COLOR,
 	ESCAPE_CODES,
-}
-
-<* Escape sequences copied from std/Io/Terminal.zig `setColor`. *>
-enum Color : char(String code)
-{
-	WHITE { "\e[37m" },
-	BRIGHT_RED { "\e[91m" },
-	BRIGHT_YELLOW { "\e[93m" },
-	BRIGHT_BLUE { "\e[94m" },
-	BRIGHT_GREEN { "\e[92m" },
-	BRIGHT_MAGENTA { "\e[95m" },
-	BRIGHT_CYAN { "\e[96m" },
-	BOLD { "\e[1m" },
-	RESET { "\e[0m" },
 }
 
 struct Terminal

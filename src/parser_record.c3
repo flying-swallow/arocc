@@ -363,7 +363,7 @@ fn type_store::QualType? Parser.record_spec_with_body(&self, ContainerBodyCallba
 			.pack_value = pack_value,
 			.tag_attributes = tag_attributes, .tag_attribute_context = tag_attribute_context,
 		})!;
-	assert(completed.index == header.qt.index, "container body callback must preserve tag identity");
+	assert(completed.unqualified() == header.qt.unqualified(), "container body callback must preserve tag identity");
 	return completed;
 }
 

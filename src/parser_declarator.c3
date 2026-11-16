@@ -114,7 +114,7 @@ fn void DeclaratorParser.pointer_qualifiers(&self, type_store::QualType* qt)
    suffixes until the inner pointer/function/array shape is known. *>
 fn type_store::QualType DeclaratorParser.splice(&self, type_store::QualType partial, type_store::QualType replacement)
 {
-	if (partial.index == type_store::IDX_DECLARATOR_COMBINE)
+	if (partial.is_declarator_combine())
 	{
 		// The marker contributes no qualifiers; keep those on the replacement type.
 		return replacement;
@@ -499,7 +499,7 @@ fn type_store::QualType? DeclaratorParser.validate(&self, type_store::QualType q
 <* The outermost layer the declarator added (its own Type, not through typedefs). *>
 fn DeclaratorType DeclaratorParser.declarator_type_of(&self, type_store::QualType qt) @local
 {
-	if (qt.is_invalid() || qt.is_auto() || qt.index == type_store::IDX_DECLARATOR_COMBINE) return OTHER;
+	if (qt.is_invalid() || qt.is_auto() || qt.is_declarator_combine()) return OTHER;
 	switch (qt.get_type(self.parser.comp).tag)
 	{
 		case FUNC: return FUNC;
@@ -519,7 +519,7 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 	parser::Parser* p = self.parser;
 	if (cur.is_invalid()) return NESTED_INVALID;
 	if (cur.is_auto()) return NESTED_AUTO;
-	if (cur.index == type_store::IDX_DECLARATOR_COMBINE) return DECLARATOR_COMBINE;
+	if (cur.is_declarator_combine()) return DECLARATOR_COMBINE;
 
 	type_store::Type ty = cur.get_type(p.comp);
 	switch (ty.tag)

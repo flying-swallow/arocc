@@ -1,6 +1,6 @@
 // Source-aware expression rendering and typed AST dumps (Tree.zig).
 module aro::tree;
-import aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::attribute, aro::attribute_map, aro::diagnostics, aro::compilation;
+import aro::ansi, aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::attribute, aro::attribute_map, aro::diagnostics, aro::compilation;
 import std::io, std::core::dstring;
 
 <* `w` is a pointer so appends that grow the buffer reach the caller. *>
@@ -250,12 +250,12 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 	for (uint j = 0; j < level; j++) w.write_byte(' ')!;
 	if (term.mode == diagnostics::ColorMode.NO_COLOR) { if (n.is_implicit()) io::write_all(w, "implicit ")!; }
 	else if (n.is_implicit()) { set_bright_blue(term)!; }
-	else { term.set_color(diagnostics::Color.BRIGHT_CYAN)!; }
+	else { term.set_color(ansi::Color.BRIGHT_CYAN)!; }
 	io::fprintf(w, "%s", n.kind.name)!;
 	if (try qt = index.qt_or_null(self)) {
 		io::write_all(w, ": ")!;
-		if (n.kind == CAST) { term.set_color(diagnostics::Color.WHITE)!; io::fprintf(w, "(%s) ", n.cast.kind.name)!; }
-		term.set_color(diagnostics::Color.BRIGHT_MAGENTA)!;
+		if (n.kind == CAST) { term.set_color(ansi::Color.WHITE)!; io::fprintf(w, "(%s) ", n.cast.kind.name)!; }
+		term.set_color(ansi::Color.BRIGHT_MAGENTA)!;
 		w.write_byte('\'')!; qt.dump(self.comp, w)!; w.write_byte('\'')!;
 	}
 	if (self.is_lval(index)) { set_bright_yellow(term)!; io::write_all(w, " lvalue")!; }
@@ -267,7 +267,7 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 		if (n.asm_stmt.quals.is_goto) io::write_all(w, " goto")!;
 	}
 	if (try value = self.value_of(index)) {
-		term.set_color(diagnostics::Color.BRIGHT_GREEN)!; io::write_all(w, " (value: ")!;
+		term.set_color(ansi::Color.BRIGHT_GREEN)!; io::write_all(w, " (value: ")!;
 		NestedPrint nested;
 		if (value.print(index.qt(self), self.comp, w, &nested)!) {
 			if (((NodeIndex)nested.node).kind(self) == COMPOUND_LITERAL_EXPR) {
@@ -283,7 +283,7 @@ fn void? Tree.dump_node(&self, NodeIndex index, uint level, Terminal term)
 	w.write_byte('\n')!;
 	AttrRef[] attrs = self.attr_map.attrs(index.pack());
 	if (attrs.len != 0) { set_bright_yellow(term)!; foreach (attr : attrs) { for (uint j = 0; j < level + 1; j++) w.write_byte(' ')!; self.dump_attribute(attr, w)!; } }
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	self.dump_children(n, level, term)!;
 }
 
@@ -345,15 +345,15 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 		case COMPOUND_LITERAL_EXPR:
 			if (n.compound_literal.storage_class != CompoundLiteralStorageClass.AUTO || n.compound_literal.thread_local) {
 				for (uint j = 0; j < level; j++) term.writer.write_byte(' ')!;
-				term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+				term.set_color(ansi::Color.BRIGHT_GREEN)!;
 				if (n.compound_literal.storage_class == CompoundLiteralStorageClass.STATIC) io::write_all(term.writer, " static")!;
 				if (n.compound_literal.storage_class == CompoundLiteralStorageClass.REGISTER) io::write_all(term.writer, " register")!;
 				if (n.compound_literal.thread_local) io::write_all(term.writer, " thread_local")!;
-				term.writer.write_byte('\n')!; term.set_color(diagnostics::Color.RESET)!;
+				term.writer.write_byte('\n')!; term.set_color(ansi::Color.RESET)!;
 			}
 			self.dump_node(n.compound_literal.initializer, level + 1, term)!;
 		case LABELED_STMT:
-			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.labeled_stmt.label_tok), diagnostics::Color.BRIGHT_GREEN)!;
+			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.labeled_stmt.label_tok), ansi::Color.BRIGHT_GREEN)!;
 			self.dump_child(term, level + 1, "stmt:", n.labeled_stmt.body)!;
 		case CASE_STMT:
 			if (!n.case_stmt.end.is_null()) {
@@ -400,14 +400,14 @@ fn void? Tree.dump_children(&self, Node n, uint level, Terminal term)
 			if (!n.for_stmt.incr.is_null()) self.dump_child(term, level + 1, "incr:", n.for_stmt.incr.unwrap())!;
 			self.dump_child(term, level + 1, "body:", n.for_stmt.body)!;
 		case ADDR_OF_LABEL:
-			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.addr_of_label.label_tok), diagnostics::Color.BRIGHT_GREEN)!;
+			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.addr_of_label.label_tok), ansi::Color.BRIGHT_GREEN)!;
 		case GOTO_STMT:
-			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.goto_stmt.label_tok), diagnostics::Color.BRIGHT_GREEN)!;
+			dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.goto_stmt.label_tok), ansi::Color.BRIGHT_GREEN)!;
 		case COMPUTED_GOTO_STMT: self.dump_child(term, level + 1, "expr:", n.computed_goto_stmt.expr)!;
 		case CONTINUE_STMT:
-			if (n.continue_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.continue_stmt.label), diagnostics::Color.BRIGHT_GREEN)!;
+			if (n.continue_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.continue_stmt.label), ansi::Color.BRIGHT_GREEN)!;
 		case BREAK_STMT:
-			if (n.break_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.break_stmt.label), diagnostics::Color.BRIGHT_GREEN)!;
+			if (n.break_stmt.has_label) dump_named_color_field(term, level + 1, "label: ", self.tok_slice(n.break_stmt.label), ansi::Color.BRIGHT_GREEN)!;
 		case RETURN_STMT:
 			if (n.return_stmt.operand == EXPR) self.dump_child(term, level + 1, "expr:", n.return_stmt.expr)!;
 		case ASM_STMT: self.dump_asm_children(n.asm_stmt, level, term)!;
@@ -531,10 +531,10 @@ fn void? Tree.dump_value_node(&self, NodeIndex index, uint indent, Terminal term
 {
 	if (try value = self.value_of(index)) {
 		for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
-		term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+		term.set_color(ansi::Color.BRIGHT_GREEN)!;
 		value.print(index.qt(self), self.comp, term.writer)!;
 		term.writer.write_byte('\n')!;
-		term.set_color(diagnostics::Color.RESET)!;
+		term.set_color(ansi::Color.RESET)!;
 	}
 }
 
@@ -543,10 +543,10 @@ fn void? Tree.dump_value_line(&self, NodeIndex index, uint indent, String label,
 	if (try value = self.value_of(index)) {
 		for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 		io::write_all(term.writer, label)!;
-		term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+		term.set_color(ansi::Color.BRIGHT_GREEN)!;
 		value.print(index.qt(self), self.comp, term.writer)!;
 		term.writer.write_byte('\n')!;
-		term.set_color(diagnostics::Color.RESET)!;
+		term.set_color(ansi::Color.RESET)!;
 	}
 }
 
@@ -564,21 +564,21 @@ fn void? Tree.dump_codegen_diagnostic(&self, NodeCodegenDiagnostic diagnostic, u
 fn void? dump_function_header(Terminal term, uint indent, bool is_static, bool is_inline, String name)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
-	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+	term.set_color(ansi::Color.BRIGHT_GREEN)!;
 	if (is_static) io::write_all(term.writer, "static ")!;
 	if (is_inline) io::write_all(term.writer, "inline ")!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	io::write_all(term.writer, "name: ")!;
-	term.set_color(diagnostics::Color.BRIGHT_RED)!;
+	term.set_color(ansi::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_variable_header(Terminal term, uint indent, VariableStorageClass storage_class, bool thread_local, String name)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
-	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+	term.set_color(ansi::Color.BRIGHT_GREEN)!;
 	switch (storage_class)
 	{
 		case AUTO: {}
@@ -587,34 +587,34 @@ fn void? dump_variable_header(Terminal term, uint indent, VariableStorageClass s
 		case REGISTER: io::write_all(term.writer, "register ")!;
 	}
 	if (thread_local) io::write_all(term.writer, "thread_local ")!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	io::write_all(term.writer, "name: ")!;
-	term.set_color(diagnostics::Color.BRIGHT_RED)!;
+	term.set_color(ansi::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
 fn void? dump_prefix_named_field(Terminal term, uint indent, String prefix, String label, String name)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
-	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+	term.set_color(ansi::Color.BRIGHT_GREEN)!;
 	io::write_all(term.writer, prefix)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::Color.BRIGHT_RED)!;
+	term.set_color(ansi::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
-fn void? dump_named_color_field(Terminal term, uint indent, String label, String name, diagnostics::Color color)
+fn void? dump_named_color_field(Terminal term, uint indent, String label, String name, ansi::Color color)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
 	term.set_color(color)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
@@ -622,9 +622,9 @@ fn void? dump_index_line(Terminal term, uint indent, String label, uint index)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::Color.BRIGHT_RED)!;
+	term.set_color(ansi::Color.BRIGHT_RED)!;
 	io::fprintf(term.writer, "0x%X", index)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
@@ -632,9 +632,9 @@ fn void? dump_number_line(Terminal term, uint indent, String label, ulong value)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::Color.BRIGHT_GREEN)!;
+	term.set_color(ansi::Color.BRIGHT_GREEN)!;
 	io::fprintf(term.writer, "%d", value)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
@@ -642,9 +642,9 @@ fn void? dump_type_line(Terminal term, uint indent, String label, QualType qt, C
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::Color.BRIGHT_MAGENTA)!;
+	term.set_color(ansi::Color.BRIGHT_MAGENTA)!;
 	qt.dump(comp, term.writer)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 
@@ -659,9 +659,9 @@ fn void? dump_named_field(Terminal term, uint indent, String label, String name)
 {
 	for (uint j = 0; j < indent; j++) term.writer.write_byte(' ')!;
 	io::write_all(term.writer, label)!;
-	term.set_color(diagnostics::Color.BRIGHT_RED)!;
+	term.set_color(ansi::Color.BRIGHT_RED)!;
 	io::write_all(term.writer, name)!;
-	term.set_color(diagnostics::Color.RESET)!;
+	term.set_color(ansi::Color.RESET)!;
 	term.writer.write_byte('\n')!;
 }
 

@@ -1179,7 +1179,7 @@ fn bool calling_convention_delayed(parser::Parser* p, Parsed attr, type_store::Q
 	{
 		if (cur.is_invalid()) return false;
 		if (cur.is_auto()) return can_delay;
-		if (cur.index == type_store::IDX_DECLARATOR_COMBINE) return true;
+		if (cur.is_declarator_combine()) return true;
 		type_store::BaseType base = cur.base(p.comp);
 		if (base.ty.tag == type_store::TypeTag.FUNC) return false;
 		if (base.ty.tag != type_store::TypeTag.POINTER) return can_delay;
@@ -1340,7 +1340,7 @@ fn type_store::QualType? Wip.apply_calling_convention(&self, parser::Parser* p, 
 			self.emit(p, attr, Diagnostic.CALLCONV_NON_FUNC, p.fmt_qt(qt))!;
 			return qt;
 		}
-		if (cur.index == type_store::IDX_DECLARATOR_COMBINE)
+		if (cur.is_declarator_combine())
 		{
 			// Unreachable after calling_convention_delayed; kept so base() is never called on the placeholder.
 			return qt;

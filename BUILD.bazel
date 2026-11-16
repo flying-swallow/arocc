@@ -54,6 +54,7 @@ c3_library(
         "src/driver_tempfiles.c3",
         "src/host_process.c3",
         "src/compilation.c3",
+        "src/ansi.c3",
         "src/diagnostics.c3",
         "src/dep_file.c3",
         "src/primitive_float_parse.c3",

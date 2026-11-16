@@ -22,6 +22,32 @@ struct WipSwitch
 	ulong size;
 }
 
+<* A compound statement that holds VLAs: the stack pointer saved before its first one. *>
+struct VlaScope
+{
+	type_store::NodeIndex compound;
+	ir::Ref saved;
+}
+
+<* A goto label: its IR block and, once defined, the VLA scopes live at it. *>
+struct GotoLabel
+{
+	ir::Ref label;
+	bool defined;
+	<* Range in `CodeGen.vla_save_pool` of the saved stack pointers live at the label. *>
+	sz saves_start;
+	sz saves_len;
+}
+
+<* A goto out of VLA scopes whose stub block (restore, then jump) is emitted at function end. *>
+struct PendingGoto
+{
+	ir::Ref stub;
+	sz label_index;
+	sz saves_start;
+	sz saves_len;
+}
+
 struct Symbol
 {
 	string_interner::StringId name;
@@ -62,6 +88,17 @@ struct CodeGen
 	ir::Ref cond_dummy_ref;
 	ir::Ref continue_label;
 	ir::Ref break_label;
+	<* `vla_scopes.len()` where the current break/continue target was entered. *>
+	sz break_vla_depth;
+	sz continue_vla_depth;
+	type_store::NodeIndex current_compound;
+	<* Runtime byte size (i64) of each VLA type, keyed by its unqualified base QualType. *>
+	HashMap{uint, ir::Ref} vla_sizes;
+	List{VlaScope} vla_scopes;
+	List{ir::Ref} vla_save_pool;
+	HashMap{uint, sz} goto_label_index;
+	List{GotoLabel} goto_labels;
+	List{PendingGoto} pending_gotos;
 	ir::Ref return_label;
 	bool has_compound_assign_dummy;
 	ir::Ref compound_assign_dummy;
@@ -101,6 +138,18 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 	c.phi_nodes.init(comp.gpa);
 	c.record_elem_buf.init(comp.gpa);
 	c.record_cache.init(comp.gpa);
+	c.vla_sizes.init(comp.gpa);
+	c.vla_scopes.init(comp.gpa);
+	c.vla_save_pool.init(comp.gpa);
+	c.goto_label_index.init(comp.gpa);
+	c.goto_labels.init(comp.gpa);
+	c.pending_gotos.init(comp.gpa);
+	defer c.vla_sizes.free();
+	defer c.vla_scopes.free();
+	defer c.vla_save_pool.free();
+	defer c.goto_label_index.free();
+	defer c.goto_labels.free();
+	defer c.pending_gotos.free();
 	defer c.symbols.free();
 	defer c.emitted_block_statics.free();
 	defer c.implicit_vars.free();
@@ -396,6 +445,15 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	// C3 deviation: Zig never clears `symbols`, so a name could resolve to an
 	// earlier function's ALLOC. Locals are per function.
 	self.symbols.clear();
+	self.vla_sizes.clear();
+	self.vla_scopes.clear();
+	self.vla_save_pool.clear();
+	self.goto_label_index.clear();
+	self.goto_labels.clear();
+	self.pending_gotos.clear();
+	self.break_vla_depth = 0;
+	self.continue_vla_depth = 0;
+	self.current_compound = (type_store::NodeIndex)type_store::NODE_NULL;
 	self.builder.start_fn();
 	foreach (param : func_type.params)
 	{
@@ -434,6 +492,7 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		ir::Ref phi = self.builder.add_phi(inputs, self.gen_type(func_type.return_type)!);
 		self.builder.add_inst(ir::InstTag.RET, { .ref = phi }, value_interner::REF_NORETURN);
 	}
+	self.emit_pending_gotos();
 	ir::Linkage linkage = self.has_internal_linkage(declaration) ? ir::Linkage.INTERNAL : ir::Linkage.EXTERNAL;
 	self.builder.finish_fn(name, linkage);
 }

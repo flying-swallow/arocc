@@ -1191,7 +1191,7 @@ fn void type_position_calling_convention_on_declarator_combine_waits_for_final_t
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
 		// Type position on the declarator placeholder: the convention stays queued and undiagnosed; used stays set so the decl path skips it.
 		type_store::QualType placeholder = wip.apply_type_attrs(&p, type_store::DECLARATOR_COMBINE)!!;
-		assert(placeholder.index == type_store::IDX_DECLARATOR_COMBINE);
+		assert(placeholder.is_declarator_combine());
 		assert(wip.parsed()[0].used_as_type_attr);
 		assert(d.messages.len() == 0);
 
@@ -1222,7 +1222,7 @@ fn void declaration_path_calling_convention_marker_is_pending_and_retries_on_fun
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
 		// Declaration path on the incomplete-declarator placeholder: queued and undiagnosed; used stays set so the decl pass skips it.
 		type_store::QualType returned = wip.apply_calling_convention(&p, 0, type_store::DECLARATOR_COMBINE, true)!!;
-		assert(returned.index == type_store::IDX_DECLARATOR_COMBINE);
+		assert(returned.is_declarator_combine());
 		assert(wip.parsed()[0].used_as_type_attr);
 		assert(wip.pending_calling_conventions_active().len == 1);
 		assert(wip.pending_calling_conventions_active()[0] == 0);

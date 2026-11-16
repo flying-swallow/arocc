@@ -9,8 +9,8 @@
 //   type_store_named.c3      initNamedTypes / generateVaListType
 //
 // Handles: a `QualType` is a 32-bit value (3 qualifier bits + a 29-bit index).
-// Indices at or above `FIRST_BUILTIN_INDEX` name builtin types; smaller ones index
-// `TypeStore.types`. Handles never hold pointers, so they stay valid when the
+// With the `builtin` bit set the index is a `BuiltinType` ordinal; otherwise it
+// indexes `TypeStore.types`. Handles never hold pointers, so they stay valid when the
 // store grows. Variable-length payloads (function params, record fields, enum
 // fields) live in separate heap allocations owned by the store, so the slices a
 // `Type` returned by value carries stay valid until `TypeStore.free`.
@@ -52,108 +52,121 @@ const NodeOptIndex NODE_NULL = (NodeOptIndex)0xFFFF_FFFF;
 // Index (enum(u29)) and QualType (packed struct(u32))
 // ---------------------------------------------------------------------------
 
-const uint MAX_INDEX = 0x1FFF_FFFF; // std.math.maxInt(u29)
+<* Largest `TypeStore.types` slot a non-builtin QualType can name (28 bits). *>
+const uint MAX_STORE_INDEX = 0x0FFF_FFFF;
 
-<* A NaN-like poison value. Can only be nested in function types. *>
-const uint IDX_INVALID = MAX_INDEX - 0;
-<* GNU auto type placeholder. Must not be nested. *>
-const uint IDX_AUTO_TYPE = MAX_INDEX - 1;
-<* C23 auto, behaves like auto_type. Must not be nested. *>
-const uint IDX_C23_AUTO = MAX_INDEX - 2;
-const uint IDX_VOID = MAX_INDEX - 3;
-const uint IDX_BOOL = MAX_INDEX - 4;
-const uint IDX_NULLPTR_T = MAX_INDEX - 5;
-const uint IDX_INT_CHAR = MAX_INDEX - 6;
-const uint IDX_INT_SCHAR = MAX_INDEX - 7;
-const uint IDX_INT_UCHAR = MAX_INDEX - 8;
-const uint IDX_INT_SHORT = MAX_INDEX - 9;
-const uint IDX_INT_USHORT = MAX_INDEX - 10;
-const uint IDX_INT_INT = MAX_INDEX - 11;
-const uint IDX_INT_UINT = MAX_INDEX - 12;
-const uint IDX_INT_LONG = MAX_INDEX - 13;
-const uint IDX_INT_ULONG = MAX_INDEX - 14;
-const uint IDX_INT_LONG_LONG = MAX_INDEX - 15;
-const uint IDX_INT_ULONG_LONG = MAX_INDEX - 16;
-const uint IDX_INT_INT128 = MAX_INDEX - 17;
-const uint IDX_INT_UINT128 = MAX_INDEX - 18;
-const uint IDX_FLOAT_FP16 = MAX_INDEX - 19;
-const uint IDX_FLOAT_FLOAT16 = MAX_INDEX - 20;
-const uint IDX_FLOAT_FLOAT = MAX_INDEX - 21;
-const uint IDX_FLOAT_DOUBLE = MAX_INDEX - 22;
-const uint IDX_FLOAT_LONG_DOUBLE = MAX_INDEX - 23;
-const uint IDX_FLOAT_FLOAT128 = MAX_INDEX - 24;
-const uint IDX_VOID_POINTER = MAX_INDEX - 25;
-const uint IDX_CHAR_POINTER = MAX_INDEX - 26;
-const uint IDX_INT_POINTER = MAX_INDEX - 27;
-<* Special type used when combining declarators. *>
-const uint IDX_DECLARATOR_COMBINE = MAX_INDEX - 28;
-const uint IDX_FLOAT_BF16 = MAX_INDEX - 29;
-const uint IDX_FLOAT_FLOAT32 = MAX_INDEX - 30;
-const uint IDX_FLOAT_FLOAT64 = MAX_INDEX - 31;
-const uint IDX_FLOAT_FLOAT32X = MAX_INDEX - 32;
-const uint IDX_FLOAT_FLOAT64X = MAX_INDEX - 33;
-const uint IDX_FLOAT_FLOAT128X = MAX_INDEX - 34;
-const uint IDX_FLOAT_DFLOAT32 = MAX_INDEX - 35;
-const uint IDX_FLOAT_DFLOAT64 = MAX_INDEX - 36;
-const uint IDX_FLOAT_DFLOAT128 = MAX_INDEX - 37;
-const uint IDX_FLOAT_DFLOAT64X = MAX_INDEX - 38;
-const uint IDX_MFP8 = MAX_INDEX - 39;
-const uint IDX_INT_INT24 = MAX_INDEX - 40;
-const uint IDX_INT_UINT24 = MAX_INDEX - 41;
-<* Indices at or above this name builtin types; below it they index `TypeStore.types`. *>
-const uint FIRST_BUILTIN_INDEX = IDX_INT_UINT24;
+<*
+ Builtin types: a QualType with `builtin` set holds one of these ordinals in
+ `index` and needs no `TypeStore.types` slot. Order is free; append new ones.
+*>
+enum BuiltinType : char
+{
+	<* A NaN-like poison value. Can only be nested in function types. *>
+	INVALID,
+	<* GNU auto type placeholder. Must not be nested. *>
+	AUTO_TYPE,
+	<* C23 auto, behaves like auto_type. Must not be nested. *>
+	C23_AUTO,
+	<* Special type used when combining declarators. *>
+	DECLARATOR_COMBINE,
+	VOID,
+	BOOL,
+	NULLPTR_T,
+	CHAR,
+	SCHAR,
+	UCHAR,
+	SHORT,
+	USHORT,
+	INT,
+	UINT,
+	LONG,
+	ULONG,
+	LONG_LONG,
+	ULONG_LONG,
+	INT128,
+	UINT128,
+	INT24,
+	UINT24,
+	BF16,
+	FP16,
+	FLOAT16,
+	FLOAT,
+	DOUBLE,
+	LONG_DOUBLE,
+	FLOAT128,
+	FLOAT32,
+	FLOAT64,
+	FLOAT32X,
+	FLOAT64X,
+	FLOAT128X,
+	DFLOAT32,
+	DFLOAT64,
+	DFLOAT128,
+	DFLOAT64X,
+	MFP8,
+	VOID_POINTER,
+	CHAR_POINTER,
+	INT_POINTER,
+}
 
-<* TypeStore.QualType: qualifiers plus a type index. Equality (`==`) is Zig's bitwise equality. *>
+<*
+ TypeStore.QualType: qualifiers plus a type handle. With `builtin` set, `index`
+ is a `BuiltinType` ordinal; otherwise it is a `TypeStore.types` slot.
+ Equality (`==`) is bitwise.
+*>
 bitstruct QualType : uint
 {
 	bool is_const : 0;
 	bool is_volatile : 1;
 	bool is_restrict : 2;
-	uint index : 3..31;
+	uint index : 3..30;
+	bool builtin : 31;
 }
 
-const QualType INVALID = { .index = IDX_INVALID };
-const QualType AUTO_TYPE = { .index = IDX_AUTO_TYPE };
-const QualType C23_AUTO = { .index = IDX_C23_AUTO };
-const QualType VOID = { .index = IDX_VOID };
-const QualType BOOL = { .index = IDX_BOOL };
-const QualType NULLPTR_T = { .index = IDX_NULLPTR_T };
-const QualType CHAR = { .index = IDX_INT_CHAR };
-const QualType SCHAR = { .index = IDX_INT_SCHAR };
-const QualType UCHAR = { .index = IDX_INT_UCHAR };
-const QualType SHORT = { .index = IDX_INT_SHORT };
-const QualType USHORT = { .index = IDX_INT_USHORT };
-const QualType INT = { .index = IDX_INT_INT };
-const QualType UINT = { .index = IDX_INT_UINT };
-const QualType LONG = { .index = IDX_INT_LONG };
-const QualType ULONG = { .index = IDX_INT_ULONG };
-const QualType LONG_LONG = { .index = IDX_INT_LONG_LONG };
-const QualType ULONG_LONG = { .index = IDX_INT_ULONG_LONG };
-const QualType INT128 = { .index = IDX_INT_INT128 };
-const QualType UINT128 = { .index = IDX_INT_UINT128 };
-const QualType INT24 = { .index = IDX_INT_INT24 };
-const QualType UINT24 = { .index = IDX_INT_UINT24 };
-const QualType BF16 = { .index = IDX_FLOAT_BF16 };
-const QualType FP16 = { .index = IDX_FLOAT_FP16 };
-const QualType FLOAT16 = { .index = IDX_FLOAT_FLOAT16 };
-const QualType FLOAT = { .index = IDX_FLOAT_FLOAT };
-const QualType DOUBLE = { .index = IDX_FLOAT_DOUBLE };
-const QualType LONG_DOUBLE = { .index = IDX_FLOAT_LONG_DOUBLE };
-const QualType FLOAT128 = { .index = IDX_FLOAT_FLOAT128 };
-const QualType FLOAT32 = { .index = IDX_FLOAT_FLOAT32 };
-const QualType FLOAT64 = { .index = IDX_FLOAT_FLOAT64 };
-const QualType FLOAT32X = { .index = IDX_FLOAT_FLOAT32X };
-const QualType FLOAT64X = { .index = IDX_FLOAT_FLOAT64X };
-const QualType FLOAT128X = { .index = IDX_FLOAT_FLOAT128X };
-const QualType DFLOAT32 = { .index = IDX_FLOAT_DFLOAT32 };
-const QualType DFLOAT64 = { .index = IDX_FLOAT_DFLOAT64 };
-const QualType DFLOAT128 = { .index = IDX_FLOAT_DFLOAT128 };
-const QualType DFLOAT64X = { .index = IDX_FLOAT_DFLOAT64X };
-const QualType MFP8 = { .index = IDX_MFP8 };
-const QualType VOID_POINTER = { .index = IDX_VOID_POINTER };
-const QualType CHAR_POINTER = { .index = IDX_CHAR_POINTER };
-const QualType INT_POINTER = { .index = IDX_INT_POINTER };
-const QualType DECLARATOR_COMBINE = { .index = IDX_DECLARATOR_COMBINE };
+fn QualType BuiltinType.qt(self) @inline => { .builtin = true, .index = self.ordinal };
+
+const QualType INVALID = { .builtin = true, .index = BuiltinType.INVALID.ordinal };
+const QualType AUTO_TYPE = { .builtin = true, .index = BuiltinType.AUTO_TYPE.ordinal };
+const QualType C23_AUTO = { .builtin = true, .index = BuiltinType.C23_AUTO.ordinal };
+const QualType DECLARATOR_COMBINE = { .builtin = true, .index = BuiltinType.DECLARATOR_COMBINE.ordinal };
+const QualType VOID = { .builtin = true, .index = BuiltinType.VOID.ordinal };
+const QualType BOOL = { .builtin = true, .index = BuiltinType.BOOL.ordinal };
+const QualType NULLPTR_T = { .builtin = true, .index = BuiltinType.NULLPTR_T.ordinal };
+const QualType CHAR = { .builtin = true, .index = BuiltinType.CHAR.ordinal };
+const QualType SCHAR = { .builtin = true, .index = BuiltinType.SCHAR.ordinal };
+const QualType UCHAR = { .builtin = true, .index = BuiltinType.UCHAR.ordinal };
+const QualType SHORT = { .builtin = true, .index = BuiltinType.SHORT.ordinal };
+const QualType USHORT = { .builtin = true, .index = BuiltinType.USHORT.ordinal };
+const QualType INT = { .builtin = true, .index = BuiltinType.INT.ordinal };
+const QualType UINT = { .builtin = true, .index = BuiltinType.UINT.ordinal };
+const QualType LONG = { .builtin = true, .index = BuiltinType.LONG.ordinal };
+const QualType ULONG = { .builtin = true, .index = BuiltinType.ULONG.ordinal };
+const QualType LONG_LONG = { .builtin = true, .index = BuiltinType.LONG_LONG.ordinal };
+const QualType ULONG_LONG = { .builtin = true, .index = BuiltinType.ULONG_LONG.ordinal };
+const QualType INT128 = { .builtin = true, .index = BuiltinType.INT128.ordinal };
+const QualType UINT128 = { .builtin = true, .index = BuiltinType.UINT128.ordinal };
+const QualType INT24 = { .builtin = true, .index = BuiltinType.INT24.ordinal };
+const QualType UINT24 = { .builtin = true, .index = BuiltinType.UINT24.ordinal };
+const QualType BF16 = { .builtin = true, .index = BuiltinType.BF16.ordinal };
+const QualType FP16 = { .builtin = true, .index = BuiltinType.FP16.ordinal };
+const QualType FLOAT16 = { .builtin = true, .index = BuiltinType.FLOAT16.ordinal };
+const QualType FLOAT = { .builtin = true, .index = BuiltinType.FLOAT.ordinal };
+const QualType DOUBLE = { .builtin = true, .index = BuiltinType.DOUBLE.ordinal };
+const QualType LONG_DOUBLE = { .builtin = true, .index = BuiltinType.LONG_DOUBLE.ordinal };
+const QualType FLOAT128 = { .builtin = true, .index = BuiltinType.FLOAT128.ordinal };
+const QualType FLOAT32 = { .builtin = true, .index = BuiltinType.FLOAT32.ordinal };
+const QualType FLOAT64 = { .builtin = true, .index = BuiltinType.FLOAT64.ordinal };
+const QualType FLOAT32X = { .builtin = true, .index = BuiltinType.FLOAT32X.ordinal };
+const QualType FLOAT64X = { .builtin = true, .index = BuiltinType.FLOAT64X.ordinal };
+const QualType FLOAT128X = { .builtin = true, .index = BuiltinType.FLOAT128X.ordinal };
+const QualType DFLOAT32 = { .builtin = true, .index = BuiltinType.DFLOAT32.ordinal };
+const QualType DFLOAT64 = { .builtin = true, .index = BuiltinType.DFLOAT64.ordinal };
+const QualType DFLOAT128 = { .builtin = true, .index = BuiltinType.DFLOAT128.ordinal };
+const QualType DFLOAT64X = { .builtin = true, .index = BuiltinType.DFLOAT64X.ordinal };
+const QualType MFP8 = { .builtin = true, .index = BuiltinType.MFP8.ordinal };
+const QualType VOID_POINTER = { .builtin = true, .index = BuiltinType.VOID_POINTER.ordinal };
+const QualType CHAR_POINTER = { .builtin = true, .index = BuiltinType.CHAR_POINTER.ordinal };
+const QualType INT_POINTER = { .builtin = true, .index = BuiltinType.INT_POINTER.ordinal };
 
 // ---------------------------------------------------------------------------
 // Type (union(enum)) and its payloads
@@ -185,7 +198,7 @@ enum TypeTag : char
 
 <*
  Type.Int, with its fixed properties:
- - `index`: the builtin QualType index (`int_index`);
+ - `builtin`: the builtin type it names (`int_qt`);
  - `name`: the C spelling (`int_name`);
  - `builder`: the type builder specifier (`builder_from_int_type`);
  - `ctype` / `fixed_bits`: the width, either the target's size of `ctype`
@@ -194,28 +207,28 @@ enum TypeTag : char
  - `rank_class`: the C conversion rank before the size term (`int_rank`);
  - `unsigned_of`: the unsigned type of the same rank (`make_int_unsigned`).
 *>
-enum TypeInt : char (uint index, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, Signedness sign, char rank_class, TypeInt unsigned_of)
+enum TypeInt : char (BuiltinType builtin, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, Signedness sign, char rank_class, TypeInt unsigned_of)
 {
-	CHAR { IDX_INT_CHAR, "char", CHAR, CHAR, 0, SIGNED, 2, UCHAR },
-	SCHAR { IDX_INT_SCHAR, "signed char", SCHAR, CHAR, 0, SIGNED, 2, UCHAR },
-	UCHAR { IDX_INT_UCHAR, "unsigned char", UCHAR, CHAR, 0, UNSIGNED, 2, UCHAR },
-	SHORT { IDX_INT_SHORT, "short", SHORT, SHORT, 0, SIGNED, 3, USHORT },
-	USHORT { IDX_INT_USHORT, "unsigned short", USHORT, USHORT, 0, UNSIGNED, 3, USHORT },
-	INT { IDX_INT_INT, "int", INT, INT, 0, SIGNED, 4, UINT },
-	UINT { IDX_INT_UINT, "unsigned int", UINT, UINT, 0, UNSIGNED, 4, UINT },
-	LONG { IDX_INT_LONG, "long", LONG, LONG, 0, SIGNED, 6, ULONG },
-	ULONG { IDX_INT_ULONG, "unsigned long", ULONG, ULONG, 0, UNSIGNED, 6, ULONG },
-	LONG_LONG { IDX_INT_LONG_LONG, "long long", LONG_LONG, LONGLONG, 0, SIGNED, 7, ULONG_LONG },
-	ULONG_LONG { IDX_INT_ULONG_LONG, "unsigned long long", ULONG_LONG, ULONGLONG, 0, UNSIGNED, 7, ULONG_LONG },
-	INT128 { IDX_INT_INT128, "__int128", INT128, CHAR, 128, SIGNED, 8, UINT128 },
-	UINT128 { IDX_INT_UINT128, "unsigned __int128", UINT128, CHAR, 128, UNSIGNED, 8, UINT128 },
-	INT24 { IDX_INT_INT24, "__int24", INT24, CHAR, 24, SIGNED, 5, UINT24 },
-	UINT24 { IDX_INT_UINT24, "unsigned __int24", UINT24, CHAR, 24, UNSIGNED, 5, UINT24 },
+	CHAR { CHAR, "char", CHAR, CHAR, 0, SIGNED, 2, UCHAR },
+	SCHAR { SCHAR, "signed char", SCHAR, CHAR, 0, SIGNED, 2, UCHAR },
+	UCHAR { UCHAR, "unsigned char", UCHAR, CHAR, 0, UNSIGNED, 2, UCHAR },
+	SHORT { SHORT, "short", SHORT, SHORT, 0, SIGNED, 3, USHORT },
+	USHORT { USHORT, "unsigned short", USHORT, USHORT, 0, UNSIGNED, 3, USHORT },
+	INT { INT, "int", INT, INT, 0, SIGNED, 4, UINT },
+	UINT { UINT, "unsigned int", UINT, UINT, 0, UNSIGNED, 4, UINT },
+	LONG { LONG, "long", LONG, LONG, 0, SIGNED, 6, ULONG },
+	ULONG { ULONG, "unsigned long", ULONG, ULONG, 0, UNSIGNED, 6, ULONG },
+	LONG_LONG { LONG_LONG, "long long", LONG_LONG, LONGLONG, 0, SIGNED, 7, ULONG_LONG },
+	ULONG_LONG { ULONG_LONG, "unsigned long long", ULONG_LONG, ULONGLONG, 0, UNSIGNED, 7, ULONG_LONG },
+	INT128 { INT128, "__int128", INT128, CHAR, 128, SIGNED, 8, UINT128 },
+	UINT128 { UINT128, "unsigned __int128", UINT128, CHAR, 128, UNSIGNED, 8, UINT128 },
+	INT24 { INT24, "__int24", INT24, CHAR, 24, SIGNED, 5, UINT24 },
+	UINT24 { UINT24, "unsigned __int24", UINT24, CHAR, 24, UNSIGNED, 5, UINT24 },
 }
 
 <*
  Type.Float, with its fixed properties:
- - `index`: the builtin QualType index (`float_index`);
+ - `builtin`: the builtin type it names (`float_qt`);
  - `name`: the C spelling (`float_name`);
  - `builder`: the type builder specifier (`builder_from_float_type`);
  - `ctype` / `fixed_bits`: the width, either the target's size of `ctype`
@@ -223,24 +236,24 @@ enum TypeInt : char (uint index, String name, BuilderSpecifierTag builder, CType
  - `rank`: the floating conversion rank (`float_rank`).
  FLOAT128X is not supported: `bits` and `float_rank` reject it.
 *>
-enum TypeFloat : char (uint index, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, uint rank)
+enum TypeFloat : char (BuiltinType builtin, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, uint rank)
 {
-	BF16 { IDX_FLOAT_BF16, "__bf16", BF16, FLOAT, 16, 0 },
-	FP16 { IDX_FLOAT_FP16, "__fp16", FP16, FLOAT, 16, 2 },
-	FLOAT16 { IDX_FLOAT_FLOAT16, "_Float16", FLOAT16, FLOAT, 16, 1 },
-	FLOAT { IDX_FLOAT_FLOAT, "float", FLOAT, FLOAT, 0, 3 },
-	DOUBLE { IDX_FLOAT_DOUBLE, "double", DOUBLE, DOUBLE, 0, 6 },
-	LONG_DOUBLE { IDX_FLOAT_LONG_DOUBLE, "long double", LONG_DOUBLE, LONGDOUBLE, 0, 9 },
-	FLOAT128 { IDX_FLOAT_FLOAT128, "__float128", FLOAT128, FLOAT, 128, 10 },
-	FLOAT32 { IDX_FLOAT_FLOAT32, "_Float32", FLOAT32, FLOAT, 32, 4 },
-	FLOAT64 { IDX_FLOAT_FLOAT64, "_Float64", FLOAT64, FLOAT, 64, 7 },
-	FLOAT32X { IDX_FLOAT_FLOAT32X, "_Float32x", FLOAT32X, FLOAT, 32 * 2, 5 },
-	FLOAT64X { IDX_FLOAT_FLOAT64X, "_Float64x", FLOAT64X, FLOAT, 64 * 2, 8 },
-	FLOAT128X { IDX_FLOAT_FLOAT128X, "_Float128x", FLOAT128X, FLOAT, 0, 0 },
-	DFLOAT32 { IDX_FLOAT_DFLOAT32, "_Decimal32", DFLOAT32, FLOAT, 32, DECIMAL_FLOAT_RANK + 0 },
-	DFLOAT64 { IDX_FLOAT_DFLOAT64, "_Decimal64", DFLOAT64, FLOAT, 64, DECIMAL_FLOAT_RANK + 1 },
-	DFLOAT128 { IDX_FLOAT_DFLOAT128, "_Decimal128", DFLOAT128, FLOAT, 128, DECIMAL_FLOAT_RANK + 3 },
-	DFLOAT64X { IDX_FLOAT_DFLOAT64X, "_Decimal64x", DFLOAT64X, FLOAT, 64 * 2, DECIMAL_FLOAT_RANK + 2 },
+	BF16 { BF16, "__bf16", BF16, FLOAT, 16, 0 },
+	FP16 { FP16, "__fp16", FP16, FLOAT, 16, 2 },
+	FLOAT16 { FLOAT16, "_Float16", FLOAT16, FLOAT, 16, 1 },
+	FLOAT { FLOAT, "float", FLOAT, FLOAT, 0, 3 },
+	DOUBLE { DOUBLE, "double", DOUBLE, DOUBLE, 0, 6 },
+	LONG_DOUBLE { LONG_DOUBLE, "long double", LONG_DOUBLE, LONGDOUBLE, 0, 9 },
+	FLOAT128 { FLOAT128, "__float128", FLOAT128, FLOAT, 128, 10 },
+	FLOAT32 { FLOAT32, "_Float32", FLOAT32, FLOAT, 32, 4 },
+	FLOAT64 { FLOAT64, "_Float64", FLOAT64, FLOAT, 64, 7 },
+	FLOAT32X { FLOAT32X, "_Float32x", FLOAT32X, FLOAT, 32 * 2, 5 },
+	FLOAT64X { FLOAT64X, "_Float64x", FLOAT64X, FLOAT, 64 * 2, 8 },
+	FLOAT128X { FLOAT128X, "_Float128x", FLOAT128X, FLOAT, 0, 0 },
+	DFLOAT32 { DFLOAT32, "_Decimal32", DFLOAT32, FLOAT, 32, DECIMAL_FLOAT_RANK + 0 },
+	DFLOAT64 { DFLOAT64, "_Decimal64", DFLOAT64, FLOAT, 64, DECIMAL_FLOAT_RANK + 1 },
+	DFLOAT128 { DFLOAT128, "_Decimal128", DFLOAT128, FLOAT, 128, DECIMAL_FLOAT_RANK + 3 },
+	DFLOAT64X { DFLOAT64X, "_Decimal64x", DFLOAT64X, FLOAT, 64 * 2, DECIMAL_FLOAT_RANK + 2 },
 }
 
 <* Type.StorageFloat: non-arithmetic floats. *>
@@ -658,17 +671,19 @@ fn FuncParam func_param(QualType qt, StringId name = string_interner::EMPTY)
 // QualType basics
 // ---------------------------------------------------------------------------
 
-fn QualType qual(uint index) @inline => { .index = index };
+<* True when this handle names builtin `b`, ignoring qualifiers. *>
+fn bool QualType.is_builtin_type(self, BuiltinType b) @inline => self.builtin && self.index == b.ordinal;
 
-fn bool QualType.is_invalid(self) => self.index == IDX_INVALID;
-fn bool QualType.is_auto_type(self) => self.index == IDX_AUTO_TYPE;
-fn bool QualType.is_c23_auto(self) => self.index == IDX_C23_AUTO;
-fn bool QualType.is_auto(self) => self.index == IDX_AUTO_TYPE || self.index == IDX_C23_AUTO;
+fn bool QualType.is_invalid(self) => self.is_builtin_type(INVALID);
+fn bool QualType.is_auto_type(self) => self.is_builtin_type(AUTO_TYPE);
+fn bool QualType.is_c23_auto(self) => self.is_builtin_type(C23_AUTO);
+fn bool QualType.is_auto(self) => self.is_auto_type() || self.is_c23_auto();
+fn bool QualType.is_declarator_combine(self) => self.is_builtin_type(DECLARATOR_COMBINE);
 fn bool QualType.is_qualified(self) => self.is_const || self.is_volatile || self.is_restrict;
-fn QualType QualType.unqualified(self) => { .index = self.index };
+fn QualType QualType.unqualified(self) => { .builtin = self.builtin, .index = self.index };
 
 fn QualType QualType.with_qualifiers(self, QualType quals_from)
-	=> { .index = self.index, .is_const = quals_from.is_const, .is_volatile = quals_from.is_volatile, .is_restrict = quals_from.is_restrict };
+	=> { .builtin = self.builtin, .index = self.index, .is_const = quals_from.is_const, .is_volatile = quals_from.is_volatile, .is_restrict = quals_from.is_restrict };
 
 fn bool Pointer.any_attrs(self) => self.bounds != C || self.nullability != DEFAULT;
 
@@ -737,25 +752,28 @@ macro copy_slice(Allocator gpa, slice) @local
 // put / putExtra / set
 // ---------------------------------------------------------------------------
 
-fn QualType TypeStore.put(&self, Type ty) => { .index = self.put_extra(ty) };
-
-fn uint int_index(TypeInt k) => k.index;
-
-fn uint float_index(TypeFloat k) => k.index;
-
-<* Builtin types map to fixed indices; everything else gets a new slot. *>
-fn uint TypeStore.put_extra(&self, Type ty)
+<* Builtin types map to fixed handles; everything else gets a new slot. *>
+fn QualType TypeStore.put(&self, Type ty)
 {
 	switch (ty.tag)
 	{
-		case VOID: return IDX_VOID;
-		case BOOL: return IDX_BOOL;
-		case NULLPTR_T: return IDX_NULLPTR_T;
-		case INT: return int_index(ty.int_ty);
-		case FLOAT: return float_index(ty.float_ty);
-		case STORAGE_FLOAT: return IDX_MFP8;
-		default: break;
+		case VOID: return VOID;
+		case BOOL: return BOOL;
+		case NULLPTR_T: return NULLPTR_T;
+		case INT: return ty.int_ty.builtin.qt();
+		case FLOAT: return ty.float_ty.builtin.qt();
+		case STORAGE_FLOAT: return MFP8;
+		default: return { .index = self.put_extra(ty) };
 	}
+}
+
+fn QualType int_qt(TypeInt k) => k.builtin.qt();
+
+fn QualType float_qt(TypeFloat k) => k.builtin.qt();
+
+<* Store a non-builtin type in a new slot and return the slot (`set` rejects builtins). *>
+fn uint TypeStore.put_extra(&self, Type ty)
+{
 	uint index = self.add_one();
 	self.set(ty, index);
 	return index;
@@ -765,7 +783,7 @@ fn uint TypeStore.put_extra(&self, Type ty)
 fn uint TypeStore.add_one(&self)
 {
 	usz index = self.len();
-	assert(index < FIRST_BUILTIN_INDEX, "type store index space (u29) exhausted");
+	assert(index <= MAX_STORE_INDEX, "type store index space (u28) exhausted");
 	self.types.push({});
 	return (uint)index;
 }
@@ -957,7 +975,7 @@ fn bool ReprTag.is_func(self)
 	}
 }
 
-<* @require !func_qt.is_invalid() && func_qt.index < self.len() *>
+<* @require !func_qt.builtin && func_qt.index < self.len() *>
 fn void TypeStore.set_func_return_type(&self, QualType func_qt, QualType return_qt)
 {
 	Repr* repr = &self.types[func_qt.index];
@@ -985,56 +1003,58 @@ fn QualType qt_from(uint raw) @inline => (QualType)raw;
 
 <*
  Decode a handle into its Type (Zig `QualType.type`).
- @require !self.is_invalid() && !self.is_auto() && self.index != IDX_DECLARATOR_COMBINE : "placeholder types have no Type"
+ @require !self.is_invalid() && !self.is_auto() && !self.is_declarator_combine() : "placeholder types have no Type"
 *>
 fn Type QualType.get_type(self, Compilation* comp)
 {
-	switch (self.index)
+	if (self.builtin)
 	{
-		case IDX_VOID: return { .tag = VOID };
-		case IDX_BOOL: return { .tag = BOOL };
-		case IDX_NULLPTR_T: return { .tag = NULLPTR_T };
-		case IDX_INT_CHAR: return type_int(CHAR);
-		case IDX_INT_SCHAR: return type_int(SCHAR);
-		case IDX_INT_UCHAR: return type_int(UCHAR);
-		case IDX_INT_SHORT: return type_int(SHORT);
-		case IDX_INT_USHORT: return type_int(USHORT);
-		case IDX_INT_INT: return type_int(INT);
-		case IDX_INT_UINT: return type_int(UINT);
-		case IDX_INT_LONG: return type_int(LONG);
-		case IDX_INT_ULONG: return type_int(ULONG);
-		case IDX_INT_LONG_LONG: return type_int(LONG_LONG);
-		case IDX_INT_ULONG_LONG: return type_int(ULONG_LONG);
-		case IDX_INT_INT128: return type_int(INT128);
-		case IDX_INT_UINT128: return type_int(UINT128);
-		case IDX_INT_INT24: return type_int(INT24);
-		case IDX_INT_UINT24: return type_int(UINT24);
-		case IDX_FLOAT_BF16: return type_float(BF16);
-		case IDX_FLOAT_FP16: return type_float(FP16);
-		case IDX_FLOAT_FLOAT16: return type_float(FLOAT16);
-		case IDX_FLOAT_FLOAT: return type_float(FLOAT);
-		case IDX_FLOAT_DOUBLE: return type_float(DOUBLE);
-		case IDX_FLOAT_LONG_DOUBLE: return type_float(LONG_DOUBLE);
-		case IDX_FLOAT_FLOAT128: return type_float(FLOAT128);
-		case IDX_FLOAT_FLOAT32: return type_float(FLOAT32);
-		case IDX_FLOAT_FLOAT64: return type_float(FLOAT64);
-		case IDX_FLOAT_FLOAT32X: return type_float(FLOAT32X);
-		case IDX_FLOAT_FLOAT64X: return type_float(FLOAT64X);
-		case IDX_FLOAT_FLOAT128X: return type_float(FLOAT128X);
-		case IDX_FLOAT_DFLOAT32: return type_float(DFLOAT32);
-		case IDX_FLOAT_DFLOAT64: return type_float(DFLOAT64);
-		case IDX_FLOAT_DFLOAT128: return type_float(DFLOAT128);
-		case IDX_FLOAT_DFLOAT64X: return type_float(DFLOAT64X);
-		case IDX_MFP8: return { .tag = STORAGE_FLOAT, .storage_float = MFP8 };
-		case IDX_VOID_POINTER: return type_pointer(VOID);
-		case IDX_CHAR_POINTER: return type_pointer(CHAR);
-		case IDX_INT_POINTER: return type_pointer(INT);
-		case IDX_INVALID:
-		case IDX_AUTO_TYPE:
-		case IDX_C23_AUTO:
-		case IDX_DECLARATOR_COMBINE:
-			unreachable("placeholder type has no Type");
-		default: break;
+		switch ((BuiltinType)self.index)
+		{
+			case VOID: return { .tag = VOID };
+			case BOOL: return { .tag = BOOL };
+			case NULLPTR_T: return { .tag = NULLPTR_T };
+			case CHAR: return type_int(CHAR);
+			case SCHAR: return type_int(SCHAR);
+			case UCHAR: return type_int(UCHAR);
+			case SHORT: return type_int(SHORT);
+			case USHORT: return type_int(USHORT);
+			case INT: return type_int(INT);
+			case UINT: return type_int(UINT);
+			case LONG: return type_int(LONG);
+			case ULONG: return type_int(ULONG);
+			case LONG_LONG: return type_int(LONG_LONG);
+			case ULONG_LONG: return type_int(ULONG_LONG);
+			case INT128: return type_int(INT128);
+			case UINT128: return type_int(UINT128);
+			case INT24: return type_int(INT24);
+			case UINT24: return type_int(UINT24);
+			case BF16: return type_float(BF16);
+			case FP16: return type_float(FP16);
+			case FLOAT16: return type_float(FLOAT16);
+			case FLOAT: return type_float(FLOAT);
+			case DOUBLE: return type_float(DOUBLE);
+			case LONG_DOUBLE: return type_float(LONG_DOUBLE);
+			case FLOAT128: return type_float(FLOAT128);
+			case FLOAT32: return type_float(FLOAT32);
+			case FLOAT64: return type_float(FLOAT64);
+			case FLOAT32X: return type_float(FLOAT32X);
+			case FLOAT64X: return type_float(FLOAT64X);
+			case FLOAT128X: return type_float(FLOAT128X);
+			case DFLOAT32: return type_float(DFLOAT32);
+			case DFLOAT64: return type_float(DFLOAT64);
+			case DFLOAT128: return type_float(DFLOAT128);
+			case DFLOAT64X: return type_float(DFLOAT64X);
+			case MFP8: return { .tag = STORAGE_FLOAT, .storage_float = MFP8 };
+			case VOID_POINTER: return type_pointer(VOID);
+			case CHAR_POINTER: return type_pointer(CHAR);
+			case INT_POINTER: return type_pointer(INT);
+			case INVALID:
+			case AUTO_TYPE:
+			case C23_AUTO:
+			case DECLARATOR_COMBINE:
+				unreachable("placeholder type has no Type");
+		}
 	}
 
 	TypeStore* ts = &comp.type_store;

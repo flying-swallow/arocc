@@ -260,7 +260,7 @@ fn void gen_ir_rejects_switch_case_range() @test
 
 fn void gen_ir_rejects_unimplemented_statement_nodes() @test
 {
-	tree::NodeKind[4] kinds = { tree::NodeKind.GOTO_STMT, tree::NodeKind.COMPUTED_GOTO_STMT,
+	tree::NodeKind[3] kinds = { tree::NodeKind.COMPUTED_GOTO_STMT,
 		tree::NodeKind.ASM_STMT, tree::NodeKind.NULLPTR_LITERAL };
 	foreach (kind : kinds)
 	{
@@ -270,9 +270,6 @@ fn void gen_ir_rejects_unimplemented_statement_nodes() @test
 		NodeIndex statement;
 		switch (kind)
 		{
-			case GOTO_STMT:
-				statement = f.tree.add_node({ .kind = kind,
-					.goto_stmt = { .label_tok = 0 } });
 			case COMPUTED_GOTO_STMT:
 				statement = f.tree.add_node({ .kind = kind,
 					.computed_goto_stmt = { .goto_tok = 0, .expr = expression } });
@@ -349,8 +346,8 @@ fn void gen_ir_rejects_unimplemented_cast_kinds() @test
 
 fn void gen_ir_rejects_unimplemented_lvalue_nodes() @test
 {
-	tree::NodeKind[5] kinds = { tree::NodeKind.MEMBER_ACCESS_EXPR, tree::NodeKind.MEMBER_ACCESS_PTR_EXPR,
-		tree::NodeKind.ARRAY_ACCESS_EXPR, tree::NodeKind.COMPOUND_LITERAL_EXPR, tree::NodeKind.COMPOUND_LITERAL_EXPR };
+	tree::NodeKind[4] kinds = { tree::NodeKind.MEMBER_ACCESS_EXPR, tree::NodeKind.MEMBER_ACCESS_PTR_EXPR,
+		tree::NodeKind.COMPOUND_LITERAL_EXPR, tree::NodeKind.COMPOUND_LITERAL_EXPR };
 	foreach (i, kind : kinds)
 	{
 		CodeGenFixture f;
@@ -363,24 +360,18 @@ fn void gen_ir_rejects_unimplemented_lvalue_nodes() @test
 			lvalue = f.tree.add_node({ .kind = kind,
 				.member_access = { .qt = type_store::INT, .base = base, .access_tok = 0 } });
 		}
-		else if (i == 2)
-		{
-			NodeIndex index = f.int_literal(0);
-			lvalue = f.tree.add_node({ .kind = kind,
-				.array_access = { .l_bracket_tok = 0, .qt = type_store::INT, .base = base, .index = index } });
-		}
 		else
 		{
 			NodeIndex initializer = f.int_literal(1);
 			lvalue = f.tree.add_node({ .kind = kind,
-				.compound_literal = { .qt = type_store::INT, .thread_local = i == 4,
-					.storage_class = i == 3 ? tree::CompoundLiteralStorageClass.STATIC : tree::CompoundLiteralStorageClass.AUTO,
+				.compound_literal = { .qt = type_store::INT, .thread_local = i == 3,
+					.storage_class = i == 2 ? tree::CompoundLiteralStorageClass.STATIC : tree::CompoundLiteralStorageClass.AUTO,
 					.initializer = initializer } });
 		}
 		NodeIndex rhs = f.int_literal(1);
 		NodeIndex assignment = f.tree.add_node({ .kind = tree::NodeKind.ASSIGN_EXPR,
 			.binary = { .qt = type_store::INT, .lhs = lvalue, .rhs = rhs } });
-		String expected = i < 3
+		String expected = i < 2
 			? string::tformat("TODO CodeGen.genLval %s\n", kind.name)
 			: "TODO CodeGen.compound_literal_expr static or thread_local\n";
 		f.expect_expression_fatal(assignment, expected);
