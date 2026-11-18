@@ -1,21 +1,13 @@
-// Reusable initializer grammar and typed initializer construction. The caller
-// supplies assignment-expression and integer-constant-expression productions;
-// this keeps statement/declaration grammar out of the initializer module.
+// Initializer grammar and typed initializer construction: `= expr`, brace lists,
+// designators and GNU ranges, built into an InitList and converted to tree nodes.
+// Element expressions use Parser's own assignment / integer-constant productions;
+// test builds may substitute them through `Parser.initializer_test_probe`.
 module aro::parser;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::init_list;
 import aro::parser_result, aro::value, aro::diagnostics, aro::parser_expression, aro::string_interner;
 import aro::bigint;
 import std::collections::list, std::core::dstring;
 
-
-<* Initializer's only grammar dependencies: `grammar`'s assignment and integer
-   constant productions, which must leave the parser at the first token after
-   their expression. *>
-struct InitializerParser
-{
-	Parser* parser;
-	IExpressionGrammar grammar;
-}
 
 struct InitializerRangeSegment
 {
@@ -24,25 +16,31 @@ struct InitializerRangeSegment
 	ulong end_index;
 }
 
-fn parser_result::Result? InitializerParser.assign_expr(&self, bool eval)
+<* Initializer assignment-expression production. Test builds may substitute
+   it through `initializer_test_probe`. *>
+fn parser_result::Result? Parser.initializer_assign_expr(&self, bool eval)
 {
-	return self.grammar.assignment_expression(self.parser, eval);
+	$if env::TESTING:
+		if (self.initializer_test_probe) return self.initializer_test_probe.assignment_expression(self, eval);
+	$endif
+	return self.assign_expr(eval);
 }
 
-fn parser_result::Result? InitializerParser.integer_const_expr(&self, ConstDeclFoldingMode mode)
+<* Initializer integer-constant-expression production (array designators). *>
+fn parser_result::Result? Parser.initializer_ice(&self, ConstDeclFoldingMode mode)
 {
-	return self.grammar.integer_constant_expression(self.parser, mode, true);
+	$if env::TESTING:
+		if (self.initializer_test_probe) return self.initializer_test_probe.integer_constant_expression(self, mode, true);
+	$endif
+	return self.integer_const_expr(true, mode);
 }
 
-fn bool InitializerParser.at(self, tokenizer::TokenId id) => self.parser.is_at(id);
-
-fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType target, bool eval = true)
+fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::QualType target, bool eval = true)
 {
-	Parser* p = self.parser;
-	if (!self.at(tokenizer::TokenId.L_BRACE))
+	if (!self.is_at(tokenizer::TokenId.L_BRACE))
 	{
-		tokens::TokenIndex tok = p.tok_i;
-		parser_result::Result? parsed = self.assign_expr(eval);
+		tokens::TokenIndex tok = self.tok_i;
+		parser_result::Result? parsed = self.initializer_assign_expr(eval);
 		if (catch __fault = parsed)
 		{
 			if (__fault == parser_expression::NO_EXPRESSION)
@@ -50,58 +48,58 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 				// An initializer requires an assignment-expression. Match
 				// Parser.zig's expectResult(assignExpr): diagnose the missing
 				// expression and return an ordinary parse failure for recovery.
-				Diagnostic.EXPECTED_EXPR.@emit(p, p.diag_index())!;
+				Diagnostic.EXPECTED_EXPR.@emit(self, self.diag_index())!;
 				return PARSING_FAILED~;
 			}
 			return __fault~;
 		}
 		parser_result::Result result = parsed;
-		if (!target.is_invalid() && target.is(p.comp, type_store::TypeTag.ARRAY))
+		if (!target.is_invalid() && target.is(self.comp, type_store::TypeTag.ARRAY))
 		{
 			// A non-braced array initializer is only accepted as a compatible
 			// string literal or array compound literal. Other expressions get the
 			// dedicated array-initializer diagnostic and are not scalar-coerced.
-			self.parser.coerce_array_initializer(&result, tok, target)!;
+			self.coerce_array_initializer(&result, tok, target)!;
 		}
 		else if (!target.is_invalid())
 		{
-			if (!(result.coerce_scalar(p, target, tok, parser_result::CoercionContext.INITIALIZATION)!))
+			if (!(result.coerce_scalar(self, target, tok, parser_result::CoercionContext.INITIALIZATION)!))
 			{
 				result.qt = type_store::INVALID;
 				result.val = value::NONE;
 			}
 		}
-		result.save_value(p);
+		result.save_value(self);
 		return result;
 	}
 
 	init_list::InitList il;
-	il.init(p.comp.gpa);
+	il.init(self.comp.gpa);
 	defer il.free();
-	tokens::TokenIndex opener = p.tok_i;
-	p.advance();
+	tokens::TokenIndex opener = self.tok_i;
+	self.advance();
 	List{ulong} cursor_path;
-	cursor_path.init(p.comp.gpa, 1);
+	cursor_path.init(self.comp.gpa, 1);
 	defer cursor_path.free();
 	List{InitializerRangeSegment} range_segments;
-	range_segments.init(p.comp.gpa, 0);
+	range_segments.init(self.comp.gpa, 0);
 	defer range_segments.free();
 	List{ulong} range_values;
-	range_values.init(p.comp.gpa, 0);
+	range_values.init(self.comp.gpa, 0);
 	defer range_values.free();
 	List{ulong} range_designator_path;
-	range_designator_path.init(p.comp.gpa, 0);
+	range_designator_path.init(self.comp.gpa, 0);
 	defer range_designator_path.free();
 	cursor_path.push(0);
 	bool warned_excess = false;
 	bool first = true;
-	while (!p.at_eof() && !self.at(tokenizer::TokenId.R_BRACE))
+	while (!self.at_eof() && !self.is_at(tokenizer::TokenId.R_BRACE))
 	{
 		if (!first)
 		{
-			if (!self.at(tokenizer::TokenId.COMMA)) break;
-			p.advance();
-			if (self.at(tokenizer::TokenId.R_BRACE)) break;
+			if (!self.is_at(tokenizer::TokenId.COMMA)) break;
+			self.advance();
+			if (self.is_at(tokenizer::TokenId.R_BRACE)) break;
 		}
 		first = false;
 		ulong index = cursor_path.len() > 0 ? cursor_path[0] : 0;
@@ -110,96 +108,96 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 		type_store::QualType designated_qt = target;
 		init_list::InitList* selected = &il;
 		bool designated = false;
-		while (self.at(tokenizer::TokenId.L_BRACKET) || self.at(tokenizer::TokenId.PERIOD))
+		while (self.is_at(tokenizer::TokenId.L_BRACKET) || self.is_at(tokenizer::TokenId.PERIOD))
 		{
 			if (!designated) cursor_path.clear();
 			designated = true;
-			if (self.at(tokenizer::TokenId.L_BRACKET))
+			if (self.is_at(tokenizer::TokenId.L_BRACKET))
 			{
-				tokens::TokenIndex bracket = p.tok_i;
-				p.advance();
-				tokens::TokenIndex index_tok = p.tok_i;
-				parser_result::Result index_result = self.integer_const_expr(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
+				tokens::TokenIndex bracket = self.tok_i;
+				self.advance();
+				tokens::TokenIndex index_tok = self.tok_i;
+				parser_result::Result index_result = self.initializer_ice(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
 				if (index_result.val.is_none())
 				{
-					Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(self.parser, index_tok)!;
+					Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(self, index_tok)!;
 					return PARSING_FAILED~;
 				}
-				if (try converted = index_result.val.to_usz(p.comp)) { index = (ulong)converted; }
+				if (try converted = index_result.val.to_usz(self.comp)) { index = (ulong)converted; }
 				else
 				{
-					if (value::compare(index_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+					if (value::compare(index_result.val, bigint::CompareOperator.LT, value::ZERO, self.comp))
 					{
-						Diagnostic.NEGATIVE_ARRAY_DESIGNATOR.@emit(self.parser, bracket + 1,
-							self.parser.fmt_value(index_result.val, index_result.qt))!;
+						Diagnostic.NEGATIVE_ARRAY_DESIGNATOR.@emit(self, bracket + 1,
+							self.fmt_value(index_result.val, index_result.qt))!;
 					}
 					else
 					{
-						Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self.parser, bracket + 1,
-							self.parser.fmt_value(index_result.val, index_result.qt))!;
+						Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self, bracket + 1,
+							self.fmt_value(index_result.val, index_result.qt))!;
 					}
 					return PARSING_FAILED~;
 				}
-				if (!designated_qt.is_invalid() && !designated_qt.is(p.comp, type_store::TypeTag.ARRAY))
+				if (!designated_qt.is_invalid() && !designated_qt.is(self.comp, type_store::TypeTag.ARRAY))
 				{
-					Diagnostic.INVALID_ARRAY_DESIGNATOR.@emit(self.parser, bracket,
-						self.parser.fmt_qt(designated_qt))!;
+					Diagnostic.INVALID_ARRAY_DESIGNATOR.@emit(self, bracket,
+						self.fmt_qt(designated_qt))!;
 					return PARSING_FAILED~;
 				}
-				bool this_range = self.at(tokenizer::TokenId.ELLIPSIS);
+				bool this_range = self.is_at(tokenizer::TokenId.ELLIPSIS);
 				ulong range_end_index = 0;
 				tokens::TokenIndex range_end_tok = 0;
-				parser_result::Result end_result;
+				parser_result::Result end_result = { .val = value::NONE };
 				end_result.val = value::NONE;
 				if (this_range)
 				{
-					p.advance();
-					range_end_tok = p.tok_i;
-					parser_result::Result range_end = self.integer_const_expr(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
+					self.advance();
+					range_end_tok = self.tok_i;
+					parser_result::Result range_end = self.initializer_ice(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
 					end_result = range_end;
 					if (end_result.val.is_none())
 					{
-						Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(self.parser, range_end_tok)!;
+						Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(self, range_end_tok)!;
 						return PARSING_FAILED~;
 					}
-					if (try converted_end = end_result.val.to_usz(p.comp)) { range_end_index = (ulong)converted_end; }
+					if (try converted_end = end_result.val.to_usz(self.comp)) { range_end_index = (ulong)converted_end; }
 					else
 					{
-						if (value::compare(end_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+						if (value::compare(end_result.val, bigint::CompareOperator.LT, value::ZERO, self.comp))
 						{
-							Diagnostic.NEGATIVE_ARRAY_DESIGNATOR.@emit(self.parser, range_end_tok,
-								self.parser.fmt_value(end_result.val, end_result.qt))!;
+							Diagnostic.NEGATIVE_ARRAY_DESIGNATOR.@emit(self, range_end_tok,
+								self.fmt_value(end_result.val, end_result.qt))!;
 						}
 						else
 						{
-							Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self.parser, range_end_tok,
-								self.parser.fmt_value(end_result.val, end_result.qt))!;
+							Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self, range_end_tok,
+								self.fmt_value(end_result.val, end_result.qt))!;
 						}
 						return PARSING_FAILED~;
 					}
 				}
-				if (catch p.expect_closing(tokenizer::TokenId.R_BRACKET, bracket)) return PARSING_FAILED~;
-				if (try arr = designated_qt.get(p.comp, type_store::TypeTag.ARRAY))
+				if (catch self.expect_closing(tokenizer::TokenId.R_BRACKET, bracket)) return PARSING_FAILED~;
+				if (try arr = designated_qt.get(self.comp, type_store::TypeTag.ARRAY))
 				{
 					if (arr.array.len.kind == type_store::ArrayLenKind.FIXED || arr.array.len.kind == type_store::ArrayLenKind.STATIC)
 					{
 						if (index >= arr.array.len.len)
 						{
-							Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self.parser, bracket + 1,
-								self.parser.fmt_value(index_result.val, index_result.qt))!;
+							Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self, bracket + 1,
+								self.fmt_value(index_result.val, index_result.qt))!;
 							return PARSING_FAILED~;
 						}
 						if (this_range && range_end_index >= arr.array.len.len)
 						{
-							Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self.parser, range_end_tok,
-								self.parser.fmt_value(end_result.val, end_result.qt))!;
+							Diagnostic.OOB_ARRAY_DESIGNATOR.@emit(self, range_end_tok,
+								self.fmt_value(end_result.val, end_result.qt))!;
 							return PARSING_FAILED~;
 						}
 					}
 				}
 				if (this_range && range_end_index < index)
 				{
-					Diagnostic.ARRAY_DESIGNATOR_RANGE_REVERSED.@emit(self.parser, range_end_tok)!;
+					Diagnostic.ARRAY_DESIGNATOR_RANGE_REVERSED.@emit(self, range_end_tok)!;
 					return PARSING_FAILED~;
 				}
 				child_qt = self.child_type(designated_qt, index);
@@ -219,21 +217,21 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			}
 			else
 			{
-				p.advance();
-				if (p.at_eof()) return PARSING_FAILED~;
-				String name = p.tree.tok_slice(p.tok_i);
-				string_interner::StringId field_name = p.comp.intern_string(name);
-				p.advance();
-				if (!designated_qt.is_invalid() && !@ok(designated_qt.get_record(p.comp)))
+				self.advance();
+				if (self.at_eof()) return PARSING_FAILED~;
+				String name = self.tree.tok_slice(self.tok_i);
+				string_interner::StringId field_name = self.comp.intern_string(name);
+				self.advance();
+				if (!designated_qt.is_invalid() && !@ok(designated_qt.get_record(self.comp)))
 				{
-					Diagnostic.INVALID_FIELD_DESIGNATOR.@emit(self.parser, p.tok_i - 2,
-						self.parser.fmt_qt(designated_qt))!;
+					Diagnostic.INVALID_FIELD_DESIGNATOR.@emit(self, self.tok_i - 2,
+						self.fmt_qt(designated_qt))!;
 					return PARSING_FAILED~;
 				}
 				usz field_index = self.field_index(designated_qt, field_name);
 				if (field_index == usz::max)
 				{
-					Diagnostic.NO_SUCH_FIELD_DESIGNATOR.@emit(self.parser, p.tok_i - 1,
+					Diagnostic.NO_SUCH_FIELD_DESIGNATOR.@emit(self, self.tok_i - 1,
 						name)!;
 					return PARSING_FAILED~;
 				}
@@ -258,15 +256,15 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 		}
 		if (designated)
 		{
-			if (self.at(tokenizer::TokenId.EQUAL)) { p.advance(); }
-			else { Diagnostic.GNU_MISSING_EQ_DESIGNATOR.@emit(self.parser, p.tok_i)!; }
+			if (self.is_at(tokenizer::TokenId.EQUAL)) { self.advance(); }
+			else { Diagnostic.GNU_MISSING_EQ_DESIGNATOR.@emit(self, self.tok_i)!; }
 		}
-		tokens::TokenIndex initializer_tok = p.tok_i;
+		tokens::TokenIndex initializer_tok = self.tok_i;
 		// Only a braced element needs its own child slot. A plain expression is
 		// stored at this list or at a deeper scalar path; an unconditional find
 		// here leaves an empty placeholder, which then counts as a prior initializer.
 		init_list::InitList* child = selected;
-		if (self.at(tokenizer::TokenId.L_BRACE))
+		if (self.is_at(tokenizer::TokenId.L_BRACE))
 		{
 			type_store::QualType brace_qt = designated ? designated_qt : target;
 			if (!designated)
@@ -285,7 +283,7 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 				{
 					if (!warned_excess)
 					{
-						self.err_excess_initializer(target, p.tok_i)!;
+						self.err_excess_initializer(target, self.tok_i)!;
 						warned_excess = true;
 					}
 					brace_qt = type_store::INVALID;
@@ -293,17 +291,17 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			}
 			if (child.has_initializer() && !target.is_invalid())
 			{
-				Diagnostic.INITIALIZER_OVERRIDES.@emit(self.parser, p.tok_i)!;
-				Diagnostic.PREVIOUS_INITIALIZER.@emit(self.parser, child.previous_initializer_tok())!;
+				Diagnostic.INITIALIZER_OVERRIDES.@emit(self, self.tok_i)!;
+				Diagnostic.PREVIOUS_INITIALIZER.@emit(self, child.previous_initializer_tok())!;
 				child.free();
-				child.init(p.comp.gpa);
+				child.init(self.comp.gpa);
 			}
 			parser_result::Result nested = self.parse_into(child, brace_qt, eval)!;
 		}
 		else
 		{
-			tokens::TokenIndex expr_tok = p.tok_i;
-			parser_result::Result parsed = self.assign_expr(eval)!;
+			tokens::TokenIndex expr_tok = self.tok_i;
+			parser_result::Result parsed = self.initializer_assign_expr(eval)!;
 			parser_result::Result result = parsed;
 			if (!designated && !self.is_aggregate(target) && !il.node.is_null())
 			{
@@ -323,7 +321,7 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			// the entire selected subtree before inserting siblings can move its
 			// sparse-list storage.
 			init_list::InitList source_copy;
-			source_copy.init(p.comp.gpa);
+			source_copy.init(self.comp.gpa);
 			defer source_copy.free();
 			// Parsing the value can grow sparse child lists and invalidate cached
 			// pointers. Re-resolve the full designated path before copying.
@@ -334,7 +332,7 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			range_values.clear();
 			foreach (segment : range_segments) range_values.push(segment.start_index);
 			List{ulong} destination_path;
-			destination_path.init(p.comp.gpa, range_designator_path.len());
+			destination_path.init(self.comp.gpa, range_designator_path.len());
 			defer destination_path.free();
 			foreach (path_index : range_designator_path) destination_path.push(path_index);
 			bool source_destination = true;
@@ -352,12 +350,12 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 					if (destination.has_initializer() && !range_override_reported)
 					{
 						tokens::TokenIndex previous_tok = destination.previous_initializer_tok();
-						Diagnostic.INITIALIZER_OVERRIDES.@emit(self.parser, initializer_tok)!;
-						Diagnostic.PREVIOUS_INITIALIZER.@emit(self.parser, previous_tok)!;
+						Diagnostic.INITIALIZER_OVERRIDES.@emit(self, initializer_tok)!;
+						Diagnostic.PREVIOUS_INITIALIZER.@emit(self, previous_tok)!;
 						range_override_reported = true;
 					}
 					destination.free();
-					destination.init(p.comp.gpa);
+					destination.init(self.comp.gpa);
 					destination.copy_from(source_copy);
 				}
 				source_destination = false;
@@ -405,9 +403,9 @@ fn parser_result::Result? InitializerParser.parse(&self, type_store::QualType ta
 			continue;
 		}
 	}
-	if (catch p.expect_closing(tokenizer::TokenId.R_BRACE, opener)) return PARSING_FAILED~;
+	if (catch self.expect_closing(tokenizer::TokenId.R_BRACE, opener)) return PARSING_FAILED~;
 	il.tok = opener;
-	type_store::NodeIndex node = p.convert_init_list(il, target);
+	type_store::NodeIndex node = self.convert_init_list(il, target);
 	return { .node = node, .qt = target, .val = value::NONE };
 }
 
@@ -471,76 +469,75 @@ fn bool? Parser.coerce_array_initializer(&self, parser_result::Result* item,
 	return true;
 }
 
-fn type_store::QualType InitializerParser.child_type(self, type_store::QualType qt, ulong index)
+fn type_store::QualType Parser.child_type(&self, type_store::QualType qt, ulong index)
 {
-	if (try arr = qt.get(self.parser.comp, type_store::TypeTag.ARRAY)) return arr.array.elem;
-	if (try vec = qt.get(self.parser.comp, type_store::TypeTag.VECTOR)) return vec.vector.elem;
-	if (try complex = qt.get(self.parser.comp, type_store::TypeTag.COMPLEX)) return complex.complex;
-	if (try rec = qt.get_record(self.parser.comp))
+	if (try arr = qt.get(self.comp, type_store::TypeTag.ARRAY)) return arr.array.elem;
+	if (try vec = qt.get(self.comp, type_store::TypeTag.VECTOR)) return vec.vector.elem;
+	if (try complex = qt.get(self.comp, type_store::TypeTag.COMPLEX)) return complex.complex;
+	if (try rec = qt.get_record(self.comp))
 	{
 		if (index < (ulong)rec.fields.len) return rec.fields[(usz)index].qt;
 	}
 	return type_store::INVALID;
 }
 
-fn ulong InitializerParser.aggregate_count(self, type_store::QualType qt)
+fn ulong Parser.aggregate_count(&self, type_store::QualType qt)
 {
-	if (try arr = qt.get(self.parser.comp, type_store::TypeTag.ARRAY))
+	if (try arr = qt.get(self.comp, type_store::TypeTag.ARRAY))
 	{
 		if (arr.array.len.kind == type_store::ArrayLenKind.FIXED || arr.array.len.kind == type_store::ArrayLenKind.STATIC) return arr.array.len.len;
 		return ulong::max;
 	}
-	if (try vec = qt.get(self.parser.comp, type_store::TypeTag.VECTOR)) return (ulong)vec.vector.len;
-	if (qt.is(self.parser.comp, type_store::TypeTag.COMPLEX)) return 2;
-	if (try rec = qt.get_record(self.parser.comp)) return (ulong)rec.fields.len;
+	if (try vec = qt.get(self.comp, type_store::TypeTag.VECTOR)) return (ulong)vec.vector.len;
+	if (qt.is(self.comp, type_store::TypeTag.COMPLEX)) return 2;
+	if (try rec = qt.get_record(self.comp)) return (ulong)rec.fields.len;
 	return 0;
 }
 
-fn bool InitializerParser.is_aggregate(self, type_store::QualType qt)
+fn bool Parser.is_aggregate(&self, type_store::QualType qt)
 {
-	return qt.is(self.parser.comp, type_store::TypeTag.ARRAY) || qt.is(self.parser.comp, type_store::TypeTag.VECTOR) ||
-		qt.is(self.parser.comp, type_store::TypeTag.COMPLEX) || @ok(qt.get_record(self.parser.comp));
+	return qt.is(self.comp, type_store::TypeTag.ARRAY) || qt.is(self.comp, type_store::TypeTag.VECTOR) ||
+		qt.is(self.comp, type_store::TypeTag.COMPLEX) || @ok(qt.get_record(self.comp));
 }
 
-fn void? InitializerParser.err_excess_initializer(self, type_store::QualType qt, tokens::TokenIndex tok)
+fn void? Parser.err_excess_initializer(&self, type_store::QualType qt, tokens::TokenIndex tok)
 {
-	parser::Parser* p = self.parser;
-	if (qt.is(p.comp, type_store::TypeTag.ARRAY)) return Diagnostic.EXCESS_ARRAY_INIT.@emit(p, tok);
-	if (qt.is(p.comp, type_store::TypeTag.VECTOR)) return Diagnostic.EXCESS_VECTOR_INIT.@emit(p, tok);
-	if (@ok(qt.get_record(p.comp)))
+	if (qt.is(self.comp, type_store::TypeTag.ARRAY)) return Diagnostic.EXCESS_ARRAY_INIT.@emit(self, tok);
+	if (qt.is(self.comp, type_store::TypeTag.VECTOR)) return Diagnostic.EXCESS_VECTOR_INIT.@emit(self, tok);
+	if (@ok(qt.get_record(self.comp)))
 	{
-		if (qt.is(p.comp, type_store::TypeTag.UNION)) return Diagnostic.EXCESS_UNION_INIT.@emit(p, tok);
-		return Diagnostic.EXCESS_STRUCT_INIT.@emit(p, tok);
+		if (qt.is(self.comp, type_store::TypeTag.UNION)) return Diagnostic.EXCESS_UNION_INIT.@emit(self, tok);
+		return Diagnostic.EXCESS_STRUCT_INIT.@emit(self, tok);
 	}
-	return Diagnostic.EXCESS_SCALAR_INIT.@emit(p, tok);
+	return Diagnostic.EXCESS_SCALAR_INIT.@emit(self, tok);
 }
 
 <* Place an unbraced expression at the next scalar leaf, advancing the sparse
    cursor outward only after each nested array or record is exhausted. *>
-fn bool? InitializerParser.find_scalar_initializer(&self, init_list::InitList* il, type_store::QualType qt, parser_result::Result result, tokens::TokenIndex tok, List{ulong}* path, usz depth, bool* warned_excess)
+fn bool? Parser.find_scalar_initializer(&self, init_list::InitList* il, type_store::QualType qt, parser_result::Result result, tokens::TokenIndex tok, List{ulong}* path, usz depth, bool* warned_excess)
 {
 	if (qt.is_invalid()) return true;
 	while (path.len() <= (sz)depth) path.push(0);
 	ulong index = (*path)[(sz)depth];
 	ulong count = self.aggregate_count(qt);
-	if (qt.is(self.parser.comp, type_store::TypeTag.ARRAY))
+	if (qt.is(self.comp, type_store::TypeTag.ARRAY))
 	{
-		tree::Node expression = result.node.get(&self.parser.tree);
+		tree::Node expression = result.node.get(&self.tree);
 		bool string_literal = expression.kind == tree::NodeKind.STRING_LITERAL_EXPR;
-		bool array_compound_literal = expression.kind == tree::NodeKind.COMPOUND_LITERAL_EXPR && result.qt.is(self.parser.comp, type_store::TypeTag.ARRAY);
+		bool array_compound_literal = expression.kind == tree::NodeKind.COMPOUND_LITERAL_EXPR && result.qt.is(self.comp, type_store::TypeTag.ARRAY);
 		if (!il.has_initializer() && (string_literal || array_compound_literal))
 		{
 			// The parser owner supplies direct string/array compatibility rules.
 			// Accept a whole-array expression only before brace elision has
 			// initialized any elements of this sparse list.
-			if (self.parser.coerce_array_initializer(&result, tok, qt)!)
+			if (self.coerce_array_initializer(&result, tok, qt)!)
 			{
 				self.store_initializer_result(il, qt, result, tok, false)!;
 				return true;
 			}
 		}
 	}
-	if (depth > 0 && self.is_aggregate(qt) && result.qt.eql(qt, self.parser.comp))
+	if (depth > 0 && self.is_aggregate(qt) && result.qt.eql(qt, self.comp))
 	{
 		self.store_initializer_result(il, qt, result, tok, false)!;
 		return true;
@@ -549,10 +546,10 @@ fn bool? InitializerParser.find_scalar_initializer(&self, init_list::InitList* i
 	{
 		if (count == 0)
 		{
-			Diagnostic.EMPTY_AGGREGATE_INIT_BRACES.@emit(self.parser, tok)!;
+			Diagnostic.EMPTY_AGGREGATE_INIT_BRACES.@emit(self, tok)!;
 			return true;
 		}
-		bool union_member_conflict = qt.is(self.parser.comp, type_store::TypeTag.UNION) &&
+		bool union_member_conflict = qt.is(self.comp, type_store::TypeTag.UNION) &&
 			(il.items.len() > 1 || (il.items.len() == 1 && il.items[0].index != index));
 		if (!il.node.is_null() || index >= count || union_member_conflict)
 		{
@@ -570,7 +567,7 @@ fn bool? InitializerParser.find_scalar_initializer(&self, init_list::InitList* i
 		if (!maybe_complete) return false;
 		if (index < ulong::max) (*path)[(sz)depth] = index + 1;
 		while (path.len() > (sz)depth + 1) path.pop()!!;
-		if (qt.is(self.parser.comp, type_store::TypeTag.UNION)) return true;
+		if (qt.is(self.comp, type_store::TypeTag.UNION)) return true;
 		return index < ulong::max && index + 1 >= count;
 	}
 
@@ -580,19 +577,18 @@ fn bool? InitializerParser.find_scalar_initializer(&self, init_list::InitList* i
 
 <* Save one scalar or already-compatible aggregate expression at this sparse
    path. `coerce` is false for whole-object expressions that already match. *>
-fn void? InitializerParser.store_initializer_result(&self, init_list::InitList* il, type_store::QualType qt, parser_result::Result result, tokens::TokenIndex tok, bool coerce)
+fn void? Parser.store_initializer_result(&self, init_list::InitList* il, type_store::QualType qt, parser_result::Result result, tokens::TokenIndex tok, bool coerce)
 {
-	Parser* p = self.parser;
-	if (coerce && !qt.is_invalid() && !result.coerce_scalar(p, qt, tok, parser_result::CoercionContext.INITIALIZATION)!) result.qt = type_store::INVALID;
+	if (coerce && !qt.is_invalid() && !result.coerce_scalar(self, qt, tok, parser_result::CoercionContext.INITIALIZATION)!) result.qt = type_store::INVALID;
 	if (il.has_initializer() && !qt.is_invalid())
 	{
-		Diagnostic.INITIALIZER_OVERRIDES.@emit(self.parser, tok)!;
-		Diagnostic.PREVIOUS_INITIALIZER.@emit(self.parser, il.previous_initializer_tok())!;
+		Diagnostic.INITIALIZER_OVERRIDES.@emit(self, tok)!;
+		Diagnostic.PREVIOUS_INITIALIZER.@emit(self, il.previous_initializer_tok())!;
 		// A whole-object replacement supersedes any children written earlier.
 		il.free();
-		il.init(p.comp.gpa);
+		il.init(self.comp.gpa);
 	}
-	result.save_value(p);
+	result.save_value(self);
 	il.node = result.node.pack();
 	il.tok = tok;
 }
@@ -622,26 +618,26 @@ fn tokens::TokenIndex InitList.previous_initializer_tok(self)
 	return 0;
 }
 
-fn usz InitializerParser.field_index(self, type_store::QualType qt, string_interner::StringId name)
+fn usz Parser.field_index(&self, type_store::QualType qt, string_interner::StringId name)
 {
-	if (try rec = qt.get_record(self.parser.comp))
+	if (try rec = qt.get_record(self.comp))
 	{
 		for (usz i = 0; i < rec.fields.len; i++) if (rec.fields[i].name == name) return i;
 	}
 	return usz::max;
 }
 
-fn type_store::QualType InitializerParser.field_type(self, type_store::QualType qt, usz index)
+fn type_store::QualType Parser.field_type(&self, type_store::QualType qt, usz index)
 {
-	if (try rec = qt.get_record(self.parser.comp)) if (index < rec.fields.len) return rec.fields[index].qt;
+	if (try rec = qt.get_record(self.comp)) if (index < rec.fields.len) return rec.fields[index].qt;
 	return type_store::INVALID;
 }
 
-fn parser_result::Result? InitializerParser.parse_into(&self, init_list::InitList* out, type_store::QualType target, bool eval)
+fn parser_result::Result? Parser.parse_into(&self, init_list::InitList* out, type_store::QualType target, bool eval)
 {
-	parser_result::Result parsed = self.parse(target, eval)!;
+	parser_result::Result parsed = self.parse_initializer_value(target, eval)!;
 	out.node = parsed.node.pack();
-	out.tok = parsed.node.tok(&self.parser.tree);
+	out.tok = parsed.node.tok(&self.tree);
 	return parsed;
 }
 

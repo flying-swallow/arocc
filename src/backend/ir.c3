@@ -1,7 +1,7 @@
 // Port of the data model and builder in src/backend/Ir.zig. This C3 IR is a
 // stable, index-based representation; references remain valid when lists grow.
 module aro::backend::ir;
-import aro::value_interner, std::collections::list;
+import aro::value_interner, std::collections::list, std::collections::map;
 
 typedef Ref = uint;
 const Ref NONE = (Ref)uint::max;
@@ -201,6 +201,8 @@ struct Builder
 	value_interner::Interner* interner;
 	DynamicArenaAllocator arena;
 	List{Decl} decls;
+	<* Name to index in `decls`, so `merge_global` finds redeclarations without a scan. Keys are copied. *>
+	HashMap{String, usz} decl_index;
 	List{Inst} instructions;
 	List{Ref} body;
 	uint arg_count;
@@ -223,6 +225,7 @@ fn void Builder.init(&self, Allocator allocator, value_interner::Interner* inter
 {
 	*self = { .allocator = allocator, .interner = interner };
 	self.decls.init(allocator);
+	self.decl_index.init(allocator);
 	self.instructions.init(allocator);
 	self.body.init(allocator);
 	self.arena.init(allocator, 4096);
@@ -232,6 +235,7 @@ fn void Builder.free(&self)
 {
 	foreach (decl : self.decls) decl.free();
 	self.decls.free();
+	self.decl_index.free();
 	self.instructions.free(); self.body.free(); self.arena.free(); *self = {};
 }
 
@@ -240,6 +244,7 @@ fn Ir Builder.finish(&self)
 {
 	Ir ir = { .allocator = self.allocator, .interner = self.interner, .decls = self.decls };
 	self.decls.init(self.allocator);
+	self.decl_index.clear();
 	return ir;
 }
 
@@ -374,9 +379,9 @@ fn void Builder.add_return(&self, Ref value)
 *>
 fn void Builder.merge_global(&self, Decl decl)
 {
-	foreach (&existing : self.decls)
+	if (try index = self.decl_index.get(decl.name))
 	{
-		if (existing.name != decl.name) continue;
+		Decl* existing = &self.decls.entries[(sz)index];
 
 		Linkage merged_linkage = (existing.linkage == Linkage.INTERNAL || decl.linkage == Linkage.INTERNAL) ?
 			Linkage.INTERNAL : Linkage.EXTERNAL;
@@ -422,6 +427,7 @@ fn void Builder.merge_global(&self, Decl decl)
 		*existing = decl;
 		return;
 	}
+	self.decl_index.set(decl.name, (usz)self.decls.len());
 	self.decls.push(decl);
 }
 

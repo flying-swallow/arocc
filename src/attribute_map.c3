@@ -276,6 +276,7 @@ fn void AttributeMap.put_string(&self, String str)
 	uint len = (uint)str.len;
 	self.extra.push(len);
 	uint words = (len + 3) / 4;
+	if (!len) return; // no payload words; `&extra[start]` would be past the end
 	uint start = (uint)self.extra.len();
 	for (uint i = 0; i < words; i++) self.extra.push(0);
 	char* bytes = (char*)&self.extra[start];
@@ -291,6 +292,7 @@ fn String AttributeMap.get_string(&self, uint index, uint* next)
 	uint len = self.extra[index];
 	uint words = (len + 3) / 4;
 	*next = index + 1 + words;
+	if (!len) return "";
 	return (String)((char*)&self.extra[(usz)index + 1])[:len];
 }
 

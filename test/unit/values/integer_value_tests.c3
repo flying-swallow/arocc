@@ -188,7 +188,8 @@ fn void none_null_zero() @test
 		assert(value::NONE.opt_ref != value::ZERO.opt_ref);
 		assert(value::NULL.opt_ref != value::ZERO.opt_ref);
 		Value zero_init = {};
-		assert(!zero_init.is_none(), "a zero-initialized Value is not none");
+		// OPT_NONE is 0 (interner index 0 is a sentinel), so a forgotten `.val` is none.
+		assert(zero_init.is_none(), "a zero-initialized Value is none");
 
 		assert(!value::NONE.is_zero(comp));
 		assert(value::ZERO.is_zero(comp));

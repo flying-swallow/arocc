@@ -80,7 +80,7 @@ fn void AttributeBuffer.add_keyword(&self, tokenizer::TokenId id, tokens::TokenI
 	);
 }
 
-fn String parser::Parser.attribute_token_text(self, tokens::TokenIndex index)
+fn String parser::Parser.attribute_token_text(&self, tokens::TokenIndex index)
 {
 	return self.tree.tok_slice(index);
 }

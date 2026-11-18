@@ -337,7 +337,7 @@ fn void include_fatal_stops_callback_chain() @test
 	registry.free(null);
 }
 
-struct PackFixture (pack::IParserAdapter)
+struct PackFixture (pack::IPackParserTestProbe)
 {
 	uint count;
 	tokenizer::TokenId[] ids;
@@ -374,7 +374,8 @@ fn void pack_state_uses_explicit_parser_adapter() @test
 		.integer_ok = true,
 	};
 	fixture.count = 7;
-	pack::HandleResult result = state.handle(&fixture, 0);
+	pack::TreeParserAdapter adapter = { .probe = &fixture };
+	pack::HandleResult result = state.handle(&adapter, 0);
 	assert(result.ok);
 	check(result.next_index, 7);
 	assert(state.current.has_value);
@@ -384,7 +385,7 @@ fn void pack_state_uses_explicit_parser_adapter() @test
 	fixture.ids = { tokenizer::TokenId.L_PAREN, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.R_PAREN };
 	fixture.texts = { "(", "pop", ",", "outer", ")" };
 	fixture.count = 5;
-	result = state.handle(&fixture, 0);
+	result = state.handle(&adapter, 0);
 	assert(result.ok);
 	assert(!state.current.has_value);
 	check(state.stack.len(), 0);
@@ -407,7 +408,8 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 		.integer_ok = true,
 	};
 	fixture.count = 3;
-	pack::HandleResult result = state.handle(&fixture, 0);
+	pack::TreeParserAdapter adapter = { .probe = &fixture };
+	pack::HandleResult result = state.handle(&adapter, 0);
 	assert(!result.ok);
 	check(fixture.last_diagnostic, pack::PackDiag.INTEGER);
 	check(fixture.diagnostics, 1);
@@ -416,7 +418,7 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 	fixture.texts = { "(", "push", ",", "outer", ",", "4", ")" };
 	fixture.integer = 4;
 	fixture.count = 7;
-	result = state.handle(&fixture, 0);
+	result = state.handle(&adapter, 0);
 	assert(result.ok);
 	check(state.current.value, 4);
 	check(state.stack.len(), 1);
@@ -426,7 +428,7 @@ fn void pack_adapter_validates_alignments_and_named_pop_state() @test
 	fixture.ids = { tokenizer::TokenId.L_PAREN, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.IDENTIFIER, tokenizer::TokenId.COMMA, tokenizer::TokenId.PP_NUM, tokenizer::TokenId.R_PAREN };
 	fixture.texts = { "(", "pop", ",", "outer", ",", "8", ")" };
 	fixture.integer = 8;
-	result = state.handle(&fixture, 0);
+	result = state.handle(&adapter, 0);
 	assert(!result.ok);
 	check(fixture.last_diagnostic, pack::PackDiag.UNDEFINED_POP);
 	check(fixture.diagnostics, 2);

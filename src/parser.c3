@@ -177,6 +177,14 @@ struct VaArgPackCallContext
 	bool typed;
 }
 
+<* One file-scope declaration in `Parser.file_scope_decls`; `prev` is the 1-based index
+   of the previous entry with the same name, 0 if none. *>
+struct FileScopeDeclEntry
+{
+	type_store::NodeIndex node;
+	uint prev;
+}
+
 <* A parser borrows its preprocessor and token storage; it owns its tree and symbol scopes. *>
 struct Parser (IQueryable)
 {
@@ -187,8 +195,8 @@ struct Parser (IQueryable)
 	symbol_stack::SymbolStack symbols;
 	IParserHandler handler;
 	IAddressOfLabel address_of_label;
-	InitializerParser initializer_parser;
-	bool has_initializer_parser;
+	<* Test-only replacement for the initializer's element productions. *>
+	IExpressionGrammar initializer_test_probe @feat(TESTING);
 	tokens::TokenIndex tok_i;
 	tokens::TokenIndex tok_end;
 	bool extension_suppressed;
@@ -206,6 +214,14 @@ struct Parser (IQueryable)
 	<* Insertion order of `maybe_unused_decl` keys, so reports follow declaration order
 	   (Zig's array hash map iterates in insertion order; C3 `HashMap` does not). *>
 	List{type_store::NodeIndex} maybe_unused_order;
+	<* Name index over file-scope FUNCTION/VARIABLE entries of `tree.root_decls`, filled
+	   lazily by `DeclarationParser.index_file_scope_decls`. Entries with the same name form
+	   a chain through `FileScopeDeclEntry.prev`; `file_scope_decl_head` maps a StringId to
+	   the newest entry (both 1-based, 0 = none). Owned; released at the end of `Parser.parse`. *>
+	List{FileScopeDeclEntry} file_scope_decls;
+	HashMap{uint, uint} file_scope_decl_head;
+	<* Number of `tree.root_decls` already scanned into `file_scope_decls`. *>
+	usz file_scope_decls_indexed;
 	<* Diagnostic error count at body start, set by the declaration parser before a function
 	   body is parsed. `Parser.diagnose_unused_locals` skips reporting when errors grew since then. *>
 	uint local_unused_err_count;
@@ -247,7 +263,7 @@ fn bool? Parser.check_va_pack_function(&self, tokens::TokenIndex builtin_tok, St
 
 
 <* Current call argument state for a va_arg_pack builtin. *>
-fn VaArgPackCallContext Parser.va_arg_pack_call_context(self) => self.va_arg_pack_call;
+fn VaArgPackCallContext Parser.va_arg_pack_call_context(&self) => self.va_arg_pack_call;
 
 <* Add or remove a nested lexical scope. Parser.init creates the outer scope. *>
 fn void Parser.push_scope(&self)
@@ -269,21 +285,14 @@ fn void Parser.define_symbol(&self, symbol_stack::Symbol symbol)
 	self.symbols.define(symbol);
 }
 
-<* Bind the expression productions used by initializer grammar. Declaration
-   callbacks and primary-expression callbacks can now share this entry point. *>
-fn void Parser.bind_initializer_parser(&self, IExpressionGrammar grammar)
+<* Substitute the initializer's element productions (tests only). *>
+fn void Parser.set_initializer_test_probe(&self, IExpressionGrammar grammar) @feat(TESTING)
 {
-	self.initializer_parser = { .parser = self, .grammar = grammar };
-	self.has_initializer_parser = true;
+	self.initializer_test_probe = grammar;
 }
 
 fn parser_result::Result? Parser.parse_initializer(&self, type_store::QualType target, bool eval = true)
 {
-	if (!self.has_initializer_parser)
-	{
-		if (catch self.grammar_unavailable()) return PARSING_FAILED~;
-		return PARSING_FAILED~;
-	}
 	tokens::TokenIndex initializer_tok = self.tok_i;
 	// Snapshot before the VLA check so an earlier error in this initializer,
 	// including VLA_INIT, suppresses the static value check below.
@@ -296,7 +305,7 @@ fn parser_result::Result? Parser.parse_initializer(&self, type_store::QualType t
 			Diagnostic.VLA_INIT.@emit(self, initializer_tok)!;
 		}
 	}
-	parser_result::Result result = self.initializer_parser.parse(target, eval)!;
+	parser_result::Result result = self.parse_initializer_value(target, eval)!;
 	InitContext context = self.init_context;
 	// A static initializer that already reported an error is not re-checked for
 	// compile-time constness, so the static diagnostic does not repeat an earlier
@@ -393,6 +402,8 @@ fn void Parser.init(&self, preprocessor::Preprocessor* pp, IParserHandler handle
 	self.symbols.push_scope();
 	self.maybe_unused_decl.init(pp.comp.gpa);
 	self.maybe_unused_order.init(pp.comp.gpa);
+	self.file_scope_decls.init(pp.comp.gpa);
+	self.file_scope_decl_head.init(pp.comp.gpa);
 	// The implicit-typedef callback may append generated tokens and grow the
 	// preprocessor list. Bind the final slice only after that callback runs.
 	self.tree.init(pp.comp, {});
@@ -400,7 +411,7 @@ fn void Parser.init(&self, preprocessor::Preprocessor* pp, IParserHandler handle
 }
 
 <* Current token index, clamped to the terminal end of the borrowed buffer. *>
-fn tokens::TokenIndex Parser.current(self) => self.tok_i;
+fn tokens::TokenIndex Parser.current(&self) => self.tok_i;
 
 <* Bind the parser to the current preprocessor token buffer after token growth is complete.
  Call this explicitly when using token helpers without Parser.parse; parse itself binds
@@ -414,7 +425,7 @@ fn void Parser.bind_finalized_tokens(&self)
 }
 
 <* Return a token index at a bounded lookahead distance, or NO_TOKEN at/beyond EOF. Index zero is valid. *>
-fn tokens::TokenIndex? Parser.peek_index(self, usz lookahead = 0)
+fn tokens::TokenIndex? Parser.peek_index(&self, usz lookahead = 0)
 {
 	if (self.tok_i >= self.tok_end) return NO_TOKEN~;
 	usz remaining = (usz)(self.tok_end - self.tok_i);
@@ -423,19 +434,19 @@ fn tokens::TokenIndex? Parser.peek_index(self, usz lookahead = 0)
 }
 
 <* Return an inspected token, or NO_TOKEN at/beyond the bound. *>
-fn tokens::TreeToken? Parser.peek(self, usz lookahead = 0)
+fn tokens::TreeToken? Parser.peek(&self, usz lookahead = 0)
 {
 	return self.tree.tokens[(usz)self.peek_index(lookahead)!];
 }
 
 <* Text of an in-range token, using Tree.tok_slice for source-backed lexemes. *>
-fn String? Parser.peek_text(self, usz lookahead = 0)
+fn String? Parser.peek_text(&self, usz lookahead = 0)
 {
 	return self.tree.tok_slice(self.peek_index(lookahead)!);
 }
 
 <* True when the next in-range token has the requested id. *>
-fn bool Parser.is_at(self, tokenizer::TokenId id, usz lookahead = 0)
+fn bool Parser.is_at(&self, tokenizer::TokenId id, usz lookahead = 0)
 {
 	if (try tok = self.peek(lookahead)) return tok.id == id;
 	return false;
@@ -512,7 +523,7 @@ fn void? Parser.expected_token_diag(&self, tokenizer::TokenId expected)
 	return PARSING_FAILED~;
 }
 
-fn tokens::TokenIndex Parser.diag_index(self)
+fn tokens::TokenIndex Parser.diag_index(&self)
 {
 	if (self.tok_i < self.tok_end) return self.tok_i;
 	if (self.tok_end > 0) return self.tok_end - 1;
@@ -664,7 +675,7 @@ fn bool? Parser.replay_pragma(&self)
 }
 
 <* True when the current token is the preprocessor's EOF token (or buffer end). *>
-fn bool Parser.at_eof(self)
+fn bool Parser.at_eof(&self)
 {
 	if (self.tok_i >= self.tok_end) return true;
 	return self.tree.tokens[(usz)self.tok_i].id == EOF;
@@ -826,6 +837,8 @@ fn Tree? Parser.parse(&self)
 	// Tree has independent ownership and remains with the caller.
 	defer self.maybe_unused_decl.free();
 	defer self.maybe_unused_order.free();
+	defer self.file_scope_decls.free();
+	defer self.file_scope_decl_head.free();
 	self.comp.pragmas.before_parse(self.comp);
 	if (self.handler && &self.handler.handle_implicit_typedefs)
 	{
@@ -1018,6 +1031,8 @@ fn void Parser.free(&self)
 		self.tree.free();
 		self.maybe_unused_decl.free();
 		self.maybe_unused_order.free();
+		self.file_scope_decls.free();
+		self.file_scope_decl_head.free();
 	}
 	self.release_symbols();
 	*self = {};

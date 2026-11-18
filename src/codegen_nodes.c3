@@ -34,6 +34,8 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		}
 	}
 
+	// Large cases are out of line: gen_expr recurses once per nesting level and
+	// every local of every case would otherwise sit in each of its frames.
 	switch (node.kind)
 	{
 		case ENUMERATION_REF:
@@ -60,211 +62,25 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case NULL_STMT:
 			break;
 		case VARIABLE:
-			if (node.variable.storage_class == tree::VariableStorageClass.EXTERN || node.variable.storage_class == tree::VariableStorageClass.STATIC)
-			{
-				self.gen_var(node.variable, node_index)!;
-				return ir::NONE;
-			}
-			ulong? fixed_size = node.variable.qt.sizeof_or_null(self.comp);
-			uint alignment = (uint)node.variable.qt.alignof(self.comp);
-			ir::Ref alloc;
-			if (catch fixed_size)
-			{
-				// VLA: allocate at runtime, freed when the enclosing compound statement ends.
-				self.enter_vla_scope();
-				ir::Ref vla_size = self.gen_type_size(node.variable.qt)!;
-				alloc = self.builder.add_dyn_alloc(vla_size, alignment);
-			}
-			else
-			{
-				alloc = self.builder.add_alloc((uint)fixed_size, alignment, node.variable.qt.is_volatile);
-			}
-			string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(node.variable.name_tok));
-			self.symbols.push(
-			{
-				.name = name, .value = alloc
-			}
-			);
-			if (!node.variable.initializer.is_null())
-			{
-				self.gen_initializer(alloc, node.variable.qt, node.variable.initializer.unwrap())!;
-			}
+			return self.gen_variable(node_index, node);
 		case LABELED_STMT:
-			sz label_index = self.goto_label(node.labeled_stmt.label_tok);
-			GotoLabel* label = &self.goto_labels[label_index];
-			label.defined = true;
-			label.saves_start = self.snapshot_vla_saves();
-			label.saves_len = self.vla_scopes.len();
-			self.builder.start_block(label.label);
-			self.gen_stmt(node.labeled_stmt.body)!;
+			return self.gen_labeled_stmt(node_index, node);
 		case COMPOUND_STMT:
-			// Preserve the Zig implementation's current (no-op) scope-length reset.
-			sz old_symbol_count = self.symbols.len();
-			while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
-			type_store::NodeIndex old_compound = self.current_compound;
-			defer self.current_compound = old_compound;
-			self.current_compound = node_index;
-			sz vla_depth = self.vla_scopes.len();
-			foreach (stmt : node.compound_stmt.body) self.gen_stmt(stmt)!;
-			if (self.vla_scopes.len() > vla_depth)
-			{
-				self.builder.add_stack_restore(self.vla_scopes[vla_depth].saved);
-				while (self.vla_scopes.len() > vla_depth) self.vla_scopes.pop()!!;
-			}
+			return self.gen_compound_stmt(node_index, node);
 		case IF_STMT:
-			ir::Ref then_label = self.builder.make_label("if.then");
-			if (node.if_stmt.else_body.is_null())
-			{
-				ir::Ref end_label = self.builder.make_label("if.end");
-				self.gen_bool_expr(node.if_stmt.cond, then_label, end_label)!;
-				self.builder.start_block(then_label);
-				self.gen_stmt(node.if_stmt.then_body)!;
-				self.builder.start_block(end_label);
-				return ir::NONE;
-			}
-			ir::Ref else_label = self.builder.make_label("if.else");
-			ir::Ref end_label = self.builder.make_label("if.end");
-			self.gen_bool_expr(node.if_stmt.cond, then_label, else_label)!;
-			self.builder.start_block(then_label);
-			self.gen_stmt(node.if_stmt.then_body)!;
-			self.builder.add_jump(end_label);
-			self.builder.start_block(else_label);
-			self.gen_stmt(node.if_stmt.else_body.unwrap())!;
-			self.builder.start_block(end_label);
+			return self.gen_if_stmt(node_index, node);
 		case SWITCH_STMT:
-			WipSwitch wip_switch = {
-				.cases = {},
-				.size = node.switch_stmt.cond.qt(self.tree).sizeof(self.comp),
-			};
-			wip_switch.cases.init(self.comp.gpa);
-			defer wip_switch.cases.free();
-			WipSwitch* old_wip_switch = self.wip_switch;
-			defer self.wip_switch = old_wip_switch;
-			self.wip_switch = &wip_switch;
-			ir::Ref old_break_label = self.break_label;
-			defer self.break_label = old_break_label;
-			sz old_break_vla_depth = self.break_vla_depth;
-			defer self.break_vla_depth = old_break_vla_depth;
-			self.break_vla_depth = self.vla_scopes.len();
-			ir::Ref end_label = self.builder.make_label("switch.end");
-			self.break_label = end_label;
-			ir::Ref cond = self.gen_expr(node.switch_stmt.cond)!;
-			ir::Ref switch_ref = self.builder.add_inst(ir::InstTag.SWITCH, { .none = 0 }, value_interner::REF_NORETURN);
-			self.gen_stmt(node.switch_stmt.body)!;
-			ir::Ref default_label = wip_switch.has_default ? wip_switch.default_label : end_label;
-			self.builder.start_block(end_label);
-			sz case_count = wip_switch.cases.len();
-			value_interner::InternerRef[] case_values = alloc::new_array(&self.builder.arena, value_interner::InternerRef, case_count);
-			ir::Ref[] case_labels = alloc::new_array(&self.builder.arena, ir::Ref, case_count);
-			foreach (i, switch_case : wip_switch.cases)
-			{
-				case_values[i] = switch_case.value;
-				case_labels[i] = switch_case.label;
-			}
-			ir::Inst* switch_inst = self.builder.instructions.get_ref((sz)switch_ref);
-			switch_inst.data.switch_data = { .target = cond, .values = case_values, .labels = case_labels, .default_label = default_label };
+			return self.gen_switch_stmt(node_index, node);
 		case CASE_STMT:
-			if (!node.case_stmt.end.is_null())
-			{
-				self.fail("TODO CodeGen.genStmt case range\n")!;
-				return ir::NONE;
-			}
-			value::Value case_value = self.tree.value_of(node.case_stmt.start)!!;
-			ir::Ref case_label = self.builder.make_label("case");
-			self.builder.start_block(case_label);
-			self.wip_switch.cases.push(
-			{
-				.value = case_value.ref(), .label = case_label
-			}
-			);
-			self.gen_stmt(node.case_stmt.body)!;
+			return self.gen_case_stmt(node_index, node);
 		case DEFAULT_STMT:
-			ir::Ref default_label = self.builder.make_label("default");
-			self.builder.start_block(default_label);
-			self.wip_switch.has_default = true;
-			self.wip_switch.default_label = default_label;
-			self.gen_stmt(node.default_stmt.body)!;
+			return self.gen_default_stmt(node_index, node);
 		case WHILE_STMT:
-			ir::Ref old_break_label = self.break_label;
-			defer self.break_label = old_break_label;
-			sz old_break_vla_depth = self.break_vla_depth;
-			defer self.break_vla_depth = old_break_vla_depth;
-			self.break_vla_depth = self.vla_scopes.len();
-			ir::Ref old_continue_label = self.continue_label;
-			defer self.continue_label = old_continue_label;
-			sz old_continue_vla_depth = self.continue_vla_depth;
-			defer self.continue_vla_depth = old_continue_vla_depth;
-			self.continue_vla_depth = self.vla_scopes.len();
-			ir::Ref cond_label = self.builder.make_label("while.cond");
-			ir::Ref body_label = self.builder.make_label("while.then");
-			ir::Ref end_label = self.builder.make_label("while.end");
-			self.continue_label = cond_label;
-			self.break_label = end_label;
-			self.builder.start_block(cond_label);
-			self.gen_bool_expr(node.while_stmt.cond, body_label, end_label)!;
-			self.builder.start_block(body_label);
-			self.gen_stmt(node.while_stmt.body)!;
-			self.builder.add_jump(cond_label);
-			self.builder.start_block(end_label);
+			return self.gen_while_stmt(node_index, node);
 		case DO_WHILE_STMT:
-			ir::Ref old_break_label = self.break_label;
-			defer self.break_label = old_break_label;
-			sz old_break_vla_depth = self.break_vla_depth;
-			defer self.break_vla_depth = old_break_vla_depth;
-			self.break_vla_depth = self.vla_scopes.len();
-			ir::Ref old_continue_label = self.continue_label;
-			defer self.continue_label = old_continue_label;
-			sz old_continue_vla_depth = self.continue_vla_depth;
-			defer self.continue_vla_depth = old_continue_vla_depth;
-			self.continue_vla_depth = self.vla_scopes.len();
-			ir::Ref body_label = self.builder.make_label("do.then");
-			ir::Ref cond_label = self.builder.make_label("do.cond");
-			ir::Ref end_label = self.builder.make_label("do.end");
-			self.continue_label = cond_label;
-			self.break_label = end_label;
-			self.builder.start_block(body_label);
-			self.gen_stmt(node.do_while_stmt.body)!;
-			self.builder.start_block(cond_label);
-			self.gen_bool_expr(node.do_while_stmt.cond, body_label, end_label)!;
-			self.builder.start_block(end_label);
+			return self.gen_do_while_stmt(node_index, node);
 		case FOR_STMT:
-			ir::Ref old_break_label = self.break_label;
-			defer self.break_label = old_break_label;
-			sz old_break_vla_depth = self.break_vla_depth;
-			defer self.break_vla_depth = old_break_vla_depth;
-			self.break_vla_depth = self.vla_scopes.len();
-			ir::Ref old_continue_label = self.continue_label;
-			defer self.continue_label = old_continue_label;
-			sz old_continue_vla_depth = self.continue_vla_depth;
-			defer self.continue_vla_depth = old_continue_vla_depth;
-			self.continue_vla_depth = self.vla_scopes.len();
-			if (!node.for_stmt.init.is_null()) self.gen_stmt(node.for_stmt.init.unwrap())!;
-			if (node.for_stmt.cond.is_null())
-			{
-				ir::Ref body_label = self.builder.make_label("for.then");
-				ir::Ref end_label = self.builder.make_label("for.end");
-				self.continue_label = body_label;
-				self.break_label = end_label;
-				self.builder.start_block(body_label);
-				self.gen_stmt(node.for_stmt.body)!;
-				if (!node.for_stmt.incr.is_null()) self.gen_expr(node.for_stmt.incr.unwrap())!;
-				self.builder.add_jump(body_label);
-				self.builder.start_block(end_label);
-				return ir::NONE;
-			}
-			ir::Ref body_label = self.builder.make_label("for.then");
-			ir::Ref continue_label = self.builder.make_label("for.cont");
-			ir::Ref end_label = self.builder.make_label("for.end");
-			self.continue_label = continue_label;
-			self.break_label = end_label;
-			ir::Ref cond_label = self.builder.make_label("for.cond");
-			self.builder.start_block(cond_label);
-			self.gen_bool_expr(node.for_stmt.cond.unwrap(), body_label, end_label)!;
-			self.builder.start_block(body_label);
-			self.gen_stmt(node.for_stmt.body)!;
-			if (!node.for_stmt.incr.is_null()) self.gen_expr(node.for_stmt.incr.unwrap())!;
-			self.builder.add_jump(cond_label);
-			self.builder.start_block(end_label);
+			return self.gen_for_stmt(node_index, node);
 		case CONTINUE_STMT:
 			self.restore_vla_depth(self.continue_vla_depth);
 			self.builder.add_jump(self.continue_label);
@@ -272,30 +88,7 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 			self.restore_vla_depth(self.break_vla_depth);
 			self.builder.add_jump(self.break_label);
 		case RETURN_STMT:
-			switch (node.return_stmt.operand)
-			{
-			case EXPR:
-				ir::Ref result = self.gen_expr(node.return_stmt.expr)!;
-				self.ret_nodes.push(
-				{
-					.value = result, .label = self.builder.current_label
-				}
-				);
-			case NONE:
-				break;
-			case IMPLICIT:
-				if (node.return_stmt.implicit_value)
-				{
-					ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.return_stmt.return_qt)!);
-					self.ret_nodes.push(
-					{
-						.value = zero, .label = self.builder.current_label
-					}
-					);
-				}
-				return ir::NONE;
-		}
-		self.builder.add_jump(self.return_label);
+			return self.gen_return_stmt(node_index, node);
 		case GOTO_STMT:
 			self.gen_goto(self.goto_label(node.goto_stmt.label_tok));
 			self.builder.start_block(self.builder.make_label("goto.after"));
@@ -338,246 +131,44 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case SHL_EXPR: return self.gen_bin_op(node.binary, ir::InstTag.BIT_SHL);
 		case SHR_EXPR: return self.gen_bin_op(node.binary, self.signed_tag(node.binary.qt, ir::InstTag.BIT_ASHR, ir::InstTag.BIT_LSHR));
 		case ADD_EXPR:
-			if (node.binary.qt.is(self.comp, type_store::TypeTag.POINTER))
-			{
-				type_store::QualType lhs_type = node.binary.lhs.qt(self.tree);
-				if (lhs_type.is(self.comp, type_store::TypeTag.POINTER))
-				{
-					return self.gen_ptr_arithmetic(self.gen_expr(node.binary.lhs)!, self.gen_expr(node.binary.rhs)!, node.binary.rhs.qt(self.tree), node.binary.qt, false);
-				}
-				ir::Ref offset = self.gen_expr(node.binary.lhs)!;
-				ir::Ref ptr = self.gen_expr(node.binary.rhs)!;
-				return self.gen_ptr_arithmetic(ptr, offset, lhs_type, node.binary.qt, false);
-			}
-			return self.gen_bin_op(node.binary, ir::InstTag.ADD);
+			return self.gen_add_expr(node_index, node);
 		case SUB_EXPR:
-			{
-				type_store::QualType lhs_type = node.binary.lhs.qt(self.tree);
-				type_store::QualType rhs_type = node.binary.rhs.qt(self.tree);
-				if (lhs_type.is_pointer(self.comp) && rhs_type.is_pointer(self.comp))
-				{
-					return self.gen_ptr_difference(self.gen_expr(node.binary.lhs)!, self.gen_expr(node.binary.rhs)!, lhs_type, node.binary.qt);
-				}
-				if (lhs_type.is_pointer(self.comp))
-				{
-					return self.gen_ptr_arithmetic(self.gen_expr(node.binary.lhs)!, self.gen_expr(node.binary.rhs)!, rhs_type, lhs_type, true);
-				}
-			}
-			return self.gen_bin_op(node.binary, ir::InstTag.SUB);
+			return self.gen_sub_expr(node_index, node);
 		case MUL_EXPR: return self.gen_bin_op(node.binary, ir::InstTag.MUL);
 		case DIV_EXPR: return self.gen_bin_op(node.binary, self.signed_tag(node.binary.qt, ir::InstTag.SDIV, ir::InstTag.UDIV));
 		case MOD_EXPR: return self.gen_bin_op(node.binary, self.signed_tag(node.binary.qt, ir::InstTag.SREM, ir::InstTag.UREM));
 		case ADDR_OF_EXPR: return self.gen_lval(node.unary.operand);
 		case DEREF_EXPR:
-			tree::Node operand_node = node.unary.operand.get(self.tree);
-			if (operand_node.kind == tree::NodeKind.CAST && operand_node.cast.kind == tree::CastKind.FUNCTION_TO_POINTER)
-			{
-				return self.gen_expr(node.unary.operand);
-			}
-			return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.unary.operand)!, node.unary.qt);
+			return self.gen_deref_expr(node_index, node);
 		case PLUS_EXPR: return self.gen_expr(node.unary.operand);
 		case NEGATE_EXPR:
 			ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.unary.qt)!);
 			return self.add_bin(ir::InstTag.SUB, zero, self.gen_expr(node.unary.operand)!, node.unary.qt);
 		case BIT_NOT_EXPR: return self.add_un(ir::InstTag.BIT_NOT, self.gen_expr(node.unary.operand)!, node.unary.qt);
 		case BOOL_NOT_EXPR:
-			// C3 deviation: Zig emits `cmp_ne 0, x` typed int, which inverts the result.
-			// `!x` is `x == 0` as an i1, widened to the int result.
-			ir::Ref operand = self.gen_expr(node.unary.operand)!;
-			ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.unary.operand.qt(self.tree))!);
-			ir::Ref is_zero = self.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { .lhs = operand, .rhs = zero } }, value_interner::REF_I1);
-			return self.add_un(ir::InstTag.ZEXT, is_zero, node.unary.qt);
+			return self.gen_bool_not_expr(node_index, node);
 		case PRE_INC_EXPR:
 		case PRE_DEC_EXPR:
 		case POST_INC_EXPR:
 		case POST_DEC_EXPR:
-			ir::Ref addr = self.gen_lval(node.unary.operand)!;
-			ir::Ref val = self.add_un(ir::InstTag.LOAD, addr, node.unary.qt)!;
-			ir::Ref one = self.builder.add_constant(value::ONE.ref(), self.gen_type(node.unary.qt)!);
-			bool decrement = node.kind == tree::NodeKind.PRE_DEC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
-			ir::Ref updated = self.add_bin(decrement ? ir::InstTag.SUB : ir::InstTag.ADD, val, one, node.unary.qt)!;
-			self.builder.add_store(addr, updated);
-			return (node.kind == tree::NodeKind.POST_INC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR) ? val : updated;
+			return self.gen_pre_inc_expr(node_index, node);
 		case PAREN_EXPR: return self.gen_expr(node.unary.operand);
 		case DECL_REF_EXPR:
 			unreachable("declaration reference must be lowered as an lvalue");
 		case CAST:
-			switch (node.cast.kind)
-			{
-			case NO_OP: return self.gen_expr(node.cast.operand);
-			case BITCAST:
-				if (node.cast.operand.qt(self.tree).is_pointer(self.comp) && node.cast.qt.is_pointer(self.comp))
-				{
-					return self.gen_expr(node.cast.operand);
-				}
-				self.fail("TODO CodeGen gen CastKind bitcast\n")!;
-				return ir::NONE;
-			case TO_VOID:
-				self.gen_expr(node.cast.operand)!;
-				return ir::NONE;
-			case LVAL_TO_RVAL: return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.cast.operand)!, node.cast.qt);
-			case FUNCTION_TO_POINTER:
-			case ARRAY_TO_POINTER: return self.gen_lval(node.cast.operand);
-			case INT_CAST:
-				ir::Ref operand = self.gen_expr(node.cast.operand)!;
-				type_store::QualType src_type = node.cast.operand.qt(self.tree);
-				ulong src_bits = src_type.bit_sizeof(self.comp);
-				ulong dest_bits = node.cast.qt.bit_sizeof(self.comp);
-				if (src_bits == dest_bits) return operand;
-				if (src_bits < dest_bits)
-				{
-					return self.add_un(src_type.signedness(self.comp) == lang_opts::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT, operand, node.cast.qt);
-				}
-				return self.add_un(ir::InstTag.TRUNC, operand, node.cast.qt);
-			case BOOL_TO_INT: return self.add_un(ir::InstTag.ZEXT, self.gen_expr(node.cast.operand)!, node.cast.qt);
-			case POINTER_TO_BOOL:
-			case INT_TO_BOOL:
-			case FLOAT_TO_BOOL:
-				ir::Ref lhs = self.gen_expr(node.cast.operand)!;
-				ir::Ref rhs = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.cast.qt)!);
-				return self.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { .lhs = lhs, .rhs = rhs } }, value_interner::REF_I1);
-			case POINTER_TO_INT:
-			case BOOL_TO_FLOAT:
-			case BOOL_TO_POINTER:
-			case INT_TO_FLOAT:
-			case COMPLEX_INT_TO_COMPLEX_FLOAT:
-			case INT_TO_POINTER:
-			case FLOAT_TO_INT:
-			case COMPLEX_FLOAT_TO_COMPLEX_INT:
-			case COMPLEX_INT_CAST:
-			case COMPLEX_INT_TO_REAL:
-			case REAL_TO_COMPLEX_INT:
-			case FLOAT_CAST:
-			case COMPLEX_FLOAT_CAST:
-			case COMPLEX_FLOAT_TO_REAL:
-			case REAL_TO_COMPLEX_FLOAT:
-			case NULL_TO_POINTER:
-			case UNION_CAST:
-			case VECTOR_SPLAT:
-			case ATOMIC_TO_NON_ATOMIC:
-			case NON_ATOMIC_TO_ATOMIC:
-				self.fail(string::tformat("TODO CodeGen gen CastKind %s\n", node.cast.kind.name))!;
-				return ir::NONE;
-		}
+			return self.gen_cast(node_index, node);
 		case BINARY_COND_EXPR:
-			if (try cond = self.tree.value_of(node.conditional.cond))
-			{
-				if (cond.to_bool(self.comp))
-				{
-					self.cond_dummy_ref = self.gen_expr(node.conditional.cond)!;
-					return self.gen_expr(node.conditional.then_expr);
-				}
-				return self.gen_expr(node.conditional.else_expr);
-			}
-			ir::Ref then_label = self.builder.make_label("ternary.then");
-			ir::Ref else_label = self.builder.make_label("ternary.else");
-			ir::Ref end_label = self.builder.make_label("ternary.end");
-			type_store::QualType cond_type = node.conditional.cond.qt(self.tree);
-			{
-				bool old_has_cond_dummy_ty = self.has_cond_dummy_ty;
-				value_interner::InternerRef old_cond_dummy_ty = self.cond_dummy_ty;
-				defer
-				{
-					self.has_cond_dummy_ty = old_has_cond_dummy_ty; self.cond_dummy_ty = old_cond_dummy_ty;
-				}
-				self.has_cond_dummy_ty = true;
-				self.cond_dummy_ty = self.gen_type(cond_type)!;
-				self.gen_bool_expr(node.conditional.cond, then_label, else_label)!;
-			}
-			self.builder.start_block(then_label);
-			ir::Inst* dummy_inst = self.builder.instructions.get_ref((sz)self.cond_dummy_ref);
-			if (dummy_inst.ty == value_interner::REF_I1)
-			{
-				self.cond_dummy_ref = self.add_un(ir::InstTag.ZEXT, self.cond_dummy_ref, cond_type)!;
-			}
-			ir::Ref then_val = self.gen_expr(node.conditional.then_expr)!;
-			self.builder.add_jump(end_label);
-			ir::Ref then_exit = self.builder.current_label;
-			self.builder.start_block(else_label);
-			ir::Ref else_val = self.gen_expr(node.conditional.else_expr)!;
-			ir::Ref else_exit = self.builder.current_label;
-			self.builder.start_block(end_label);
-			ir::PhiInput[2] conditional_inputs = {
-				{
-					.value = then_val, .label = then_exit
-				}
-				, { .value = else_val, .label = else_exit },
-			};
-			return self.builder.add_phi(conditional_inputs[..], self.gen_type(node.conditional.qt)!);
+			return self.gen_binary_cond_expr(node_index, node);
 		case COND_DUMMY_EXPR:
 			return self.cond_dummy_ref;
 		case COND_EXPR:
-			if (try cond = self.tree.value_of(node.conditional.cond))
-			{
-				return self.gen_expr(cond.to_bool(self.comp) ? node.conditional.then_expr: node.conditional.else_expr);
-			}
-			ir::Ref then_label = self.builder.make_label("ternary.then");
-			ir::Ref else_label = self.builder.make_label("ternary.else");
-			ir::Ref end_label = self.builder.make_label("ternary.end");
-			self.gen_bool_expr(node.conditional.cond, then_label, else_label)!;
-			self.builder.start_block(then_label);
-			ir::Ref then_val = self.gen_expr(node.conditional.then_expr)!;
-			self.builder.add_jump(end_label);
-			ir::Ref then_exit = self.builder.current_label;
-			self.builder.start_block(else_label);
-			ir::Ref else_val = self.gen_expr(node.conditional.else_expr)!;
-			ir::Ref else_exit = self.builder.current_label;
-			self.builder.start_block(end_label);
-			ir::PhiInput[2] conditional_inputs = {
-				{
-					.value = then_val, .label = then_exit
-				}
-				, { .value = else_val, .label = else_exit },
-			};
-			return self.builder.add_phi(conditional_inputs[..], self.gen_type(node.conditional.qt)!);
+			return self.gen_cond_expr(node_index, node);
 		case CALL_EXPR:
 			return self.gen_call(node.call);
 		case BOOL_OR_EXPR:
-			if (try lhs = self.tree.value_of(node.binary.lhs))
-			{
-				if (!lhs.to_bool(self.comp)) return self.builder.add_constant(value::ONE.ref(), self.gen_type(node.binary.qt)!);
-				return self.gen_expr(node.binary.rhs);
-			}
-			ir::Ref false_label = self.builder.make_label("bool_false");
-			ir::Ref bool_exit_label = self.builder.make_label("bool_exit");
-			ir::Ref old_bool_end_label = self.bool_end_label;
-			defer self.bool_end_label = old_bool_end_label;
-			self.bool_end_label = bool_exit_label;
-			sz phi_top = self.phi_nodes.len();
-			defer
-			{
-				while (self.phi_nodes.len() > phi_top) self.phi_nodes.pop()!!;
-			}
-			self.gen_bool_expr(node.binary.lhs, bool_exit_label, false_label)!;
-			self.builder.start_block(false_label);
-			self.gen_bool_expr(node.binary.rhs, bool_exit_label, bool_exit_label)!;
-			self.builder.start_block(bool_exit_label);
-			ir::PhiInput[] phi_inputs = self.phi_nodes.array_view()[phi_top..];
-			ir::Ref phi = self.builder.add_phi(phi_inputs, value_interner::REF_I1);
-			return self.add_un(ir::InstTag.ZEXT, phi, node.binary.qt);
+			return self.gen_bool_or_expr(node_index, node);
 		case BOOL_AND_EXPR:
-			if (try lhs = self.tree.value_of(node.binary.lhs))
-			{
-				if (!lhs.to_bool(self.comp)) return self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.binary.qt)!);
-				return self.gen_expr(node.binary.rhs);
-			}
-			ir::Ref true_label = self.builder.make_label("bool_true");
-			ir::Ref bool_exit_label = self.builder.make_label("bool_exit");
-			ir::Ref old_bool_end_label = self.bool_end_label;
-			defer self.bool_end_label = old_bool_end_label;
-			self.bool_end_label = bool_exit_label;
-			sz phi_top = self.phi_nodes.len();
-			defer
-			{
-				while (self.phi_nodes.len() > phi_top) self.phi_nodes.pop()!!;
-			}
-			self.gen_bool_expr(node.binary.lhs, true_label, bool_exit_label)!;
-			self.builder.start_block(true_label);
-			self.gen_bool_expr(node.binary.rhs, bool_exit_label, bool_exit_label)!;
-			self.builder.start_block(bool_exit_label);
-			ir::PhiInput[] phi_inputs = self.phi_nodes.array_view()[phi_top..];
-			ir::Ref phi = self.builder.add_phi(phi_inputs, value_interner::REF_I1);
-			return self.add_un(ir::InstTag.ZEXT, phi, node.binary.qt);
+			return self.gen_bool_and_expr(node_index, node);
 		case BUILTIN_CHOOSE_EXPR:
 			value::Value cond = self.tree.value_of(node.conditional.cond)!!;
 			return self.gen_expr(cond.to_bool(self.comp) ? node.conditional.then_expr: node.conditional.else_expr);
@@ -590,12 +181,7 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case GENERIC_DEFAULT_EXPR:
 			unreachable("generic association/default is not directly evaluated");
 		case STMT_EXPR:
-			tree::Node compound = node.unary.operand.get(self.tree);
-			sz old_symbol_count = self.symbols.len();
-			while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
-			usz body_end = compound.compound_stmt.body.len > 0 ? compound.compound_stmt.body.len - 1 : 0;
-			for (usz i = 0; i < body_end; i++) self.gen_stmt(compound.compound_stmt.body[i])!;
-			return self.gen_expr(compound.compound_stmt.body[compound.compound_stmt.body.len - 1]);
+			return self.gen_stmt_expr(node_index, node);
 		case BUILTIN_CALL_EXPR:
 			builtins::Expanded builtin = self.comp.builtins.lookup(self.tree.tok_slice(node.builtin_call.builtin_tok));
 			return self.gen_builtin_call(builtin, node.builtin_call.args, node.builtin_call.qt);
@@ -603,23 +189,609 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 		case IMAG_EXPR:
 		case REAL_EXPR:
 		case SIZEOF_EXPR:
+		case MEMBER_ACCESS_EXPR: // on an rvalue aggregate, e.g. `({ ...; s; }).x`
+		case MEMBER_ACCESS_PTR_EXPR:
+		case ARRAY_ACCESS_EXPR: // only reached for an rvalue vector element
+		case BUILTIN_CONVERTVECTOR:
+		case BUILTIN_SHUFFLEVECTOR:
 		case BUILTIN_VA_ARG_PACK:
 		case BUILTIN_VA_ARG_PACK_LEN:
 			self.fail(string::tformat("TODO CodeGen.genExpr %s\n", node.kind.name))!;
 			return ir::NONE;
 		case CODEGEN_DIAGNOSTIC:
-			String diagnostic_text = words_as_string(node.codegen_diagnostic.text);
-			self.comp.diagnostics.add_with_location(self.comp, {
-					.kind = node.codegen_diagnostic.kind,
-					.text = diagnostic_text,
-					.has_opt = node.codegen_diagnostic.has_opt,
-					.opt = node.codegen_diagnostic.opt,
-					.has_location = true,
-					.location = node_index.loc(self.tree).expand(self.comp),
-			}, self.pp.expansion_slice(node.codegen_diagnostic.tok), true)!;
+			return self.gen_codegen_diagnostic(node_index, node);
 		default:
-			unreachable("non-expression node in CodeGen.gen_expr");
+			unreachable("non-expression node %s in CodeGen.gen_expr", node.kind.name);
 	}
+	return ir::NONE;
+}
+
+<* `gen_expr` case VARIABLE. *>
+fn ir::Ref? CodeGen.gen_variable(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (node.variable.storage_class == tree::VariableStorageClass.EXTERN || node.variable.storage_class == tree::VariableStorageClass.STATIC)
+	{
+		self.gen_var(node.variable, node_index)!;
+		return ir::NONE;
+	}
+	ulong? fixed_size = node.variable.qt.sizeof_or_null(self.comp);
+	uint alignment = (uint)node.variable.qt.alignof(self.comp);
+	ir::Ref alloc;
+	if (catch fixed_size)
+	{
+		// VLA: allocate at runtime, freed when the enclosing compound statement ends.
+		self.enter_vla_scope();
+		ir::Ref vla_size = self.gen_type_size(node.variable.qt)!;
+		alloc = self.builder.add_dyn_alloc(vla_size, alignment);
+	}
+	else
+	{
+		alloc = self.builder.add_alloc((uint)fixed_size, alignment, node.variable.qt.is_volatile);
+	}
+	string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(node.variable.name_tok));
+	self.symbols.push(
+	{
+		.name = name, .value = alloc
+	}
+	);
+	if (!node.variable.initializer.is_null())
+	{
+		self.gen_initializer(alloc, node.variable.qt, node.variable.initializer.unwrap())!;
+	}
+	return ir::NONE;
+}
+
+<* `gen_expr` case LABELED_STMT. *>
+fn ir::Ref? CodeGen.gen_labeled_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	sz label_index = self.goto_label(node.labeled_stmt.label_tok);
+	GotoLabel* label = &self.goto_labels[label_index];
+	label.defined = true;
+	label.saves_start = self.snapshot_vla_saves();
+	label.saves_len = self.vla_scopes.len();
+	self.builder.start_block(label.label);
+	self.gen_stmt(node.labeled_stmt.body)!;
+	return ir::NONE;
+}
+
+<* `gen_expr` case COMPOUND_STMT. *>
+fn ir::Ref? CodeGen.gen_compound_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	// Preserve the Zig implementation's current (no-op) scope-length reset.
+	sz old_symbol_count = self.symbols.len();
+	while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
+	type_store::NodeIndex old_compound = self.current_compound;
+	defer self.current_compound = old_compound;
+	self.current_compound = node_index;
+	sz vla_depth = self.vla_scopes.len();
+	foreach (stmt : node.compound_stmt.body) self.gen_stmt(stmt)!;
+	if (self.vla_scopes.len() > vla_depth)
+	{
+		self.builder.add_stack_restore(self.vla_scopes[vla_depth].saved);
+		while (self.vla_scopes.len() > vla_depth) self.vla_scopes.pop()!!;
+	}
+	return ir::NONE;
+}
+
+<* `gen_expr` case IF_STMT. *>
+fn ir::Ref? CodeGen.gen_if_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	ir::Ref then_label = self.builder.make_label("if.then");
+	if (node.if_stmt.else_body.is_null())
+	{
+		ir::Ref end_label = self.builder.make_label("if.end");
+		self.gen_bool_expr(node.if_stmt.cond, then_label, end_label)!;
+		self.builder.start_block(then_label);
+		self.gen_stmt(node.if_stmt.then_body)!;
+		self.builder.start_block(end_label);
+		return ir::NONE;
+	}
+	ir::Ref else_label = self.builder.make_label("if.else");
+	ir::Ref end_label = self.builder.make_label("if.end");
+	self.gen_bool_expr(node.if_stmt.cond, then_label, else_label)!;
+	self.builder.start_block(then_label);
+	self.gen_stmt(node.if_stmt.then_body)!;
+	self.builder.add_jump(end_label);
+	self.builder.start_block(else_label);
+	self.gen_stmt(node.if_stmt.else_body.unwrap())!;
+	self.builder.start_block(end_label);
+	return ir::NONE;
+}
+
+<* `gen_expr` case SWITCH_STMT. *>
+fn ir::Ref? CodeGen.gen_switch_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	WipSwitch wip_switch = {
+		.cases = {},
+		.size = node.switch_stmt.cond.qt(self.tree).sizeof(self.comp),
+	};
+	wip_switch.cases.init(self.comp.gpa);
+	defer wip_switch.cases.free();
+	WipSwitch* old_wip_switch = self.wip_switch;
+	defer self.wip_switch = old_wip_switch;
+	self.wip_switch = &wip_switch;
+	ir::Ref old_break_label = self.break_label;
+	defer self.break_label = old_break_label;
+	sz old_break_vla_depth = self.break_vla_depth;
+	defer self.break_vla_depth = old_break_vla_depth;
+	self.break_vla_depth = self.vla_scopes.len();
+	ir::Ref end_label = self.builder.make_label("switch.end");
+	self.break_label = end_label;
+	ir::Ref cond = self.gen_expr(node.switch_stmt.cond)!;
+	ir::Ref switch_ref = self.builder.add_inst(ir::InstTag.SWITCH, { .none = 0 }, value_interner::REF_NORETURN);
+	self.gen_stmt(node.switch_stmt.body)!;
+	ir::Ref default_label = wip_switch.has_default ? wip_switch.default_label : end_label;
+	self.builder.start_block(end_label);
+	sz case_count = wip_switch.cases.len();
+	value_interner::InternerRef[] case_values = alloc::new_array(&self.builder.arena, value_interner::InternerRef, case_count);
+	ir::Ref[] case_labels = alloc::new_array(&self.builder.arena, ir::Ref, case_count);
+	foreach (i, switch_case : wip_switch.cases)
+	{
+		case_values[i] = switch_case.value;
+		case_labels[i] = switch_case.label;
+	}
+	ir::Inst* switch_inst = self.builder.instructions.get_ref((sz)switch_ref);
+	switch_inst.data.switch_data = { .target = cond, .values = case_values, .labels = case_labels, .default_label = default_label };
+	return ir::NONE;
+}
+
+<* `gen_expr` case CASE_STMT. *>
+fn ir::Ref? CodeGen.gen_case_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (!node.case_stmt.end.is_null())
+	{
+		self.fail("TODO CodeGen.genStmt case range\n")!;
+		return ir::NONE;
+	}
+	value::Value case_value = self.tree.value_of(node.case_stmt.start)!!;
+	ir::Ref case_label = self.builder.make_label("case");
+	self.builder.start_block(case_label);
+	self.wip_switch.cases.push(
+	{
+		.value = case_value.ref(), .label = case_label
+	}
+	);
+	self.gen_stmt(node.case_stmt.body)!;
+	return ir::NONE;
+}
+
+<* `gen_expr` case DEFAULT_STMT. *>
+fn ir::Ref? CodeGen.gen_default_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	ir::Ref default_label = self.builder.make_label("default");
+	self.builder.start_block(default_label);
+	self.wip_switch.has_default = true;
+	self.wip_switch.default_label = default_label;
+	self.gen_stmt(node.default_stmt.body)!;
+	return ir::NONE;
+}
+
+<* `gen_expr` case WHILE_STMT. *>
+fn ir::Ref? CodeGen.gen_while_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	ir::Ref old_break_label = self.break_label;
+	defer self.break_label = old_break_label;
+	sz old_break_vla_depth = self.break_vla_depth;
+	defer self.break_vla_depth = old_break_vla_depth;
+	self.break_vla_depth = self.vla_scopes.len();
+	ir::Ref old_continue_label = self.continue_label;
+	defer self.continue_label = old_continue_label;
+	sz old_continue_vla_depth = self.continue_vla_depth;
+	defer self.continue_vla_depth = old_continue_vla_depth;
+	self.continue_vla_depth = self.vla_scopes.len();
+	ir::Ref cond_label = self.builder.make_label("while.cond");
+	ir::Ref body_label = self.builder.make_label("while.then");
+	ir::Ref end_label = self.builder.make_label("while.end");
+	self.continue_label = cond_label;
+	self.break_label = end_label;
+	self.builder.start_block(cond_label);
+	self.gen_bool_expr(node.while_stmt.cond, body_label, end_label)!;
+	self.builder.start_block(body_label);
+	self.gen_stmt(node.while_stmt.body)!;
+	self.builder.add_jump(cond_label);
+	self.builder.start_block(end_label);
+	return ir::NONE;
+}
+
+<* `gen_expr` case DO_WHILE_STMT. *>
+fn ir::Ref? CodeGen.gen_do_while_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	ir::Ref old_break_label = self.break_label;
+	defer self.break_label = old_break_label;
+	sz old_break_vla_depth = self.break_vla_depth;
+	defer self.break_vla_depth = old_break_vla_depth;
+	self.break_vla_depth = self.vla_scopes.len();
+	ir::Ref old_continue_label = self.continue_label;
+	defer self.continue_label = old_continue_label;
+	sz old_continue_vla_depth = self.continue_vla_depth;
+	defer self.continue_vla_depth = old_continue_vla_depth;
+	self.continue_vla_depth = self.vla_scopes.len();
+	ir::Ref body_label = self.builder.make_label("do.then");
+	ir::Ref cond_label = self.builder.make_label("do.cond");
+	ir::Ref end_label = self.builder.make_label("do.end");
+	self.continue_label = cond_label;
+	self.break_label = end_label;
+	self.builder.start_block(body_label);
+	self.gen_stmt(node.do_while_stmt.body)!;
+	self.builder.start_block(cond_label);
+	self.gen_bool_expr(node.do_while_stmt.cond, body_label, end_label)!;
+	self.builder.start_block(end_label);
+	return ir::NONE;
+}
+
+<* `gen_expr` case FOR_STMT. *>
+fn ir::Ref? CodeGen.gen_for_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	ir::Ref old_break_label = self.break_label;
+	defer self.break_label = old_break_label;
+	sz old_break_vla_depth = self.break_vla_depth;
+	defer self.break_vla_depth = old_break_vla_depth;
+	self.break_vla_depth = self.vla_scopes.len();
+	ir::Ref old_continue_label = self.continue_label;
+	defer self.continue_label = old_continue_label;
+	sz old_continue_vla_depth = self.continue_vla_depth;
+	defer self.continue_vla_depth = old_continue_vla_depth;
+	self.continue_vla_depth = self.vla_scopes.len();
+	if (!node.for_stmt.init.is_null()) self.gen_stmt(node.for_stmt.init.unwrap())!;
+	if (node.for_stmt.cond.is_null())
+	{
+		ir::Ref body_label = self.builder.make_label("for.then");
+		ir::Ref end_label = self.builder.make_label("for.end");
+		self.continue_label = body_label;
+		self.break_label = end_label;
+		self.builder.start_block(body_label);
+		self.gen_stmt(node.for_stmt.body)!;
+		if (!node.for_stmt.incr.is_null()) self.gen_expr(node.for_stmt.incr.unwrap())!;
+		self.builder.add_jump(body_label);
+		self.builder.start_block(end_label);
+		return ir::NONE;
+	}
+	ir::Ref body_label = self.builder.make_label("for.then");
+	ir::Ref continue_label = self.builder.make_label("for.cont");
+	ir::Ref end_label = self.builder.make_label("for.end");
+	self.continue_label = continue_label;
+	self.break_label = end_label;
+	ir::Ref cond_label = self.builder.make_label("for.cond");
+	self.builder.start_block(cond_label);
+	self.gen_bool_expr(node.for_stmt.cond.unwrap(), body_label, end_label)!;
+	self.builder.start_block(body_label);
+	self.gen_stmt(node.for_stmt.body)!;
+	if (!node.for_stmt.incr.is_null()) self.gen_expr(node.for_stmt.incr.unwrap())!;
+	self.builder.add_jump(cond_label);
+	self.builder.start_block(end_label);
+	return ir::NONE;
+}
+
+<* `gen_expr` case RETURN_STMT. *>
+fn ir::Ref? CodeGen.gen_return_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	switch (node.return_stmt.operand)
+	{
+	case EXPR:
+		ir::Ref result = self.gen_expr(node.return_stmt.expr)!;
+		self.ret_nodes.push(
+		{
+			.value = result, .label = self.builder.current_label
+		}
+		);
+	case NONE:
+		break;
+	case IMPLICIT:
+		if (node.return_stmt.implicit_value)
+		{
+			ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.return_stmt.return_qt)!);
+			self.ret_nodes.push(
+			{
+				.value = zero, .label = self.builder.current_label
+			}
+			);
+		}
+		return ir::NONE;
+}
+self.builder.add_jump(self.return_label);
+	return ir::NONE;
+}
+
+<* `gen_expr` case ADD_EXPR. *>
+fn ir::Ref? CodeGen.gen_add_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (node.binary.qt.is(self.comp, type_store::TypeTag.POINTER))
+	{
+		type_store::QualType lhs_type = node.binary.lhs.qt(self.tree);
+		if (lhs_type.is(self.comp, type_store::TypeTag.POINTER))
+		{
+			return self.gen_ptr_arithmetic(self.gen_expr(node.binary.lhs)!, self.gen_expr(node.binary.rhs)!, node.binary.rhs.qt(self.tree), node.binary.qt, false);
+		}
+		ir::Ref offset = self.gen_expr(node.binary.lhs)!;
+		ir::Ref ptr = self.gen_expr(node.binary.rhs)!;
+		return self.gen_ptr_arithmetic(ptr, offset, lhs_type, node.binary.qt, false);
+	}
+	return self.gen_bin_op(node.binary, ir::InstTag.ADD);
+	return ir::NONE;
+}
+
+<* `gen_expr` case SUB_EXPR. *>
+fn ir::Ref? CodeGen.gen_sub_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	{
+		type_store::QualType lhs_type = node.binary.lhs.qt(self.tree);
+		type_store::QualType rhs_type = node.binary.rhs.qt(self.tree);
+		if (lhs_type.is_pointer(self.comp) && rhs_type.is_pointer(self.comp))
+		{
+			return self.gen_ptr_difference(self.gen_expr(node.binary.lhs)!, self.gen_expr(node.binary.rhs)!, lhs_type, node.binary.qt);
+		}
+		if (lhs_type.is_pointer(self.comp))
+		{
+			return self.gen_ptr_arithmetic(self.gen_expr(node.binary.lhs)!, self.gen_expr(node.binary.rhs)!, rhs_type, lhs_type, true);
+		}
+	}
+	return self.gen_bin_op(node.binary, ir::InstTag.SUB);
+	return ir::NONE;
+}
+
+<* `gen_expr` case DEREF_EXPR. *>
+fn ir::Ref? CodeGen.gen_deref_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	tree::Node operand_node = node.unary.operand.get(self.tree);
+	if (operand_node.kind == tree::NodeKind.CAST && operand_node.cast.kind == tree::CastKind.FUNCTION_TO_POINTER)
+	{
+		return self.gen_expr(node.unary.operand);
+	}
+	return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.unary.operand)!, node.unary.qt);
+	return ir::NONE;
+}
+
+<* `gen_expr` case BOOL_NOT_EXPR. *>
+fn ir::Ref? CodeGen.gen_bool_not_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	// C3 deviation: Zig emits `cmp_ne 0, x` typed int, which inverts the result.
+	// `!x` is `x == 0` as an i1, widened to the int result.
+	ir::Ref operand = self.gen_expr(node.unary.operand)!;
+	ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.unary.operand.qt(self.tree))!);
+	ir::Ref is_zero = self.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { .lhs = operand, .rhs = zero } }, value_interner::REF_I1);
+	return self.add_un(ir::InstTag.ZEXT, is_zero, node.unary.qt);
+	return ir::NONE;
+}
+
+<* `gen_expr` case PRE_INC_EXPR, PRE_DEC_EXPR, POST_INC_EXPR, POST_DEC_EXPR. *>
+fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	ir::Ref addr = self.gen_lval(node.unary.operand)!;
+	ir::Ref val = self.add_un(ir::InstTag.LOAD, addr, node.unary.qt)!;
+	ir::Ref one = self.builder.add_constant(value::ONE.ref(), self.gen_type(node.unary.qt)!);
+	bool decrement = node.kind == tree::NodeKind.PRE_DEC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
+	ir::Ref updated = self.add_bin(decrement ? ir::InstTag.SUB : ir::InstTag.ADD, val, one, node.unary.qt)!;
+	self.builder.add_store(addr, updated);
+	return (node.kind == tree::NodeKind.POST_INC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR) ? val : updated;
+	return ir::NONE;
+}
+
+<* `gen_expr` case CAST. *>
+fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	switch (node.cast.kind)
+	{
+	case NO_OP: return self.gen_expr(node.cast.operand);
+	case BITCAST:
+		if (node.cast.operand.qt(self.tree).is_pointer(self.comp) && node.cast.qt.is_pointer(self.comp))
+		{
+			return self.gen_expr(node.cast.operand);
+		}
+		self.fail("TODO CodeGen gen CastKind bitcast\n")!;
+		return ir::NONE;
+	case TO_VOID:
+		self.gen_expr(node.cast.operand)!;
+		return ir::NONE;
+	case LVAL_TO_RVAL: return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.cast.operand)!, node.cast.qt);
+	case FUNCTION_TO_POINTER:
+	case ARRAY_TO_POINTER: return self.gen_lval(node.cast.operand);
+	case INT_CAST:
+		ir::Ref operand = self.gen_expr(node.cast.operand)!;
+		type_store::QualType src_type = node.cast.operand.qt(self.tree);
+		ulong src_bits = src_type.bit_sizeof(self.comp);
+		ulong dest_bits = node.cast.qt.bit_sizeof(self.comp);
+		if (src_bits == dest_bits) return operand;
+		if (src_bits < dest_bits)
+		{
+			return self.add_un(src_type.signedness(self.comp) == lang_opts::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT, operand, node.cast.qt);
+		}
+		return self.add_un(ir::InstTag.TRUNC, operand, node.cast.qt);
+	case BOOL_TO_INT: return self.add_un(ir::InstTag.ZEXT, self.gen_expr(node.cast.operand)!, node.cast.qt);
+	case POINTER_TO_BOOL:
+	case INT_TO_BOOL:
+	case FLOAT_TO_BOOL:
+		ir::Ref lhs = self.gen_expr(node.cast.operand)!;
+		ir::Ref rhs = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.cast.qt)!);
+		return self.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { .lhs = lhs, .rhs = rhs } }, value_interner::REF_I1);
+	case POINTER_TO_INT:
+	case BOOL_TO_FLOAT:
+	case BOOL_TO_POINTER:
+	case INT_TO_FLOAT:
+	case COMPLEX_INT_TO_COMPLEX_FLOAT:
+	case INT_TO_POINTER:
+	case FLOAT_TO_INT:
+	case COMPLEX_FLOAT_TO_COMPLEX_INT:
+	case COMPLEX_INT_CAST:
+	case COMPLEX_INT_TO_REAL:
+	case REAL_TO_COMPLEX_INT:
+	case FLOAT_CAST:
+	case COMPLEX_FLOAT_CAST:
+	case COMPLEX_FLOAT_TO_REAL:
+	case REAL_TO_COMPLEX_FLOAT:
+	case NULL_TO_POINTER:
+	case UNION_CAST:
+	case VECTOR_SPLAT:
+	case ATOMIC_TO_NON_ATOMIC:
+	case NON_ATOMIC_TO_ATOMIC:
+		self.fail(string::tformat("TODO CodeGen gen CastKind %s\n", node.cast.kind.name))!;
+		return ir::NONE;
+}
+	return ir::NONE;
+}
+
+<* `gen_expr` case BINARY_COND_EXPR. *>
+fn ir::Ref? CodeGen.gen_binary_cond_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (try cond = self.tree.value_of(node.conditional.cond))
+	{
+		if (cond.to_bool(self.comp))
+		{
+			self.cond_dummy_ref = self.gen_expr(node.conditional.cond)!;
+			return self.gen_expr(node.conditional.then_expr);
+		}
+		return self.gen_expr(node.conditional.else_expr);
+	}
+	ir::Ref then_label = self.builder.make_label("ternary.then");
+	ir::Ref else_label = self.builder.make_label("ternary.else");
+	ir::Ref end_label = self.builder.make_label("ternary.end");
+	type_store::QualType cond_type = node.conditional.cond.qt(self.tree);
+	{
+		bool old_has_cond_dummy_ty = self.has_cond_dummy_ty;
+		value_interner::InternerRef old_cond_dummy_ty = self.cond_dummy_ty;
+		defer
+		{
+			self.has_cond_dummy_ty = old_has_cond_dummy_ty; self.cond_dummy_ty = old_cond_dummy_ty;
+		}
+		self.has_cond_dummy_ty = true;
+		self.cond_dummy_ty = self.gen_type(cond_type)!;
+		self.gen_bool_expr(node.conditional.cond, then_label, else_label)!;
+	}
+	self.builder.start_block(then_label);
+	ir::Inst* dummy_inst = self.builder.instructions.get_ref((sz)self.cond_dummy_ref);
+	if (dummy_inst.ty == value_interner::REF_I1)
+	{
+		self.cond_dummy_ref = self.add_un(ir::InstTag.ZEXT, self.cond_dummy_ref, cond_type)!;
+	}
+	ir::Ref then_val = self.gen_expr(node.conditional.then_expr)!;
+	self.builder.add_jump(end_label);
+	ir::Ref then_exit = self.builder.current_label;
+	self.builder.start_block(else_label);
+	ir::Ref else_val = self.gen_expr(node.conditional.else_expr)!;
+	ir::Ref else_exit = self.builder.current_label;
+	self.builder.start_block(end_label);
+	// A void conditional has no value to merge (arms may be `(void)0`).
+	if (node.conditional.qt.is(self.comp, type_store::TypeTag.VOID)) return ir::NONE;
+	ir::PhiInput[2] conditional_inputs = {
+		{
+			.value = then_val, .label = then_exit
+		}
+		, { .value = else_val, .label = else_exit },
+	};
+	return self.builder.add_phi(conditional_inputs[..], self.gen_type(node.conditional.qt)!);
+	return ir::NONE;
+}
+
+<* `gen_expr` case COND_EXPR. *>
+fn ir::Ref? CodeGen.gen_cond_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (try cond = self.tree.value_of(node.conditional.cond))
+	{
+		return self.gen_expr(cond.to_bool(self.comp) ? node.conditional.then_expr: node.conditional.else_expr);
+	}
+	ir::Ref then_label = self.builder.make_label("ternary.then");
+	ir::Ref else_label = self.builder.make_label("ternary.else");
+	ir::Ref end_label = self.builder.make_label("ternary.end");
+	self.gen_bool_expr(node.conditional.cond, then_label, else_label)!;
+	self.builder.start_block(then_label);
+	ir::Ref then_val = self.gen_expr(node.conditional.then_expr)!;
+	self.builder.add_jump(end_label);
+	ir::Ref then_exit = self.builder.current_label;
+	self.builder.start_block(else_label);
+	ir::Ref else_val = self.gen_expr(node.conditional.else_expr)!;
+	ir::Ref else_exit = self.builder.current_label;
+	self.builder.start_block(end_label);
+	// A void conditional has no value to merge (arms may be `(void)0`).
+	if (node.conditional.qt.is(self.comp, type_store::TypeTag.VOID)) return ir::NONE;
+	ir::PhiInput[2] conditional_inputs = {
+		{
+			.value = then_val, .label = then_exit
+		}
+		, { .value = else_val, .label = else_exit },
+	};
+	return self.builder.add_phi(conditional_inputs[..], self.gen_type(node.conditional.qt)!);
+	return ir::NONE;
+}
+
+<* `gen_expr` case BOOL_OR_EXPR. *>
+fn ir::Ref? CodeGen.gen_bool_or_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (try lhs = self.tree.value_of(node.binary.lhs))
+	{
+		// `1 || x` is 1; `0 || x` is `x != 0`, built below (the folded lhs jumps).
+		if (lhs.to_bool(self.comp)) return self.builder.add_constant(value::ONE.ref(), self.gen_type(node.binary.qt)!);
+	}
+	ir::Ref false_label = self.builder.make_label("bool_false");
+	ir::Ref bool_exit_label = self.builder.make_label("bool_exit");
+	ir::Ref old_bool_end_label = self.bool_end_label;
+	defer self.bool_end_label = old_bool_end_label;
+	self.bool_end_label = bool_exit_label;
+	sz phi_top = self.phi_nodes.len();
+	defer
+	{
+		while (self.phi_nodes.len() > phi_top) self.phi_nodes.pop()!!;
+	}
+	self.gen_bool_expr(node.binary.lhs, bool_exit_label, false_label)!;
+	self.builder.start_block(false_label);
+	self.gen_bool_expr(node.binary.rhs, bool_exit_label, bool_exit_label)!;
+	self.builder.start_block(bool_exit_label);
+	ir::PhiInput[] phi_inputs = self.phi_nodes.array_view()[phi_top..];
+	ir::Ref phi = self.builder.add_phi(phi_inputs, value_interner::REF_I1);
+	return self.add_un(ir::InstTag.ZEXT, phi, node.binary.qt);
+	return ir::NONE;
+}
+
+<* `gen_expr` case BOOL_AND_EXPR. *>
+fn ir::Ref? CodeGen.gen_bool_and_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	if (try lhs = self.tree.value_of(node.binary.lhs))
+	{
+		// `0 && x` is 0; `1 && x` is `x != 0`, built below (the folded lhs jumps).
+		if (!lhs.to_bool(self.comp)) return self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.binary.qt)!);
+	}
+	ir::Ref true_label = self.builder.make_label("bool_true");
+	ir::Ref bool_exit_label = self.builder.make_label("bool_exit");
+	ir::Ref old_bool_end_label = self.bool_end_label;
+	defer self.bool_end_label = old_bool_end_label;
+	self.bool_end_label = bool_exit_label;
+	sz phi_top = self.phi_nodes.len();
+	defer
+	{
+		while (self.phi_nodes.len() > phi_top) self.phi_nodes.pop()!!;
+	}
+	self.gen_bool_expr(node.binary.lhs, true_label, bool_exit_label)!;
+	self.builder.start_block(true_label);
+	self.gen_bool_expr(node.binary.rhs, bool_exit_label, bool_exit_label)!;
+	self.builder.start_block(bool_exit_label);
+	ir::PhiInput[] phi_inputs = self.phi_nodes.array_view()[phi_top..];
+	ir::Ref phi = self.builder.add_phi(phi_inputs, value_interner::REF_I1);
+	return self.add_un(ir::InstTag.ZEXT, phi, node.binary.qt);
+	return ir::NONE;
+}
+
+<* `gen_expr` case STMT_EXPR. *>
+fn ir::Ref? CodeGen.gen_stmt_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	tree::Node compound = node.unary.operand.get(self.tree);
+	sz old_symbol_count = self.symbols.len();
+	while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
+	usz body_end = compound.compound_stmt.body.len > 0 ? compound.compound_stmt.body.len - 1 : 0;
+	for (usz i = 0; i < body_end; i++) self.gen_stmt(compound.compound_stmt.body[i])!;
+	return self.gen_expr(compound.compound_stmt.body[compound.compound_stmt.body.len - 1]);
+	return ir::NONE;
+}
+
+<* `gen_expr` case CODEGEN_DIAGNOSTIC. *>
+fn ir::Ref? CodeGen.gen_codegen_diagnostic(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	String diagnostic_text = words_as_string(node.codegen_diagnostic.text);
+	self.comp.diagnostics.add_with_location(self.comp, {
+			.kind = node.codegen_diagnostic.kind,
+			.text = diagnostic_text,
+			.has_opt = node.codegen_diagnostic.has_opt,
+			.opt = node.codegen_diagnostic.opt,
+			.has_location = true,
+			.location = node_index.loc(self.tree).expand(self.comp),
+	}, self.pp.expansion_slice(node.codegen_diagnostic.tok), true)!;
 	return ir::NONE;
 }
 
@@ -679,6 +851,11 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 		case ARRAY_ACCESS_EXPR:
 			type_store::NodeIndex base = node.array_access.base;
 			type_store::NodeIndex index = node.array_access.index;
+			if (base.qt(self.tree).is(self.comp, type_store::TypeTag.VECTOR) || index.qt(self.tree).is(self.comp, type_store::TypeTag.VECTOR))
+			{
+				self.fail("TODO CodeGen.genLval vector element\n")!;
+				return ir::NONE;
+			}
 			// `i[p]` is `p[i]`.
 			if (!base.qt(self.tree).is_pointer(self.comp)) @swap(base, index);
 			ir::Ref base_ptr = self.gen_expr(base)!;
@@ -697,6 +874,19 @@ fn void? CodeGen.gen_bool_expr(&self, type_store::NodeIndex base, ir::Ref true_l
 {
 	type_store::NodeIndex node = base;
 	while (node.get(self.tree).kind == tree::NodeKind.PAREN_EXPR) node = node.get(self.tree).unary.operand;
+	// Zig genBoolExpr: a folded condition jumps straight to its target without
+	// lowering operands (which may have no IR form, e.g. alignof).
+	if (try folded = self.tree.value_of(node))
+	{
+		if (!folded.is_pointer(self.comp))
+		{
+			bool truth = folded.to_bool(self.comp);
+			ir::Ref target = truth ? true_label : false_label;
+			if (target == self.bool_end_label) return self.add_bool_phi(truth != self.bool_invert);
+			self.builder.add_jump(target);
+			return;
+		}
+	}
 	tree::Node n = node.get(self.tree);
 	switch (n.kind)
 	{
@@ -1401,6 +1591,11 @@ fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_s
 	if (try found = self.tree.value_of(initializer))
 	{
 		val = found;
+	}
+	else if (init_node.kind == tree::NodeKind.CAST && init_node.cast.kind == tree::CastKind.NULL_TO_POINTER)
+	{
+		// The parser keeps NULL out of the tree value map (see first_missing_value).
+		val = value::NULL;
 	}
 	else if (qt.is(self.comp, type_store::TypeTag.POINTER) && string_node.get(self.tree).kind == tree::NodeKind.STRING_LITERAL_EXPR)
 	{

@@ -97,8 +97,41 @@ fn String executable_directory(Allocator a, String[] args, String cwd)
 	return dir.to_absolute_path(a) ?? cwd;
 }
 
+struct Rlimit
+{
+	ulong cur;
+	ulong max;
+}
+
+const CInt RLIMIT_STACK = 3; // Linux, macOS and the BSDs
+const ulong RLIM_INFINITY = ulong::max;
+
+extern fn CInt getrlimit(CInt resource, Rlimit* rlim) @if(env::POSIX);
+extern fn CInt setrlimit(CInt resource, Rlimit* rlim) @if(env::POSIX);
+
+<* Port of libiberty `stack_limit_increase`, which GCC calls at startup
+ (toplev.cc, gcc.cc): raise the soft RLIMIT_STACK to `pref` bytes, capped at the
+ hard limit, so the main thread's stack can grow for deeply nested input (GCC's
+ limits-* torture tests nest ~10k levels). *>
+fn void stack_limit_increase(ulong pref)
+{
+	$if env::POSIX:
+		Rlimit rlim;
+		if (getrlimit(RLIMIT_STACK, &rlim) != 0) return;
+		if (rlim.cur == RLIM_INFINITY || rlim.cur >= pref) return;
+		if (rlim.max != RLIM_INFINITY && rlim.cur >= rlim.max) return;
+		rlim.cur = pref;
+		if (rlim.max != RLIM_INFINITY && rlim.cur > rlim.max) rlim.cur = rlim.max;
+		setrlimit(RLIMIT_STACK, &rlim);
+	$endif
+}
+
+<* GCC uses 64 MiB (128 MiB under ASan). *>
+const ulong STACK_LIMIT = 64 * 1024 * 1024;
+
 fn int main(String[] args)
 {
+	stack_limit_increase(STACK_LIMIT);
 	Diagnostics diagnostics;
 	ColorMode color_mode = io::stderr().isatty() ? ESCAPE_CODES : NO_COLOR;
 	diagnostics.init_writer(io::stderr(), color_mode);

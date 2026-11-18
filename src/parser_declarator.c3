@@ -3,13 +3,15 @@
 // declarator operators around a caller-supplied base type.
 module aro::parser_declarator;
 import aro::bigint, aro::parser, aro::diagnostics, aro::parser_result, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
-import aro::tree, aro::symbol_stack, aro::string_interner, aro::lang_opts;
+import aro::compilation, aro::tree, aro::symbol_stack, aro::string_interner, aro::lang_opts, aro::parser_declaration;
 import std::collections::list;
 
 excuse PARSING_FAILED;
 
-<* Productions the declarator grammar borrows from the declaration grammar. *>
-interface IDeclaratorGrammar
+<* Test-only replacement for the productions the declarator grammar borrows
+   from the declaration grammar; compiled out of non-test builds. Installed as
+   DeclaratorParser.probe; a missing method reports the grammar unavailable. *>
+interface IDeclaratorTestProbe @feat(TESTING)
 {
 	<* A typed type-name (the bridge until declaration specifiers are reusable parser methods). *>
 	fn type_store::QualType? declarator_type_name(parser::Parser* p) @optional;
@@ -27,7 +29,27 @@ interface IDeclaratorGrammar
 struct DeclaratorParser
 {
 	parser::Parser* parser;
-	IDeclaratorGrammar grammar;
+	<* Type-name and parameter productions; null when unavailable. *>
+	parser_declaration::DeclaratorCallbackContext* grammar;
+	<* Replaces `grammar` when set. *>
+	IDeclaratorTestProbe probe @feat(TESTING);
+}
+
+<* Whether a parameter-declaration production is available. *>
+fn bool DeclaratorParser.has_parameter_grammar(&self) @inline
+{
+	$if env::TESTING:
+		if (self.probe) return &self.probe.declarator_parameter != null;
+	$endif
+	return self.grammar != null;
+}
+
+fn type_store::FuncParam? DeclaratorParser.parameter_declaration(&self, parser::Parser* p) @inline
+{
+	$if env::TESTING:
+		if (self.probe) return self.probe.declarator_parameter(p);
+	$endif
+	return self.grammar.declarator_parameter(p);
 }
 
 <* Zig Declarator.declarator_type: what the declarator itself built, kept apart
@@ -111,51 +133,68 @@ fn void DeclaratorParser.pointer_qualifiers(&self, type_store::QualType* qt)
 
 <* Insert `replacement` wherever the declarator-combine marker occurs. The
    marker lets parenthesized declarators defer application of their outer
-   suffixes until the inner pointer/function/array shape is known. *>
+   suffixes until the inner pointer/function/array shape is known.
+   Iterative (walk down to the marker, rebuild upward) so deeply nested
+   declarators (limits-declparen) do not exhaust the stack. *>
 fn type_store::QualType DeclaratorParser.splice(&self, type_store::QualType partial, type_store::QualType replacement)
 {
-	if (partial.is_declarator_combine())
+	compilation::Compilation* comp = self.parser.comp;
+	List{type_store::QualType} layers;
+	layers.init(comp.gpa);
+	defer layers.free();
+
+	type_store::QualType cur = partial;
+	while (true)
 	{
 		// The marker contributes no qualifiers; keep those on the replacement type.
-		return replacement;
+		if (cur.is_declarator_combine()) { cur = replacement; break; }
+		type_store::QualType child;
+		if (try pointer = cur.get(comp, type_store::TypeTag.POINTER)) { child = pointer.pointer.child; }
+		else if (try array = cur.get(comp, type_store::TypeTag.ARRAY)) { child = array.array.elem; }
+		else if (try func = cur.get(comp, type_store::TypeTag.FUNC)) { child = func.func.return_type; }
+		else if (try atomic = cur.get(comp, type_store::TypeTag.ATOMIC)) { child = atomic.atomic; }
+		else { break; }
+		layers.push(cur);
+		cur = child;
 	}
 
-	if (try pointer = partial.get(self.parser.comp, type_store::TypeTag.POINTER))
+	for (sz i = layers.len() - 1; i >= 0; i--)
 	{
-		type_store::QualType child = self.splice(pointer.pointer.child, replacement);
-		type_store::Type rebuilt = {
-			.tag = type_store::TypeTag.POINTER,
-			.pointer = {
-				.child = child,
-				.has_decayed = pointer.pointer.has_decayed,
-				.decayed = pointer.pointer.decayed,
-				.bounds = pointer.pointer.bounds,
-				.nullability = pointer.pointer.nullability,
-			},
-		};
-		return self.parser.comp.type_store.put(rebuilt).with_qualifiers(partial);
+		type_store::QualType layer = layers[i];
+		type_store::QualType child = cur;
+		if (try pointer = layer.get(comp, type_store::TypeTag.POINTER))
+		{
+			type_store::Type rebuilt = {
+				.tag = type_store::TypeTag.POINTER,
+				.pointer = {
+					.child = child,
+					.has_decayed = pointer.pointer.has_decayed,
+					.decayed = pointer.pointer.decayed,
+					.bounds = pointer.pointer.bounds,
+					.nullability = pointer.pointer.nullability,
+				},
+			};
+			cur = comp.type_store.put(rebuilt).with_qualifiers(layer);
+		}
+		else if (try array = layer.get(comp, type_store::TypeTag.ARRAY))
+		{
+			type_store::Type rebuilt = { .tag = type_store::TypeTag.ARRAY,
+				.array = { .elem = child, .len = array.array.len } };
+			cur = comp.type_store.put(rebuilt).with_qualifiers(layer);
+		}
+		else if (try func = layer.get(comp, type_store::TypeTag.FUNC))
+		{
+			type_store::Type rebuilt = { .tag = type_store::TypeTag.FUNC,
+				.func = { .return_type = child, .kind = func.func.kind,
+					.params = func.func.params, .cc = func.func.cc } };
+			cur = comp.type_store.put(rebuilt).with_qualifiers(layer);
+		}
+		else
+		{
+			cur = comp.type_store.put(type_store::type_atomic(child)).with_qualifiers(layer);
+		}
 	}
-	if (try array = partial.get(self.parser.comp, type_store::TypeTag.ARRAY))
-	{
-		type_store::QualType child = self.splice(array.array.elem, replacement);
-		type_store::Type rebuilt = { .tag = type_store::TypeTag.ARRAY,
-			.array = { .elem = child, .len = array.array.len } };
-		return self.parser.comp.type_store.put(rebuilt).with_qualifiers(partial);
-	}
-	if (try func = partial.get(self.parser.comp, type_store::TypeTag.FUNC))
-	{
-		type_store::QualType ret = self.splice(func.func.return_type, replacement);
-		type_store::Type rebuilt = { .tag = type_store::TypeTag.FUNC,
-			.func = { .return_type = ret, .kind = func.func.kind,
-				.params = func.func.params, .cc = func.func.cc } };
-		return self.parser.comp.type_store.put(rebuilt).with_qualifiers(partial);
-	}
-	if (try atomic = partial.get(self.parser.comp, type_store::TypeTag.ATOMIC))
-	{
-		type_store::QualType child = self.splice(atomic.atomic, replacement);
-		return self.parser.comp.type_store.put(type_store::type_atomic(child)).with_qualifiers(partial);
-	}
-	return partial;
+	return cur;
 }
 
 <* Parse one array suffix and return its metadata through an already-parsed
@@ -284,7 +323,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 		return p.comp.type_store.put(type_store::type_func(ret, type_store::FuncKind.VARIADIC, {}));
 	}
-	if (!self.grammar || !&self.grammar.declarator_parameter)
+	if (!self.has_parameter_grammar())
 	{
 		p.grammar_unavailable()!;
 		return PARSING_FAILED~;
@@ -334,7 +373,7 @@ fn type_store::QualType? DeclaratorParser.function_suffix(&self, type_store::Qua
 				shape.old_style_ident_tok = p.tok_i;
 			}
 			typed_param = true;
-			type_store::FuncParam param = self.grammar.declarator_parameter(p)!;
+			type_store::FuncParam param = self.parameter_declaration(p)!;
 			if (p.tok_i == param_start) return PARSING_FAILED~;
 			if (param.qt.is(p.comp, type_store::TypeTag.VOID))
 			{
@@ -420,49 +459,78 @@ fn type_store::QualType? DeclaratorParser.suffixes(&self, type_store::QualType b
 	return base;
 }
 
+<* One parenthesized group entered by `parse_shape`: the pointer prefix that preceded
+   its `(` and the `(` token itself. *>
+struct GroupLevel @local
+{
+	type_store::QualType prefix;
+	tokens::TokenIndex opener;
+}
+
 <* Parse pointer prefixes, an optional name/group, and all direct suffixes.
    A group parses against its own combine marker; the outer prefix and suffix
-   chain is then spliced into that marker to preserve C precedence. *>
+   chain is then spliced into that marker to preserve C precedence.
+   Nested groups are handled iteratively: each level's own shape (prefix plus
+   suffixes around one marker) is collected, then composed outermost-first so
+   every splice only walks that level's own layers. *>
 fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType base, bool allow_abstract)
 {
 	parser::Parser* p = self.parser;
-	type_store::QualType prefix = base;
-	while (self.at(tokenizer::TokenId.ASTERISK))
-	{
-		p.advance();
-		prefix = p.comp.type_store.put(type_store::type_pointer(prefix));
-		self.pointer_qualifiers(&prefix);
-	}
+	List{GroupLevel} groups;
+	groups.init(p.comp.gpa);
+	defer groups.free();
 
-	tokens::TokenIndex after_pointers_tok = p.tok_i;
-	DeclaratorShape shape = { .qt = prefix, .after_pointers_tok = after_pointers_tok };
-	if (!allow_abstract && !p.at_eof() && p.tree.tokens[(usz)p.tok_i].id.is_identifier())
+	DeclaratorShape shape;
+	type_store::QualType prefix = base;
+	while (true)
 	{
-		shape.has_name = true;
-		shape.name_tok = p.tok_i;
+		while (self.at(tokenizer::TokenId.ASTERISK))
+		{
+			p.advance();
+			prefix = p.comp.type_store.put(type_store::type_pointer(prefix));
+			self.pointer_qualifiers(&prefix);
+		}
+		if (groups.len() == 0) shape.after_pointers_tok = p.tok_i;
+		if (!allow_abstract && !p.at_eof() && p.tree.tokens[(usz)p.tok_i].id.is_identifier())
+		{
+			shape.has_name = true;
+			shape.name_tok = p.tok_i;
+			p.advance();
+			break;
+		}
+		if (!is_group_start(self, allow_abstract)) break;
+		groups.push({ .prefix = prefix, .opener = p.tok_i });
 		p.advance();
-	}
-	else if (is_group_start(self, allow_abstract))
-	{
-		tokens::TokenIndex opener = p.tok_i;
-		p.advance();
-		type_store::QualType marker = type_store::DECLARATOR_COMBINE;
-		DeclaratorShape inner = self.parse_shape(marker, allow_abstract)!;
-		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
-		// The group precedes the outer suffixes, so its old-style record wins.
-		shape.has_old_style_ident = inner.has_old_style_ident;
-		shape.old_style_ident_tok = inner.old_style_ident_tok;
-		shape.suffix_tok = p.tok_i;
-		type_store::QualType maybe_outer = self.suffixes(prefix, &shape)!;
-		shape.qt = self.splice(inner.qt, maybe_outer);
-		shape.has_name = inner.has_name;
-		shape.name_tok = inner.name_tok;
-		return shape;
+		prefix = type_store::DECLARATOR_COMBINE;
 	}
 
 	shape.suffix_tok = p.tok_i;
-	type_store::QualType maybe_suffixes = self.suffixes(prefix, &shape)!;
-	shape.qt = maybe_suffixes;
+	type_store::QualType innermost = self.suffixes(prefix, &shape)!;
+	if (groups.len() == 0)
+	{
+		shape.qt = innermost;
+		return shape;
+	}
+
+	// Unwind innermost group first. The shared `shape` keeps the first old-style
+	// identifier seen, so the innermost group's record wins as before.
+	List{type_store::QualType} owns;
+	owns.init(p.comp.gpa);
+	defer owns.free();
+	owns.push(innermost);
+	for (sz i = groups.len() - 1; i >= 0; i--)
+	{
+		GroupLevel level = groups[i];
+		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, level.opener)) return PARSING_FAILED~;
+		shape.suffix_tok = p.tok_i;
+		owns.push(self.suffixes(level.prefix, &shape)!);
+	}
+
+	// owns[0] is innermost, owns[last] outermost. Each holds exactly one marker,
+	// so splice(inner, splice(mid, outer)) == splice(splice(inner, mid), outer).
+	type_store::QualType composed = owns[owns.len() - 1];
+	for (sz i = owns.len() - 2; i >= 0; i--) composed = self.splice(owns[i], composed);
+	shape.qt = composed;
 	return shape;
 }
 
@@ -512,27 +580,58 @@ fn DeclaratorType DeclaratorParser.declarator_type_of(&self, type_store::QualTyp
 
 <*
  Zig Declarator.validateExtra. Like Zig it reads each layer's own Type (not its
- base), so typedef/typeof wrappers end the walk.
+ base), so typedef/typeof wrappers end the walk. Iterative so deeply nested
+ declarators (limits-declparen) do not exhaust the stack: walk down to the
+ terminal layer, then apply each layer's checks innermost-first.
 *>
-fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType cur, tokens::TokenIndex source_tok)
+fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType qt, tokens::TokenIndex source_tok)
 {
 	parser::Parser* p = self.parser;
-	if (cur.is_invalid()) return NESTED_INVALID;
-	if (cur.is_auto()) return NESTED_AUTO;
-	if (cur.is_declarator_combine()) return DECLARATOR_COMBINE;
+	List{type_store::QualType} layers;
+	layers.init(p.comp.gpa);
+	defer layers.free();
 
+	ValidationResult res = NORMAL;
+	type_store::QualType cur = qt;
+	while (true)
+	{
+		if (cur.is_invalid()) { res = NESTED_INVALID; break; }
+		if (cur.is_auto()) { res = NESTED_AUTO; break; }
+		if (cur.is_declarator_combine()) { res = DECLARATOR_COMBINE; break; }
+		type_store::Type ty = cur.get_type(p.comp);
+		type_store::QualType child;
+		switch (ty.tag)
+		{
+			case POINTER: child = ty.pointer.child;
+			case ATOMIC: child = ty.atomic;
+			case ARRAY: child = ty.array.elem;
+			case FUNC: child = ty.func.return_type;
+			case BLOCK: child = ty.block.func;
+			default: break;
+		}
+		if (ty.tag != POINTER && ty.tag != ATOMIC && ty.tag != ARRAY && ty.tag != FUNC && ty.tag != BLOCK) break;
+		layers.push(cur);
+		cur = child;
+	}
+
+	for (sz i = layers.len() - 1; i >= 0; i--)
+	{
+		if (res != NORMAL) return res;
+		res = self.validate_layer(layers[i], source_tok)!;
+	}
+	return res;
+}
+
+<* Checks for one declarator layer whose child validated as NORMAL. Pointer and
+   atomic layers add none. *>
+fn ValidationResult? DeclaratorParser.validate_layer(&self, type_store::QualType cur, tokens::TokenIndex source_tok) @local
+{
+	parser::Parser* p = self.parser;
 	type_store::Type ty = cur.get_type(p.comp);
 	switch (ty.tag)
 	{
-		case POINTER:
-			return self.validate_extra(ty.pointer.child, source_tok);
-		case ATOMIC:
-			return self.validate_extra(ty.atomic, source_tok);
 		case ARRAY:
 			type_store::QualType elem_qt = ty.array.elem;
-			ValidationResult child_res = self.validate_extra(elem_qt, source_tok)!;
-			if (child_res != NORMAL) return child_res;
-
 			if (elem_qt.has_incomplete_size(p.comp))
 			{
 				Diagnostic.ARRAY_INCOMPLETE_ELEM.@emit(p, source_tok, p.fmt_qt(elem_qt))!;
@@ -580,9 +679,6 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 			return NORMAL;
 		case FUNC:
 			type_store::QualType ret_qt = ty.func.return_type;
-			ValidationResult child_res = self.validate_extra(ret_qt, source_tok)!;
-			if (child_res != NORMAL) return child_res;
-
 			if (ret_qt.is(p.comp, type_store::TypeTag.ARRAY)) Diagnostic.FUNC_CANNOT_RETURN_ARRAY.@emit(p, source_tok)!;
 			if (ret_qt.is(p.comp, type_store::TypeTag.FUNC)) Diagnostic.FUNC_CANNOT_RETURN_FUNC.@emit(p, source_tok)!;
 			if (ret_qt.is_const) Diagnostic.QUAL_ON_RET_TYPE.@emit(p, source_tok, "const")!;
@@ -602,8 +698,6 @@ fn ValidationResult? DeclaratorParser.validate_extra(&self, type_store::QualType
 			return NORMAL;
 		case BLOCK:
 			type_store::QualType func_qt = ty.block.func;
-			ValidationResult child_res = self.validate_extra(func_qt, source_tok)!;
-			if (child_res != NORMAL) return child_res;
 			if (!func_qt.is(p.comp, type_store::TypeTag.FUNC))
 			{
 				Diagnostic.BLOCK_TO_NON_FUNCTION.@emit(p, source_tok)!;
@@ -651,6 +745,13 @@ fn type_store::QualType? DeclaratorParser.abstract_declarator(&self, type_store:
    IParserHandler. This leaves declaration specifiers with their owner. *>
 fn type_store::QualType? DeclaratorParser.parse_type_name(&self)
 {
-	if (!self.grammar || !&self.grammar.declarator_type_name) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+	$if env::TESTING:
+		if (self.probe)
+		{
+			if (!&self.probe.declarator_type_name) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
+			return self.probe.declarator_type_name(self.parser);
+		}
+	$endif
+	if (!self.grammar) { self.parser.grammar_unavailable()!; return PARSING_FAILED~; }
 	return self.grammar.declarator_type_name(self.parser);
 }

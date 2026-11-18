@@ -594,7 +594,7 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(&grammar_parse_initializer_context_assignment);
+		p.set_initializer_test_probe(&grammar_parse_initializer_context_assignment);
 		type_store::NodeIndex x_declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 			.variable = { .qt = type_store::INT } });
 		p.define_symbol({ .name = comp.intern_string("x"), .kind = symbol_stack::SymbolKind.DEF,
@@ -685,7 +685,7 @@ fn void variable_length_array_initializers_are_diagnosed_and_defaulted() @test
 		parser::Parser p;
 		p.init(&pp, {});
 		p.bind_finalized_tokens();
-		p.bind_initializer_parser(&grammar_parse_initializer_context_assignment);
+		p.set_initializer_test_probe(&grammar_parse_initializer_context_assignment);
 
 		type_store::NodeIndex bound = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
 			.literal = { .literal_tok = 0, .qt = type_store::INT } });

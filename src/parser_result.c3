@@ -771,6 +771,8 @@ fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType des
 		self.qt = type_store::INVALID;
 		return true;
 	}
+	// Coercing into an _Atomic object converts to its unqualified value type.
+	if (try atomic_dest = dest.get(p.comp, type_store::TypeTag.ATOMIC)) dest = atomic_dest.atomic.unqualified();
 	self.lval_conversion(p);
 	if (self.qt.is_invalid()) return true;
 	self.atomic_to_non_atomic(p);
@@ -839,7 +841,13 @@ fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType des
 <* Apply a supported explicit scalar or equal-size vector cast. *>
 fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex l_paren)
 {
-	if (self.qt.is_invalid() || dest.is_invalid()) return false;
+	// An invalid operand or type name was already diagnosed; no "invalid cast" follow-up.
+	if (self.qt.is_invalid() || dest.is_invalid())
+	{
+		self.qt = type_store::INVALID;
+		self.val = value::NONE;
+		return true;
+	}
 	self.value_conversion(p);
 	self.atomic_to_non_atomic(p);
 	type_store::QualType original = self.qt;
@@ -856,6 +864,13 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 				}
 			}
 		);
+		return true;
+	}
+	if (dest.has_incomplete_size(p.comp))
+	{
+		Diagnostic.CAST_TO_INCOMPLETE_TYPE.@emit(p, l_paren, p.fmt_qt(dest))!;
+		self.qt = type_store::INVALID;
+		self.val = value::NONE;
 		return true;
 	}
 	type_store::Type? dst_vec = dest.get(p.comp, type_store::TypeTag.VECTOR);
@@ -1001,7 +1016,7 @@ fn void? Result.usual_arithmetic_conversion(&self, Result* rhs, parser::Parser* 
 	type_store::QualType target;
 	if (as == bs)
 	{
-		target = order == type_store::Order.LT ? rhs.qt : a;
+		target = order == type_store::Order.LT ? b : a;
 	}
 	else if (order != (as ? type_store::Order.GT : type_store::Order.LT))
 	{

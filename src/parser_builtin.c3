@@ -255,7 +255,7 @@ fn parser_result::Result? BuiltinParser.bit_cast(&self, tokens::TokenIndex built
 			}
 		}
 	);
-	return { .node = node, .qt = dest };
+	return { .node = node, .qt = dest, .val = value::NONE };
 }
 
 <* __builtin_shufflevector(lhs, rhs, integer-constant-index...). *>
@@ -333,7 +333,7 @@ fn parser_result::Result? BuiltinParser.shufflevector(&self, tokens::TokenIndex 
 		}
 	}
 	);
-	return { .node = node, .qt = result_qt };
+	return { .node = node, .qt = result_qt, .val = value::NONE };
 }
 
 <* __builtin_va_arg(list, type-name). *>
@@ -361,7 +361,7 @@ fn parser_result::Result? BuiltinParser.va_arg(&self, tokens::TokenIndex builtin
 			}
 		}
 	);
-	return { .node = node, .qt = result_qt };
+	return { .node = node, .qt = result_qt, .val = value::NONE };
 }
 
 <* __builtin_va_arg_pack() and __builtin_va_arg_pack_len(). *>
@@ -397,7 +397,7 @@ fn parser_result::Result? BuiltinParser.va_arg_pack(&self, tokens::TokenIndex bu
 		.kind = tree::NodeKind.BUILTIN_VA_ARG_PACK, .va_arg_pack = { .builtin_tok = builtin_tok }
 	}
 	);
-	return { .node = node, .qt = result_qt };
+	return { .node = node, .qt = result_qt, .val = value::NONE };
 }
 
 fn parser_result::Result? BuiltinParser.va_arg_pack_len(&self, tokens::TokenIndex builtin_tok)
@@ -411,7 +411,7 @@ fn parser_result::Result? BuiltinParser.va_arg_pack_len(&self, tokens::TokenInde
 		.kind = tree::NodeKind.BUILTIN_VA_ARG_PACK_LEN, .va_arg_pack = { .builtin_tok = builtin_tok }
 	}
 	);
-	return { .node = node, .qt = type_store::INT };
+	return { .node = node, .qt = type_store::INT, .val = value::NONE };
 }
 
 <* __builtin_offsetof / __builtin_bitoffsetof with member and array designators. *>
@@ -558,7 +558,7 @@ fn parser_result::Result? BuiltinParser.offsetof(&self, tokens::TokenIndex built
 				offset_known = false;
 			}
 			index.save_value(p);
-			parser_result::Result array_base = { .node = access, .qt = current_qt };
+			parser_result::Result array_base = { .node = access, .qt = current_qt, .val = value::NONE };
 			array_base.lval_conversion(p);
 			access = p.tree.add_node(
 				{
@@ -653,7 +653,7 @@ fn parser_result::Result? BuiltinParser.convertvector(&self, tokens::TokenIndex 
 			}
 		}
 	);
-	return { .node = node, .qt = dest };
+	return { .node = node, .qt = dest, .val = value::NONE };
 }
 
 <* __builtin_types_compatible_p(type-name, type-name). *>
@@ -673,7 +673,7 @@ fn parser_result::Result? BuiltinParser.types_compatible(&self, tokens::TokenInd
 			}
 		}
 	);
-	parser_result::Result result = { .node = node, .qt = invalid ? type_store::INVALID : type_store::INT };
+	parser_result::Result result = { .node = node, .qt = invalid ? type_store::INVALID : type_store::INT, .val = value::NONE };
 	if (!invalid)
 	{
 		result.val = value::from_bool(lhs.eql(rhs, p.comp));

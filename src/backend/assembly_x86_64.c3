@@ -5,53 +5,28 @@ import aro::tree, aro::tokens, aro::source, aro::compilation, aro::diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::text_literal_semantics, aro::code_gen_options;
 import std::core::dstring;
 
-enum StorageUnit : char (char bits)
+enum StorageUnit : char (char bits, String directive, ulong mask)
 {
-	BYTE { 8 },
-	SHORT { 16 },
-	LONG { 32 },
-	QUAD { 64 },
+	BYTE { 8, "byte", 0xFF },
+	SHORT { 16, "short", 0xFFFF },
+	LONG { 32, "long", 0xFFFF_FFFF },
+	QUAD { 64, "quad", 0xFFFF_FFFF_FFFF_FFFF },
 }
 
 excuse NO_STORAGE_UNIT;
 
 fn StorageUnit? storage_unit(ulong bits)
 {
-	switch (bits)
+	foreach (unit : StorageUnit::values)
 	{
-		case 8: return BYTE;
-		case 16: return SHORT;
-		case 32: return LONG;
-		case 64: return QUAD;
-		default: return NO_STORAGE_UNIT~;
+		if (unit.bits == bits) return unit;
 	}
-}
-
-fn String directive(StorageUnit unit)
-{
-	switch (unit)
-	{
-		case BYTE: return "byte";
-		case SHORT: return "short";
-		case LONG: return "long";
-		case QUAD: return "quad";
-	}
-}
-
-fn ulong truncate(ulong value, StorageUnit unit)
-{
-	switch (unit)
-	{
-		case BYTE: return value & 0xFF;
-		case SHORT: return value & 0xFFFF;
-		case LONG: return value & 0xFFFF_FFFF;
-		case QUAD: return value;
-	}
+	return NO_STORAGE_UNIT~;
 }
 
 fn void serialize_int(DString* output, ulong value, StorageUnit unit)
 {
-	output.appendf("  .%s  0x%x\n", directive(unit), truncate(value, unit));
+	output.appendf("  .%s  0x%x\n", unit.directive, value & unit.mask);
 }
 
 fn void serialize_float(DString* output, primitive_value::PrimitiveValue value)
@@ -114,7 +89,7 @@ fn void? emit_single_value(tree::Tree* tree, type_store::QualType qt, type_store
 			StorageUnit? maybe_unit = storage_unit(storage_bits);
 			if (try unit = maybe_unit)
 			{
-				data.appendf("  .%s ", directive(unit));
+				data.appendf("  .%s ", unit.directive);
 				if (qt.is(comp, type_store::TypeTag.BOOL))
 				{
 					data.append_string(value.is_zero(comp) ? "false" : "true");

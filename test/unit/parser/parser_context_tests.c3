@@ -12,67 +12,39 @@ excuse SYMBOL_TEST_WRITE_FAILURE;
 
 struct RejectSymbolWriter (OutStream) { char unused; }
 
-alias HookFn = fn void?(void* context, Parser* p);
-alias TypedHookFn = fn QualType?(void* context, Parser* p);
-
-<* Test handler built from free fixture functions; unset hooks report HOOK_ABSENT. *>
-struct FnHandler (parser::IParserHandler)
-{
-	void* context;
-	HookFn declaration;
-	HookFn type_name;
-	TypedHookFn typed_type_name;
-	HookFn implicit_typedefs;
-}
-
-fn void? FnHandler.handle_declaration(&self, Parser* p) @dynamic
-{
-	if (!self.declaration) return parser::HOOK_ABSENT~;
-	return self.declaration(self.context, p);
-}
-
-fn void? FnHandler.handle_type_name(&self, Parser* p) @dynamic
-{
-	if (!self.type_name) return parser::HOOK_ABSENT~;
-	return self.type_name(self.context, p);
-}
-
-fn QualType? FnHandler.handle_typed_type_name(&self, Parser* p) @dynamic
-{
-	if (!self.typed_type_name) return parser::HOOK_ABSENT~;
-	return self.typed_type_name(self.context, p);
-}
-
-fn void? FnHandler.handle_implicit_typedefs(&self, Parser* p) @dynamic
-{
-	if (!self.implicit_typedefs) return parser::HOOK_ABSENT~;
-	return self.implicit_typedefs(self.context, p);
-}
-
 fn sz? RejectSymbolWriter.write(&self, char[] bytes) @dynamic => SYMBOL_TEST_WRITE_FAILURE~;
 fn void? RejectSymbolWriter.write_byte(&self, char byte) @dynamic => SYMBOL_TEST_WRITE_FAILURE~;
 fn void? RejectSymbolWriter.flush(&self) @dynamic => SYMBOL_TEST_WRITE_FAILURE~;
 
-fn QualType? return_int_type(void* context, Parser* p) => type_store::INT;
+<* Declaration grammar that consumes one token; the implicit-typedef hook appends EOF. *>
+struct CursorDeclarationHandler (parser::IParserHandler) { char unused; }
 
-fn QualType? fail_type_name(void* context, Parser* p)
-{
-	return CALLBACK_FAILURE~;
-}
-
-fn void? fail_legacy_type_name(void* context, Parser* p)
-{
-	return CALLBACK_FAILURE~;
-}
-
-fn void? consume_one_token(void* context, Parser* p)
+fn void? CursorDeclarationHandler.handle_declaration(&self, Parser* p) @dynamic
 {
 	p.advance();
 }
 
-fn void? append_eof_token(void* context, Parser* p)
+fn void? CursorDeclarationHandler.handle_implicit_typedefs(&self, Parser* p) @dynamic
 {
 	p.pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
+}
+
+<* Supplies only the untyped type-name production. *>
+struct LegacyTypeNameHandler (parser::IParserHandler) { bool fail; }
+
+fn void? LegacyTypeNameHandler.handle_type_name(&self, Parser* p) @dynamic
+{
+	if (self.fail) return CALLBACK_FAILURE~;
+	p.advance();
+}
+
+<* Supplies only the typed type-name production. *>
+struct TypedTypeNameHandler (parser::IParserHandler) { bool fail; }
+
+fn QualType? TypedTypeNameHandler.handle_typed_type_name(&self, Parser* p) @dynamic
+{
+	if (self.fail) return CALLBACK_FAILURE~;
+	return type_store::INT;
 }
 
 struct FunctionContextBodyCheck
@@ -306,10 +278,7 @@ fn void declaration_callback_controls_cursor() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
 
-		FnHandler handler = {
-			.declaration = &consume_one_token,
-			.implicit_typedefs = &append_eof_token,
-		};
+		CursorDeclarationHandler handler;
 		Parser p;
 		p.init(&pp, &handler);
 		Tree result = p.parse()!!;
@@ -338,7 +307,7 @@ fn void legacy_and_typed_type_name_callbacks_are_distinct() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		Source src = comp.add_source_from_buffer("type-name-callback.c", "name")!!;
 		pp.tokens.push({ .id = IDENTIFIER, .loc = parser_loc(src, 0, 1) });
-		FnHandler legacy_callbacks = { .type_name = &consume_one_token };
+		LegacyTypeNameHandler legacy_callbacks;
 		Parser p;
 		p.init(&pp, &legacy_callbacks);
 		p.bind_finalized_tokens();
@@ -346,21 +315,21 @@ fn void legacy_and_typed_type_name_callbacks_are_distinct() @test
 		assert(p.current() == 1);
 		p.free();
 
-		legacy_callbacks.type_name = &fail_legacy_type_name;
+		legacy_callbacks.fail = true;
 		Parser failing;
 		failing.init(&pp, &legacy_callbacks);
 		failing.bind_finalized_tokens();
 		assert(@catch(failing.parse_type_name()) == CALLBACK_FAILURE);
 		failing.free();
 
-		FnHandler typed_callbacks = { .typed_type_name = &return_int_type };
+		TypedTypeNameHandler typed_callbacks;
 		Parser typed;
 		typed.init(&pp, &typed_callbacks);
 		typed.bind_finalized_tokens();
 		assert(typed.parse_typed_type_name()!!.eql(type_store::INT, &comp));
 		typed.free();
 
-		typed_callbacks.typed_type_name = &fail_type_name;
+		typed_callbacks.fail = true;
 		Parser typed_failing;
 		typed_failing.init(&pp, &typed_callbacks);
 		typed_failing.bind_finalized_tokens();
@@ -468,13 +437,17 @@ fn void grammar_diagnostics_follow_macro_expansion_order() @test
 	assert(ta.allocation_count() == 0);
 }
 
-fn void? fail_after_allocating_tree_node(void* context, Parser* p)
+struct FailingDeclarationHandler (parser::IParserHandler) { char unused; }
+
+fn void? FailingDeclarationHandler.handle_declaration(&self, Parser* p) @dynamic
 {
 	p.tree.add_node({ .kind = tree::NodeKind.EMPTY_DECL });
 	return p.diagnostics.add({ .kind = diagnostics::MessageKind.FATAL_ERROR, .text = "fatal parser diagnostic" });
 }
 
-fn void? recover_after_failure(void* context, Parser* p)
+struct RecoveringDeclarationHandler (parser::IParserHandler) { char unused; }
+
+fn void? RecoveringDeclarationHandler.handle_declaration(&self, Parser* p) @dynamic
 {
 	p.advance();
 }
@@ -484,21 +457,19 @@ fn symbol_stack::Symbol parser_test_symbol(string_interner::StringId name, symbo
 	return { .name = name, .kind = kind, .qt = qt, .tok = tok, .node = (NodeIndex)node, .val = value::NONE };
 }
 
-struct ImplicitTypedefState
+struct ImplicitTypedefState (parser::IParserHandler)
 {
 	string_interner::StringId name;
 	bool declaration_saw_typedef;
 }
 
-fn void? seed_implicit_typedef(void* context, Parser* p)
+fn void? ImplicitTypedefState.handle_implicit_typedefs(&state, Parser* p) @dynamic
 {
-	ImplicitTypedefState* state = (ImplicitTypedefState*)context;
 	p.define_symbol(parser_test_symbol(state.name, symbol_stack::SymbolKind.TYPEDEF, 0, 90));
 }
 
-fn void? inspect_implicit_typedef(void* context, Parser* p)
+fn void? ImplicitTypedefState.handle_declaration(&state, Parser* p) @dynamic
 {
-	ImplicitTypedefState* state = (ImplicitTypedefState*)context;
 	symbol_stack::Symbol found;
 	state.declaration_saw_typedef = p.find_typedef(state.name, 0, false, &found)!! && found.kind == symbol_stack::SymbolKind.TYPEDEF;
 	p.advance();
@@ -572,12 +543,7 @@ fn void implicit_typedefs_run_inside_outer_scope_before_declarations() @test
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 		ImplicitTypedefState state = { .name = comp.intern_string("Implicit") };
 		Parser p;
-		FnHandler handler = {
-			.context = &state,
-			.declaration = &inspect_implicit_typedef,
-			.implicit_typedefs = &seed_implicit_typedef,
-		};
-		p.init(&pp, &handler);
+		p.init(&pp, &state);
 		Tree result = p.parse()!!;
 		assert(state.declaration_saw_typedef);
 		assert(!p.symbols_initialized && p.symbols.active_len == 0);
@@ -660,7 +626,7 @@ fn void parser_failure_cleanup_allows_later_success() @test
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 
 		Parser p;
-		FnHandler failing_handler = { .declaration = &fail_after_allocating_tree_node };
+		FailingDeclarationHandler failing_handler;
 		p.init(&pp, &failing_handler);
 		assert(@catch(p.parse()) == compilation::FATAL_ERROR);
 		assert(!p.initialized);
@@ -671,7 +637,7 @@ fn void parser_failure_cleanup_allows_later_success() @test
 
 		// Reinitialize over the same borrowed token buffer and prove the failed
 		// tree's owned allocations were released before a clean parse succeeds.
-		FnHandler recovering_handler = { .declaration = &recover_after_failure };
+		RecoveringDeclarationHandler recovering_handler;
 		p.init(&pp, &recovering_handler);
 		Tree result = p.parse()!!;
 		assert(result.root_decls.len() == 0);
@@ -702,7 +668,6 @@ fn void declaration_body_installs_only_supplied_function_context_and_restores_it
 		FunctionContextBodyCheck check = {};
 		CheckExpressions check_expressions = { &check };
 		parser_declaration::DeclarationParser declarations = {
-			.context = &check,
 			.statements = { .expressions = &check_expressions },
 			.function_return_qt = type_store::VOID,
 			.function_context = { .active = true, .variadic = true, .named_param_count = 4 },

@@ -81,6 +81,9 @@ struct CodeGen
 	List{ir::PhiInput} phi_nodes;
 	List{value_interner::InternerRef} record_elem_buf;
 	HashMap{uint, value_interner::InternerRef} record_cache;
+	<* Flags per node index (`LINKAGE_*` bits), built once by `index_internal_linkage` so
+	   `has_internal_linkage` and `is_root_declaration` avoid scanning `root_decls`. *>
+	HashMap{uint, char} linkage_flags;
 	bool has_cond_dummy_ty;
 	value_interner::InternerRef cond_dummy_ty;
 	bool bool_invert;
@@ -138,6 +141,7 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 	c.phi_nodes.init(comp.gpa);
 	c.record_elem_buf.init(comp.gpa);
 	c.record_cache.init(comp.gpa);
+	c.linkage_flags.init(comp.gpa);
 	c.vla_sizes.init(comp.gpa);
 	c.vla_scopes.init(comp.gpa);
 	c.vla_save_pool.init(comp.gpa);
@@ -158,7 +162,9 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 	defer c.phi_nodes.free();
 	defer c.record_elem_buf.free();
 	defer c.record_cache.free();
+	defer c.linkage_flags.free();
 	defer c.builder.free();
+	c.index_internal_linkage();
 
 	foreach (decl_index : tree.root_decls)
 	{
@@ -263,8 +269,55 @@ fn String CodeGen.find_emitted_string(&self, type_store::NodeIndex node)
 <* Whether a node is one of the translation unit's file-scope declarations. *>
 fn bool CodeGen.is_root_declaration(&self, type_store::NodeIndex declaration)
 {
-	foreach (root_decl : self.tree.root_decls) if (root_decl == declaration) return true;
-	return false;
+	return (self.linkage_flag(declaration) & LINKAGE_ROOT) != 0;
+}
+
+const char LINKAGE_STATIC_FN_ROOT = 1;
+const char LINKAGE_STATIC_VAR_ROOT = 2;
+const char LINKAGE_STATIC_FN_TARGET = 4;
+const char LINKAGE_STATIC_VAR_TARGET = 8;
+const char LINKAGE_ROOT = 16;
+
+<* Mark every file-scope node with `LINKAGE_ROOT`, and record, for every static file-scope
+   function/variable, the root node itself and the definition it links to. *>
+fn void CodeGen.index_internal_linkage(&self)
+{
+	foreach (root_decl : self.tree.root_decls)
+	{
+		self.add_linkage_flag(root_decl, LINKAGE_ROOT);
+		tree::Node node = root_decl.get(self.tree);
+		char root_bit;
+		char target_bit;
+		type_store::NodeOptIndex definition;
+		switch (node.kind)
+		{
+			case FUNCTION:
+				if (!node.function.is_static) continue;
+				root_bit = LINKAGE_STATIC_FN_ROOT;
+				target_bit = LINKAGE_STATIC_FN_TARGET;
+				definition = node.function.definition;
+			case VARIABLE:
+				if (node.variable.storage_class != tree::VariableStorageClass.STATIC) continue;
+				root_bit = LINKAGE_STATIC_VAR_ROOT;
+				target_bit = LINKAGE_STATIC_VAR_TARGET;
+				definition = node.variable.definition;
+			default:
+				continue;
+		}
+		self.add_linkage_flag(root_decl, root_bit);
+		if (!definition.is_null()) self.add_linkage_flag(definition.unwrap(), target_bit);
+	}
+}
+
+fn void CodeGen.add_linkage_flag(&self, type_store::NodeIndex index, char bit)
+{
+	char flags = self.linkage_flags.get((uint)index) ?? 0;
+	self.linkage_flags.set((uint)index, flags | bit);
+}
+
+fn char CodeGen.linkage_flag(&self, type_store::NodeIndex index)
+{
+	return self.linkage_flags.get((uint)index) ?? 0;
 }
 
 <* Whether a declaration has internal linkage, following parser redeclaration links. *>
@@ -280,31 +333,14 @@ fn bool CodeGen.has_internal_linkage(&self, type_store::NodeIndex declaration)
 				tree::Node definition = node.function.definition.unwrap().get(self.tree);
 				if (definition.kind == tree::NodeKind.FUNCTION && definition.function.is_static) return true;
 			}
-			foreach (root_decl : self.tree.root_decls)
-			{
-				tree::Node prior = root_decl.get(self.tree);
-				if (prior.kind != tree::NodeKind.FUNCTION || !prior.function.is_static) continue;
-				if (root_decl == declaration) return true;
-				if (!prior.function.definition.is_null() && prior.function.definition.unwrap() == declaration) return true;
-			}
-			return false;
+			return (self.linkage_flag(declaration) & (LINKAGE_STATIC_FN_ROOT | LINKAGE_STATIC_FN_TARGET)) != 0;
 		case VARIABLE:
 			if (!node.variable.definition.is_null())
 			{
-				tree::Node definition = node.variable.definition.unwrap().get(self.tree);
-				if (definition.kind == tree::NodeKind.VARIABLE && definition.variable.storage_class == tree::VariableStorageClass.STATIC)
-				{
-					foreach (root_decl : self.tree.root_decls) if (root_decl == node.variable.definition.unwrap()) return true;
-				}
+				type_store::NodeIndex definition = node.variable.definition.unwrap();
+				if (self.linkage_flag(definition) & LINKAGE_STATIC_VAR_ROOT) return true;
 			}
-			foreach (root_decl : self.tree.root_decls)
-			{
-				tree::Node prior = root_decl.get(self.tree);
-				if (prior.kind != tree::NodeKind.VARIABLE || prior.variable.storage_class != tree::VariableStorageClass.STATIC) continue;
-				if (root_decl == declaration) return true;
-				if (!prior.variable.definition.is_null() && prior.variable.definition.unwrap() == declaration) return true;
-			}
-			return false;
+			return (self.linkage_flag(declaration) & (LINKAGE_STATIC_VAR_ROOT | LINKAGE_STATIC_VAR_TARGET)) != 0;
 		default: return false;
 	}
 }

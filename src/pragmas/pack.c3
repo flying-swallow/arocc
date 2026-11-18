@@ -22,11 +22,11 @@ enum PackDiag : char
 }
 
 <*
- Token access and reporting for the pack grammar, supplied by the parser or a
- test. Indices address the expanded token stream; strings returned by
- `token_text` are borrowed.
+ Test-only replacement for TreeParserAdapter's token access and reporting;
+ compiled out of non-test builds. Indices address the expanded token stream;
+ strings returned by `token_text` are borrowed.
 *>
-interface IParserAdapter
+interface IPackParserTestProbe @feat(TESTING)
 {
 	<* Tokens at indices >= token_count() are past the directive. *>
 	fn uint token_count();
@@ -119,27 +119,27 @@ fn bool PackState.pop(&self)
 	return true;
 }
 
-fn bool is_token(IParserAdapter parser, uint index, tokenizer::TokenId id)
-	=> index < parser.token_count() && parser.token_id(index) == id;
+fn bool TreeParserAdapter.is_token(&self, uint index, tokenizer::TokenId id)
+	=> index < self.token_count() && self.token_id(index) == id;
 
-fn void report(IParserAdapter parser, uint index, PackDiag kind, ulong value = 0)
+fn void TreeParserAdapter.report(&self, uint index, PackDiag kind, ulong value = 0)
 {
-	parser.diagnose(index, kind, value);
+	self.diagnose(index, kind, value);
 }
 
 <* Parse a `pack(...)` body. `lparen_index` points at the opening parenthesis. *>
-fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index)
+fn HandleResult PackState.handle(&self, TreeParserAdapter* parser, uint lparen_index)
 {
-	if (!is_token(parser, lparen_index, tokenizer::TokenId.L_PAREN))
+	if (!parser.is_token(lparen_index, tokenizer::TokenId.L_PAREN))
 	{
-		report(parser, lparen_index, PackDiag.LPAREN);
+		parser.report(lparen_index, PackDiag.LPAREN);
 		return { .ok = false, .next_index = lparen_index };
 	}
 
 	uint index = lparen_index + 1;
 	if (index >= parser.token_count())
 	{
-		report(parser, index, PackDiag.RPAREN);
+		parser.report(index, PackDiag.RPAREN);
 		return { .ok = false, .next_index = index };
 	}
 
@@ -152,12 +152,12 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 		if (action == "show")
 		{
 			ulong value = self.current.has_value ? self.current.value : 8;
-			report(parser, action_index, PackDiag.SHOW, value);
+			parser.report(action_index, PackDiag.SHOW, value);
 			return { .ok = true, .next_index = index };
 		}
 		if (action != "push" && action != "pop")
 		{
-			report(parser, action_index, PackDiag.UNKNOWN_ACTION);
+			parser.report(action_index, PackDiag.UNKNOWN_ACTION);
 			return { .ok = false, .next_index = action_index };
 		}
 
@@ -165,18 +165,18 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 		bool has_label = false;
 		bool has_new_value = false;
 		char new_value = 0;
-		if (is_token(parser, index, tokenizer::TokenId.COMMA))
+		if (parser.is_token(index, tokenizer::TokenId.COMMA))
 		{
 			index++;
 			if (index >= parser.token_count())
 			{
-				report(parser, index, PackDiag.INTEGER_OR_IDENTIFIER);
+				parser.report(index, PackDiag.INTEGER_OR_IDENTIFIER);
 				return { .ok = false, .next_index = index };
 			}
 			id = parser.token_id(index);
 			if (id == tokenizer::TokenId.PP_NUM)
 			{
-				if (!read_pack_value(parser, index, &new_value)) return { .ok = false, .next_index = index };
+				if (!parser.read_pack_value(index, &new_value)) return { .ok = false, .next_index = index };
 				has_new_value = true;
 				index++;
 			}
@@ -185,22 +185,22 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 				label = parser.token_text(index);
 				has_label = true;
 				index++;
-				if (is_token(parser, index, tokenizer::TokenId.COMMA))
+				if (parser.is_token(index, tokenizer::TokenId.COMMA))
 				{
 					index++;
-					if (!is_token(parser, index, tokenizer::TokenId.PP_NUM))
+					if (!parser.is_token(index, tokenizer::TokenId.PP_NUM))
 					{
-						report(parser, index, PackDiag.INTEGER_OR_IDENTIFIER);
+						parser.report(index, PackDiag.INTEGER_OR_IDENTIFIER);
 						return { .ok = false, .next_index = index };
 					}
-					if (!read_pack_value(parser, index, &new_value)) return { .ok = false, .next_index = index };
+					if (!parser.read_pack_value(index, &new_value)) return { .ok = false, .next_index = index };
 					has_new_value = true;
 					index++;
 				}
 			}
 			else
 			{
-				report(parser, index, PackDiag.INTEGER_OR_IDENTIFIER);
+				parser.report(index, PackDiag.INTEGER_OR_IDENTIFIER);
 				return { .ok = false, .next_index = index };
 			}
 		}
@@ -214,17 +214,17 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 			bool popped = has_label ? self.pop_named(label) : self.pop();
 			if (has_new_value)
 			{
-				report(parser, action_index, PackDiag.UNDEFINED_POP);
+				parser.report(action_index, PackDiag.UNDEFINED_POP);
 			}
 			else if (!popped)
 			{
-				report(parser, action_index, PackDiag.EMPTY_STACK);
+				parser.report(action_index, PackDiag.EMPTY_STACK);
 				return { .ok = false, .next_index = index };
 			}
 		}
 		if (has_new_value) self.current = { .has_value = true, .value = new_value };
 		if (action == "pop" && has_new_value) return { .ok = false, .next_index = index };
-		return finish(parser, index);
+		return parser.finish(index);
 	}
 
 	if (id == tokenizer::TokenId.R_PAREN)
@@ -235,57 +235,75 @@ fn HandleResult PackState.handle(&self, IParserAdapter parser, uint lparen_index
 	if (id == tokenizer::TokenId.PP_NUM)
 	{
 		char value = 0;
-		if (!read_pack_value(parser, index, &value)) return { .ok = false, .next_index = index };
+		if (!parser.read_pack_value(index, &value)) return { .ok = false, .next_index = index };
 		self.current = { .has_value = true, .value = value };
-		return finish(parser, index + 1);
+		return parser.finish(index + 1);
 	}
-	return finish(parser, index);
+	return parser.finish(index);
 }
 
-fn HandleResult finish(IParserAdapter parser, uint index)
+fn HandleResult TreeParserAdapter.finish(&self, uint index)
 {
-	if (!is_token(parser, index, tokenizer::TokenId.R_PAREN))
+	if (!self.is_token(index, tokenizer::TokenId.R_PAREN))
 	{
-		report(parser, index, PackDiag.RPAREN);
+		self.report(index, PackDiag.RPAREN);
 		return { .ok = false, .next_index = index };
 	}
 	return { .ok = true, .next_index = index + 1 };
 }
 
-fn bool read_pack_value(IParserAdapter parser, uint index, char* out)
+fn bool TreeParserAdapter.read_pack_value(&self, uint index, char* out)
 {
 	ulong value = 0;
-	if (!parser.parse_integer(index, &value)) return false;
+	if (!self.parse_integer(index, &value)) return false;
 	if (value != 1 && value != 2 && value != 4 && value != 8 && value != 16)
 	{
-		report(parser, index, PackDiag.INTEGER);
+		self.report(index, PackDiag.INTEGER);
 		return false;
 	}
 	*out = (char)value;
 	return true;
 }
 
-<* IParserAdapter over the parser's expanded token tree, ending at the directive's newline. *>
-struct TreeParserAdapter (IParserAdapter)
+<* Pack grammar token access over the parser's expanded token tree, ending at the
+   directive's newline. Test builds may route token access through `probe`
+   (then `p` may be null). *>
+struct TreeParserAdapter
 {
 	parser::Parser* p;
 	uint end;
+	IPackParserTestProbe probe @feat(TESTING);
 }
 
-fn uint TreeParserAdapter.token_count(&self) @dynamic => self.end;
-
-fn tokenizer::TokenId TreeParserAdapter.token_id(&self, uint index) @dynamic
+fn uint TreeParserAdapter.token_count(&self)
 {
+	$if env::TESTING:
+		if (self.probe) return self.probe.token_count();
+	$endif
+	return self.end;
+}
+
+fn tokenizer::TokenId TreeParserAdapter.token_id(&self, uint index)
+{
+	$if env::TESTING:
+		if (self.probe) return self.probe.token_id(index);
+	$endif
 	return self.p.tree.tokens[(usz)index].id;
 }
 
-fn String TreeParserAdapter.token_text(&self, uint index) @dynamic
+fn String TreeParserAdapter.token_text(&self, uint index)
 {
+	$if env::TESTING:
+		if (self.probe) return self.probe.token_text(index);
+	$endif
 	return self.p.tree.tok_slice((tokens::TokenIndex)index);
 }
 
-fn bool TreeParserAdapter.parse_integer(&self, uint index, ulong* out) @dynamic
+fn bool TreeParserAdapter.parse_integer(&self, uint index, ulong* out)
 {
+	$if env::TESTING:
+		if (self.probe) return self.probe.parse_integer(index, out);
+	$endif
 	parser::Parser* p = self.p;
 	tokens::TreeToken tok = p.tree.tokens[(usz)index];
 	number_literal::NumberLiteralParser literal = {
@@ -301,8 +319,11 @@ fn bool TreeParserAdapter.parse_integer(&self, uint index, ulong* out) @dynamic
 	return true;
 }
 
-fn void TreeParserAdapter.diagnose(&self, uint index, PackDiag kind, ulong value) @dynamic
+fn void TreeParserAdapter.diagnose(&self, uint index, PackDiag kind, ulong value)
 {
+	$if env::TESTING:
+		if (self.probe) { self.probe.diagnose(index, kind, value); return; };
+	$endif
 	parser::Parser* p = self.p;
 	String message = "invalid #pragma pack directive";
 	diagnostics::Option opt = diagnostics::Option.IGNORED_PRAGMAS;

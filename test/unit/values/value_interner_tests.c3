@@ -155,8 +155,9 @@ fn void deduplication() @test
 	Interner* in = &f.in;
 	InternerRef a = in.put({ .tag = INT_TY, .ty_bits = 7 });
 	InternerRef b = in.put({ .tag = INT_TY, .ty_bits = 24 });
-	check(a, 0);
-	check(b, 1);
+	// Dense refs start at 1: ref 0 is the none sentinel.
+	check(a, 1);
+	check(b, 2);
 	check(in.put({ .tag = INT_TY, .ty_bits = 7 }), a);
 	check(in.put({ .tag = INT_TY, .ty_bits = 24 }), b);
 	check(in.len(), 2);
@@ -164,7 +165,7 @@ fn void deduplication() @test
 	// Ints dedupe by value across u64 / i64 / big_int forms.
 	Limb[1] five = { 5 };
 	InternerRef r5 = in.put(primitive_value::int_key(5));
-	check(r5, 2);
+	check(r5, 3);
 	check(in.put(primitive_value::int_key(5)), r5);
 	check(in.put(big(&five, true)), r5);
 	Limb[2] five_padded = { 5, 0 }; // non-normalized input still dedupes
@@ -519,7 +520,7 @@ fn void slices_stable_across_growth() @test
 
 	// Dedup still works after rehashing, and refs are dense in insertion order.
 	check(in.put({ .tag = BYTES, .bytes = "constant string" }), sref);
-	check(in.put({ .tag = INT_TY, .ty_bits = 200 }), 3);
+	check(in.put({ .tag = INT_TY, .ty_bits = 200 }), 4);
 	sz n = in.len();
 	for (uint i = 0; i < 5000; i++)
 	{

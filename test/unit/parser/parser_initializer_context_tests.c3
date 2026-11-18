@@ -26,7 +26,7 @@ fn void init_context_parser(Compilation* comp, Preprocessor* pp, Source src, Par
 	pp.add_token(pp.preprocess(src)!!)!!;
 	p.init(pp, {});
 	p.bind_finalized_tokens();
-	p.bind_initializer_parser(&grammar_parse_context_test_expr);
+	p.set_initializer_test_probe(&grammar_parse_context_test_expr);
 	type_store::NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 		.variable = { .qt = type_store::INT } });
 	p.define_symbol({ .name = comp.intern_string("unknown"), .kind = symbol_stack::SymbolKind.DEF,
@@ -152,7 +152,7 @@ fn void init_context_error_parser(Compilation* comp, Preprocessor* pp, Source sr
 	pp.add_token(pp.preprocess(src)!!)!!;
 	p.init(pp, {});
 	p.bind_finalized_tokens();
-	p.bind_initializer_parser(&grammar_parse_context_error_test_expr);
+	p.set_initializer_test_probe(&grammar_parse_context_error_test_expr);
 }
 
 fn void static_initializer_skips_value_check_after_error() @test

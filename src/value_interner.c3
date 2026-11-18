@@ -10,7 +10,10 @@
 // from 0xFFFF_FFFE are the static refs below (REF_PTR .. REF_CF128); every other
 // value is a dense index into `items`, assigned in insertion order (Zig's
 // AutoArrayHashMap index). `InternerOptRef` is the same encoding plus
-// OPT_NONE = 0xFFFF_FFFF. Converting between them is a plain bit copy.
+// OPT_NONE = 0. Converting between them is a plain bit copy.
+// Deviation from Zig (OPT_NONE = maxInt): `items[0]` is a dead sentinel pushed by
+// `init`, so dense refs start at 1 and a zero-initialized Value is `none` instead
+// of silently aliasing the first interned constant.
 //
 // Keys. Deviation from Zig: numeric keys are flat. The key tag carries the whole
 // type (INT_POSITIVE / INT_NEGATIVE, F16..F128, CF16..CF128) and the payload is:
@@ -81,7 +84,9 @@ const InternerRef REF_CF128 = (InternerRef)0xFFFF_FFE8;    // max - 23
 <* Smallest static ref; any ref below it indexes `items`. *>
 const uint FIRST_STATIC_REF = 0xFFFF_FFE8;
 
-const InternerOptRef OPT_NONE = (InternerOptRef)0xFFFF_FFFF;
+const InternerOptRef OPT_NONE = (InternerOptRef)0;
+<* Index of the dead sentinel item that reserves ref 0 for OPT_NONE. *>
+const uint SENTINEL_INDEX = 0;
 const InternerOptRef OPT_ZERO = (InternerOptRef)0xFFFF_FFEF;
 const InternerOptRef OPT_ONE = (InternerOptRef)0xFFFF_FFEE;
 const InternerOptRef OPT_NULL = (InternerOptRef)0xFFFF_FFED;
@@ -197,6 +202,9 @@ fn void Interner.init(&self, Allocator gpa)
 	self.strings.init(gpa);
 	self.records.init(gpa);
 	self.hashes.init(gpa);
+	// Reserve index 0 so no dense ref aliases OPT_NONE; never in `table`.
+	self.items.push({ VOID_TY, 0 });
+	self.hashes.push(0);
 }
 
 fn void Interner.free(&self)
@@ -215,8 +223,8 @@ fn void Interner.free(&self)
 	*self = {};
 }
 
-<* Number of non-static entries (`items.len`). *>
-fn sz Interner.len(&self) => self.items.len();
+<* Number of interned non-static entries (excludes the ref-0 sentinel). *>
+fn sz Interner.len(&self) => self.items.len() ? self.items.len() - 1 : 0;
 
 <*
  Interner.put: intern `key` and return its ref (static ref, existing entry, or a
@@ -339,7 +347,7 @@ fn void Interner.index_insert(&self, uint index, uint h)
 		self.table = alloc::new_array(self.gpa, uint, new_len);
 		self.table[..] = 0;
 		// Re-add every existing item; the new one is added below.
-		for (uint i = 0; i < index; i++) self.table_place(i, self.hashes[i]);
+		for (uint i = SENTINEL_INDEX + 1; i < index; i++) self.table_place(i, self.hashes[i]);
 	}
 	self.table_place(index, h);
 }
@@ -392,6 +400,7 @@ fn PrimitiveValue Interner.get(&self, InternerRef ref)
 		}
 	}
 
+	assert((uint)ref != SENTINEL_INDEX, "Interner.get: ref 0 is the none sentinel");
 	InternerItem item = self.items[(sz)(uint)ref];
 	uint data = item.data;
 	PrimitiveType tag = item.tag;

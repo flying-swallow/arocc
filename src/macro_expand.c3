@@ -1029,22 +1029,33 @@ fn bool TokenIterator.next_no_ws(&self, TokenWithExpansionLocs* out)
 fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, ExpandBuf* buf, sz start_idx, sz end_idx, EvalContext eval_ctx)
 {
 	Allocator gpa = self.comp.gpa;
+	// Deviation from Zig: each scan pass uses a gap buffer instead of
+	// ArrayList.replaceRange, which memmoved the whole unscanned tail on every
+	// expansion (quadratic for huge expansions, gcc limits-externdecl.c).
+	// buf[.. w) is scanned output, buf[w .. r) a gap of dead slots, buf[r ..]
+	// the unscanned tail at absolute indices. `w` plays the role of Zig's `idx`;
+	// `moving_end_idx` stays in Zig's gap-free coordinates.
 	sz moving_end_idx = end_idx;
 	sz advance_index = 0;
+	sz w = 0;
+	sz r = 0;
+	defer close_gap(buf, &w, &r);
 	// rescan loop
 	bool do_rescan = true;
 	while (do_rescan)
 	{
 		do_rescan = false;
 		// expansion loop
-		sz idx = start_idx + advance_index;
-		while EXPANSION: (idx < moving_end_idx)
+		w = start_idx + advance_index;
+		r = w;
+		while EXPANSION: (w < moving_end_idx)
 		{
-			TokenWithExpansionLocs macro_tok = buf.entries[idx];
+			TokenWithExpansionLocs macro_tok = buf.entries[r];
 			if (macro_tok.id == KEYWORD_DEFINED && eval_ctx == EXPR)
 			{
-				idx++;
-				TokenIterator it = { .toks = buf.array_view()[idx:moving_end_idx - idx] };
+				buf.entries[w++] = buf.entries[r++];
+				sz tail_end = moving_end_idx + (r - w);
+				TokenIterator it = { .toks = buf.array_view()[r:tail_end - r] };
 				TokenWithExpansionLocs tok;
 				if (it.next_no_ws(&tok))
 				{
@@ -1054,25 +1065,25 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 						it.next_no_ws(null); // eat (what should be) r paren
 					}
 				}
-				idx += it.i;
+				for (sz k = 0; k < it.i; k++) buf.entries[w++] = buf.entries[r++];
 				continue EXPANSION;
 			}
 			if (!macro_tok.id.is_macro_identifier() || macro_tok.flags.expansion_disabled)
 			{
-				idx++;
+				buf.entries[w++] = buf.entries[r++];
 				continue EXPANSION;
 			}
 			String expanded = self.expanded_slice(macro_tok);
 			Macro* m = self.defines.get(expanded);
 			if (!m)
 			{
-				idx++;
+				buf.entries[w++] = buf.entries[r++];
 				continue EXPANSION;
 			}
 			HidesetIndex macro_hidelist = self.hideset.get(macro_tok.loc);
 			if (self.hideset.contains(macro_hidelist, expanded))
 			{
-				idx++;
+				buf.entries[w++] = buf.entries[r++];
 				continue EXPANSION;
 			}
 			uint name_len = (uint)expanded.len;
@@ -1080,19 +1091,22 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 			if (m.is_func)
 			{
 				TokenWithExpansionLocs r_paren;
-				sz macro_scan_idx = idx;
+				sz macro_scan_idx = r;
 				// to be saved in case this doesn't turn out to be a call
-				MacroArguments? args_opt = self.collect_macro_func_arguments(tokenizer, buf, &macro_scan_idx, &moving_end_idx, m.is_builtin(), &r_paren);
+				sz gap = r - w;
+				sz tail_end = moving_end_idx + gap;
+				MacroArguments? args_opt = self.collect_macro_func_arguments(tokenizer, buf, &macro_scan_idx, &tail_end, m.is_builtin(), &r_paren);
+				moving_end_idx = tail_end - gap;
 				if (catch f = args_opt)
 				{
 					switch (f)
 					{
 						case MISSING_L_PAREN:
-							if (!buf.entries[idx].flags.is_macro_arg) buf.entries[idx].flags.expansion_disabled = true;
-							idx++;
+							if (!buf.entries[r].flags.is_macro_arg) buf.entries[r].flags.expansion_disabled = true;
+							buf.entries[w++] = buf.entries[r++];
 						case UNTERMINATED:
-							if (self.comp.langopts.emulate == GCC) idx++;
-							self.remove_expanded_tokens(buf, idx, macro_scan_idx - idx, &moving_end_idx);
+							if (self.comp.langopts.emulate == GCC) buf.entries[w++] = buf.entries[r++];
+							gap_remove_tokens(gpa, buf, &r, macro_scan_idx - r, &moving_end_idx);
 						default:
 							return f~;
 					}
@@ -1129,16 +1143,16 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 					// Validate argument count.
 					if (m.var_args && args_count < m.params.len)
 					{
-						self.err(buf.entries[idx], Diagnostic.EXPECTED_AT_LEAST_ARGUMENTS, (ulong)m.params.len, (ulong)args_count)!;
-						idx++;
-						self.remove_expanded_tokens(buf, idx, macro_scan_idx - idx + 1, &moving_end_idx);
+						self.err(buf.entries[r], Diagnostic.EXPECTED_AT_LEAST_ARGUMENTS, (ulong)m.params.len, (ulong)args_count)!;
+						buf.entries[w++] = buf.entries[r++];
+						gap_remove_tokens(gpa, buf, &r, macro_scan_idx - r + 1, &moving_end_idx);
 						continue EXPANSION;
 					}
 					if (!m.var_args && args_count != m.params.len)
 					{
-						self.err(buf.entries[idx], Diagnostic.EXPECTED_ARGUMENTS, (ulong)m.params.len, (ulong)args_count)!;
-						idx++;
-						self.remove_expanded_tokens(buf, idx, macro_scan_idx - idx + 1, &moving_end_idx);
+						self.err(buf.entries[r], Diagnostic.EXPECTED_ARGUMENTS, (ulong)m.params.len, (ulong)args_count)!;
+						buf.entries[w++] = buf.entries[r++];
+						gap_remove_tokens(gpa, buf, &r, macro_scan_idx - r + 1, &moving_end_idx);
 						continue EXPANSION;
 					}
 					MacroArguments expanded_args;
@@ -1170,15 +1184,17 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 					ExpandBuf res = self.expand_func_macro(macro_tok, m, &args, &expanded_args, hs, eval_ctx)!;
 					defer res.free(); // the tokens move into `buf`
 					sz tokens_added = res.len();
-					sz tokens_removed = macro_scan_idx - idx + 1;
-					free_buf_tokens(gpa, buf.array_view()[idx:tokens_removed]);
-					replace_range(buf, idx, tokens_removed, res.array_view());
+					sz tokens_removed = macro_scan_idx - r + 1;
+					free_buf_tokens(gpa, buf.array_view()[r:tokens_removed]);
+					r += tokens_removed;
+					ensure_gap(buf, w, &r, tokens_added);
+					if (tokens_added) mem::copy(&buf.entries[w], res.entries, tokens_added * TokenWithExpansionLocs::size);
+					w += tokens_added;
 
 					moving_end_idx += tokens_added;
 					// Overflow here means that we encountered an unterminated argument list
 					// while expanding the body of this macro.
 					moving_end_idx = moving_end_idx > tokens_removed ? moving_end_idx - tokens_removed : 0;
-					idx += tokens_added;
 					do_rescan = true;
 				}
 			}
@@ -1223,23 +1239,71 @@ fn void? Preprocessor.expand_macro_exhaustive(&self, Tokenizer* tokenizer, Expan
 					}
 				}
 
-				buf.entries[idx].expansion_locs.free();
-				replace_range(buf, idx, 1, res.array_view());
-				idx += increment_idx_by;
-				moving_end_idx = moving_end_idx + res.len() - 1;
+				buf.entries[r].expansion_locs.free();
+				r++;
+				sz res_len = res.len();
+				ensure_gap(buf, w, &r, res_len);
+				// res[.. increment) is scanned output; res[increment ..] goes back
+				// in front of the tail so this pass rescans it.
+				if (increment_idx_by) mem::copy(&buf.entries[w], res.entries, increment_idx_by * TokenWithExpansionLocs::size);
+				w += increment_idx_by;
+				sz rescan = res_len - increment_idx_by;
+				r -= rescan;
+				if (rescan) mem::copy(&buf.entries[r], &res.entries[increment_idx_by], rescan * TokenWithExpansionLocs::size);
+				moving_end_idx = moving_end_idx + res_len - 1;
 				do_rescan = true;
 			}
-			if (idx - start_idx == advance_index + 1 && !do_rescan)
+			if (w - start_idx == advance_index + 1 && !do_rescan)
 			{
 				advance_index++;
 			}
 		} // end of replacement phase
+		close_gap(buf, &w, &r);
 	}
 	// end of scanning phase
 
 	// trim excess buffer
 	free_buf_tokens(gpa, buf.array_view()[moving_end_idx:buf.len() - moving_end_idx]);
 	buf.size = moving_end_idx;
+}
+
+<* Gap-buffer helper for expand_macro_exhaustive: make buf[w .. *r) at least
+   `need` slots by shifting the tail right, growing geometrically so a pass
+   costs amortized O(1) per token. *>
+fn void ensure_gap(ExpandBuf* buf, sz w, sz* r, sz need) @private
+{
+	sz gap = *r - w;
+	if (gap >= need) return;
+	sz len = buf.len();
+	sz grow = need - gap;
+	sz min_grow = len / 2 + 16;
+	if (grow < min_grow) grow = min_grow;
+	buf.reserve(grow);
+	sz tail = len - *r;
+	if (tail) mem::move(&buf.entries[*r + grow], &buf.entries[*r], tail * TokenWithExpansionLocs::size);
+	buf.size = len + grow;
+	*r += grow;
+}
+
+<* Close the expand_macro_exhaustive gap: move the tail down to `w`. *>
+fn void close_gap(ExpandBuf* buf, sz* w, sz* r) @private
+{
+	sz gap = *r - *w;
+	if (gap == 0) return;
+	sz len = buf.len();
+	sz tail = len - *r;
+	if (tail) mem::move(&buf.entries[*w], &buf.entries[*r], tail * TokenWithExpansionLocs::size);
+	buf.size = len - gap;
+	*r = *w;
+}
+
+<* Gap-buffer form of `remove_expanded_tokens`: free buf[*r .. *r + len) and
+   widen the gap over them; *moving_end_idx saturating -= len. *>
+fn void gap_remove_tokens(Allocator gpa, ExpandBuf* buf, sz* r, sz len, sz* moving_end_idx) @private
+{
+	free_buf_tokens(gpa, buf.array_view()[*r:len]);
+	*r += len;
+	*moving_end_idx = *moving_end_idx > len ? *moving_end_idx - len : 0;
 }
 
 <*

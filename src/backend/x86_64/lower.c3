@@ -53,6 +53,8 @@ struct Lowering
 	int[] areas;
 	<* Assembly label of each LABEL instruction. *>
 	String[] labels;
+	<* Body index just after each LABEL (where its PHIs start); 0 = not a body label. *>
+	usz[] label_body_next;
 	<* rbp displacement of the PHI copy area. *>
 	int phi_area;
 	int frame;
@@ -159,9 +161,9 @@ fn void Lowering.emit(&self, Mnemonic mnemonic, Operand a = {}, Operand b = {}, 
 }
 
 fn void Lowering.emit_label(&self, String label) => self.lines.push(
-{
-	.is_label = true, .label = label
-}
+	{
+		.is_label = true, .label = label
+	}
 
 );
 
@@ -226,9 +228,9 @@ fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 			{
 				label = string::tformat(".L.str.%d", self.strings.len());
 				self.strings.push(
-				{
-					.constant = inst.data.constant, .label = label, .bytes = key.bytes
-				}
+					{
+						.constant = inst.data.constant, .label = label, .bytes = key.bytes
+					}
 				);
 			}
 			self.emit(LEA, reg_op(reg.to_bits(64)), label_mem_op(label));
@@ -280,16 +282,19 @@ fn void? Lowering.layout(&self)
 	self.slots = mem::temp_array(int, count);
 	self.areas = mem::temp_array(int, count);
 	self.labels = mem::temp_array(String, count);
+	self.label_body_next = mem::temp_array(usz, count);
+	for (sz i = 0; i < count; i++) self.label_body_next[i] = 0;
 	int offset = 0;
 	uint phis_in_block = 0;
 	uint max_phis = 0;
-	foreach (ref : self.decl.body)
+	foreach (usz body_index, ref : self.decl.body)
 	{
 		ir::Inst inst = self.inst(ref);
 		switch (inst.tag)
 		{
 			case LABEL:
 				self.labels[(sz)ref] = string::tformat(".L%s.%s.%d", self.decl.name, inst.data.label, (uint)ref);
+				if (self.label_body_next[(sz)ref] == 0) self.label_body_next[(sz)ref] = body_index + 1;
 				phis_in_block = 0;
 				continue;
 			case ALLOC:
@@ -662,12 +667,17 @@ fn void Lowering.allocate(&self)
 		{
 			uint block_start = (uint)block_starts[(sz)block];
 			uint block_end = (uint)(block_ends[(sz)block] - 1);
-			for (usz ref = 0; ref < count; ref++)
+			// Visit only the set bits; scanning every ref per block is
+			// O(blocks * refs) on huge functions (gcc 20001226-1.c).
+			for (usz word = 0; word < words; word++)
 			{
-				if (!candidates[ref]) continue;
-				ir::Ref value = (ir::Ref)ref;
-				if (bit_is_set(live_in, base, value) || bit_is_set(live_out, base, value))
+				ulong live = live_in[base + word] | live_out[base + word];
+				while (live)
 				{
+					usz ref = word * 64 + (usz)live.ctz();
+					live &= live - 1;
+					if (ref >= count || !candidates[ref]) continue;
+					ir::Ref value = (ir::Ref)ref;
 					self.note_interval(value, block_start, candidates, starts, ends);
 					self.note_interval(value, block_end, candidates, starts, ends);
 				}
@@ -761,15 +771,9 @@ fn void Lowering.allocate(&self)
 fn void? Lowering.edge_copies(&self, ir::Ref target)
 {
 	// Find target's PHIs: the instructions right after its LABEL in body order.
-	usz start = usz::max;
-	foreach (usz i, ref : self.decl.body)
-	{
-		if (ref == target)
-		{
-			start = i + 1; break;
-		}
-	}
-	if (start == usz::max) return;
+	if ((usz)target >= self.label_body_next.len) return;
+	usz start = self.label_body_next[(sz)target];
+	if (start == 0) return;
 	// Phase 1: inputs into the copy area. Phase 2: copy area into the PHI slots.
 	uint n = 0;
 	for (usz i = start; i < self.decl.body.len && self.inst(self.decl.body[i]).tag == PHI; i++)

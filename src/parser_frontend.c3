@@ -31,11 +31,9 @@ fn void FrontendHandler.bind(&self, parser::Parser* p)
 	self.asm_parser = { .parser = p, .context = self, .expression = &asm_operand_expression };
 	self.declarations = {
 		.statements = { .expressions = self, .asm_parser = &self.asm_parser },
-		.implicit_typedefs = &parser_declaration::implicit_typedef_prelude,
-		.has_implicit_typedefs = true,
+		.implicit_typedef_prelude = true,
 	};
 	p.handler = self;
-	p.bind_initializer_parser(self);
 }
 
 // Grammar hooks forward to the declaration grammar.
@@ -79,8 +77,7 @@ fn parser_result::Result? FrontendHandler.handle_compound_literal_primary(&self,
 
 fn type_store::NodeIndex? FrontendHandler.handle_statement_expression_body(&self, parser::Parser* p, bool eval) @dynamic
 {
-	self.declarations.statements.parser = p;
-	return self.declarations.statements.parse_body(false);
+	return self.declarations.statements.parse_body(p, false);
 }
 
 // IExpressionGrammar: Parser's composed expression entry points.

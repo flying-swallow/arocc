@@ -403,72 +403,29 @@ fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenInd
 
 fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::TokenIndex l_paren, bool eval)
 {
+	// Kept minimal: this frame is live across every nested parenthesis level.
 	parser::Parser* p = self.parser;
 	p.advance();
 	parser::TypeNameProbe probe = p.probe_typed_type_name()!;
-	if (probe.matched)
-	{
-		if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
-		if (p.is_at(tokenizer::TokenId.L_BRACE))
-		{
-			parser::IExpressionParts g = self.parts;
-			if (g && &g.parse_compound_literal)
-			{
-				parser_result::Result? literal = g.parse_compound_literal(p, l_paren, probe.qt, eval);
-				if (catch f = literal)
-				{
-					if (f != parser::HOOK_ABSENT) return f~;
-				} else
-				{
-					return literal;
-				}
-			}
-			return unavailable(p, "compound literal expressions are unavailable in this parser composition", l_paren);
-		}
-		// A cast-expression is a unary expression or another cast-expression.
-		tokens::Precedence unary_only = (tokens::Precedence)((ichar)tokens::PREC_MULTIPLICATIVE + 1);
-		parser_result::Result? maybe_operand = self.nested(unary_only, eval);
-		if (catch f = maybe_operand)
-		{
-			if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
-			return f~;
-		}
-		parser_result::Result operand = maybe_operand;
-		type_store::QualType source_qt = operand.qt;
-		bool maybe_cast = operand.explicit_cast(p, probe.qt, l_paren)!;
-		if (!maybe_cast)
-		{
-			if (probe.qt.is_pointer(p.comp))
-			{
-				Diagnostic.INVALID_CAST_TO_POINTER.@emit(p, l_paren, p.fmt_qt(source_qt))!;
-			}
-			else if (source_qt.is_pointer(p.comp) && probe.qt.is_float(p.comp))
-			{
-				Diagnostic.INVALID_CAST_TO_FLOAT.@emit(p, l_paren, p.fmt_qt(probe.qt))!;
-			}
-			else if (probe.qt.is_int(p.comp) || probe.qt.is_float(p.comp))
-			{
-				Diagnostic.INVALID_CAST_OPERAND_TYPE.@emit(p, l_paren, p.fmt_qt(source_qt))!;
-			}
-			else
-			{
-				Diagnostic.INVALID_CAST_TYPE.@emit(p, l_paren, p.fmt_qt(probe.qt))!;
-			}
-			return PARSING_FAILED~;
-		}
-		return operand;
-	}
+	if (probe.matched) return self.parse_cast(l_paren, probe.qt, eval);
 	if (p.is_at(tokenizer::TokenId.L_BRACE))
 	{
 		return unavailable(p, "statement expressions are unavailable in this parser composition", l_paren);
 	}
 	parser_result::Result? maybe_inside = self.nested(tokens::PREC_ANY, eval);
-	if (catch f = maybe_inside)
-	{
-		if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
-		return f~;
-	}
-	parser_result::Result inside = maybe_inside;
+	if (catch f = maybe_inside) return nested_fault(p, f);
+	return finish_paren(p, maybe_inside, l_paren);
+}
+
+fn parser_result::Result? nested_fault(parser::Parser* p, fault f) @noinline
+{
+	if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
+	return f~;
+}
+
+<* `( expr )` once `expr` is parsed. *>
+fn parser_result::Result? finish_paren(parser::Parser* p, parser_result::Result inside, tokens::TokenIndex l_paren) @noinline
+{
 	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
 	type_store::NodeIndex node = p.tree.add_node(
 		{
@@ -478,6 +435,65 @@ fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::Token
 		}
 	);
 	return { .node = node, .qt = inside.qt, .val = inside.val };
+}
+
+<* `( type-name )` followed by a cast operand or a compound literal. *>
+fn parser_result::Result? PrimaryParser.parse_cast(&self, tokens::TokenIndex l_paren, type_store::QualType qt, bool eval) @noinline
+{
+	parser::Parser* p = self.parser;
+	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
+	if (p.is_at(tokenizer::TokenId.L_BRACE)) return self.parse_compound_literal_after_type(l_paren, qt, eval);
+	// A cast-expression is a unary expression or another cast-expression.
+	tokens::Precedence unary_only = (tokens::Precedence)((ichar)tokens::PREC_MULTIPLICATIVE + 1);
+	parser_result::Result? maybe_operand = self.nested(unary_only, eval);
+	if (catch f = maybe_operand) return nested_fault(p, f);
+	return finish_cast(p, maybe_operand, qt, l_paren);
+}
+
+fn parser_result::Result? PrimaryParser.parse_compound_literal_after_type(&self, tokens::TokenIndex l_paren, type_store::QualType qt, bool eval) @noinline
+{
+	parser::Parser* p = self.parser;
+	parser::IExpressionParts g = self.parts;
+	if (g && &g.parse_compound_literal)
+	{
+		parser_result::Result? literal = g.parse_compound_literal(p, l_paren, qt, eval);
+		if (catch f = literal)
+		{
+			if (f != parser::HOOK_ABSENT) return f~;
+		} else
+		{
+			return literal;
+		}
+	}
+	return unavailable(p, "compound literal expressions are unavailable in this parser composition", l_paren);
+}
+
+<* Apply and diagnose the explicit cast of a parsed operand to `qt`. *>
+fn parser_result::Result? finish_cast(parser::Parser* p, parser_result::Result operand, type_store::QualType qt, tokens::TokenIndex l_paren) @noinline
+{
+	type_store::QualType source_qt = operand.qt;
+	bool maybe_cast = operand.explicit_cast(p, qt, l_paren)!;
+	if (!maybe_cast)
+	{
+		if (qt.is_pointer(p.comp))
+		{
+			Diagnostic.INVALID_CAST_TO_POINTER.@emit(p, l_paren, p.fmt_qt(source_qt))!;
+		}
+		else if (source_qt.is_pointer(p.comp) && qt.is_float(p.comp))
+		{
+			Diagnostic.INVALID_CAST_TO_FLOAT.@emit(p, l_paren, p.fmt_qt(qt))!;
+		}
+		else if (qt.is_int(p.comp) || qt.is_float(p.comp))
+		{
+			Diagnostic.INVALID_CAST_OPERAND_TYPE.@emit(p, l_paren, p.fmt_qt(source_qt))!;
+		}
+		else
+		{
+			Diagnostic.INVALID_CAST_TYPE.@emit(p, l_paren, p.fmt_qt(qt))!;
+		}
+		return PARSING_FAILED~;
+	}
+	return operand;
 }
 
 fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex generic_tok, bool eval)
@@ -667,19 +683,10 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 	return { .node = node, .qt = selected.qt, .val = selected.val };
 }
 
-<* Parse one primary-expression production. *>
-fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
+<* `true`, `false` and `nullptr`. Out of line to keep `PrimaryParser.parse`, which
+ is live across every nesting level, small. *>
+fn parser_result::Result? parse_keyword_constant(parser::Parser* p, tokens::TokenIndex tok, tokenizer::TokenId id) @noinline
 {
-	parser::Parser* p = self.parser;
-	if (p.at_eof()) return parser_expression::NO_EXPRESSION~;
-	tokens::TokenIndex tok = p.tok_i;
-	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
-	if (id == tokenizer::TokenId.PP_NUM || id == tokenizer::TokenId.EMBED_BYTE)
-	{
-		return self.parse_number(tok);
-	}
-	if (id.is_char_literal()) return self.parse_char(tok);
-	if (is_string_token(id)) return self.parse_string(tok);
 	if (id == tokenizer::TokenId.KEYWORD_TRUE || id == tokenizer::TokenId.KEYWORD_FALSE)
 	{
 		p.advance();
@@ -706,6 +713,35 @@ fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
 		p.tree.set_value(node, value::NULL);
 		return { .node = node, .qt = type_store::NULLPTR_T, .val = value::NULL };
 	}
+	unreachable();
+}
+
+<* Parse one primary-expression production. *>
+fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
+{
+	// Only `(` recurses; keep this frame minimal and parse the leaf forms out of line.
+	parser::Parser* p = self.parser;
+	if (p.at_eof()) return parser_expression::NO_EXPRESSION~;
+	tokens::TokenIndex tok = p.tok_i;
+	if (p.tree.tokens[(usz)tok].id == tokenizer::TokenId.L_PAREN) return self.parse_group_or_cast(tok, eval);
+	return self.parse_leaf(tok, eval);
+}
+
+<* Primary expressions other than parenthesized ones. *>
+fn parser_result::Result? PrimaryParser.parse_leaf(&self, tokens::TokenIndex tok, bool eval) @noinline
+{
+	parser::Parser* p = self.parser;
+	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
+	if (id == tokenizer::TokenId.PP_NUM || id == tokenizer::TokenId.EMBED_BYTE)
+	{
+		return self.parse_number(tok);
+	}
+	if (id.is_char_literal()) return self.parse_char(tok);
+	if (is_string_token(id)) return self.parse_string(tok);
+	if (id == tokenizer::TokenId.KEYWORD_TRUE || id == tokenizer::TokenId.KEYWORD_FALSE || id == tokenizer::TokenId.KEYWORD_NULLPTR)
+	{
+		return parse_keyword_constant(p, tok, id);
+	}
 	if (id.is_identifier())
 	{
 		return self.parse_identifier(tok, eval);
@@ -714,7 +750,6 @@ fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
 	{
 		p.advance(); return self.parse_generic(tok, eval);
 	}
-	if (id == tokenizer::TokenId.L_PAREN) return self.parse_group_or_cast(tok, eval);
 	if (id == tokenizer::TokenId.MACRO_FUNC || id == tokenizer::TokenId.MACRO_FUNCTION)
 	{
 		return self.parse_predefined_identifier(tok, false);

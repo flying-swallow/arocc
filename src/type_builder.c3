@@ -704,6 +704,8 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 {
 	if (input.is_invalid()) return INVALID;
 	QualType qt = input;
+	bool inner_const;
+	bool inner_volatile;
 	if (self.has_atomic_type_tok || self.has_atomic)
 	{
 		tokens::TokenIndex atok = self.has_atomic_type_tok ? self.atomic_type_tok : self.atomic_tok;
@@ -716,10 +718,21 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 		if (t.tag == ATOMIC) { self.err(Diagnostic.ATOMIC_ATOMIC, atok, self.fmt_qt(qt))!; return INVALID; }
 		if (t.tag == COMPLEX) { self.err(Diagnostic.ATOMIC_COMPLEX, atok, self.fmt_qt(qt))!; return INVALID; }
 		if (t.tag == BIT_INT) { self.err(Diagnostic.ATOMIC_BIT_INT, atok, self.fmt_qt(qt))!; return INVALID; }
+		if (qt.is_const || qt.is_volatile)
+		{
+			// `_Atomic(const T)` is invalid; the `_Atomic` qualifier on a qualified
+			// type (typedef, typeof) combines with its qualifiers, which stay on the
+			// outer type since the atomic payload is unqualified.
+			if (self.has_atomic_type_tok) { self.err(Diagnostic.ATOMIC_QUALIFIED, atok, self.fmt_qt(qt))!; return INVALID; }
+			inner_const = qt.is_const;
+			inner_volatile = qt.is_volatile;
+			qt.is_const = false;
+			qt.is_volatile = false;
+		}
 		qt = self.parser.comp.type_store.put(type_atomic(qt));
 	}
-	if (self.has_const) qt.is_const = true;
-	if (self.has_volatile) qt.is_volatile = true;
+	if (self.has_const || inner_const) qt.is_const = true;
+	if (self.has_volatile || inner_volatile) qt.is_volatile = true;
 	// Source TypeStore.Builder leaves `unaligned` unmodeled (its attributed-type
 	// construction is commented out); preserve that unsupported form explicitly.
 	if (self.has_restrict)
@@ -759,6 +772,12 @@ fn void? Builder.combine_atomic(&self, QualType base_qt, tokens::TokenIndex tok)
 	if (self.has_atomic_type_tok) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "_Atomic");
 	if (self.is_typedef) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "type-name");
 	if (self.is_typeof) return Diagnostic.CANNOT_COMBINE_SPEC.@emit(self.parser, tok, "typeof");
+	// C11 6.7.2.4p3: the type name in `_Atomic(type-name)` shall not be qualified.
+	if (base_qt.is_const || base_qt.is_volatile || base_qt.is_restrict)
+	{
+		Diagnostic.ATOMIC_QUALIFIED.@emit(self.parser, tok, self.fmt_qt(base_qt))!;
+		base_qt = base_qt.unqualified();
+	}
 	BuilderSpecifier spec = builder_from_type(self.parser.comp, base_qt);
 	self.combine(spec, tok)!;
 	self.has_atomic_type_tok = true;

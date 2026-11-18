@@ -802,21 +802,38 @@ fn bool Diagnostic.enabled(self, parser::IQueryable q)
 
 <*
  Zig `Parser.err`: format `$self.fmt` with the varargs and report it at token
- `tok` of `q`. `$self.fmt` is a constant, so `string::tformat`'s `@format` makes
- c3c check the argument count and types at every call site. Disabled
- diagnostics return before any formatting.
+ `tok` of `q`. `$self.fmt` is a constant, so the `$assert` runs
+ `string::tformat`'s `@format` check on the argument count and types at every
+ call site without generating code. Formatting happens out of line in
+ `emit_args`: an inlined `tformat` per call site made every diagnostic branch
+ add stack slots to its caller, and at -O0 those add up in the recursive
+ parser/codegen functions (deep nesting overflowed the stack).
 *>
 macro void? Diagnostic.@emit($self, parser::IQueryable q, tokens::TokenIndex tok, ...)
 {
-	if (!$self.enabled(q)) return;
-	return $self.report(q, string::tformat($self.fmt, ...$vaarg), tok);
+	$assert $defined(string::tformat($self.fmt, ...$vaarg)) : "diagnostic arguments do not match its format";
+	return $self.emit_args(q, tok, ...$vaarg);
 }
 
 <* `@emit` at an explicit location (e.g. just past a token) with `expansion_locs` as macro notes. *>
 macro void? Diagnostic.@emit_at($self, parser::IQueryable q, ExpandedLocation loc, Location[] expansion_locs, ...)
 {
-	if (!$self.enabled(q)) return;
-	return $self.report_at(q, string::tformat($self.fmt, ...$vaarg), loc, expansion_locs);
+	$assert $defined(string::tformat($self.fmt, ...$vaarg)) : "diagnostic arguments do not match its format";
+	return $self.emit_at_args(q, loc, expansion_locs, ...$vaarg);
+}
+
+<* Out-of-line body of `@emit`; disabled diagnostics return before any formatting. *>
+fn void? Diagnostic.emit_args(self, parser::IQueryable q, tokens::TokenIndex tok, args...) @noinline
+{
+	if (!self.enabled(q)) return;
+	return self.report(q, string::tformat(self.fmt, ...args), tok);
+}
+
+<* Out-of-line body of `@emit_at`. *>
+fn void? Diagnostic.emit_at_args(self, parser::IQueryable q, ExpandedLocation loc, Location[] expansion_locs, args...) @noinline
+{
+	if (!self.enabled(q)) return;
+	return self.report_at(q, string::tformat(self.fmt, ...args), loc, expansion_locs);
 }
 
 <* Internal sink under `@emit`: send formatted `text` at token `tok` of `q`, with its expanded location and macro notes. *>

@@ -23,19 +23,19 @@ fn sz first_user_root(tree::Tree* result)
 	return i;
 }
 
-struct RecoveryState
+struct RecoveryState (parser_declaration::IDeclarationTestProbe)
 {
 	uint initial_scopes;
 	bool saw_following_declaration;
 }
 
-struct FrontendFaultRecoveryState
+struct FrontendFaultRecoveryState (parser_declaration::IDeclarationTestProbe)
 {
 	parser_frontend::FrontendHandler* frontend;
 	bool returned_declaration_module_fault;
 }
 
-struct InferredArrayCapture
+struct InferredArrayCapture (parser_declaration::IDeclarationTestProbe)
 {
 	parser_declaration::DeclarationParser declarations;
 	type_store::QualType items_qt;
@@ -45,7 +45,7 @@ struct InferredArrayCapture
 	uint declaration_count;
 }
 
-struct InferredTypeCapture
+struct InferredTypeCapture (parser_declaration::IDeclarationTestProbe)
 {
 	parser_declaration::DeclarationParser declarations;
 	string_interner::StringId first_name;
@@ -57,9 +57,8 @@ struct InferredTypeCapture
 	uint declaration_count;
 }
 
-fn void? capture_inferred_array_declaration(void* context, parser::Parser* p)
+fn void? InferredArrayCapture.declaration(&capture, parser::Parser* p) @dynamic
 {
-	InferredArrayCapture* capture = (InferredArrayCapture*)context;
 	capture.declarations.parse_declaration(p)!;
 	if (capture.declaration_count == 0)
 	{
@@ -76,9 +75,8 @@ fn void? capture_inferred_array_declaration(void* context, parser::Parser* p)
 	capture.declaration_count++;
 }
 
-fn void? capture_inferred_type_declaration(void* context, parser::Parser* p)
+fn void? InferredTypeCapture.declaration(&capture, parser::Parser* p) @dynamic
 {
-	InferredTypeCapture* capture = (InferredTypeCapture*)context;
 	capture.declarations.parse_declaration(p)!;
 	if (capture.declaration_count == 0)
 	{
@@ -99,9 +97,8 @@ fn void? capture_inferred_type_declaration(void* context, parser::Parser* p)
 	capture.declaration_count++;
 }
 
-fn void? recover_malformed_function_then_declaration(void* context, parser::Parser* p)
+fn void? RecoveryState.declaration(&state, parser::Parser* p) @dynamic
 {
-	RecoveryState* state = (RecoveryState*)context;
 	if (p.is_at(tokenizer::TokenId.IDENTIFIER))
 	{
 		// Model a function-body parse that entered its scope before discovering
@@ -126,9 +123,8 @@ fn void? recover_malformed_function_then_declaration(void* context, parser::Pars
 <* Adapt the real declaration parser's diagnosed syntax failure to its own
  module fault so FrontendHandler's classifier is exercised at translation-unit
  scope. *>
-fn void? malformed_declaration_module_fault(void* context, parser::Parser* p)
+fn void? FrontendFaultRecoveryState.declaration(&state, parser::Parser* p) @dynamic
 {
-	FrontendFaultRecoveryState* state = (FrontendFaultRecoveryState*)context;
 	fault parse_fault = @catch(state.frontend.declarations.parse_declaration(p));
 	if (parse_fault && !state.returned_declaration_module_fault)
 	{
@@ -211,7 +207,7 @@ fn void abstract_declarator_suffix_respects_parenthesized_pointer_precedence() @
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		UnusedTypeName unused;
-		parser_declarator::DeclaratorParser declarator = { .parser = &p, .grammar = &unused };
+		parser_declarator::DeclaratorParser declarator = { .parser = &p, .probe = &unused };
 		type_store::QualType pointer_to_array = declarator.abstract_declarator(type_store::INT)!!;
 		type_store::Type pointer = pointer_to_array.get(&comp, type_store::TypeTag.POINTER)!!;
 		assert(pointer.pointer.child.is(&comp, type_store::TypeTag.ARRAY), "(*)[] must be pointer to array");
@@ -253,7 +249,7 @@ fn void declarator_around_invalid_base_is_invalid() @test
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		UnusedTypeName unused;
-		parser_declarator::DeclaratorParser declarator = { .parser = &p, .grammar = &unused };
+		parser_declarator::DeclaratorParser declarator = { .parser = &p, .probe = &unused };
 		type_store::QualType pointer = declarator.abstract_declarator(type_store::INVALID)!!;
 		assert(pointer.is_invalid(), "pointer to an invalid type must be invalid");
 		type_store::QualType array = declarator.abstract_declarator(type_store::INVALID)!!;
@@ -280,8 +276,7 @@ fn void malformed_function_recovery_preserves_following_translation_unit_state()
 		pp.add_token(pp.preprocess(src)!!)!!;
 		RecoveryState state = { .saw_following_declaration = false };
 		parser::Parser p;
-		parser_declaration::DeclarationParser recovery = { .context = &state,
-			.declaration = &recover_malformed_function_then_declaration, .has_declaration = true };
+		parser_declaration::DeclarationParser recovery = { .test_probe = &state };
 		p.init(&pp, &recovery);
 		state.initial_scopes = (uint)p.symbols.active_len;
 		tree::Tree result = p.parse()!!;
@@ -310,9 +305,7 @@ fn void frontend_recovers_declaration_module_fault_and_keeps_following_node() @t
 		parser_frontend::FrontendHandler frontend;
 		frontend.bind(&p);
 		FrontendFaultRecoveryState state = { .frontend = &frontend };
-		frontend.declarations.context = &state;
-		frontend.declarations.declaration = &malformed_declaration_module_fault;
-		frontend.declarations.has_declaration = true;
+		frontend.declarations.test_probe = &state;
 		tree::Tree result = p.parse()!!;
 
 		assert(state.returned_declaration_module_fault,
@@ -422,9 +415,7 @@ fn void source_derived_declarations_complete_inferred_array_types() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		InferredArrayCapture capture = {};
-		capture.declarations.context = (void*)&capture;
-		capture.declarations.declaration = &capture_inferred_array_declaration;
-		capture.declarations.has_declaration = true;
+		capture.declarations.test_probe = &capture;
 		parser::Parser p;
 		p.init(&pp, &capture.declarations);
 		tree::Tree result = p.parse()!!;
@@ -493,9 +484,7 @@ fn void source_derived_gnu_auto_type_deduces_and_updates_symbol_types() @test
 			.first_name = comp.intern_string("source"),
 			.second_name = comp.intern_string("copy"),
 		};
-		capture.declarations.context = (void*)&capture;
-		capture.declarations.declaration = &capture_inferred_type_declaration;
-		capture.declarations.has_declaration = true;
+		capture.declarations.test_probe = &capture;
 		parser::Parser p;
 		p.init(&pp, &capture.declarations);
 		tree::Tree result = p.parse()!!;
@@ -542,9 +531,7 @@ fn void source_derived_c23_auto_deduces_initializer_type() @test
 		InferredTypeCapture capture = {
 			.first_name = comp.intern_string("inferred"),
 		};
-		capture.declarations.context = (void*)&capture;
-		capture.declarations.declaration = &capture_inferred_type_declaration;
-		capture.declarations.has_declaration = true;
+		capture.declarations.test_probe = &capture;
 		parser::Parser p;
 		p.init(&pp, &capture.declarations);
 		tree::Tree result = p.parse()!!;
@@ -2447,9 +2434,7 @@ fn void source_derived_typeof_unqual_symbol_matches_declaration_type() @test
 			.first_name = comp.intern_string("width_source"),
 			.second_name = comp.intern_string("width_copy"),
 		};
-		capture.declarations.context = (void*)&capture;
-		capture.declarations.declaration = &capture_inferred_type_declaration;
-		capture.declarations.has_declaration = true;
+		capture.declarations.test_probe = &capture;
 		parser::Parser p;
 		p.init(&pp, &capture.declarations);
 		tree::Tree result = p.parse()!!;
@@ -3932,7 +3917,7 @@ fn void source_derived_function_definition_invalid_return_type_has_one_diagnosti
 }
 
 <* Declarator grammar whose type-name production must not be reached. *>
-struct UnusedTypeName (parser_declarator::IDeclaratorGrammar) { bool unused; }
+struct UnusedTypeName (parser_declarator::IDeclaratorTestProbe) { bool unused; }
 
 fn type_store::QualType? UnusedTypeName.declarator_type_name(&self, parser::Parser* p) @dynamic
 	=> unused_type_name(null, p);

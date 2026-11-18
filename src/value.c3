@@ -682,6 +682,7 @@ fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 *>
 fn bool? compare_pointers(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 {
+	if (lhs.is_none() || rhs.is_none()) return NOT_COMPARABLE~;
 	if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
 
 	PrimitiveValue lhs_key = comp.interner.get(lhs.ref());

@@ -17,13 +17,24 @@ import std::core::dstring;
 excuse PARSING_FAILED;
 excuse NO_DECL_SPEC;
 
-alias Declaration = fn void?(void* context, parser::Parser* p);
-alias TypeName = fn void?(void* context, parser::Parser* p);
-alias TypedTypeName = fn type_store::QualType?(void* context, parser::Parser* p);
-alias ImplicitTypedefs = fn void?(void* context, parser::Parser* p);
-<* Builds a complete local declaration statement or returns null when the
-   current token sequence is not a declaration. *>
-alias LocalDeclarationStatement = fn type_store::NodeIndex?(void* context, parser::Parser* p);
+<* Test-only overrides of the declaration grammar; compiled out of non-test builds.
+   Every method is optional: a null probe or a missing method selects the built-in
+   production, or parser::HOOK_ABSENT for type_name / implicit_typedefs, which have none.
+   An installed probe replaces the implicit typedef prelude. *>
+interface IDeclarationTestProbe @feat(TESTING)
+{
+	<* Replaces the top-level declaration production. *>
+	fn void? declaration(parser::Parser* p) @optional;
+	<* Untyped type-name production. *>
+	fn void? type_name(parser::Parser* p) @optional;
+	<* Replaces the typed type-name production. *>
+	fn type_store::QualType? typed_type_name(parser::Parser* p) @optional;
+	<* Seeds implicit typedefs before the first declaration. *>
+	fn void? implicit_typedefs(parser::Parser* p) @optional;
+	<* Builds a complete local declaration statement, or returns null when the
+	   current token sequence is not a declaration. *>
+	fn type_store::NodeIndex? local_declaration_statement(parser::Parser* p) @optional;
+}
 
 enum StorageClass : char
 {
@@ -54,31 +65,22 @@ struct DeclSpec
 // Keeps mutually recursive declaration and statement productions together.
 // A declaration callback may use `statements` for function bodies and local
 // declarations; Parser.parse remains responsible for top-level recovery.
-struct DeclarationParser (parser::IParserHandler, parser::IExpressionGrammar, parser_statement::ILocalDeclarationGrammar)
+struct DeclarationParser (parser::IParserHandler, parser::IExpressionGrammar)
 {
-	Declaration declaration;
-	TypeName type_name;
-	TypedTypeName typed_type_name;
-	ImplicitTypedefs implicit_typedefs;
-	LocalDeclarationStatement local_declaration_statement;
-	void* context;
+	IDeclarationTestProbe test_probe @feat(TESTING);
+	<* Seed the implicit typedef prelude before the first declaration. *>
+	bool implicit_typedef_prelude;
 	parser_statement::StatementParser statements;
 	parser_statement::StatementBodyBinding body_binding;
-	parser::Parser* active_parser;
 	type_store::QualType function_return_qt;
 	tokens::TokenIndex function_name_tok;
 	parser::FunctionContext function_context;
 	uint record_member_depth;
 	bool has_function_context;
-	bool has_declaration;
-	bool has_type_name;
-	bool has_typed_type_name;
-	bool has_implicit_typedefs;
-	bool has_local_declaration_statement;
 }
 
-<* IDeclaratorGrammar for one declarator: the declaration grammar plus the attributes being collected. *>
-struct DeclaratorCallbackContext (parser_declarator::IDeclaratorGrammar)
+<* Declarator productions for one declarator: the declaration grammar plus the attributes being collected. *>
+struct DeclaratorCallbackContext
 {
 	DeclarationParser* declaration_parser;
 	attribute_wip::Wip* wip;
@@ -112,7 +114,6 @@ fn parser_result::Result? DeclarationParser.parse_variable_initializer(&self, pa
 	type_store::NodeOptIndex declaration = type_store::NODE_NULL, string_interner::StringId name = string_interner::EMPTY,
 	tokens::TokenIndex name_tok = 0)
 {
-	p.bind_initializer_parser(self);
 	parser::InitContext context = constexpr_decl ? parser::InitContext.CONSTEXPR :
 		static_duration ? parser::InitContext.STATIC : parser::InitContext.RUNTIME;
 	if (declaration.is_null()) return p.parse_initializer_with_context(target, context, eval);
@@ -135,7 +136,6 @@ fn parser_result::Result? DeclarationParser.parse_auto_type_initializer(&self, p
 	defer p.pop_scope();
 	p.define_symbol({ .kind = symbol_stack::SymbolKind.DEF, .name = name, .qt = type_store::INVALID,
 		.tok = name_tok, .node = declaration, .val = value::NONE });
-	p.bind_initializer_parser(self);
 	parser::AutoTypeDeclContext previous_auto_type_decl = p.auto_type_decl;
 	if (deduce) p.auto_type_decl = { .active = true, .name = name, .node = declaration };
 	defer p.auto_type_decl = previous_auto_type_decl;
@@ -215,7 +215,7 @@ fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 	type_store::QualType old_return_qt = self.statements.function_return_qt;
 	tokens::TokenIndex old_function_name_tok = self.statements.function_name_tok;
 	bool old_has_function_context = self.statements.has_function_context;
-	parser_statement::ILocalDeclarationGrammar old_local_declarations = self.statements.local_declarations;
+	DeclarationParser* old_local_declarations = self.statements.local_declarations;
 	parser::IExpressionGrammar old_expressions = self.statements.expressions;
 	parser::FunctionContext old_parser_function_context = p.function_context;
 	self.statements.loop_depth = 0;
@@ -241,11 +241,12 @@ fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 	return self.body_binding.parse(p);
 }
 
-<* ILocalDeclarationGrammar for the statement grammar. *>
-fn type_store::NodeIndex? DeclarationParser.parse_local_declaration(&self, parser::Parser* p) @dynamic
+<* Local declaration production for the statement grammar. *>
+fn type_store::NodeIndex? DeclarationParser.parse_local_declaration(&self, parser::Parser* p)
 {
-	self.statements.parser = p;
-	if (self.has_local_declaration_statement) return self.local_declaration_statement(self.context, p);
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.local_declaration_statement) return self.test_probe.local_declaration_statement(p);
+	$endif
 	type_store::NodeIndex? parsed = self.parse_local_declaration_statement(p,
 		self.statements.prefix_declaration_attributes);
 	if (@ok(parsed) && parsed!!.get(&p.tree).kind == tree::NodeKind.DECL_STMT)
@@ -257,10 +258,9 @@ fn type_store::NodeIndex? DeclarationParser.parse_local_declaration(&self, parse
 
 fn void? DeclarationParser.handle_declaration(&self, parser::Parser* p) @dynamic
 {
-	self.statements.parser = p;
-	self.active_parser = p;
-	p.bind_initializer_parser(self);
-	if (self.has_declaration) return self.declaration(self.context, p);
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.declaration) return self.test_probe.declaration(p);
+	$endif
 	return self.parse_declaration(p);
 }
 
@@ -275,22 +275,26 @@ fn void? DeclarationParser.handle_translation_unit_end(&self, parser::Parser* p)
 fn bool? DeclarationParser.is_recoverable_parse_fault(&self, parser::Parser* p, fault parse_fault) @dynamic
 	=> parser_statement::recoverable_statement_item_fault(parse_fault);
 
-<* Only provided when an override is installed (has_type_name), matching the
+<* Only provided when a test probe implements type_name, matching the
    legacy callback table; otherwise Parser reports the grammar as unavailable. *>
 fn void? DeclarationParser.handle_type_name(&self, parser::Parser* p) @dynamic
 {
-	if (!self.has_type_name) return parser::HOOK_ABSENT~;
-	return self.type_name(self.context, p);
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.type_name) return self.test_probe.type_name(p);
+	$endif
+	return parser::HOOK_ABSENT~;
 }
 
 fn type_store::QualType? DeclarationParser.handle_typed_type_name(&self, parser::Parser* p) @dynamic
 {
-	if (self.has_typed_type_name) return self.typed_type_name(self.context, p);
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.typed_type_name) return self.test_probe.typed_type_name(p);
+	$endif
 	return self.parse_typed_type_name(p);
 }
 
-<* DeclaratorParser seam; forwards to the handler method. *>
-fn type_store::QualType? DeclaratorCallbackContext.declarator_type_name(&self, parser::Parser* p) @dynamic
+<* DeclaratorParser seam; forwards to handle_typed_type_name. *>
+fn type_store::QualType? DeclaratorCallbackContext.declarator_type_name(&self, parser::Parser* p)
 	=> self.declaration_parser.handle_typed_type_name(p);
 
 fn parser::TypeNameProbe? DeclarationParser.handle_typed_type_name_probe(&self, parser::Parser* p) @dynamic
@@ -425,6 +429,190 @@ fn type_store::QualType? DeclarationParser.parse_enum_underlying(&self, parser::
 	return wip.apply_pending_calling_conventions(p, spec.qt);
 }
 
+
+<* The comma-separated declarators of one struct/union member declaration.
+ Out of line so its locals are not on the stack while nested record bodies
+ (parsed by the member's specifiers) recurse. *>
+fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, parser::ContainerBodySeed seed, DeclSpec spec,
+	attribute_wip::Wip* field_wip, attribute_wip::State declarator_state, tokens::TokenIndex member_start,
+	list::List{type_store::RecordField}* fields, list::List{type_store::NodeIndex}* field_nodes,
+	bool* has_flexible_field, tokens::TokenIndex* flexible_field_tok) @noinline
+{
+	while (true)
+	{
+		// Only an unnamed bit-field (`int : 3;`) has an abstract member declarator.
+		bool member_abstract = p.is_at(tokenizer::TokenId.COLON);
+		DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = field_wip };
+		parser_declarator::ParsedDeclarator field_decl = self.declarator_parser(p, &callback_context).parse_declarator(spec.qt, member_abstract)!;
+		AttributeUseSnapshot attribute_use_state;
+		attribute_use_state.init(p, field_wip);
+		defer attribute_use_state.free();
+		self.append_attributes(p, field_wip)!;
+		type_store::QualType field_qt = field_wip.apply_type_attrs(p, field_decl.qt)!;
+		field_qt = field_wip.apply_pending_calling_conventions(p, field_qt)!;
+		type_store::NodeOptIndex bit_width_node = type_store::NODE_NULL;
+		uint bit_width = type_store::BIT_WIDTH_NULL;
+		if (p.is_at(tokenizer::TokenId.COLON))
+		{
+			tokens::TokenIndex colon = p.tok_i;
+			p.advance();
+			tokens::TokenIndex width_tok = p.tok_i;
+			parser_result::Result? maybe_width = p.integer_const_expr(true,
+				parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
+			if (catch f = maybe_width) return f~;
+			parser_result::Result width_result = maybe_width;
+			if (!field_qt.is_int(p.comp))
+			{
+				Diagnostic.NON_INT_BITFIELD.@emit(p, field_decl.has_name ? field_decl.name_tok : colon,
+					p.fmt_qt(field_qt))!;
+				return PARSING_FAILED~;
+			}
+			if (width_result.val.is_none())
+			{
+				Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, width_tok)!;
+			}
+			else
+			{
+				if (value::compare(width_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
+				{
+					Diagnostic.NEGATIVE_BITWIDTH.@emit(p, colon,
+						p.fmt_value(width_result.val, width_result.qt))!;
+					return PARSING_FAILED~;
+				}
+				if (field_qt.has_incomplete_size(p.comp))
+				{
+					Diagnostic.FIELD_INCOMPLETE_TY.@emit(p, field_decl.has_name ? field_decl.name_tok : colon,
+						p.fmt_qt(field_qt))!;
+					return PARSING_FAILED~;
+				}
+				ulong width_value = width_result.val.to_u64(p.comp) ?? ulong::max;
+				if (width_value > field_qt.bit_sizeof(p.comp))
+				{
+					Diagnostic.BITFIELD_TOO_BIG.@emit(p, colon)!;
+					return PARSING_FAILED~;
+				}
+				bit_width = (uint)width_value;
+				bit_width_node = width_result.node.pack();
+				if (bit_width == 0 && field_decl.has_name)
+				{
+					Diagnostic.ZERO_WIDTH_NAMED_FIELD.@emit(p, field_decl.name_tok)!;
+					return PARSING_FAILED~;
+				}
+			}
+		}
+		else if (!field_decl.has_name)
+		{
+			Diagnostic.EXPECTED_RECORD_DECL.@emit(p, p.tok_i)!;
+			return PARSING_FAILED~;
+		}
+		// Attributes may also follow the bit-field width (`int i : 1 __attribute__((aligned(8)));`);
+		// like Zig's second `attributeSpecifier`, they reach the field through `apply_decl_attrs` below.
+		self.append_attributes(p, field_wip)!;
+
+		// Zig recordDeclarator field-type checks: function fields, VLA fields and
+		// flexible array members (an incomplete array is allowed as a field).
+		if (!field_qt.is_invalid())
+		{
+			tokens::TokenIndex first_tok = field_decl.has_name ? field_decl.name_tok : member_start;
+			type_store::Type field_ty = field_qt.base(p.comp).ty;
+			switch (field_ty.tag)
+			{
+				case FUNC:
+					Diagnostic.FUNC_FIELD.@emit(p, first_tok)!;
+					field_qt = type_store::INVALID;
+				case ARRAY:
+					switch (field_ty.array.len.kind)
+					{
+						case VARIABLE:
+							Diagnostic.VLA_FIELD.@emit(p, first_tok)!;
+							field_qt = type_store::INVALID;
+						case INCOMPLETE:
+							if (seed.is_union)
+							{
+								if (p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
+								{
+									Diagnostic.FLEXIBLE_IN_UNION_MSVC.@emit(p, first_tok)!;
+								}
+								else
+								{
+									Diagnostic.FLEXIBLE_IN_UNION.@emit(p, first_tok)!;
+									field_qt = type_store::INVALID;
+								}
+							}
+							if (*has_flexible_field && !seed.is_union)
+							{
+								Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, *flexible_field_tok)!;
+							}
+							*has_flexible_field = true;
+							*flexible_field_tok = first_tok;
+						default: break;
+					}
+				default:
+					if (field_qt.has_incomplete_size(p.comp))
+					{
+						Diagnostic.FIELD_INCOMPLETE_TY.@emit(p, first_tok, p.fmt_qt(field_qt))!;
+						return PARSING_FAILED~;
+					}
+					if (*has_flexible_field && !seed.is_union)
+					{
+						Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, *flexible_field_tok)!;
+					}
+			}
+		}
+		string_interner::StringId field_name = field_decl.has_name ?
+			p.comp.intern_string(p.tree.tok_slice(field_decl.name_tok)) : string_interner::EMPTY;
+		tokens::TokenIndex field_tok = field_decl.has_name ? field_decl.name_tok : member_start;
+		type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.RECORD_FIELD,
+			.record_field = { .name_or_first_tok = field_tok, .qt = field_qt,
+				.bit_width = bit_width_node } });
+		field_wip.apply_decl_attrs(p, node, type_store::NODE_NULL)!;
+		fields.push({ .qt = field_qt, .name = field_name,
+			.name_tok = field_decl.has_name ? (type_store::TokenIndex)field_decl.name_tok : (type_store::TokenIndex)0,
+			.bit_width = bit_width, .field_decl = node.pack() });
+		field_nodes.push(node);
+		field_wip.restore(declarator_state);
+		attribute_use_state.restore(field_wip);
+
+		if (!p.is_at(tokenizer::TokenId.COMMA)) break;
+		p.advance();
+	}
+}
+
+<* Layout and node of a struct/union whose member list has been parsed. *>
+fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Parser* p, parser::ContainerBodySeed seed,
+	list::List{type_store::RecordField}* fields, list::List{type_store::NodeIndex}* field_nodes) @noinline
+{
+	if (catch p.expect(tokenizer::TokenId.R_BRACE)) return PARSING_FAILED~;
+	self.apply_tag_body_end_attributes(p, seed)!;
+
+	type_store::RecordField[] record_fields = fields.array_view();
+	pack::PackValue current_pack = seed.pack_value;
+	if (p.comp.langopts.emulate == lang_opts::Compiler.GCC || p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
+	{
+		current_pack = {};
+		if (try pack_handler = p.comp.pragmas.get("pack"))
+		{
+			pack::PackState* pack_state = (pack::PackState*)pack_handler.ptr;
+			current_pack = pack_state.current_value();
+		}
+	}
+	uint pragma_pack = current_pack.has_value ? (uint)current_pack.value : 0;
+	type_store::RecordLayout? maybe_layout = type_store::compute(record_fields,
+		seed.decl_node.pack(), seed.is_union, p.comp, &p.tree.attr_map, pragma_pack);
+	if (catch f = maybe_layout) return f~;
+	type_store::RecordLayout layout = maybe_layout;
+	type_store::Type record_type = type_store::type_record(seed.name, record_fields,
+		layout, seed.is_union, seed.decl_node.pack());
+	p.comp.type_store.set(record_type, seed.qt.index);
+	tree::NodeKind decl_kind = seed.is_union ? tree::NodeKind.UNION_DECL : tree::NodeKind.STRUCT_DECL;
+	type_store::NodeIndex[] nodes = field_nodes.array_view();
+	p.tree.set_node({ .kind = decl_kind, .container_decl = {
+		.name_or_kind_tok = seed.name_tok != 0 ? seed.name_tok : seed.keyword_tok,
+		.container_qt = seed.qt, .fields = nodes,
+	} }, (sz)seed.decl_node);
+	return seed.qt;
+}
+
 fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::Parser* p, parser::ContainerBodySeed seed)
 {
 	if (seed.is_enum) return self.parse_enum_body(p, seed);
@@ -514,171 +702,12 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 			continue;
 		}
 
-		while (true)
-		{
-			// Only an unnamed bit-field (`int : 3;`) has an abstract member declarator.
-			bool member_abstract = p.is_at(tokenizer::TokenId.COLON);
-			DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = &field_wip };
-			parser_declarator::ParsedDeclarator field_decl = self.declarator_parser(p, &callback_context).parse_declarator(spec.qt, member_abstract)!;
-			AttributeUseSnapshot attribute_use_state;
-			attribute_use_state.init(p, &field_wip);
-			defer attribute_use_state.free();
-			self.append_attributes(p, &field_wip)!;
-			type_store::QualType field_qt = field_wip.apply_type_attrs(p, field_decl.qt)!;
-			field_qt = field_wip.apply_pending_calling_conventions(p, field_qt)!;
-			type_store::NodeOptIndex bit_width_node = type_store::NODE_NULL;
-			uint bit_width = type_store::BIT_WIDTH_NULL;
-			if (p.is_at(tokenizer::TokenId.COLON))
-			{
-				tokens::TokenIndex colon = p.tok_i;
-				p.advance();
-				tokens::TokenIndex width_tok = p.tok_i;
-				parser_result::Result? maybe_width = p.integer_const_expr(true,
-					parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
-				if (catch f = maybe_width) return f~;
-				parser_result::Result width_result = maybe_width;
-				if (!field_qt.is_int(p.comp))
-				{
-					Diagnostic.NON_INT_BITFIELD.@emit(p, field_decl.has_name ? field_decl.name_tok : colon,
-						p.fmt_qt(field_qt))!;
-					return PARSING_FAILED~;
-				}
-				if (width_result.val.is_none())
-				{
-					Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, width_tok)!;
-				}
-				else
-				{
-					if (value::compare(width_result.val, bigint::CompareOperator.LT, value::ZERO, p.comp))
-					{
-						Diagnostic.NEGATIVE_BITWIDTH.@emit(p, colon,
-							p.fmt_value(width_result.val, width_result.qt))!;
-						return PARSING_FAILED~;
-					}
-					ulong width_value = width_result.val.to_u64(p.comp) ?? ulong::max;
-					if (width_value > field_qt.bit_sizeof(p.comp))
-					{
-						Diagnostic.BITFIELD_TOO_BIG.@emit(p, colon)!;
-						return PARSING_FAILED~;
-					}
-					bit_width = (uint)width_value;
-					bit_width_node = width_result.node.pack();
-					if (bit_width == 0 && field_decl.has_name)
-					{
-						Diagnostic.ZERO_WIDTH_NAMED_FIELD.@emit(p, field_decl.name_tok)!;
-						return PARSING_FAILED~;
-					}
-				}
-			}
-			else if (!field_decl.has_name)
-			{
-				Diagnostic.EXPECTED_RECORD_DECL.@emit(p, p.tok_i)!;
-				return PARSING_FAILED~;
-			}
-			// Attributes may also follow the bit-field width (`int i : 1 __attribute__((aligned(8)));`);
-			// like Zig's second `attributeSpecifier`, they reach the field through `apply_decl_attrs` below.
-			self.append_attributes(p, &field_wip)!;
-
-			// Zig recordDeclarator field-type checks: function fields, VLA fields and
-			// flexible array members (an incomplete array is allowed as a field).
-			if (!field_qt.is_invalid())
-			{
-				tokens::TokenIndex first_tok = field_decl.has_name ? field_decl.name_tok : member_start;
-				type_store::Type field_ty = field_qt.base(p.comp).ty;
-				switch (field_ty.tag)
-				{
-					case FUNC:
-						Diagnostic.FUNC_FIELD.@emit(p, first_tok)!;
-						field_qt = type_store::INVALID;
-					case ARRAY:
-						switch (field_ty.array.len.kind)
-						{
-							case VARIABLE:
-								Diagnostic.VLA_FIELD.@emit(p, first_tok)!;
-								field_qt = type_store::INVALID;
-							case INCOMPLETE:
-								if (seed.is_union)
-								{
-									if (p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
-									{
-										Diagnostic.FLEXIBLE_IN_UNION_MSVC.@emit(p, first_tok)!;
-									}
-									else
-									{
-										Diagnostic.FLEXIBLE_IN_UNION.@emit(p, first_tok)!;
-										field_qt = type_store::INVALID;
-									}
-								}
-								if (has_flexible_field && !seed.is_union)
-								{
-									Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, flexible_field_tok)!;
-								}
-								has_flexible_field = true;
-								flexible_field_tok = first_tok;
-							default: break;
-						}
-					default:
-						if (field_qt.has_incomplete_size(p.comp))
-						{
-							Diagnostic.FIELD_INCOMPLETE_TY.@emit(p, first_tok, p.fmt_qt(field_qt))!;
-							return PARSING_FAILED~;
-						}
-						if (has_flexible_field && !seed.is_union)
-						{
-							Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, flexible_field_tok)!;
-						}
-				}
-			}
-			string_interner::StringId field_name = field_decl.has_name ?
-				p.comp.intern_string(p.tree.tok_slice(field_decl.name_tok)) : string_interner::EMPTY;
-			tokens::TokenIndex field_tok = field_decl.has_name ? field_decl.name_tok : member_start;
-			type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.RECORD_FIELD,
-				.record_field = { .name_or_first_tok = field_tok, .qt = field_qt,
-					.bit_width = bit_width_node } });
-			field_wip.apply_decl_attrs(p, node, type_store::NODE_NULL)!;
-			fields.push({ .qt = field_qt, .name = field_name,
-				.name_tok = field_decl.has_name ? (type_store::TokenIndex)field_decl.name_tok : (type_store::TokenIndex)0,
-				.bit_width = bit_width, .field_decl = node.pack() });
-			field_nodes.push(node);
-			field_wip.restore(declarator_state);
-			attribute_use_state.restore(&field_wip);
-
-			if (!p.is_at(tokenizer::TokenId.COMMA)) break;
-			p.advance();
-		}
+		self.parse_field_declarators(p, seed, spec, &field_wip, declarator_state, member_start, &fields, &field_nodes, &has_flexible_field, &flexible_field_tok)!;
 		if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		field_wip.restore(member_state);
 	}
 	self.record_member_depth = previous_record_member_depth;
-	if (catch p.expect(tokenizer::TokenId.R_BRACE)) return PARSING_FAILED~;
-	self.apply_tag_body_end_attributes(p, seed)!;
-
-	type_store::RecordField[] record_fields = fields.array_view();
-	pack::PackValue current_pack = seed.pack_value;
-	if (p.comp.langopts.emulate == lang_opts::Compiler.GCC || p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
-	{
-		current_pack = {};
-		if (try pack_handler = p.comp.pragmas.get("pack"))
-		{
-			pack::PackState* pack_state = (pack::PackState*)pack_handler.ptr;
-			current_pack = pack_state.current_value();
-		}
-	}
-	uint pragma_pack = current_pack.has_value ? (uint)current_pack.value : 0;
-	type_store::RecordLayout? maybe_layout = type_store::compute(record_fields,
-		seed.decl_node.pack(), seed.is_union, p.comp, &p.tree.attr_map, pragma_pack);
-	if (catch f = maybe_layout) return f~;
-	type_store::RecordLayout layout = maybe_layout;
-	type_store::Type record_type = type_store::type_record(seed.name, record_fields,
-		layout, seed.is_union, seed.decl_node.pack());
-	p.comp.type_store.set(record_type, seed.qt.index);
-	tree::NodeKind decl_kind = seed.is_union ? tree::NodeKind.UNION_DECL : tree::NodeKind.STRUCT_DECL;
-	type_store::NodeIndex[] nodes = field_nodes.array_view();
-	p.tree.set_node({ .kind = decl_kind, .container_decl = {
-		.name_or_kind_tok = seed.name_tok != 0 ? seed.name_tok : seed.keyword_tok,
-		.container_qt = seed.qt, .fields = nodes,
-	} }, (sz)seed.decl_node);
-	return seed.qt;
+	return self.finish_record_body(p, seed, &fields, &field_nodes);
 }
 fn value::Value increment_enum_value(value::Value current, compilation::Compilation* comp)
 {
@@ -1019,7 +1048,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 			field_node.enum_field.qt = dest_qt;
 			if (!field_node.enum_field.init.is_null())
 			{
-				parser_result::Result result;
+				parser_result::Result result = { .val = value::NONE };
 				result.init(field_node.enum_field.init.unwrap(), dest_qt, symbol.val);
 				result.implicit_cast(p, tree::CastKind.INT_CAST);
 				field_node.enum_field.init = result.node.pack();
@@ -1149,75 +1178,14 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		if (id == KEYWORD_ALIGNAS || id == KEYWORD_C23_ALIGNAS)
 		{
 			result.recognized = true;
-			String spelling = p.tree.tok_slice(tok);
-			if (id == KEYWORD_C23_ALIGNAS)
-			{
-				if (p.comp.langopts.standard.at_least(C23))
-				{
-					Diagnostic.PRE_C23_COMPAT.@emit(p, tok, spelling)!;
-				}
-			}
-			else if (p.comp.langopts.standard.at_least(C11))
-			{
-				Diagnostic.PRE_C11_COMPAT.@emit(p, tok, spelling)!;
-			}
-			else
-			{
-				Diagnostic.C11_EXTENSION.@emit(p, tok, spelling)!;
-			}
-			p.advance();
-			tokens::TokenIndex opener = p.tok_i;
-			if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-			parser_result::Result arg;
-			parser::TypeNameProbe? maybe_type_name = p.probe_typed_type_name();
-			if (catch maybe_type_name) return PARSING_FAILED~;
-			parser::TypeNameProbe type_name = maybe_type_name;
-			if (type_name.matched)
-			{
-				type_store::QualType qt = type_name.qt;
-				if (!qt.alignable(p.comp))
-				{
-					Diagnostic.INVALID_ALIGNOF.@emit(p, tok, p.fmt_qt(qt))!;
-				}
-				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.ALIGNAS_TYPE,
-					.alignas_type = { .alignas_tok = tok, .qt = qt } });
-				arg = { .node = node, .qt = qt, .val = value::NONE };
-			}
-			else
-			{
-				parser_result::Result? maybe_expr = p.integer_const_expr(true,
-					parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING);
-				if (catch maybe_expr) return PARSING_FAILED~;
-				arg = maybe_expr;
-			}
-			if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
-			parser_result::Result[1] args = { arg };
-			wip.add_keyword(p, tok, args[..]);
-			consumed = true; result.recognized = true; continue;
+			self.parse_alignas_specifier(p, wip, tok, id)!;
+			consumed = true; continue;
 		}
 		if (id == KEYWORD_BIT_INT)
 		{
 			result.recognized = true;
-			Diagnostic.BIT_INT.@emit(p, tok)!;
-			p.advance();
-			tokens::TokenIndex opener = p.tok_i;
-			if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
-			parser_result::Result? maybe_width = p.integer_const_expr(true, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
-			if (catch maybe_width) return PARSING_FAILED~;
-			parser_result::Result width = maybe_width;
-			if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
-			if (width.val.is_none())
-			{
-				Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, width.node.tok(&p.tree))!;
-				return PARSING_FAILED~;
-			}
-			ulong bits = 0;
-			if (!value::compare(width.val, bigint::CompareOperator.LTE, value::ZERO, p.comp))
-			{
-				bits = width.val.to_u64(p.comp) ?? ulong::max;
-			}
-			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.BIT_INT, .bits = bits }, tok)) return PARSING_FAILED~;
-			consumed = true; result.recognized = true; continue;
+			parse_bit_int_specifier(p, &builder, tok)!;
+			consumed = true; continue;
 		}
 		if (try specifier)
 		{
@@ -1246,17 +1214,8 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		if (id == KEYWORD_ATOMIC)
 		{
 			result.recognized = true;
-			p.advance(); consumed = true; result.recognized = true;
-			if (p.is_at(tokenizer::TokenId.L_PAREN))
-			{
-				tokens::TokenIndex opener = p.tok_i;
-				p.advance();
-				type_store::QualType? atomic_type = self.parse_typed_type_name(p);
-				if (catch atomic_type) return PARSING_FAILED~;
-				if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
-				if (catch builder.combine_atomic(atomic_type, tok)) return PARSING_FAILED~;
-			}
-			else { builder.has_atomic = true; builder.atomic_tok = tok; }
+			p.advance(); consumed = true;
+			self.parse_atomic_specifier(p, &builder, tok)!;
 			continue;
 		}
 		if (id == KEYWORD_STRUCT || id == KEYWORD_UNION || id == KEYWORD_ENUM)
@@ -1308,6 +1267,96 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 	result.qt = wip.apply_type_attrs(p, result.qt)!;
 	committed = true;
 	return result;
+}
+
+<* `_Alignas(type-name)` / `alignas(expr)`, recorded as a keyword attribute.
+ The `parse_decl_spec` helpers are out of line so `parse_decl_spec`, live
+ while nested struct bodies are parsed, stays small. *>
+fn void? DeclarationParser.parse_alignas_specifier(&self, parser::Parser* p, attribute_wip::Wip* wip, tokens::TokenIndex tok, tokenizer::TokenId id) @noinline
+{
+	String spelling = p.tree.tok_slice(tok);
+	if (id == KEYWORD_C23_ALIGNAS)
+	{
+		if (p.comp.langopts.standard.at_least(C23))
+		{
+			Diagnostic.PRE_C23_COMPAT.@emit(p, tok, spelling)!;
+		}
+	}
+	else if (p.comp.langopts.standard.at_least(C11))
+	{
+		Diagnostic.PRE_C11_COMPAT.@emit(p, tok, spelling)!;
+	}
+	else
+	{
+		Diagnostic.C11_EXTENSION.@emit(p, tok, spelling)!;
+	}
+	p.advance();
+	tokens::TokenIndex opener = p.tok_i;
+	if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
+	parser_result::Result arg = { .val = value::NONE };
+	parser::TypeNameProbe? maybe_type_name = p.probe_typed_type_name();
+	if (catch maybe_type_name) return PARSING_FAILED~;
+	parser::TypeNameProbe type_name = maybe_type_name;
+	if (type_name.matched)
+	{
+		type_store::QualType qt = type_name.qt;
+		if (!qt.alignable(p.comp))
+		{
+			Diagnostic.INVALID_ALIGNOF.@emit(p, tok, p.fmt_qt(qt))!;
+		}
+		type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.ALIGNAS_TYPE,
+			.alignas_type = { .alignas_tok = tok, .qt = qt } });
+		arg = { .node = node, .qt = qt, .val = value::NONE };
+	}
+	else
+	{
+		parser_result::Result? maybe_expr = p.integer_const_expr(true,
+			parser::ConstDeclFoldingMode.NO_CONST_DECL_FOLDING);
+		if (catch maybe_expr) return PARSING_FAILED~;
+		arg = maybe_expr;
+	}
+	if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
+	parser_result::Result[1] args = { arg };
+	wip.add_keyword(p, tok, args[..]);
+}
+
+<* `_BitInt(N)` *>
+fn void? parse_bit_int_specifier(parser::Parser* p, type_store::Builder* builder, tokens::TokenIndex tok) @noinline
+{
+	Diagnostic.BIT_INT.@emit(p, tok)!;
+	p.advance();
+	tokens::TokenIndex opener = p.tok_i;
+	if (catch p.expect(tokenizer::TokenId.L_PAREN)) return PARSING_FAILED~;
+	parser_result::Result? maybe_width = p.integer_const_expr(true, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION);
+	if (catch maybe_width) return PARSING_FAILED~;
+	parser_result::Result width = maybe_width;
+	if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
+	if (width.val.is_none())
+	{
+		Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(p, width.node.tok(&p.tree))!;
+		return PARSING_FAILED~;
+	}
+	ulong bits = 0;
+	if (!value::compare(width.val, bigint::CompareOperator.LTE, value::ZERO, p.comp))
+	{
+		bits = width.val.to_u64(p.comp) ?? ulong::max;
+	}
+	if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.BIT_INT, .bits = bits }, tok)) return PARSING_FAILED~;
+}
+
+<* `_Atomic` qualifier or `_Atomic(type-name)` specifier, after the keyword. *>
+fn void? DeclarationParser.parse_atomic_specifier(&self, parser::Parser* p, type_store::Builder* builder, tokens::TokenIndex tok) @noinline
+{
+	if (p.is_at(tokenizer::TokenId.L_PAREN))
+	{
+		tokens::TokenIndex opener = p.tok_i;
+		p.advance();
+		type_store::QualType? atomic_type = self.parse_typed_type_name(p);
+		if (catch atomic_type) return PARSING_FAILED~;
+		if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
+		if (catch builder.combine_atomic(atomic_type, tok)) return PARSING_FAILED~;
+	}
+	else { builder.has_atomic = true; builder.atomic_tok = tok; }
 }
 
 fn type_store::QualType? DeclarationParser.parse_typeof_specifier(&self, parser::Parser* p, tokenizer::TokenId id)
@@ -1382,8 +1431,15 @@ fn parser::TypeNameProbe? DeclarationParser.probe_typed_type_name(&self, parser:
 
 fn void? DeclarationParser.handle_implicit_typedefs(&self, parser::Parser* p) @dynamic
 {
-	if (!self.has_implicit_typedefs) return parser::HOOK_ABSENT~;
-	return self.implicit_typedefs(self.context, p);
+	$if env::TESTING:
+		if (self.test_probe)
+		{
+			if (&self.test_probe.implicit_typedefs) return self.test_probe.implicit_typedefs(p);
+			return parser::HOOK_ABSENT~;
+		}
+	$endif
+	if (self.implicit_typedef_prelude) return implicit_typedef_prelude(p);
+	return parser::HOOK_ABSENT~;
 }
 
 <* Zig `Parser.parse` expected_implicit_typedef_max: the token capacity reserved for
@@ -1420,7 +1476,7 @@ fn void? add_implicit_typedef(parser::Parser* p, String name, type_store::QualTy
 <* Zig `Parser.parse` implicit typedef prelude, in Zig's order. char8_t, __int24 and
    __mfp8 follow LangOpts and Target; __float80 follows the emulated compiler. The
    callback runs before any declaration, so every entry is a leading root. *>
-fn void? implicit_typedef_prelude(void* context, parser::Parser* p)
+fn void? implicit_typedef_prelude(parser::Parser* p)
 {
 	p.pp.ensure_unused_token_capacity(EXPECTED_IMPLICIT_TYPEDEF_MAX);
 	if (p.comp.langopts.has_char8_t()) add_implicit_typedef(p, "char8_t", type_store::UCHAR)!;
@@ -1593,7 +1649,7 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 	return { .qt = qt, .name = name, .name_tok = (type_store::TokenIndex)name_tok, .node = param_node };
 }
 
-fn type_store::FuncParam? DeclaratorCallbackContext.declarator_parameter(&self, parser::Parser* p) @dynamic
+fn type_store::FuncParam? DeclaratorCallbackContext.declarator_parameter(&self, parser::Parser* p)
 	=> self.declaration_parser.parse_parameter_declaration(p, self.wip);
 
 <* Decide whether an optional parameter declarator carries an identifier.
@@ -1742,20 +1798,41 @@ fn void DeclarationParser.link_top_level_declarations(&self, parser::Parser* p,
 	if (declaration.kind == tree::NodeKind.FUNCTION) { name_tok = declaration.function.name_tok; }
 	else if (declaration.kind == tree::NodeKind.VARIABLE) { name_tok = declaration.variable.name_tok; }
 	else { return; }
+	self.index_file_scope_decls(p);
 	string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(name_tok));
 	tree::NodeKind declaration_kind = declaration.kind;
-	foreach (root_decl : p.tree.root_decls)
+	uint entry = p.file_scope_decl_head.get((uint)name) ?? 0;
+	while (entry != 0)
 	{
-		tree::Node prior = root_decl.get(&p.tree);
+		parser::FileScopeDeclEntry decl = p.file_scope_decls[(sz)entry - 1];
+		entry = decl.prev;
+		tree::Node prior = decl.node.get(&p.tree);
 		if (prior.kind != declaration_kind) continue;
-		tokens::TokenIndex prior_name_tok;
-		if (prior.kind == tree::NodeKind.FUNCTION) { prior_name_tok = prior.function.name_tok; }
-		else { prior_name_tok = prior.variable.name_tok; }
-		if (p.comp.intern_string(p.tree.tok_slice(prior_name_tok)) != name) continue;
 		if (prior.kind == tree::NodeKind.FUNCTION) { prior.function.definition = definition.pack(); }
 		else { prior.variable.definition = definition.pack(); }
-		p.tree.set_node(prior, (sz)root_decl);
+		p.tree.set_node(prior, (sz)decl.node);
 	}
+}
+
+<* Extend the name index over `root_decls` pushed since the last call, so
+   `link_top_level_declarations` only visits same-name declarations. *>
+fn void DeclarationParser.index_file_scope_decls(&self, parser::Parser* p)
+{
+	sz len = p.tree.root_decls.len();
+	for (sz i = (sz)p.file_scope_decls_indexed; i < len; i++)
+	{
+		type_store::NodeIndex root_decl = p.tree.root_decls[i];
+		tree::Node node = root_decl.get(&p.tree);
+		tokens::TokenIndex name_tok;
+		if (node.kind == tree::NodeKind.FUNCTION) { name_tok = node.function.name_tok; }
+		else if (node.kind == tree::NodeKind.VARIABLE) { name_tok = node.variable.name_tok; }
+		else { continue; }
+		string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(name_tok));
+		uint prev = p.file_scope_decl_head.get((uint)name) ?? 0;
+		p.file_scope_decls.push({ .node = root_decl, .prev = prev });
+		p.file_scope_decl_head.set((uint)name, (uint)p.file_scope_decls.len());
+	}
+	p.file_scope_decls_indexed = (usz)len;
 }
 
 <* Give a file-scope tentative definition of an incomplete array its C-mandated
@@ -2172,7 +2249,6 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser::Parser* p, bool local = false,
 	parser_attribute::AttributeBuffer* prefix_attributes = null)
 {
-	self.active_parser = p;
 	attribute_wip::Wip wip;
 	wip.init(p.comp.gpa);
 	defer wip.free();
@@ -2241,6 +2317,15 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		else
 		{
 			p.tree.root_decls.push(global_asm);
+			return (type_store::NodeIndex)0;
+		}
+		// Zig `externalDeclaration`: a stray file-scope ';' is an empty declaration.
+		if (p.is_at(tokenizer::TokenId.SEMICOLON))
+		{
+			tokens::TokenIndex semicolon = p.tok_i;
+			Diagnostic.EXTRA_SEMI.@emit(p, semicolon)!;
+			p.advance();
+			p.tree.root_decls.push(self.add_empty_declaration(p, semicolon));
 			return (type_store::NodeIndex)0;
 		}
 		Diagnostic.EXPECTED_EXTERNAL_DECL.@emit(p, p.diag_index())!;
@@ -2401,7 +2486,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				if (old_style_function && parsed.has_old_style_ident)
 				{
 					Diagnostic.DEF_NO_PROTO_DEPRECATED.@emit(p, name_tok)!;
-					qt = self.parse_kr_definition_parameters(p, fn_type, &extra_kr_params)!!;
+					qt = self.parse_kr_definition_parameters(p, fn_type, &extra_kr_params)!;
 					fn_type = qt.get(p.comp, type_store::TypeTag.FUNC)!.func;
 					if (!p.is_at(tokenizer::TokenId.L_BRACE))
 					{
@@ -2442,8 +2527,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 						Diagnostic.MAIN_RETURN_TYPE.@emit(p, name_tok)!;
 					}
 				}
-				self.active_parser = p;
-				type_store::QualType old_function_return_qt = self.function_return_qt;
+							type_store::QualType old_function_return_qt = self.function_return_qt;
 				tokens::TokenIndex old_function_name_tok = self.function_name_tok;
 				parser::FunctionContext old_function_context = self.function_context;
 				bool old_has_function_context = self.has_function_context;

@@ -5,15 +5,14 @@ import aro::compilation, aro::diagnostics, aro::type_store, aro::string_interner
 import aro::bigint, aro::value_interner;
 import std::core::mem::allocators;
 
-struct GrammarTypedefSeed
+struct GrammarTypedefSeed (parser_declaration::IDeclarationTestProbe)
 {
 	string_interner::StringId name;
 	type_store::QualType qt;
 }
 
-fn void? seed_grammar_typedef(void* context, parser::Parser* p)
+fn void? GrammarTypedefSeed.implicit_typedefs(&seed, parser::Parser* p) @dynamic
 {
-	GrammarTypedefSeed* seed = (GrammarTypedefSeed*)context;
 	seed.qt = p.comp.type_store.put(type_store::type_typedef(type_store::INT, seed.name,
 		(type_store::NodeIndex)0));
 	p.define_symbol({ .kind = symbol_stack::SymbolKind.TYPEDEF, .name = seed.name,
@@ -45,9 +44,7 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 
 		GrammarTypedefSeed seed = { .name = comp.intern_string("Seeded") };
 		parser_declaration::DeclarationParser declarations = {
-			.context = (void*)&seed,
-			.implicit_typedefs = &seed_grammar_typedef,
-			.has_implicit_typedefs = true,
+			.test_probe = &seed,
 		};
 		parser::Parser p;
 		p.init(&pp, &declarations);
