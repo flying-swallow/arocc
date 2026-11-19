@@ -426,7 +426,7 @@ fn ushort? Lowering.load_constant(&self, ir::Inst inst, Register reg)
 		case F32:
 		case F64: self.fail("TODO: floating point constant requested in a GPR")!;
 		case F80:
-			self.fail("TODO: F80 floating point constants")!;
+			self.fail("F80 constants must be loaded through the x87 stack")!;
 		case F128: self.fail("TODO: F128 floating point constants")!;
 		default: self.fail("TODO: constants of this kind")!;
 	}

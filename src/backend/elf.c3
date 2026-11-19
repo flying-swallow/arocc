@@ -1,5 +1,6 @@
-// ELF64 relocatable object writer. All on-disk integers are emitted field by
-// field; no C3 or host structure layout is part of the file format.
+// ELF64 relocatable object writer. Fixed-size records (ELF header, section
+// headers, symbols, relocations) are packed structs of fixed-endian bitstruct
+// fields; section payloads, strings and padding are written raw.
 module aro::backend::elf;
 import aro::target;
 import aro::backend::object;
@@ -191,20 +192,121 @@ fn void add_relocation(Elf* e, String name, object::Section section, ulong addre
 	if (!s.relocs.len()) e.strtab_len += 5;
 	if (kind == object::RelocKind.AUTO) kind = sym.defined ? object::RelocKind.PC32 : object::RelocKind.PLT32;
 	s.relocs.push(
-	{
-		.symbol = sym, .offset = address, .addend = addend, .kind = kind.value
-	}
+		{
+			.symbol = sym, .offset = address, .addend = addend, .kind = kind.value
+		}
 	);
 }
 
-fn void? put(OutStream w, ulong v, uint n, bool big)
+// Elf64_Ehdr in both byte orders; the field types fix the on-disk encoding.
+struct ElfHeaderLE @packed @private
 {
-	for (uint i = 0; i < n; i++)
-	{
-		uint shift = big ? (n - i - 1) * 8 : i * 8;
-		w.write_byte((char)(v >> shift))!;
-	}
+	char[16] ident;
+	UShortLE type;
+	UShortLE machine;
+	UIntLE version;
+	ULongLE entry;
+	ULongLE phoff;
+	ULongLE shoff;
+	UIntLE flags;
+	UShortLE ehsize;
+	UShortLE phentsize;
+	UShortLE phnum;
+	UShortLE shentsize;
+	UShortLE shnum;
+	UShortLE shstrndx;
 }
+
+struct ElfHeaderBE @packed @private
+{
+	char[16] ident;
+	UShortBE type;
+	UShortBE machine;
+	UIntBE version;
+	ULongBE entry;
+	ULongBE phoff;
+	ULongBE shoff;
+	UIntBE flags;
+	UShortBE ehsize;
+	UShortBE phentsize;
+	UShortBE phnum;
+	UShortBE shentsize;
+	UShortBE shnum;
+	UShortBE shstrndx;
+}
+
+$assert ElfHeaderLE::size == 64 && ElfHeaderBE::size == 64;
+
+// Elf64_Shdr in both byte orders.
+struct ElfSectionHeaderLE @packed @private
+{
+	UIntLE name;
+	UIntLE type;
+	ULongLE flags;
+	ULongLE addr;
+	ULongLE offset;
+	ULongLE size;
+	UIntLE link;
+	UIntLE info;
+	ULongLE addralign;
+	ULongLE entsize;
+}
+
+struct ElfSectionHeaderBE @packed @private
+{
+	UIntBE name;
+	UIntBE type;
+	ULongBE flags;
+	ULongBE addr;
+	ULongBE offset;
+	ULongBE size;
+	UIntBE link;
+	UIntBE info;
+	ULongBE addralign;
+	ULongBE entsize;
+}
+
+$assert ElfSectionHeaderLE::size == 64 && ElfSectionHeaderBE::size == 64;
+
+// Elf64_Sym in both byte orders.
+struct ElfSymbolLE @packed @private
+{
+	UIntLE name;
+	char info;
+	char other;
+	UShortLE shndx;
+	ULongLE value;
+	ULongLE size;
+}
+
+struct ElfSymbolBE @packed @private
+{
+	UIntBE name;
+	char info;
+	char other;
+	UShortBE shndx;
+	ULongBE value;
+	ULongBE size;
+}
+
+$assert ElfSymbolLE::size == 24 && ElfSymbolBE::size == 24;
+
+// Elf64_Rela in both byte orders.
+struct ElfRelaLE @packed @private
+{
+	ULongLE offset;
+	ULongLE info;
+	LongLE addend;
+}
+
+struct ElfRelaBE @packed @private
+{
+	ULongBE offset;
+	ULongBE info;
+	LongBE addend;
+}
+
+$assert ElfRelaLE::size == 24 && ElfRelaBE::size == 24;
 
 fn void? pad(OutStream w, ulong n)
 {
@@ -324,10 +426,25 @@ fn void? finish(Elf* e, OutStream w)
 	ulong rela_off = sym_aligned + sym_len; ulong str_off = rela_off + rela_len;
 	ulong sh_off = align_forward(str_off + e.strtab_len, 16);
 	// ELF header (64 bytes)
-	io::write_all(w, "\x7FELF")!; w.write_byte(2)!; w.write_byte(big ? 2 : 1)!; w.write_byte(1)!; w.write_byte(0)!; w.write_byte(0)!; pad(w, 7)!;
-	put(w, 1, 2, big)!; put(w, machine(e.target.cpu.arch), 2, big)!; put(w, 1, 4, big)!;
-	put(w, 0, 8, big)!; put(w, 0, 8, big)!; put(w, sh_off, 8, big)!; put(w, 0, 4, big)!;
-	put(w, 64, 2, big)!; put(w, 0, 2, big)!; put(w, 0, 2, big)!; put(w, 64, 2, big)!; put(w, count, 2, big)!; put(w, 1, 2, big)!;
+	ushort arch = (ushort)machine(e.target.cpu.arch);
+	if (big)
+	{
+		ElfHeaderBE h = {
+			.ident = { 0x7F, 'E', 'L', 'F', 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+			.type.val = 1, .machine.val = arch, .version.val = 1, .shoff.val = sh_off,
+			.ehsize.val = 64, .shentsize.val = 64, .shnum.val = count, .shstrndx.val = 1,
+		};
+		io::write_any(w, &h)!;
+	}
+	else
+	{
+		ElfHeaderLE h = {
+			.ident = { 0x7F, 'E', 'L', 'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+			.type.val = 1, .machine.val = arch, .version.val = 1, .shoff.val = sh_off,
+			.ehsize.val = 64, .shentsize.val = 64, .shnum.val = count, .shstrndx.val = 1,
+		};
+		io::write_any(w, &h)!;
+	}
 	ulong payload_cursor = 64;
 	foreach (s : e.sections)
 	{
@@ -356,7 +473,7 @@ fn void? finish(Elf* e, OutStream w)
 	}
 	foreach (s : e.sections) foreach (r : s.relocs)
 	{
-		put(w, r.offset, 8, big)!; put(w, ((ulong)r.symbol.index << 32) | r.kind, 8, big)!; put(w, (ulong)r.addend, 8, big)!;
+		write_rela(w, &r, big)!;
 	}
 	io::write_all(w, DEFAULT_STRTAB)!;
 	foreach (s : e.locals)
@@ -374,13 +491,13 @@ fn void? finish(Elf* e, OutStream w)
 	}
 	pad(w, sh_off - (str_off + e.strtab_len))!; pad(w, 64)!;
 	write_shdr(w, 1, 3, 0, str_off, e.strtab_len, 0, 0, 1, 0, big)!;
-	write_shdr(w, 9, 2, 0, sym_aligned, sym_len, 1, (ulong)e.locals.len() + 1, 8, 24, big)!;
+	write_shdr(w, 9, 2, 0, sym_aligned, sym_len, 1, (uint)e.locals.len() + 1, 8, 24, big)!;
 	ulong roff = rela_off; noff = section_name_off;
 	foreach (s : e.sections)
 	{
 		uint rela_prefix = s.relocs.len() ? 5 : 0;
 		ulong alignment = effective_alignment(s);
-		write_shdr(w, (ulong)noff + rela_prefix, s.sh_type, s.flags, s.file_offset, section_size(s), 0, 0, alignment, 0, big)!;
+		write_shdr(w, noff + rela_prefix, s.sh_type, s.flags, s.file_offset, section_size(s), 0, 0, alignment, 0, big)!;
 		if (s.relocs.len())
 		{
 			write_shdr(w, noff, 4, 0, roff, (ulong)s.relocs.len() * 24, 2, s.index, 8, 24, big)!; roff += (ulong)s.relocs.len() * 24;
@@ -392,7 +509,6 @@ fn void? finish(Elf* e, OutStream w)
 
 fn void? write_symbol(OutStream w, Symbol* s, uint name, bool big)
 {
-	put(w, name, 4, big)!; w.write_byte(s.info)!; w.write_byte(0)!;
 	ushort section_index = 0;
 	if (s.common)
 	{
@@ -402,12 +518,53 @@ fn void? write_symbol(OutStream w, Symbol* s, uint name, bool big)
 	{
 		section_index = s.section.index;
 	}
-	put(w, section_index, 2, big)!; put(w, s.offset, 8, big)!; put(w, s.size, 8, big)!;
+	if (big)
+	{
+		ElfSymbolBE h = {
+			.name.val = name, .info = s.info, .shndx.val = section_index, .value.val = s.offset, .size.val = s.size,
+		};
+		io::write_any(w, &h)!;
+	}
+	else
+	{
+		ElfSymbolLE h = {
+			.name.val = name, .info = s.info, .shndx.val = section_index, .value.val = s.offset, .size.val = s.size,
+		};
+		io::write_any(w, &h)!;
+	}
 }
 
-fn void? write_shdr(OutStream w, ulong name, ulong ty, ulong flags, ulong offset, ulong size, ulong link, ulong info, ulong align, ulong entsize, bool big)
+fn void? write_rela(OutStream w, Relocation* r, bool big)
 {
-	put(w, name, 4, big)!; put(w, ty, 4, big)!; put(w, flags, 8, big)!; put(w, 0, 8, big)!;
-	put(w, offset, 8, big)!; put(w, size, 8, big)!; put(w, link, 4, big)!; put(w, info, 4, big)!;
-	put(w, align, 8, big)!; put(w, entsize, 8, big)!;
+	ulong info = ((ulong)r.symbol.index << 32) | r.kind;
+	if (big)
+	{
+		ElfRelaBE h = { .offset.val = r.offset, .info.val = info, .addend.val = r.addend };
+		io::write_any(w, &h)!;
+	}
+	else
+	{
+		ElfRelaLE h = { .offset.val = r.offset, .info.val = info, .addend.val = r.addend };
+		io::write_any(w, &h)!;
+	}
+}
+
+fn void? write_shdr(OutStream w, uint name, uint ty, ulong flags, ulong offset, ulong size, uint link, uint info, ulong align, ulong entsize, bool big)
+{
+	if (big)
+	{
+		ElfSectionHeaderBE h = {
+			.name.val = name, .type.val = ty, .flags.val = flags, .offset.val = offset, .size.val = size,
+			.link.val = link, .info.val = info, .addralign.val = align, .entsize.val = entsize,
+		};
+		io::write_any(w, &h)!;
+	}
+	else
+	{
+		ElfSectionHeaderLE h = {
+			.name.val = name, .type.val = ty, .flags.val = flags, .offset.val = offset, .size.val = size,
+			.link.val = link, .info.val = info, .addralign.val = align, .entsize.val = entsize,
+		};
+		io::write_any(w, &h)!;
+	}
 }

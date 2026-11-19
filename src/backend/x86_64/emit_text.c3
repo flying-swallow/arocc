@@ -13,6 +13,7 @@ fn String size_keyword(ushort bits)
 		case 16: return "word ptr ";
 		case 32: return "dword ptr ";
 		case 64: return "qword ptr ";
+		// GNU Intel syntax accepts TBYTE PTR for x87 80-bit memory operands.
 		case 80: return "tbyte ptr ";
 		case 128: return "xmmword ptr ";
 		default: return "";
@@ -24,7 +25,15 @@ fn void write_operand(DString* out, Operand op)
 	switch (op.kind)
 	{
 		case NONE: break;
-		case REG: out.append_string(op.reg.name);
+		case REG:
+			if (op.reg.class == X87)
+			{
+				out.appendf("st(%d)", op.reg.enc);
+			}
+			else
+			{
+				out.append_string(op.reg.name);
+			}
 		case IMM: out.appendf("%d", op.imm);
 		case TARGET:
 			out.append_string(op.target);
