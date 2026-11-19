@@ -105,6 +105,8 @@ struct DriverOptions
 	bool whole_program;
 	<* Prefer the in-process IR object emitter over the external assembler. *>
 	bool integrated_as;
+	<* -f[no-]integrated-as was given; otherwise the target picks (on for x86_64 Linux). *>
+	bool has_integrated_as;
 	String code_model;
 	bool has_code_model;
 	String debug_format;
@@ -127,6 +129,7 @@ struct DriverOptions
 	bool verbose_ir;
 	<* Run the internal IR verifier before dumping or rendering IR. *>
 	bool verify_ir;
+	bool codegen_todo_report;
 	bool x86_64_spill_all;
 	bool verbose_linker_args;
 	bool apple_kext;

@@ -13,7 +13,7 @@ struct CodeGenFixture
 	TrackingAllocator ta;
 	Diagnostics diagnostics;
 	Compilation comp;
-	tokens::TreeToken[4] tokens;
+	tokens::TreeToken[11] tokens;
 	Tree tree;
 	Preprocessor pp;
 }
@@ -23,7 +23,8 @@ fn void CodeGenFixture.init(&self)
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
 	self.comp.init(&self.ta, null, &self.diagnostics);
-	Source src = self.comp.add_source_from_buffer("codegen.c", "answer __builtin_longjmp target ptr")!!;
+	String source_text = "answer __builtin_longjmp target ptr va_start va_end va_copy __builtin_va_start __builtin_va_end __builtin_va_copy __builtin_va_arg";
+	Source src = self.comp.add_source_from_buffer("codegen.c", source_text)!!;
 	self.tokens[0] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = 0, .line = 1 } };
 	self.tokens[1] = { .id = tokenizer::TokenId.IDENTIFIER,
@@ -32,6 +33,20 @@ fn void CodeGenFixture.init(&self)
 		.loc = { .id = src.id, .byte_offset = 25, .line = 1 } };
 	self.tokens[3] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = 32, .line = 1 } };
+	self.tokens[4] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("__builtin_va_start")!!, .line = 1 } };
+	self.tokens[5] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("__builtin_va_end")!!, .line = 1 } };
+	self.tokens[6] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("__builtin_va_copy")!!, .line = 1 } };
+	self.tokens[7] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("__builtin_va_arg")!!, .line = 1 } };
+	self.tokens[8] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("va_start")!!, .line = 1 } };
+	self.tokens[9] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("va_end")!!, .line = 1 } };
+	self.tokens[10] = { .id = tokenizer::TokenId.IDENTIFIER,
+		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("va_copy")!!, .line = 1 } };
 	self.tree.init(&self.comp, self.tokens[..]);
 	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 }
@@ -57,6 +72,109 @@ fn NodeIndex CodeGenFixture.typed_int_literal(&self, long number, type_store::Qu
 	return literal;
 }
 
+fn NodeIndex CodeGenFixture.local_ref_value(&self, NodeIndex variable, type_store::QualType qt,
+	tokens::TokenIndex name_tok)
+{
+	NodeIndex reference = self.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = name_tok, .qt = qt, .decl = variable } });
+	return self.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.LVAL_TO_RVAL, .operand = reference, .qt = qt, .implicit = true } });
+}
+
+fn NodeIndex CodeGenFixture.scalar_local(&self, type_store::QualType qt, tokens::TokenIndex name_tok)
+{
+	return self.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = name_tok, .qt = qt, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+}
+
+fn type_store::QualType CodeGenFixture.va_list_pointer_type(&self)
+{
+	type_store::QualType tag = self.comp.type_store.put(type_store::type_record_incomplete(
+		self.comp.intern_string("__va_list_tag")));
+	return self.comp.type_store.put(type_store::type_pointer(tag));
+}
+
+fn type_store::QualType CodeGenFixture.long_record_type(&self, uint field_count)
+{
+	type_store::RecordField[9] fields;
+	for (uint i = 0; i < field_count; i++)
+	{
+		fields[i] = type_store::record_field(self.comp.intern_string("field"), type_store::LONG_LONG);
+		fields[i].layout = { .offset_bits = (ulong)i * 64, .size_bits = 64 };
+	}
+	type_store::RecordLayout layout = { .size_bits = (ulong)field_count * 64,
+		.field_alignment_bits = 64, .pointer_alignment_bits = 64, .required_alignment_bits = 8 };
+	return self.comp.type_store.put(type_store::type_record(self.comp.intern_string("LongRecord"),
+		fields[0..field_count - 1], layout));
+}
+
+fn type_store::QualType CodeGenFixture.computed_record_type(&self, String name, type_store::RecordField[] fields)
+{
+	type_store::RecordLayout layout = type_store::compute(fields, type_store::NODE_NULL, false,
+		&self.comp, &self.tree.attr_map, 0)!!;
+	return self.comp.type_store.put(type_store::type_record(self.comp.intern_string(name), fields, layout));
+}
+
+fn NodeIndex CodeGenFixture.record_member_lvalue(&self, NodeIndex variable, type_store::QualType record_type,
+	type_store::QualType field_type, uint member_index)
+{
+	NodeIndex base = self.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 3, .qt = record_type, .decl = variable } });
+	return self.tree.add_node({ .kind = tree::NodeKind.MEMBER_ACCESS_EXPR,
+		.member_access = { .qt = field_type, .base = base, .access_tok = 0, .member_index = member_index } });
+}
+
+fn uint count_dump_occurrences(String text, String needle)
+{
+	uint count = 0;
+	while (try at = text.index_of(needle))
+	{
+		count++;
+		text = text[(usz)at + needle.len..];
+	}
+	return count;
+}
+
+fn uint count_dump_loads_of_type(String text, String type)
+{
+	uint count = 0;
+	usz line_start = 0;
+	for (usz i = 0; i <= text.len; i++)
+	{
+		if (i < text.len && text[i] != '\n') continue;
+		if (i > line_start)
+		{
+			String line = text[line_start..i - 1];
+			if (line.contains(type) && line.contains(" = load ptr_ty ")) count++;
+		}
+		line_start = i + 1;
+	}
+	return count;
+}
+
+fn bool CodeGenFixture.ir_ptr_ref_is_at(&self, ir::Inst[] instructions, ir::Ref pointer, ir::Ref base, ulong offset)
+{
+	if (offset == 0) return pointer == base;
+	if ((usz)pointer >= instructions.len) return false;
+	ir::Inst address = instructions[(usz)pointer];
+	if (address.tag != ir::InstTag.ADD || address.data.bin.lhs != base) return false;
+	ir::Ref offset_ref = address.data.bin.rhs;
+	if ((usz)offset_ref >= instructions.len) return false;
+	ir::Inst offset_inst = instructions[(usz)offset_ref];
+	return offset_inst.tag == ir::InstTag.CONSTANT && offset_inst.ty == value_interner::REF_I64 &&
+		offset_inst.data.constant == value::int_u64(offset, &self.comp).ref();
+}
+
+fn bool CodeGenFixture.constant_is(&self, ir::Inst[] instructions, ir::Ref reference, ulong number,
+	value_interner::InternerRef ty)
+{
+	if ((usz)reference >= instructions.len) return false;
+	ir::Inst inst = instructions[(usz)reference];
+	return inst.tag == ir::InstTag.CONSTANT && inst.ty == ty &&
+		inst.data.constant == value::int_u64(number, &self.comp).ref();
+}
+
 fn NodeIndex CodeGenFixture.function(&self, NodeIndex body)
 	=> self.function_with_return_type(body, type_store::INT);
 
@@ -67,6 +185,18 @@ fn NodeIndex CodeGenFixture.function_with_return_type(&self, NodeIndex body, typ
 		type_store::type_func(return_type, type_store::FuncKind.NORMAL, {}));
 	NodeIndex function = self.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
 		.function = { .name_tok = 0, .qt = function_type, .is_static = is_static, .body = body.pack(),
+			.definition = type_store::NODE_NULL } });
+	self.tree.root_decls.push(function);
+	return function;
+}
+
+fn NodeIndex CodeGenFixture.function_with_params(&self, NodeIndex body, type_store::QualType return_type,
+	type_store::FuncParam[] params)
+{
+	type_store::QualType function_type = self.comp.type_store.put(
+		type_store::type_func(return_type, type_store::FuncKind.NORMAL, params));
+	NodeIndex function = self.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
+		.function = { .name_tok = 0, .qt = function_type, .body = body.pack(),
 			.definition = type_store::NODE_NULL } });
 	self.tree.root_decls.push(function);
 	return function;
@@ -142,13 +272,65 @@ fn void CodeGenFixture.expect_local_initializer_fatal(&self, NodeIndex initializ
 	self.expect_statement_fatal(variable, expected_text);
 }
 
-fn void gen_ir_rejects_union_type() @test
+fn void gen_ir_lowers_union_local_assignment() @test
 {
 	CodeGenFixture f;
 	f.init();
-	type_store::QualType union_type = f.comp.type_store.put(type_store::type_record_incomplete(
-		f.comp.intern_string("UnsupportedUnion"), true));
-	f.expect_typed_return_fatal(union_type, "TODO lower union types");
+	type_store::RecordField[2] fields = {
+		type_store::record_field(f.comp.intern_string("integer"), type_store::INT),
+		type_store::record_field(f.comp.intern_string("character"), type_store::CHAR),
+	};
+	type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32,
+		.pointer_alignment_bits = 32, .required_alignment_bits = 8 };
+	type_store::QualType union_type = f.comp.type_store.put(type_store::type_record(
+		f.comp.intern_string("AssignableUnion"), fields[..], layout, true));
+	NodeIndex local = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 2, .qt = union_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex source = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = union_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex local_ref = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 2, .qt = union_type, .decl = local } });
+	NodeIndex source_ref = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 3, .qt = union_type, .decl = source } });
+	NodeIndex whole_assignment = f.tree.add_node({ .kind = tree::NodeKind.ASSIGN_EXPR,
+		.binary = { .qt = union_type, .lhs = local_ref, .rhs = source_ref } });
+	NodeIndex reference = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 2, .qt = union_type, .decl = local } });
+	NodeIndex member = f.tree.add_node({ .kind = tree::NodeKind.MEMBER_ACCESS_EXPR,
+		.member_access = { .qt = type_store::INT, .base = reference, .member_index = 0 } });
+	NodeIndex assignment = f.tree.add_node({ .kind = tree::NodeKind.ASSIGN_EXPR,
+		.binary = { .qt = type_store::INT, .lhs = member, .rhs = f.int_literal(42) } });
+	NodeIndex[4] statements = { local, source, whole_assignment, assignment };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::VOID);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref storage = ir::NONE;
+	bool assigned = false;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC && storage == ir::NONE)
+		{
+			assert(inst.data.alloc.size == 4, "the complete union local should allocate its 4-byte size");
+			storage = (ir::Ref)i;
+		}
+		if (inst.tag == ir::InstTag.STORE && inst.data.bin.lhs == storage)
+		{
+			assigned = f.constant_is(decl.instructions, inst.data.bin.rhs, 42, value_interner::REF_I32);
+		}
+	}
+	assert(storage != ir::NONE && assigned, "union field assignment should store its value at the local's offset 0");
+	bool copied_union = false;
+	foreach (inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_I32) copied_union = true;
+	}
+	assert(copied_union, "whole-union assignment should copy its object representation");
+	graph.free();
 	f.free();
 }
 
@@ -321,15 +503,15 @@ fn void gen_ir_rejects_unimplemented_expression_nodes() @test
 
 fn void gen_ir_rejects_unimplemented_cast_kinds() @test
 {
-	tree::CastKind[21] kinds = {
-		tree::CastKind.BITCAST, tree::CastKind.POINTER_TO_INT, tree::CastKind.BOOL_TO_FLOAT,
-		tree::CastKind.BOOL_TO_POINTER, tree::CastKind.INT_TO_FLOAT,
-		tree::CastKind.COMPLEX_INT_TO_COMPLEX_FLOAT, tree::CastKind.INT_TO_POINTER,
-		tree::CastKind.FLOAT_TO_INT, tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT,
-		tree::CastKind.COMPLEX_INT_CAST, tree::CastKind.COMPLEX_INT_TO_REAL,
-		tree::CastKind.REAL_TO_COMPLEX_INT, tree::CastKind.FLOAT_CAST, tree::CastKind.COMPLEX_FLOAT_CAST,
+	// POINTER_TO_INT, INT_TO_POINTER and NULL_TO_POINTER are implemented (pointer_casts_lower).
+	tree::CastKind[14] kinds = {
+		tree::CastKind.BITCAST, tree::CastKind.BOOL_TO_POINTER,
+		tree::CastKind.COMPLEX_INT_TO_COMPLEX_FLOAT,
+		tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT, tree::CastKind.COMPLEX_INT_CAST,
+		tree::CastKind.COMPLEX_INT_TO_REAL,
+		tree::CastKind.REAL_TO_COMPLEX_INT, tree::CastKind.COMPLEX_FLOAT_CAST,
 		tree::CastKind.COMPLEX_FLOAT_TO_REAL, tree::CastKind.REAL_TO_COMPLEX_FLOAT,
-		tree::CastKind.NULL_TO_POINTER, tree::CastKind.UNION_CAST, tree::CastKind.VECTOR_SPLAT,
+		tree::CastKind.UNION_CAST, tree::CastKind.VECTOR_SPLAT,
 		tree::CastKind.ATOMIC_TO_NON_ATOMIC, tree::CastKind.NON_ATOMIC_TO_ATOMIC,
 	};
 	foreach (kind : kinds)
@@ -342,6 +524,128 @@ fn void gen_ir_rejects_unimplemented_cast_kinds() @test
 		f.expect_expression_fatal(cast, string::tformat("TODO CodeGen gen CastKind %s\n", kind.name));
 		f.free();
 	}
+}
+
+fn void gen_ir_lowers_scalar_float_arithmetic_and_comparisons() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	NodeIndex x = f.scalar_local(type_store::DOUBLE, 3);
+	NodeIndex y = f.scalar_local(type_store::DOUBLE, 4);
+	NodeIndex x_lvalue = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 3, .qt = type_store::DOUBLE, .decl = x } });
+	NodeIndex x_value = f.local_ref_value(x, type_store::DOUBLE, 3);
+	NodeIndex y_value = f.local_ref_value(y, type_store::DOUBLE, 4);
+	NodeIndex[18] statements;
+	uint statement_count = 0;
+	statements[statement_count++] = x;
+	statements[statement_count++] = y;
+	tree::NodeKind[4] arithmetic_kinds = { tree::NodeKind.ADD_EXPR, tree::NodeKind.SUB_EXPR,
+		tree::NodeKind.MUL_EXPR, tree::NodeKind.DIV_EXPR };
+	foreach (kind : arithmetic_kinds)
+	{
+		statements[statement_count++] = f.tree.add_node({ .kind = kind,
+			.binary = { .qt = type_store::DOUBLE, .lhs = x_value, .op_tok = 0, .rhs = y_value } });
+	}
+	statements[statement_count++] = f.tree.add_node({ .kind = tree::NodeKind.NEGATE_EXPR,
+		.unary = { .qt = type_store::DOUBLE, .operand = x_value } });
+	tree::NodeKind[6] comparison_kinds = { tree::NodeKind.EQUAL_EXPR, tree::NodeKind.NOT_EQUAL_EXPR,
+		tree::NodeKind.LESS_THAN_EXPR, tree::NodeKind.LESS_THAN_EQUAL_EXPR,
+		tree::NodeKind.GREATER_THAN_EXPR, tree::NodeKind.GREATER_THAN_EQUAL_EXPR };
+	foreach (kind : comparison_kinds)
+	{
+		statements[statement_count++] = f.tree.add_node({ .kind = kind,
+			.binary = { .qt = type_store::INT, .lhs = x_value, .op_tok = 0, .rhs = y_value } });
+	}
+	tree::NodeKind[4] increment_kinds = { tree::NodeKind.PRE_INC_EXPR, tree::NodeKind.PRE_DEC_EXPR,
+		tree::NodeKind.POST_INC_EXPR, tree::NodeKind.POST_DEC_EXPR };
+	foreach (kind : increment_kinds)
+	{
+		statements[statement_count++] = f.tree.add_node({ .kind = kind,
+			.unary = { .qt = type_store::DOUBLE, .operand = x_lvalue } });
+	}
+	NodeIndex dummy = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_ASSIGN_DUMMY_EXPR,
+		.unary = { .qt = type_store::DOUBLE, .operand = x_lvalue } });
+	NodeIndex dummy_value = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.LVAL_TO_RVAL, .operand = dummy,
+			.qt = type_store::DOUBLE, .implicit = true } });
+	NodeIndex add_rhs = f.tree.add_node({ .kind = tree::NodeKind.ADD_EXPR,
+		.binary = { .qt = type_store::DOUBLE, .lhs = dummy_value, .op_tok = 0, .rhs = y_value } });
+	statements[statement_count++] = f.tree.add_node({ .kind = tree::NodeKind.ADD_ASSIGN_EXPR,
+		.binary = { .qt = type_store::DOUBLE, .lhs = x_lvalue, .op_tok = 0, .rhs = add_rhs } });
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::VOID);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	String dump = dump_to_string(&graph, &f.ta);
+	assert(count_dump_occurrences(dump, "fadd ") == 4 && count_dump_occurrences(dump, "fsub ") == 3 &&
+		count_dump_occurrences(dump, "fmul ") == 1 && count_dump_occurrences(dump, "fdiv ") == 1 &&
+		count_dump_occurrences(dump, "fneg ") == 1,
+		"float arithmetic, compound assignment and increments should use scalar float instructions:\n%s", dump);
+	assert(count_dump_occurrences(dump, "fcmp_oeq ") == 1 && count_dump_occurrences(dump, "fcmp_une ") == 1 &&
+		count_dump_occurrences(dump, "fcmp_olt ") == 1 && count_dump_occurrences(dump, "fcmp_ole ") == 1 &&
+		count_dump_occurrences(dump, "fcmp_ogt ") == 1 && count_dump_occurrences(dump, "fcmp_oge ") == 1,
+		"all float comparisons should select their ordered/unordered scalar compare tags:\n%s", dump);
+	alloc::free(&f.ta, dump.ptr);
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_scalar_float_conversions_and_truthiness() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	NodeIndex x = f.scalar_local(type_store::DOUBLE, 3);
+	NodeIndex y = f.scalar_local(type_store::FLOAT, 4);
+	NodeIndex x_value = f.local_ref_value(x, type_store::DOUBLE, 3);
+	NodeIndex y_value = f.local_ref_value(y, type_store::FLOAT, 4);
+	NodeIndex bool_to_float = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.BOOL_TO_FLOAT, .operand = f.typed_int_literal(1, type_store::BOOL),
+			.qt = type_store::FLOAT } });
+	NodeIndex signed_to_float = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.INT_TO_FLOAT, .operand = f.int_literal(-7), .qt = type_store::DOUBLE } });
+	NodeIndex unsigned_to_float = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.INT_TO_FLOAT, .operand = f.typed_int_literal(7, type_store::UINT),
+			.qt = type_store::DOUBLE } });
+	NodeIndex float_to_signed = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FLOAT_TO_INT, .operand = x_value, .qt = type_store::INT } });
+	NodeIndex float_to_unsigned = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FLOAT_TO_INT, .operand = x_value, .qt = type_store::UINT } });
+	NodeIndex float_narrow = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FLOAT_CAST, .operand = x_value, .qt = type_store::FLOAT } });
+	NodeIndex float_widen = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FLOAT_CAST, .operand = y_value, .qt = type_store::DOUBLE } });
+	NodeIndex float_to_bool = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FLOAT_TO_BOOL, .operand = x_value, .qt = type_store::BOOL } });
+	NodeIndex float_to_bool_via_float_to_int = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FLOAT_TO_INT, .operand = x_value, .qt = type_store::BOOL } });
+	NodeIndex logical_not = f.tree.add_node({ .kind = tree::NodeKind.BOOL_NOT_EXPR,
+		.unary = { .qt = type_store::INT, .operand = x_value } });
+	NodeIndex null_stmt = f.tree.add_node({ .kind = tree::NodeKind.NULL_STMT });
+	NodeIndex if_stmt = f.tree.add_node({ .kind = tree::NodeKind.IF_STMT,
+		.if_stmt = { .init = type_store::NODE_NULL, .cond = x_value, .then_body = null_stmt,
+			.else_body = type_store::NODE_NULL } });
+	NodeIndex[13] statements = { x, y, bool_to_float, signed_to_float, unsigned_to_float,
+		float_to_signed, float_to_unsigned, float_narrow, float_widen, float_to_bool,
+		float_to_bool_via_float_to_int, logical_not, if_stmt };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::VOID);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	String dump = dump_to_string(&graph, &f.ta);
+	assert(count_dump_occurrences(dump, "uitofp ") == 1 && count_dump_occurrences(dump, "sitofp ") == 2 &&
+		count_dump_occurrences(dump, "fptosi ") == 1 && count_dump_occurrences(dump, "fptoui ") == 1 &&
+		count_dump_occurrences(dump, "fptrunc ") == 1 && count_dump_occurrences(dump, "fpext ") == 1,
+		"scalar float casts should choose signedness and width-specific conversion instructions:\n%s", dump);
+	assert(count_dump_occurrences(dump, "fcmp_une ") == 3 && count_dump_occurrences(dump, "fcmp_oeq ") == 1,
+		"float truthiness should be unordered-not-equal-zero, while logical not uses ordered-equal-zero:\n%s", dump);
+	alloc::free(&f.ta, dump.ptr);
+	graph.free();
+	f.free();
 }
 
 fn void gen_ir_rejects_unimplemented_lvalue_nodes() @test
@@ -379,10 +683,12 @@ fn void gen_ir_rejects_unimplemented_lvalue_nodes() @test
 	}
 }
 
+<* Braced aggregate initializer nodes for a scalar destination are not lowered
+   (`int x = {}` / DEFAULT_INIT_EXPR is: it stores zero). *>
 fn void gen_ir_rejects_unimplemented_initializer_nodes() @test
 {
-	tree::NodeKind[5] kinds = { tree::NodeKind.ARRAY_INIT_EXPR, tree::NodeKind.STRUCT_INIT_EXPR,
-		tree::NodeKind.UNION_INIT_EXPR, tree::NodeKind.ARRAY_FILLER_EXPR, tree::NodeKind.DEFAULT_INIT_EXPR };
+	tree::NodeKind[4] kinds = { tree::NodeKind.ARRAY_INIT_EXPR, tree::NodeKind.STRUCT_INIT_EXPR,
+		tree::NodeKind.UNION_INIT_EXPR, tree::NodeKind.ARRAY_FILLER_EXPR };
 	foreach (kind : kinds)
 	{
 		CodeGenFixture f;
@@ -399,9 +705,6 @@ fn void gen_ir_rejects_unimplemented_initializer_nodes() @test
 			case ARRAY_FILLER_EXPR:
 				initializer = f.tree.add_node({ .kind = kind,
 					.array_filler = { .qt = type_store::INT, .count = 1 } });
-			case DEFAULT_INIT_EXPR:
-				initializer = f.tree.add_node({ .kind = kind,
-					.default_init = { .qt = type_store::INT } });
 			default: unreachable();
 		}
 		f.expect_local_initializer_fatal(initializer, type_store::INT,
@@ -410,7 +713,26 @@ fn void gen_ir_rejects_unimplemented_initializer_nodes() @test
 	}
 }
 
-fn void gen_ir_rejects_string_array_initializer_memcpy() @test
+<* Run gen_ir over a function whose body declares a local `variable_type x = initializer;`. *>
+fn String CodeGenFixture.local_initializer_ir(&self, NodeIndex initializer, type_store::QualType variable_type,
+	type_store::NodeOptIndex preceding_local = type_store::NODE_NULL)
+{
+	NodeIndex variable = self.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 0, .qt = variable_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = initializer.pack(), .definition = type_store::NODE_NULL } });
+	NodeIndex[2] statements;
+	usz statement_count = 0;
+	if (!preceding_local.is_null()) statements[statement_count++] = preceding_local.unwrap();
+	statements[statement_count++] = variable;
+	NodeIndex body = self.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[0..statement_count - 1] } });
+	self.function(body);
+	ir::Ir graph = codegen::gen_ir(&self.tree, &self.pp)!!;
+	defer graph.free();
+	return dump_to_string(&graph, tmem);
+}
+
+fn void string_array_local_initializer_zero_fills_and_copies() @test
 {
 	CodeGenFixture f;
 	f.init();
@@ -419,7 +741,196 @@ fn void gen_ir_rejects_string_array_initializer_memcpy() @test
 	f.tree.set_value(initializer, value::intern(&f.comp, { .tag = BYTES, .bytes = "abc" }));
 	type_store::QualType array_type = f.comp.type_store.put(
 		type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
-	f.expect_local_initializer_fatal(initializer, array_type, "TODO memcpy\n");
+	String ir_text = f.local_initializer_ir(initializer, array_type);
+	assert(ir_text.contains("memcpy"), "string-initialized char array should copy with memcpy:\n%s", ir_text);
+	assert(ir_text.contains("store"), "string-initialized char array should be zero-filled first:\n%s", ir_text);
+	f.free();
+}
+
+fn void record_local_initializer_from_variable_copies_inline() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::QualType record_type = f.long_record_type(2);
+	NodeIndex source = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = record_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex initializer = f.local_ref_value(source, record_type, 3);
+	String ir_text = f.local_initializer_ir(initializer, record_type, (type_store::NodeOptIndex)source);
+	assert(ir_text.contains("alloc size 16"), "both record locals should allocate 16 bytes:\n%s", ir_text);
+	assert(ir_text.contains("load ptr_ty") && ir_text.contains("store ptr_ty"),
+		"a 16-byte record copy should use inline loads and stores:\n%s", ir_text);
+	assert(!ir_text.contains("memcpy"), "a 16-byte record copy should not call memcpy:\n%s", ir_text);
+	assert(!ir_text.contains("load { i64, i64 }"), "record copies must not load RECORD_TY values:\n%s", ir_text);
+	f.free();
+}
+
+fn void large_record_local_initializer_uses_memcpy() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::QualType record_type = f.long_record_type(9);
+	NodeIndex source = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = record_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex initializer = f.local_ref_value(source, record_type, 3);
+	String ir_text = f.local_initializer_ir(initializer, record_type, (type_store::NodeOptIndex)source);
+	assert(ir_text.contains("alloc size 72"), "a nine-field record local should allocate 72 bytes:\n%s", ir_text);
+	assert(ir_text.contains("call ptr_ty @memcpy"), "a record copy larger than 64 bytes should call memcpy:\n%s", ir_text);
+	f.free();
+}
+
+fn void gen_ir_lowers_12_byte_record_parameter_into_two_i64_args() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::RecordField[3] fields = {
+		type_store::record_field(f.comp.intern_string("a"), type_store::INT),
+		type_store::record_field(f.comp.intern_string("b"), type_store::INT),
+		type_store::record_field(f.comp.intern_string("c"), type_store::INT),
+	};
+	for (uint i = 0; i < fields.len; i++) fields[i].layout = { .offset_bits = (ulong)i * 32, .size_bits = 32 };
+	type_store::RecordLayout layout = { .size_bits = 96, .field_alignment_bits = 32,
+		.pointer_alignment_bits = 32, .required_alignment_bits = 8 };
+	type_store::QualType record_type = f.comp.type_store.put(type_store::type_record(
+		f.comp.intern_string("TwelveBytes"), fields[..], layout));
+	type_store::FuncParam[1] params = { type_store::func_param(record_type, f.comp.intern_string("value")) };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT, .compound_stmt = { .body = {} } });
+	f.function_with_params(body, type_store::VOID, params[..]);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	assert(graph.decls.len() == 1);
+	ir::Decl* decl = &graph.decls[0];
+	uint arg_count = 0;
+	foreach (inst : decl.instructions)
+	{
+		if (inst.tag != ir::InstTag.ARG) continue;
+		assert(inst.ty == value_interner::REF_I64, "each eightbyte of a 12-byte INTEGER-class parameter should be i64");
+		assert(inst.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER,
+			"the two-word record should use the first two GP argument registers");
+		assert(inst.data.arg.stack_size == 0);
+		arg_count++;
+	}
+	assert(arg_count == 2, "a 12-byte record parameter should lower to two i64 ARG instructions");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_16_byte_record_call_and_return_as_pairs() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::QualType record_type = f.long_record_type(2);
+	type_store::FuncParam[1] callee_params = {
+		type_store::func_param(type_store::INT, f.comp.intern_string("seed")),
+	};
+	type_store::QualType callee_type = f.comp.type_store.put(
+		type_store::type_func(record_type, type_store::FuncKind.NORMAL, callee_params[..]));
+	NodeIndex callee_decl = f.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
+		.function = { .name_tok = 1, .qt = callee_type, .body = type_store::NODE_NULL,
+			.definition = type_store::NODE_NULL } });
+	NodeIndex callee_ref = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 1, .qt = callee_type, .decl = callee_decl } });
+	type_store::QualType callee_pointer = f.comp.type_store.put(type_store::type_pointer(callee_type));
+	NodeIndex callee = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FUNCTION_TO_POINTER, .operand = callee_ref,
+			.qt = callee_pointer, .implicit = true } });
+	NodeIndex argument = f.int_literal(7);
+	NodeIndex[1] arguments = { argument };
+	NodeIndex call = f.tree.add_node({ .kind = tree::NodeKind.CALL_EXPR,
+		.call = { .qt = record_type, .callee = callee, .args = arguments[..] } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = record_type, .operand = tree::ReturnOperandKind.EXPR, .expr = call } });
+	NodeIndex[1] statements = { ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, record_type);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	assert(graph.decls.len() == 1);
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref call_ref = ir::NONE;
+	ir::Ref call_hi_ref = ir::NONE;
+	ir::Ref return_pair_ref = ir::NONE;
+	foreach (i, ref : decl.body)
+	{
+		ir::Inst inst = decl.instructions[(usz)ref];
+		if (inst.tag == ir::InstTag.CALL) call_ref = ref;
+		if (inst.tag == ir::InstTag.CALL_HI)
+		{
+			call_hi_ref = ref;
+			assert(i > 0 && decl.body[i - 1] == inst.data.ref,
+				"CALL_HI must immediately follow the CALL whose high result it reads");
+			assert(inst.ty == value_interner::REF_I64);
+		}
+		if (inst.tag == ir::InstTag.RET_PAIR) return_pair_ref = ref;
+	}
+	assert(call_ref != ir::NONE && call_hi_ref != ir::NONE && return_pair_ref != ir::NONE,
+		"a 16-byte record call returned by its caller should use CALL/CALL_HI and RET_PAIR");
+	assert(decl.instructions[(usz)call_ref].ty == value_interner::REF_I64,
+		"the low word of an INTEGER-class 16-byte return should be i64");
+	assert(decl.instructions[(usz)return_pair_ref].data.bin.lhs != ir::NONE &&
+		decl.instructions[(usz)return_pair_ref].data.bin.rhs != ir::NONE,
+		"RET_PAIR should carry both return words");
+	assert(decl.instructions[(usz)decl.instructions[(usz)return_pair_ref].data.bin.lhs].ty == value_interner::REF_I64 &&
+		decl.instructions[(usz)decl.instructions[(usz)return_pair_ref].data.bin.rhs].ty == value_interner::REF_I64,
+		"both RET_PAIR values should be i64");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_returns_sret_pointer_for_memory_class_record() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::QualType record_type = f.long_record_type(9);
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT, .compound_stmt = { .body = {} } });
+	f.function_with_return_type(body, record_type);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref sret_arg = ir::NONE;
+	ir::Ref return_ref = ir::NONE;
+	foreach (ref : decl.body)
+	{
+		ir::Inst inst = decl.instructions[(usz)ref];
+		if (inst.tag == ir::InstTag.ARG)
+		{
+			assert(inst.ty == value_interner::REF_PTR);
+			assert(inst.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER);
+			assert(inst.data.arg.location == 0);
+			sret_arg = ref;
+		}
+		if (inst.tag == ir::InstTag.RET) return_ref = inst.data.ref;
+	}
+	assert(sret_arg != ir::NONE, "a MEMORY-class return should receive the hidden sret pointer in RDI");
+	assert(return_ref == sret_arg, "a MEMORY-class return should return its sret pointer in RAX");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_reports_sse_class_for_record_with_float_field() @test
+{
+	CodeGenFixture f;
+	f.init();
+	type_store::RecordField[1] fields = {
+		type_store::record_field(f.comp.intern_string("value"), type_store::DOUBLE),
+	};
+	fields[0].layout = { .offset_bits = 0, .size_bits = 64 };
+	type_store::RecordLayout layout = { .size_bits = 64, .field_alignment_bits = 64,
+		.pointer_alignment_bits = 64, .required_alignment_bits = 8 };
+	type_store::QualType record_type = f.comp.type_store.put(type_store::type_record(
+		f.comp.intern_string("FloatingRecord"), fields[..], layout));
+	codegen::CodeGen generator = { .comp = &f.comp };
+	fault fatal = @catch(generator.classify_record(record_type));
+	assert(fatal == compilation::FATAL_ERROR, "SSE-class aggregate classification should report its TODO");
+	assert(f.diagnostics.messages.len() == 1, "SSE classification should report one diagnostic");
+	test::eq(f.diagnostics.messages[0].text, "TODO pass and return struct/union by value: SSE class\n");
 	f.free();
 }
 
@@ -432,6 +943,444 @@ fn void gen_ir_rejects_builtin_call() @test
 	NodeIndex call = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
 		.builtin_call = { .builtin_tok = 1, .qt = type_store::VOID, .args = {} } });
 	f.expect_expression_fatal(call, "TODO CodeGen.genBuiltinCall __builtin_longjmp\n");
+	f.free();
+}
+
+fn void gen_ir_lowers_va_start_and_end_aliases() @test
+{
+	CodeGenFixture f;
+	f.init();
+	type_store::QualType va_list_type = f.va_list_pointer_type();
+	f.comp.type_store.va_list = va_list_type;
+	f.comp.builtins.get_or_create(&f.comp, "va_start")!!;
+	f.comp.builtins.get_or_create(&f.comp, "va_end")!!;
+	NodeIndex va_list = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = va_list_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex named_arg = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 0, .qt = type_store::INT, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex va_list_value = f.local_ref_value(va_list, va_list_type, 3);
+	NodeIndex named_arg_value = f.local_ref_value(named_arg, type_store::INT, 0);
+	NodeIndex[2] start_args = { va_list_value, named_arg_value };
+	NodeIndex start = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 8, .qt = type_store::VOID, .args = start_args[..] } });
+	NodeIndex[2] end_args = { va_list_value, named_arg_value };
+	NodeIndex end = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 9, .qt = type_store::VOID, .args = end_args[..] } });
+	NodeIndex[4] statements = { va_list, named_arg, start, end };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::VOID);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	bool saw_va_start = false;
+	bool saw_call = false;
+	uint pointer_loads = 0;
+	uint integer_loads = 0;
+	ir::Ref va_storage = ir::NONE;
+	ir::Ref named_arg_storage = ir::NONE;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC)
+		{
+			if (va_storage == ir::NONE)
+			{
+				va_storage = (ir::Ref)i;
+			}
+			else
+			{
+				named_arg_storage = (ir::Ref)i;
+			}
+		}
+		if (inst.tag == ir::InstTag.VA_START)
+		{
+			saw_va_start = true;
+			assert(decl.instructions[(usz)inst.data.ref].tag == ir::InstTag.LOAD &&
+				decl.instructions[(usz)inst.data.ref].data.ref == va_storage,
+				"va_start should receive gen_expr's loaded va_list pointer");
+		}
+		if (inst.tag == ir::InstTag.CALL) saw_call = true;
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_PTR) pointer_loads++;
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_I32 &&
+			inst.data.ref == named_arg_storage) integer_loads++;
+	}
+	assert(saw_va_start, "va_start alias should lower to the VA_START IR instruction");
+	assert(!saw_call, "va_start and va_end aliases should not be forwarded as library calls");
+	assert(pointer_loads == 2, "va_start and va_end should each evaluate only their va_list argument");
+	assert(integer_loads == 0, "va_start must not evaluate its second argument");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_va_copy_alias() @test
+{
+	CodeGenFixture f;
+	f.init();
+	type_store::QualType va_list_type = f.va_list_pointer_type();
+	f.comp.type_store.va_list = va_list_type;
+	f.comp.builtins.get_or_create(&f.comp, "va_copy")!!;
+	NodeIndex destination = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 2, .qt = va_list_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex source = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = va_list_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex[2] copy_args = {
+		f.local_ref_value(destination, va_list_type, 2), f.local_ref_value(source, va_list_type, 3),
+	};
+	NodeIndex copy = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 10, .qt = type_store::VOID, .args = copy_args[..] } });
+	NodeIndex[3] statements = { destination, source, copy };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::VOID);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref destination_storage = ir::NONE;
+	ir::Ref source_storage = ir::NONE;
+	ir::Ref destination_base = ir::NONE;
+	ir::Ref source_base = ir::NONE;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC)
+		{
+			if (destination_storage == ir::NONE)
+			{
+				destination_storage = (ir::Ref)i;
+			}
+			else
+			{
+				source_storage = (ir::Ref)i;
+			}
+		}
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_PTR)
+		{
+			if (inst.data.ref == destination_storage) destination_base = (ir::Ref)i;
+			if (inst.data.ref == source_storage) source_base = (ir::Ref)i;
+		}
+	}
+	assert(destination_base != ir::NONE && source_base != ir::NONE, "va_copy should evaluate both va_list pointers");
+	uint i64_loads = 0;
+	uint stores = 0;
+	uint[3] load_offsets = {};
+	uint[3] store_offsets = {};
+	ulong[3] offsets = { 0, 8, 16 };
+	foreach (inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.CALL) assert(false, "va_copy must not call memcpy or a library function");
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_I64)
+		{
+			i64_loads++;
+			foreach (i, offset : offsets)
+			{
+				if (f.ir_ptr_ref_is_at(decl.instructions, inst.data.ref, source_base, offset)) load_offsets[i]++;
+			}
+		}
+		if (inst.tag == ir::InstTag.STORE)
+		{
+			stores++;
+			foreach (i, offset : offsets)
+			{
+				if (f.ir_ptr_ref_is_at(decl.instructions, inst.data.bin.lhs, destination_base, offset)) store_offsets[i]++;
+			}
+		}
+	}
+	assert(i64_loads == 3 && stores == 3, "va_copy should copy exactly three i64 fields");
+	foreach (i, offset : offsets) assert(load_offsets[i] == 1 && store_offsets[i] == 1,
+		"va_copy should load and store its i64 field at offset %d", offset);
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_integer_and_pointer_va_arg() @test
+{
+	CodeGenFixture f;
+	f.init();
+	type_store::QualType va_list_type = f.va_list_pointer_type();
+	f.comp.type_store.va_list = va_list_type;
+	f.comp.builtins.get_or_create(&f.comp, "__builtin_va_arg")!!;
+	type_store::QualType pointer_type = f.comp.type_store.put(type_store::type_pointer(type_store::CHAR));
+	NodeIndex va_list = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = va_list_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex[1] arg = { f.local_ref_value(va_list, va_list_type, 3) };
+	NodeIndex int_value = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 7, .qt = type_store::INT, .args = arg[..] } });
+	NodeIndex pointer_value = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 7, .qt = pointer_type, .args = arg[..] } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = pointer_type, .operand = tree::ReturnOperandKind.EXPR, .expr = pointer_value } });
+	NodeIndex[3] statements = { va_list, int_value, ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, pointer_type);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref list_storage = ir::NONE;
+	ir::Ref[2] list_values = { ir::NONE, ir::NONE };
+	uint list_value_count = 0;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC && list_storage == ir::NONE) list_storage = (ir::Ref)i;
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_PTR && inst.data.ref == list_storage)
+		{
+			list_values[list_value_count++] = (ir::Ref)i;
+		}
+	}
+	assert(list_value_count == 2, "each va_arg should evaluate its va_list pointer");
+	uint branches = 0;
+	uint comparisons = 0;
+	uint gp_offset_loads = 0;
+	uint overflow_pointer_loads = 0;
+	uint register_save_area_loads = 0;
+	uint gp_offset_stores = 0;
+	uint overflow_pointer_stores = 0;
+	uint integer_results = 0;
+	uint pointer_results = 0;
+	uint phis = 0;
+	foreach (inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.BRANCH) branches++;
+		if (inst.tag == ir::InstTag.CMP_ULT)
+		{
+			comparisons++;
+			assert(f.constant_is(decl.instructions, inst.data.bin.rhs, 48, value_interner::REF_I32),
+				"va_arg should compare gp_offset against 48");
+		}
+		if (inst.tag == ir::InstTag.PHI)
+		{
+			phis++;
+			assert(inst.ty == value_interner::REF_PTR && inst.data.phi.len == 2,
+				"va_arg should join register and overflow addresses with a pointer phi");
+		}
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_I32)
+		{
+			foreach (list_value : list_values)
+			{
+				if (inst.data.ref == list_value) gp_offset_loads++;
+			}
+			if (decl.instructions[(usz)inst.data.ref].tag == ir::InstTag.PHI) integer_results++;
+		}
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_PTR)
+		{
+			foreach (list_value : list_values)
+			{
+				if (f.ir_ptr_ref_is_at(decl.instructions, inst.data.ref, list_value, 8)) overflow_pointer_loads++;
+				if (f.ir_ptr_ref_is_at(decl.instructions, inst.data.ref, list_value, 16)) register_save_area_loads++;
+			}
+			if (decl.instructions[(usz)inst.data.ref].tag == ir::InstTag.PHI) pointer_results++;
+		}
+		if (inst.tag == ir::InstTag.STORE)
+		{
+			foreach (list_value : list_values)
+			{
+				if (f.ir_ptr_ref_is_at(decl.instructions, inst.data.bin.lhs, list_value, 0)) gp_offset_stores++;
+				if (f.ir_ptr_ref_is_at(decl.instructions, inst.data.bin.lhs, list_value, 8)) overflow_pointer_stores++;
+			}
+		}
+	}
+	assert(branches == 2 && comparisons == 2 && phis == 2,
+		"each va_arg should branch on gp_offset and join both paths with a phi");
+	assert(gp_offset_loads == 2 && gp_offset_stores == 2, "va_arg should read and advance gp_offset at offset 0");
+	assert(overflow_pointer_loads == 2 && overflow_pointer_stores == 2,
+		"va_arg should read and advance overflow_arg_area at offset 8");
+	assert(register_save_area_loads == 2, "va_arg should load reg_save_area from offset 16");
+	assert(integer_results == 1 && pointer_results == 1,
+		"va_arg should load integer and pointer results through the joined address");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_passes_f80_call_arguments_in_memory_without_using_sse() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::FuncParam[2] params = {
+		type_store::func_param(type_store::LONG_DOUBLE, f.comp.intern_string("wide")),
+		type_store::func_param(type_store::DOUBLE, f.comp.intern_string("narrow")),
+	};
+	type_store::QualType callee_type = f.comp.type_store.put(
+		type_store::type_func(type_store::INT, type_store::FuncKind.NORMAL, params[..]));
+	NodeIndex callee_decl = f.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
+		.function = { .name_tok = 0, .qt = callee_type, .body = type_store::NODE_NULL,
+			.definition = type_store::NODE_NULL } });
+	NodeIndex callee_ref = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 0, .qt = callee_type, .decl = callee_decl } });
+	type_store::QualType callee_pointer = f.comp.type_store.put(type_store::type_pointer(callee_type));
+	NodeIndex callee = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.FUNCTION_TO_POINTER, .operand = callee_ref,
+			.qt = callee_pointer, .implicit = true } });
+	NodeIndex wide = f.tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL,
+		.literal = { .literal_tok = 0, .qt = type_store::LONG_DOUBLE } });
+	f.tree.set_value(wide, value::intern(&f.comp,
+		primitive_value::f80_value((primitive_value::F80Bits)((uint128)0x3fff << 64 | 0x8000000000000000))));
+	NodeIndex narrow = f.tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL,
+		.literal = { .literal_tok = 0, .qt = type_store::DOUBLE } });
+	f.tree.set_value(narrow, value::intern(&f.comp, primitive_value::f64_value(0x3ff0_0000_0000_0000)));
+	NodeIndex[2] arguments = { wide, narrow };
+	NodeIndex call = f.tree.add_node({ .kind = tree::NodeKind.CALL_EXPR,
+		.call = { .qt = type_store::INT, .callee = callee, .args = arguments[..] } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = type_store::INT, .operand = tree::ReturnOperandKind.EXPR, .expr = call } });
+	NodeIndex[1] statements = { ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::INT);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref call_ref = ir::NONE;
+	foreach (i, inst : decl.instructions) if (inst.tag == ir::InstTag.CALL) call_ref = (ir::Ref)i;
+	assert(call_ref != ir::NONE, "the function call should lower to CALL");
+	ir::CallData call_data = decl.instructions[(usz)call_ref].data.call;
+	assert(call_data.args.len == 2 && call_data.args[0] != ir::NONE && call_data.args[1] != ir::NONE);
+	assert(decl.instructions[(usz)call_data.args[0]].ty == value_interner::REF_F80 &&
+		decl.instructions[(usz)call_data.args[1]].ty == value_interner::REF_F64,
+		"the call should retain its F80 and F64 argument types");
+	assert(call_data.stack_only[0] && !call_data.stack_only[1],
+		"F80 should use memory while the following F64 remains eligible for an SSE register");
+	assert(call_data.memory_copy_bytes[0] == 0,
+		"F80's typed memory argument should use the backend's 16-byte F80 stack slot");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_loads_va_arg_long_double_from_aligned_overflow_area() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::QualType va_list_type = f.va_list_pointer_type();
+	f.comp.type_store.va_list = va_list_type;
+	f.comp.builtins.get_or_create(&f.comp, "__builtin_va_arg")!!;
+	NodeIndex va_list = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = va_list_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex[1] arg = { f.local_ref_value(va_list, va_list_type, 3) };
+	NodeIndex value = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 7, .qt = type_store::LONG_DOUBLE, .args = arg[..] } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = type_store::LONG_DOUBLE, .operand = tree::ReturnOperandKind.EXPR, .expr = value } });
+	NodeIndex[2] statements = { va_list, ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::LONG_DOUBLE);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	ir::Ref list_storage = ir::NONE;
+	ir::Ref list_value = ir::NONE;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC && list_storage == ir::NONE) list_storage = (ir::Ref)i;
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_PTR && inst.data.ref == list_storage)
+		{
+			list_value = (ir::Ref)i;
+		}
+	}
+	assert(list_storage != ir::NONE && list_value != ir::NONE, "va_arg should load its va_list pointer");
+	ir::Ref overflow_field = ir::NONE;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ADD && f.ir_ptr_ref_is_at(decl.instructions, (ir::Ref)i, list_value, 8))
+		{
+			overflow_field = (ir::Ref)i;
+		}
+	}
+	assert(overflow_field != ir::NONE, "long double va_arg should access overflow_arg_area at offset 8");
+	ir::Ref overflow_address = ir::NONE;
+	uint overflow_loads = 0;
+	uint overflow_stores = 0;
+	uint alignment_adds = 0;
+	uint alignment_ands = 0;
+	uint f80_loads = 0;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_PTR && inst.data.ref == overflow_field)
+		{
+			overflow_address = (ir::Ref)i;
+			overflow_loads++;
+		}
+	}
+	assert(overflow_address != ir::NONE && overflow_loads == 1, "overflow_arg_area should be loaded once");
+	ir::Ref unaligned_address = ir::NONE;
+	ir::Ref aligned_address = ir::NONE;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ADD && inst.data.bin.lhs == overflow_address &&
+			f.constant_is(decl.instructions, inst.data.bin.rhs, 15, value_interner::REF_I64))
+		{
+			unaligned_address = (ir::Ref)i;
+			alignment_adds++;
+		}
+		if (inst.tag == ir::InstTag.BIT_AND && inst.data.bin.lhs == unaligned_address &&
+			f.constant_is(decl.instructions, inst.data.bin.rhs, ~(ulong)15, value_interner::REF_PTR))
+		{
+			aligned_address = (ir::Ref)i;
+			alignment_ands++;
+		}
+		if (inst.tag == ir::InstTag.LOAD && inst.ty == value_interner::REF_F80 && inst.data.ref == aligned_address)
+		{
+			f80_loads++;
+		}
+		if (inst.tag == ir::InstTag.STORE && inst.data.bin.lhs == overflow_field)
+		{
+			overflow_stores++;
+			ir::Ref updated = inst.data.bin.rhs;
+			assert((usz)updated < decl.instructions.len && decl.instructions[(usz)updated].tag == ir::InstTag.ADD &&
+				decl.instructions[(usz)updated].data.bin.lhs == aligned_address &&
+				f.constant_is(decl.instructions, decl.instructions[(usz)updated].data.bin.rhs, 16, value_interner::REF_I64),
+				"long double va_arg should advance overflow_arg_area by 16 bytes from the aligned address");
+		}
+	}
+	assert(alignment_adds == 1 && alignment_ands == 1 && aligned_address != ir::NONE,
+		"long double va_arg should align overflow_arg_area up to 16 bytes");
+	assert(overflow_stores == 1 && f80_loads == 1,
+		"long double va_arg should update overflow_arg_area and load its F80 value from the aligned address");
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_keeps_unsupported_va_arg_result_as_todo() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.type_store.va_list = f.va_list_pointer_type();
+	f.comp.builtins.get_or_create(&f.comp, "__builtin_va_arg")!!;
+	NodeIndex[1] args = { f.int_literal(0) };
+	NodeIndex call = f.tree.add_node({ .kind = tree::NodeKind.BUILTIN_CALL_EXPR,
+		.builtin_call = { .builtin_tok = 7, .qt = type_store::FLOAT128, .args = args[..] } });
+	f.expect_expression_fatal(call, "TODO CodeGen.genBuiltinCall __builtin_va_arg <type>\n");
+	f.free();
+}
+
+fn void gen_ir_allows_f80_only_on_x86_64_and_keeps_other_float_widths_unsupported() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	codegen::CodeGen generator = { .comp = &f.comp };
+	generator.ensure_scalar_float_width(type_store::LONG_DOUBLE)!!;
+	f.comp.target.cpu.arch = target::Arch.AARCH64;
+	fault non_x86_fatal = @catch(generator.ensure_scalar_float_width(type_store::LONG_DOUBLE));
+	assert(non_x86_fatal == compilation::FATAL_ERROR,
+		"F80 should remain unsupported outside the x86_64 lowering path");
+	assert(f.diagnostics.messages[f.diagnostics.messages.len() - 1].text ==
+		"TODO lower non-f32/f64 floating point\n");
+	f.comp.target.cpu.arch = target::Arch.X86_64;
+	type_store::QualType[2] unsupported = { type_store::FLOAT16, type_store::FLOAT128 };
+	foreach (qt : unsupported)
+	{
+		fault fatal = @catch(generator.ensure_scalar_float_width(qt));
+		assert(fatal == compilation::FATAL_ERROR, "F16 and F128 should remain unsupported in scalar lowering");
+		assert(f.diagnostics.messages[f.diagnostics.messages.len() - 1].text ==
+			"TODO lower non-f32/f64 floating point\n");
+	}
 	f.free();
 }
 
@@ -963,6 +1912,33 @@ fn void gen_ir_lowers_static_int_initializer() @test
 	f.free();
 }
 
+fn void gen_ir_serializes_long_double_initializer_and_padding() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	NodeIndex initial_value = f.tree.add_node({ .kind = tree::NodeKind.FLOAT_LITERAL,
+		.literal = { .literal_tok = 0, .qt = type_store::LONG_DOUBLE } });
+	f.tree.set_value(initial_value, value::intern(&f.comp,
+		primitive_value::f80_value((primitive_value::F80Bits)((uint128)0x3fff << 64 | 0x8000000000000000))));
+	f.add_global(0, type_store::LONG_DOUBLE, tree::VariableStorageClass.STATIC, initial_value.pack());
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	assert(graph.decls.len() == 1);
+	ir::Decl* global = &graph.decls[0];
+	assert(global.kind == ir::DeclKind.GLOBAL);
+	assert(global.global.size == 16 && global.global.bytes.len == 16);
+	char[16] expected = { 0, 0, 0, 0, 0, 0, 0, (char)0x80, (char)0xff, 0x3f,
+		0, 0, 0, 0, 0, 0 };
+	for (usz i = 0; i < expected.len; i++)
+	{
+		assert(global.global.bytes[i] == expected[i], "long double initializer byte %d: expected %x, got %x",
+			i, (uint)(char)expected[i], (uint)(char)global.global.bytes[i]);
+	}
+	graph.free();
+	f.free();
+}
+
 fn void gen_ir_lowers_address_initializer_to_relocation() @test
 {
 	CodeGenFixture f;
@@ -1384,16 +2360,31 @@ fn void gen_ir_rejects_thread_local_global() @test
 	f.free();
 }
 
-fn void gen_ir_rejects_aggregate_global_initializer() @test
+fn void aggregate_global_initializer_serializes_elements() @test
 {
 	CodeGenFixture f;
 	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
 	type_store::QualType array_type = f.comp.type_store.put(
-		type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 1));
+		type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
+	NodeIndex[3] items = { f.int_literal(1), f.int_literal(0), f.int_literal(258) };
+	items[1] = f.tree.add_node({ .kind = tree::NodeKind.ARRAY_FILLER_EXPR,
+		.array_filler = { .qt = type_store::INT, .count = 1 } });
 	NodeIndex initializer = f.tree.add_node({ .kind = tree::NodeKind.ARRAY_INIT_EXPR,
-		.container_init = { .container_qt = array_type, .items = {} } });
+		.container_init = { .container_qt = array_type, .items = items[..] } });
 	f.add_global(2, array_type, tree::VariableStorageClass.AUTO, initializer.pack());
-	f.expect_fatal("TODO CodeGen.genVar initializer array_init_expr\n");
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	bool found = false;
+	foreach (&decl : graph.decls)
+	{
+		if (decl.kind != ir::DeclKind.GLOBAL) continue;
+		char[] b = decl.global.bytes;
+		assert(b.len == 12, "int[3] global should have 12 bytes, got %d", b.len);
+		assert(b[0] == 1 && b[4] == 0 && b[8] == 2 && b[9] == 1, "array_init/filler bytes were not serialized");
+		found = true;
+	}
+	assert(found, "no global emitted");
+	graph.free();
 	f.free();
 }
 
@@ -1598,5 +2589,216 @@ fn void gen_ir_verifier_accepts_function_with_two_returns() @test
 		.compound_stmt = { .body = statements[..] } });
 	f.function(body);
 	f.expect_verifier_success();
+	f.free();
+}
+
+fn void gen_ir_lowers_signed_bitfield_read_with_sign_extension() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::RecordField[2] fields = {
+		type_store::record_field(f.comp.intern_string("a"), type_store::INT),
+		type_store::record_field(f.comp.intern_string("b"), type_store::INT),
+	};
+	fields[0].name_tok = (type_store::TokenIndex)1;
+	fields[1].name_tok = (type_store::TokenIndex)2;
+	fields[0].bit_width = 3;
+	fields[1].bit_width = 5;
+	type_store::QualType record_type = f.computed_record_type("SignedBits", fields[..]);
+	NodeIndex local = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = record_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex first_member = f.record_member_lvalue(local, record_type, type_store::INT, 0);
+	NodeIndex first_value = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.LVAL_TO_RVAL, .operand = first_member,
+			.qt = type_store::INT, .implicit = true } });
+	NodeIndex second_member = f.record_member_lvalue(local, record_type, type_store::INT, 1);
+	NodeIndex second_value = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.LVAL_TO_RVAL, .operand = second_member,
+			.qt = type_store::INT, .implicit = true } });
+	NodeIndex sum = f.tree.add_node({ .kind = tree::NodeKind.ADD_EXPR,
+		.binary = { .qt = type_store::INT, .lhs = first_value, .op_tok = 0, .rhs = second_value } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = type_store::INT, .operand = tree::ReturnOperandKind.EXPR, .expr = sum } });
+	NodeIndex[2] statements = { local, ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function(body);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	String dump = dump_to_string(&graph, &f.ta);
+	assert(count_dump_loads_of_type(dump, "i32 ") == 2 &&
+		count_dump_occurrences(dump, "bit_shl") == 2 &&
+		count_dump_occurrences(dump, "bit_ashr") == 2,
+		"signed bitfield reads at shifts 0 and 3 should load their int storage units, shift left, then arithmetic-shift right:\n%s", dump);
+	assert(!dump.contains("bit_and"),
+		"signed bitfield reads should not mask before sign extension:\n%s", dump);
+	alloc::free(&f.ta, dump.ptr);
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_unsigned_bitfield_read_with_mask() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::RecordField[2] fields = {
+		type_store::record_field(f.comp.intern_string("a"), type_store::UINT),
+		type_store::record_field(f.comp.intern_string("b"), type_store::UINT),
+	};
+	fields[0].name_tok = (type_store::TokenIndex)1;
+	fields[1].name_tok = (type_store::TokenIndex)2;
+	fields[0].bit_width = 3;
+	fields[1].bit_width = 5;
+	type_store::QualType record_type = f.computed_record_type("UnsignedBits", fields[..]);
+	NodeIndex local = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = record_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex member = f.record_member_lvalue(local, record_type, type_store::UINT, 1);
+	NodeIndex value = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.LVAL_TO_RVAL, .operand = member,
+			.qt = type_store::UINT, .implicit = true } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = type_store::UINT, .operand = tree::ReturnOperandKind.EXPR, .expr = value } });
+	NodeIndex[2] statements = { local, ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::UINT);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	String dump = dump_to_string(&graph, &f.ta);
+	assert(count_dump_loads_of_type(dump, "i32 ") == 1 && dump.contains("bit_lshr") && dump.contains("bit_and"),
+		"unsigned bitfield reads should load their int storage unit, shift right logically, and mask:\n%s", dump);
+	assert(!dump.contains("bit_ashr"), "unsigned bitfield reads should not use arithmetic shift:\n%s", dump);
+	alloc::free(&f.ta, dump.ptr);
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_bitfield_store_as_read_modify_write() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::RecordField[2] fields = {
+		type_store::record_field(f.comp.intern_string("a"), type_store::INT),
+		type_store::record_field(f.comp.intern_string("b"), type_store::INT),
+	};
+	fields[0].name_tok = (type_store::TokenIndex)1;
+	fields[1].name_tok = (type_store::TokenIndex)2;
+	fields[0].bit_width = 3;
+	fields[1].bit_width = 5;
+	type_store::QualType record_type = f.computed_record_type("WritableBits", fields[..]);
+	NodeIndex local = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = record_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex member = f.record_member_lvalue(local, record_type, type_store::INT, 1);
+	NodeIndex assignment = f.tree.add_node({ .kind = tree::NodeKind.ASSIGN_EXPR,
+		.binary = { .qt = type_store::INT, .lhs = member, .rhs = f.int_literal(11) } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = type_store::INT, .operand = tree::ReturnOperandKind.EXPR, .expr = assignment } });
+	NodeIndex[2] statements = { local, ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function(body);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	String dump = dump_to_string(&graph, &f.ta);
+	assert(count_dump_loads_of_type(dump, "i32 ") == 1 && dump.contains("bit_and") && dump.contains("bit_shl") &&
+		dump.contains("bit_or") && dump.contains("store"),
+		"bitfield assignment should load its int storage unit, clear and replace field bits, then store:\n%s", dump);
+	ir::Ref storage = ir::NONE;
+	uint loads_from_storage = 0;
+	uint stores_to_storage = 0;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC && storage == ir::NONE)
+		{
+			storage = (ir::Ref)i;
+		}
+		if (inst.tag == ir::InstTag.LOAD && inst.data.ref == storage)
+		{
+			loads_from_storage++;
+		}
+		if (inst.tag == ir::InstTag.STORE && inst.data.bin.lhs == storage)
+		{
+			stores_to_storage++;
+		}
+	}
+	assert(storage != ir::NONE && loads_from_storage == 1 && stores_to_storage == 1,
+		"bitfield read-modify-write should use the same storage-unit pointer for its load and store");
+	alloc::free(&f.ta, dump.ptr);
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_lowers_bitfield_compound_assign_single_address() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::RecordField[2] fields = {
+		type_store::record_field(f.comp.intern_string("prefix"), type_store::INT),
+		type_store::record_field(f.comp.intern_string("bits"), type_store::INT),
+	};
+	fields[1].name_tok = (type_store::TokenIndex)2;
+	fields[1].bit_width = 3;
+	type_store::QualType record_type = f.computed_record_type("CompoundBits", fields[..]);
+	NodeIndex local = f.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 3, .qt = record_type, .storage_class = tree::VariableStorageClass.AUTO,
+			.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+	NodeIndex member = f.record_member_lvalue(local, record_type, type_store::INT, 1);
+	NodeIndex dummy = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_ASSIGN_DUMMY_EXPR,
+		.unary = { .qt = type_store::INT, .operand = member, .op_tok = 0 } });
+	NodeIndex dummy_value = f.tree.add_node({ .kind = tree::NodeKind.CAST,
+		.cast = { .kind = tree::CastKind.LVAL_TO_RVAL, .operand = dummy,
+			.qt = type_store::INT, .implicit = true } });
+	NodeIndex calculation = f.tree.add_node({ .kind = tree::NodeKind.ADD_EXPR,
+		.binary = { .qt = type_store::INT, .lhs = dummy_value, .op_tok = 0, .rhs = f.int_literal(1) } });
+	NodeIndex assignment = f.tree.add_node({ .kind = tree::NodeKind.ADD_ASSIGN_EXPR,
+		.binary = { .qt = type_store::INT, .lhs = member, .rhs = calculation } });
+	NodeIndex ret = f.tree.add_node({ .kind = tree::NodeKind.RETURN_STMT,
+		.return_stmt = { .return_qt = type_store::INT, .operand = tree::ReturnOperandKind.EXPR, .expr = assignment } });
+	NodeIndex[2] statements = { local, ret };
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function(body);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	String dump = dump_to_string(&graph, &f.ta);
+	assert(count_dump_occurrences(dump, "add ptr_ty") == 1 && dump.contains("load") && dump.contains("store"),
+		"compound assignment should compute one storage-unit address and load/store through it:\n%s", dump);
+	ir::Ref base = ir::NONE;
+	ir::Ref unit_ptr = ir::NONE;
+	uint loads_from_unit = 0;
+	uint stores_to_unit = 0;
+	foreach (i, inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.ALLOC && base == ir::NONE)
+		{
+			base = (ir::Ref)i;
+		}
+		if (inst.tag == ir::InstTag.ADD && inst.ty == value_interner::REF_PTR &&
+			f.ir_ptr_ref_is_at(decl.instructions, (ir::Ref)i, base, 4))
+		{
+			unit_ptr = (ir::Ref)i;
+		}
+		if (inst.tag == ir::InstTag.LOAD && unit_ptr != ir::NONE && inst.data.ref == unit_ptr)
+		{
+			loads_from_unit++;
+		}
+		if (inst.tag == ir::InstTag.STORE && unit_ptr != ir::NONE && inst.data.bin.lhs == unit_ptr)
+		{
+			stores_to_unit++;
+		}
+	}
+	assert(base != ir::NONE && unit_ptr != ir::NONE && loads_from_unit >= 1 && stores_to_unit == 1,
+		"compound assignment should reuse its byte-offset storage-unit pointer for its reads and store");
+	alloc::free(&f.ta, dump.ptr);
+	graph.free();
 	f.free();
 }

@@ -1,8 +1,8 @@
 // Complete C front-end parser wiring: declaration/statement grammar from
-// DeclarationParser plus the builtin, compound-literal and statement-expression
+// DeclarationParser plus the builtin and statement-expression
 // extension hooks. Shared by the CLI driver and the migration frontend probe.
 module aro::parser_frontend;
-import aro::parser, aro::parser_result, aro::parser_declaration, aro::parser_builtin, aro::parser_postfix, aro::parser_asm;
+import aro::parser, aro::parser_result, aro::parser_declaration, aro::parser_builtin;
 import aro::builtin_call, aro::tokens, aro::type_store;
 
 <*
@@ -14,23 +14,15 @@ struct FrontendHandler (parser::IParserHandler, parser::IExpressionGrammar)
 {
 	parser_declaration::DeclarationParser declarations;
 	parser_builtin::BuiltinParser builtin;
-	parser_postfix::PostfixParser postfix;
-	parser_asm::AsmParser asm_parser;
 }
-
-<* AsmParser operand callback: `context` is the FrontendHandler. *>
-fn parser_result::Result? asm_operand_expression(void* context, parser::Parser* p, bool eval)
-	=> p.expr(eval);
 
 <* Install this handler on an initialized `p` and bind the initializer seam. *>
 fn void FrontendHandler.bind(&self, parser::Parser* p)
 {
 	*self = {};
 	self.builtin = { .parser = p, .expressions = self };
-	self.postfix = { .parser = p };
-	self.asm_parser = { .parser = p, .context = self, .expression = &asm_operand_expression };
 	self.declarations = {
-		.statements = { .expressions = self, .asm_parser = &self.asm_parser },
+		.statements = { .expressions = self },
 		.implicit_typedef_prelude = true,
 	};
 	p.handler = self;
@@ -66,13 +58,6 @@ fn parser_result::Result? FrontendHandler.handle_builtin_call(&self, parser::Par
 	tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @dynamic
 {
 	return builtin_call::dispatch(null, p, callee, l_paren, args, eval);
-}
-
-fn parser_result::Result? FrontendHandler.handle_compound_literal_primary(&self, parser::Parser* p,
-	tokens::TokenIndex opening_tok, type_store::QualType qt, bool eval) @dynamic
-{
-	self.postfix.parser = p;
-	return self.postfix.parse_compound_literal(opening_tok, qt, eval: eval);
 }
 
 fn type_store::NodeIndex? FrontendHandler.handle_statement_expression_body(&self, parser::Parser* p, bool eval) @dynamic

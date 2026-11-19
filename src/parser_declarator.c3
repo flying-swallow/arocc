@@ -4,6 +4,7 @@
 module aro::parser_declarator;
 import aro::bigint, aro::parser, aro::diagnostics, aro::parser_result, aro::tokens, aro::tokenizer, aro::type_store, aro::value;
 import aro::compilation, aro::tree, aro::symbol_stack, aro::string_interner, aro::lang_opts, aro::parser_declaration;
+import aro::parser_attribute, aro::parser_statement;
 import std::collections::list;
 
 excuse PARSING_FAILED;
@@ -104,8 +105,10 @@ fn bool is_group_start(DeclaratorParser* self, bool allow_abstract)
 	return !allow_abstract && next.is_identifier();
 }
 
-<* Consume the qualifiers that follow one pointer star. *>
-fn void DeclaratorParser.pointer_qualifiers(&self, type_store::QualType* qt)
+<* Consume the qualifiers that follow one pointer star. GNU `__attribute__((...))` may appear among them (Zig
+   `typeQual(allow_attr = true)`, glibc `char *__attribute__((__nothrow__)) f(...)`);
+   they apply to the declaration being built, like prefix attributes. *>
+fn void? DeclaratorParser.pointer_qualifiers(&self, type_store::QualType* qt)
 {
 	parser::Parser* p = self.parser;
 	while (!p.at_eof())
@@ -126,6 +129,12 @@ fn void DeclaratorParser.pointer_qualifiers(&self, type_store::QualType* qt)
 				// In this position _Atomic is a type qualifier on the pointer.
 				*qt = p.comp.type_store.put(type_store::type_atomic(*qt));
 				p.advance();
+			case KEYWORD_ATTRIBUTE1: case KEYWORD_ATTRIBUTE2:
+				parser_attribute::AttributeBuffer buffer;
+				buffer.init(p.comp.gpa);
+				defer buffer.free();
+				p.parse_gnu_attribute_specifier(&buffer)!;
+				if (self.grammar && self.grammar.wip) parser_statement::append_statement_attributes(p, &buffer, self.grammar.wip)!;
 			default: return;
 		}
 	}
@@ -488,7 +497,7 @@ fn DeclaratorShape? DeclaratorParser.parse_shape(&self, type_store::QualType bas
 		{
 			p.advance();
 			prefix = p.comp.type_store.put(type_store::type_pointer(prefix));
-			self.pointer_qualifiers(&prefix);
+			self.pointer_qualifiers(&prefix)!;
 		}
 		if (groups.len() == 0) shape.after_pointers_tok = p.tok_i;
 		if (!allow_abstract && !p.at_eof() && p.tree.tokens[(usz)p.tok_i].id.is_identifier())

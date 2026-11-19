@@ -186,8 +186,23 @@ fn String argv_value_after(String[] argv, String option)
 	return "";
 }
 
-fn int run_backend_driver(String[] args, diagnostics::Diagnostics* d, BackendChild* child, String path_value)
+<* These tests observe the external assembler/linker children, so the system
+   assembler is pinned unless a test asks for -fintegrated-as (the x86_64 Linux
+   default) or `native_default` keeps the driver's own choice. *>
+fn String[] pin_external_assembler(String[] args, bool native_default)
 {
+	if (native_default || !args.len) return args;
+	foreach (a : args) if (a == "-fintegrated-as" || a == "-fno-integrated-as") return args;
+	String[] pinned = mem::temp_array(String, args.len + 1);
+	pinned[0] = args[0];
+	pinned[1] = "-fno-integrated-as";
+	foreach (i, a : args[1..]) pinned[i + 2] = a;
+	return pinned;
+}
+
+fn int run_backend_driver(String[] args, diagnostics::Diagnostics* d, BackendChild* child, String path_value, bool native_default = false)
+{
+	args = pin_external_assembler(args, native_default);
 	compilation::Compilation comp;
 	comp.init(mem, null, d);
 	comp.environment.process = { .ctx = (void*)child, .run = &backend_fake_child };
@@ -765,4 +780,56 @@ fn void driver_verbose_ast_is_accepted_with_preprocess_only() @test
 	assert(status == 0 && d.errors == 0, "-E --verbose-ast should exit 0 with no errors, got status %d and %d errors: %s; diagnostics: %s", status, d.errors, d.messages.len() > 0 ? d.messages[0].text : "none", backend_diag_text(&d));
 	assert(child.calls == 0, "-E --verbose-ast launched a backend process; diagnostics: %s", backend_diag_text(&d));
 	d.free();
+}
+
+fn void x86_64_linux_defaults_to_integrated_object_emitter() @test
+{
+	String dir = backend_scratch("default-integrated");
+	String source = backend_put(dir, "default.c", "int f(int x) { return x + 1; }\n");
+	String object_out = backend_join(dir, "default.o");
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	BackendChild child;
+	int status = run_backend_driver({ "aro", "-O0", "--target=x86_64-linux-gnu", "-c", "-nostdinc", "-nobuiltininc", "-o", object_out, source },
+		&d, &child, backend_tool_path(dir), native_default: true);
+	assert(status == 0 && d.errors == 0, "default -c failed; diagnostics: %s", backend_diag_text(&d));
+	assert(child.calls == 0, "x86_64 Linux -c should use the integrated emitter without spawning `as`; calls=%d", child.calls);
+	char[] bytes = file::load_temp(object_out)!!;
+	assert(((String)bytes).starts_with("\x7fELF"), "default -c did not write an ELF object");
+	d.free();
+}
+
+fn void codegen_todo_report_handles_multiple_unsupported_definitions() @test
+{
+	String dir = backend_scratch("codegen todo report");
+	String source = backend_put(dir, "unsupported.c",
+		"extern int seven(int, int, int, int, int, int, int);\n"
+		"int unsupported_many_args(void) { return seven(1, 2, 3, 4, 5, 6, 7); }\n"
+		"int unsupported_complex_local(void) { _Complex double local = 1.0; return 0; }\n"
+		"int supported(void) { return 42; }\n");
+	String output = backend_join(dir, "unsupported.o");
+	BackendChild child;
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	int status = run_backend_driver({ "aro", "-O0", "--target=x86_64-linux-gnu", "-fintegrated-as", "--codegen-todo-report",
+		"-c", "-nostdinc", "-nobuiltininc", "-o", output, source }, &d, &child, backend_tool_path(dir));
+	assert(status == 1, "--codegen-todo-report should exit 1 for unsupported definitions, got %d; diagnostics: %s", status, backend_diag_text(&d));
+	assert(d.messages.len() == 0 && d.errors == 0,
+		"--codegen-todo-report emitted ordinary diagnostics; diagnostics: %s", backend_diag_text(&d));
+	assert(!file::exists(output), "--codegen-todo-report created an object despite unsupported definitions");
+	d.free();
+
+	BackendChild default_child;
+	diagnostics::Diagnostics default_d;
+	default_d.init_list(mem);
+	String default_output = backend_join(dir, "unsupported-default.o");
+	int default_status = run_backend_driver({ "aro", "-O0", "--target=x86_64-linux-gnu", "-fintegrated-as",
+		"-c", "-nostdinc", "-nobuiltininc", "-o", default_output, source }, &default_d, &default_child, backend_tool_path(dir));
+	assert(default_status == 1 && default_d.messages.len() == 1 && default_d.errors == 1,
+		"without --codegen-todo-report expected one fatal TODO diagnostic; got status %d and diagnostics: %s",
+		default_status, backend_diag_text(&default_d));
+	assert(backend_diag_count(&default_d, diagnostics::MessageKind.FATAL_ERROR, "TODO lower complex types") == 1,
+		"without --codegen-todo-report the first fatal TODO changed; diagnostics: %s", backend_diag_text(&default_d));
+	assert(!file::exists(default_output), "default codegen failure created an object");
+	default_d.free();
 }

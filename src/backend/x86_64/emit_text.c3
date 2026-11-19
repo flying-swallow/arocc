@@ -13,6 +13,8 @@ fn String size_keyword(ushort bits)
 		case 16: return "word ptr ";
 		case 32: return "dword ptr ";
 		case 64: return "qword ptr ";
+		case 80: return "tbyte ptr ";
+		case 128: return "xmmword ptr ";
 		default: return "";
 	}
 }
@@ -215,6 +217,12 @@ fn String? render_asm(ir::Ir* ir, Allocator allocator, ir::ErrorList* errors, bo
 			out.append_string("\t.section .rodata\n");
 			foreach (s : lowering.strings)
 			{
+				if (s.align > 1)
+				{
+					uint align_power = 0;
+					while ((1u << align_power) < s.align) align_power++;
+					out.appendf("\t.p2align %d\n", align_power);
+				}
 				out.appendf("%s:\n\t.byte ", s.label);
 				foreach (i, b : s.bytes) { if (i) out.append_string(", "); out.appendf("%d", b); }
 				out.append_char('\n');

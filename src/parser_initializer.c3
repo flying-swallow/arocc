@@ -4,7 +4,7 @@
 // test builds may substitute them through `Parser.initializer_test_probe`.
 module aro::parser;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::init_list;
-import aro::parser_result, aro::value, aro::diagnostics, aro::parser_expression, aro::string_interner;
+import aro::parser_result, aro::value, aro::diagnostics, aro::string_interner;
 import aro::bigint;
 import std::collections::list, std::core::dstring;
 
@@ -43,7 +43,7 @@ fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::Qual
 		parser_result::Result? parsed = self.initializer_assign_expr(eval);
 		if (catch __fault = parsed)
 		{
-			if (__fault == parser_expression::NO_EXPRESSION)
+			if (__fault == NO_EXPRESSION)
 			{
 				// An initializer requires an assignment-expression. Match
 				// Parser.zig's expectResult(assignExpr): diagnose the missing
@@ -525,6 +525,17 @@ fn bool? Parser.find_scalar_initializer(&self, init_list::InitList* il, type_sto
 		tree::Node expression = result.node.get(&self.tree);
 		bool string_literal = expression.kind == tree::NodeKind.STRING_LITERAL_EXPR;
 		bool array_compound_literal = expression.kind == tree::NodeKind.COMPOUND_LITERAL_EXPR && result.qt.is(self.comp, type_store::TypeTag.ARRAY);
+		// Zig isStringInit: a string literal initializes this array whole only when
+		// the element type is an integer (char-like); for `const char *a[] = {"x"}`
+		// it initializes the first pointer element instead. Likewise an array
+		// compound literal only when its element type matches.
+		type_store::QualType target_elem = qt.get(self.comp, type_store::TypeTag.ARRAY)!!.array.elem;
+		if (string_literal && !target_elem.is(self.comp, type_store::TypeTag.INT)) string_literal = false;
+		if (array_compound_literal &&
+			!result.qt.get(self.comp, type_store::TypeTag.ARRAY)!!.array.elem.eql(target_elem, self.comp))
+		{
+			array_compound_literal = false;
+		}
 		if (!il.has_initializer() && (string_literal || array_compound_literal))
 		{
 			// The parser owner supplies direct string/array compatibility rules.
@@ -766,7 +777,7 @@ fn type_store::NodeIndex Parser.convert_sequence(&self, init_list::InitList il, 
 
 <* Construct the compound-literal AST node once a caller has parsed its type
  and initializer. Parsing the ambiguous `(type-name){...}` prefix and storage
- duration belongs to the primary-expression grammar callback. *>
+ duration belongs to the primary-expression grammar. *>
 fn type_store::NodeIndex Parser.compound_literal_node(&self, tokens::TokenIndex l_paren, type_store::QualType qt, type_store::NodeIndex initializer, tree::CompoundLiteralStorageClass storage = tree::CompoundLiteralStorageClass.AUTO, bool thread_local = false)
 {
 	return self.tree.add_node({ .kind = tree::NodeKind.COMPOUND_LITERAL_EXPR, .compound_literal = {

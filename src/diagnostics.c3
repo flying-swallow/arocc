@@ -948,6 +948,8 @@ enum Diagnostic : ushort (String fmt, MessageKind kind, DiagMeta meta, Diagnosti
 	TO_MATCH_QUESTION { "to match this '?'", NOTE, {}, PREPROCESSOR },
 	FLOAT_LITERAL_IN_EXPR { "floating point literal in preprocessor expression", ERROR, {}, PREPROCESSOR },
 	INT_LITERAL_TOO_BIG { "integer literal is too large to be represented in any integer type", ERROR, {}, PREPROCESSOR },
+	DATA_DEFINITION_NO_TYPE { "data definition has no type or storage class", WARNING, { .extension = true }, PARSER },
+	C90_UNSIGNED_DECIMAL { "this decimal constant is unsigned only in ISO C90", WARNING, {}, PREPROCESSOR },
 	IMPLICITLY_UNSIGNED_LITERAL { "integer literal is too large to be represented in a signed integer type, interpreting as unsigned", WARNING, { .has_opt = true, .opt = Option.IMPLICITLY_UNSIGNED_LITERAL, .extension = true }, PREPROCESSOR },
 	NEWLINE_EOF { "no newline at end of file", OFF, { .has_opt = true, .opt = Option.NEWLINE_EOF, .extension = true }, PREPROCESSOR },
 	MALFORMED_WARNING_CHECK { "%s expected option name (e.g. \"-Wundef\")", WARNING, { .has_opt = true, .opt = Option.MALFORMED_WARNING_CHECK, .extension = true }, PREPROCESSOR },

@@ -10,7 +10,7 @@
 // Message text is `Message.text` as rendered; types print quoted, e.g. 'int'.
 // Note: QualType.eql ignores top-level qualifiers, so qualifier expectations also assert is_const.
 module parser_postfix_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::lang_opts;
 import std::core::mem::allocators;
@@ -77,8 +77,7 @@ fn void expect_postfix_failure(PostfixFixture* f)
 	parser_result::Result? parsed = f.parser.expr();
 	if (catch parse_error = parsed)
 	{
-		assert(parse_error == parser_postfix::PARSING_FAILED || parse_error == parser_expression::PARSING_FAILED ||
-			parse_error == parser::PARSING_FAILED);
+		assert(parse_error == parser::PARSING_FAILED);
 	}
 	else
 	{

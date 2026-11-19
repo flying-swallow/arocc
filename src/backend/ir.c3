@@ -25,6 +25,10 @@ enum InstTag : char (String name)
 	SELECT { "select" },
 	JMP_VAL { "jmp_val" },
 	CALL { "call" },
+	<* High eightbyte of the immediately preceding CALL result. *>
+	CALL_HI { "call_hi" },
+	<* Initialize the SysV va_list using this variadic function's register save area. *>
+	VA_START { "va_start" },
 	ALLOC { "alloc" },
 	<* Runtime-sized stack allocation (VLA); emitted in place, freed by STACK_RESTORE or function return. *>
 	DYN_ALLOC { "dyn_alloc" },
@@ -59,21 +63,43 @@ enum InstTag : char (String name)
 	UDIV { "udiv" },
 	SREM { "srem" },
 	UREM { "urem" },
+	FADD { "fadd" },
+	FSUB { "fsub" },
+	FMUL { "fmul" },
+	FDIV { "fdiv" },
+	FCMP_OEQ { "fcmp_oeq" },
+	FCMP_UNE { "fcmp_une" },
+	FCMP_OLT { "fcmp_olt" },
+	FCMP_OLE { "fcmp_ole" },
+	FCMP_OGT { "fcmp_ogt" },
+	FCMP_OGE { "fcmp_oge" },
 	RET { "ret" },
+	<* Return two i64 eightbytes in RAX and RDX. *>
+	RET_PAIR { "ret_pair" },
 	LOAD { "load" },
 	BIT_NOT { "bit_not" },
 	NEGATE { "negate" },
+	FNEG { "fneg" },
 	TRUNC { "trunc" },
 	ZEXT { "zext" },
 	SEXT { "sext" },
+	FPTOSI { "fptosi" },
+	FPTOUI { "fptoui" },
+	SITOFP { "sitofp" },
+	UITOFP { "uitofp" },
+	FPEXT { "fpext" },
+	FPTRUNC { "fptrunc" },
 }
 
 struct BinData { Ref lhs; Ref rhs; }
+// Keep existing values stable: SSE_REGISTER is appended after the original ABI locations.
+enum ArgLocationKind : char { ORDINAL, GP_REGISTER, STACK, SSE_REGISTER }
+struct ArgData { ArgLocationKind location_kind; uint location; uint stack_size; bool stack_address; }
 struct AllocData { uint size; uint align; bool is_volatile; }
 struct DynAllocData { Ref size; uint align; }
 struct BranchData { Ref cond; Ref then_label; Ref else_label; }
 struct SwitchData { Ref target; value_interner::InternerRef[] values; Ref[] labels; Ref default_label; }
-struct CallData { Ref func; Ref[] args; }
+struct CallData { Ref func; Ref[] args; bool[] stack_only; uint[] memory_copy_bytes; }
 struct PhiInput { Ref label; Ref value; }
 
 enum DeclKind : char
@@ -123,6 +149,7 @@ struct InstData
 	{
 		<* Zig `Inst.Data.none`, used by `ARG`. The byte is ignored; C3 unions cannot contain `void`. *>
 		char none;
+		ArgData arg;
 		value_interner::InternerRef constant;
 		Ref ref;
 		AllocData alloc;
@@ -216,7 +243,7 @@ fn bool Builder.block_terminated(&self)
 	if (self.body.len() == 0) return false;
 	switch (self.instructions[(sz)self.body[self.body.len() - 1]].tag)
 	{
-		case JMP: case BRANCH: case SWITCH: case RET: case JMP_VAL: return true;
+		case JMP: case BRANCH: case SWITCH: case RET: case RET_PAIR: case JMP_VAL: return true;
 		default: return false;
 	}
 }
@@ -265,7 +292,30 @@ fn void Builder.insert_body(&self, sz at, Ref ref)
 
 fn Ref Builder.add_arg(&self, value_interner::InternerRef ty)
 {
-	Ref ref = self.append({ .tag = ARG, .data.none = 0, .ty = ty });
+	Ref ref = self.append({ .tag = ARG, .data.arg = { .location_kind = ArgLocationKind.ORDINAL }, .ty = ty });
+	self.insert_body((sz)self.arg_count, ref);
+	self.arg_count++;
+	return ref;
+}
+
+<* Add a parameter at a specific SysV integer/SSE register or incoming stack offset.
+   Stack offsets are measured from the first stack byte at rbp+16; stack_size is
+   the rounded byte footprint. stack_address returns the whole argument's address. *>
+fn Ref Builder.add_arg_at(&self, value_interner::InternerRef ty, ArgLocationKind location_kind,
+	uint location, uint stack_size, bool stack_address = false)
+{
+	assert(location_kind != ArgLocationKind.ORDINAL);
+	assert(location_kind == ArgLocationKind.GP_REGISTER || location_kind == ArgLocationKind.SSE_REGISTER ||
+		location_kind == ArgLocationKind.STACK);
+	assert(location_kind != ArgLocationKind.GP_REGISTER || location < 6);
+	assert(location_kind != ArgLocationKind.SSE_REGISTER || location < 8);
+	assert((location_kind != ArgLocationKind.GP_REGISTER && location_kind != ArgLocationKind.SSE_REGISTER) || stack_size == 0);
+	assert(location_kind != ArgLocationKind.STACK || (stack_size >= 8 && stack_size % 8 == 0));
+	assert(location_kind != ArgLocationKind.STACK || location % 8 == 0);
+	assert(location_kind != ArgLocationKind.STACK || stack_size <= (uint)(int::max - 16));
+	assert(location_kind != ArgLocationKind.STACK || location <= (uint)(int::max - 16) - stack_size);
+	assert(!stack_address || location_kind == ArgLocationKind.STACK);
+	Ref ref = self.append({ .tag = ARG, .data.arg = { location_kind, location, stack_size, stack_address }, .ty = ty });
 	self.insert_body((sz)self.arg_count, ref);
 	self.arg_count++;
 	return ref;
@@ -347,9 +397,40 @@ fn Ref Builder.add_phi(&self, PhiInput[] inputs, value_interner::InternerRef ty)
 
 fn Ref Builder.add_call(&self, Ref func, Ref[] args, value_interner::InternerRef ty)
 {
+	bool[] stack_only = alloc::new_array(&self.arena, bool, args.len);
+	uint[] memory_copy_bytes = alloc::new_array(&self.arena, uint, args.len);
+	for (usz i = 0; i < args.len; i++) { stack_only[i] = false; memory_copy_bytes[i] = 0; }
+	return self.add_call_abi(func, args, stack_only, memory_copy_bytes, ty);
+}
+
+<* Add a call with per-argument SysV placement and by-value memory-copy metadata. *>
+fn Ref Builder.add_call_abi(&self, Ref func, Ref[] args, bool[] stack_only,
+	uint[] memory_copy_bytes, value_interner::InternerRef ty)
+{
+	assert(args.len == stack_only.len && args.len == memory_copy_bytes.len);
 	Ref[] owned_args = alloc::new_array(&self.arena, Ref, args.len);
+	bool[] owned_stack_only = alloc::new_array(&self.arena, bool, args.len);
+	uint[] owned_memory_copy_bytes = alloc::new_array(&self.arena, uint, args.len);
 	owned_args[..] = args[..];
-	return self.add_inst(CALL, { .call = { func, owned_args } }, ty);
+	owned_stack_only[..] = stack_only[..];
+	owned_memory_copy_bytes[..] = memory_copy_bytes[..];
+	return self.add_inst(CALL, { .call = { func, owned_args, owned_stack_only, owned_memory_copy_bytes } }, ty);
+}
+
+<* Add the high i64 result half for the immediately preceding CALL. *>
+fn Ref Builder.add_call_hi(&self, Ref call)
+{
+	assert((usz)call < (usz)self.instructions.len(), "CALL_HI must reference an existing instruction");
+	assert(self.instructions[(sz)call].tag == CALL, "CALL_HI must reference a CALL");
+	assert(self.body.len() != 0 && self.body[(sz)(self.body.len() - 1)] == call,
+		"CALL_HI must be added immediately after its CALL");
+	return self.add_inst(CALL_HI, { .ref = call }, value_interner::REF_I64);
+}
+
+fn void Builder.add_va_start(&self, Ref va_list)
+{
+	if (self.block_terminated()) return;
+	self.add_inst(VA_START, { .ref = va_list }, value_interner::REF_VOID);
 }
 
 fn void Builder.add_switch(&self, Ref target, value_interner::InternerRef[] values, Ref[] labels, Ref default_label)
@@ -370,6 +451,12 @@ fn void Builder.add_return(&self, Ref value)
 {
 	if (self.block_terminated()) return;
 	self.add_inst(RET, { .ref = value }, value_interner::REF_NORETURN);
+}
+
+fn void Builder.add_return_pair(&self, Ref lo, Ref hi)
+{
+	if (self.block_terminated()) return;
+	self.add_inst(RET_PAIR, { .bin = { lo, hi } }, value_interner::REF_NORETURN);
 }
 
 <*
@@ -443,6 +530,16 @@ fn void Builder.finish_fn(&self, String name, Linkage linkage = Linkage.EXTERNAL
 	self.merge_global(decl);
 	self.arena.init(self.allocator, 4096);
 	self.instructions.clear(); self.body.clear(); self.arg_count = 0; self.alloc_count = 0;
+	self.current_label = NONE;
+}
+
+<* Discard the current function and reset the builder's temporary storage. *>
+fn void Builder.abort_fn(&self)
+{
+	self.arena.free();
+	self.arena.init(self.allocator, 4096);
+	self.instructions.clear(); self.body.clear(); self.arg_count = 0; self.alloc_count = 0;
+	self.current_label = NONE;
 }
 
 <*

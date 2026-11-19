@@ -4,9 +4,9 @@
 // cross-checked against src/builtin_eval.c3. No Zig executable was run;
 // these tests do not claim executable Zig parity.
 module builtin_call_tests;
-import aro::builtin_call, aro::builtins, aro::compilation, aro::diagnostics, aro::parser, aro::parser_postfix, aro::parser_result;
+import aro::builtin_call, aro::builtins, aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
 import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::target, aro::primitive_value;
+import aro::type_store, aro::value, aro::target, aro::primitive_value, aro::symbol_stack;
 import std::core::mem::allocators;
 
 struct CallOperands
@@ -24,88 +24,45 @@ struct CallOperands
 	type_store::QualType complex_double;
 }
 
-<* The fixtures intentionally recognize only builtin names, integer literals,
-   and a few named operand types; call argument parsing and dispatch remain
-   the production PostfixParser/builtin-call hook under test. *>
-fn parser_result::Result? builtin_primary(void* context, parser::Parser* p, bool eval)
+<* Parser handler that routes builtin calls to the production dispatcher; all
+   other grammar is the real expression grammar on Parser. *>
+struct CallHandler (parser::IParserHandler)
 {
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.IDENTIFIER) return parser_postfix::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	builtins::Expanded? maybe_expanded = p.comp.builtins.get_or_create(p.comp, p.tree.tok_slice(tok));
-	if (catch maybe_expanded) return parser_postfix::PARSING_FAILED~;
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.BUILTIN_REF,
-		.builtin_ref = { .name_tok = tok, .qt = maybe_expanded.qt } });
-	p.advance();
-	return { .node = node, .qt = maybe_expanded.qt };
+	bool unused;
 }
 
-fn parser_result::Result? builtin_call_argument(void* context, parser::Parser* p,
-	tokens::Precedence min_prec, bool eval)
-{
-	if (p.at_eof()) return parser_postfix::PARSING_FAILED~;
-	CallOperands* operands = (CallOperands*)context;
-	tokens::TokenIndex tok = p.tok_i;
-	tokens::TreeToken token = p.tree.tokens[(usz)tok];
-	type_store::QualType qt;
-	value::Value val = value::NONE;
-	if (token.id == tokenizer::TokenId.PP_NUM)
-	{
-		String spelling = p.tree.tok_slice(tok);
-		if (spelling.contains("."))
-		{
-			qt = type_store::DOUBLE;
-		}
-		else
-		{
-			long n = spelling == "0" ? 0 : spelling == "1" ? 1 : spelling == "2" ? 2 : 3;
-			qt = type_store::INT;
-			if (eval) val = value::int_i64(n, p.comp);
-		}
-	}
-	else if (token.id == tokenizer::TokenId.IDENTIFIER)
-	{
-		String spelling = p.tree.tok_slice(tok);
-		if (spelling == "char_arg")
-		{
-			type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
-				.decl_ref = { .name_tok = tok, .qt = type_store::CHAR, .decl = (type_store::NodeIndex)0 } });
-			p.advance();
-			return { .node = node, .qt = type_store::CHAR, .val = val };
-		}
-		if (spelling == "last")
-		{
-			type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
-				.decl_ref = { .name_tok = tok, .qt = type_store::INT, .decl = (type_store::NodeIndex)0 } });
-			p.advance();
-			return { .node = node, .qt = type_store::INT, .val = val };
-		}
-		switch
-		{
-			case spelling == "ap": qt = operands.void_pointer;
-			case spelling == "out": qt = operands.int_pointer;
-			case spelling == "const_out": qt = operands.const_int_pointer;
-			case spelling == "float_out": qt = operands.float_pointer;
-			case spelling == "vector_arg": qt = operands.int_vector;
-			case spelling == "atomic_int_pointer": qt = operands.atomic_int_pointer;
-			case spelling == "short_out": qt = operands.short_pointer;
-			case spelling == "bool_out": qt = operands.bool_pointer;
-			case spelling == "enum_out": qt = operands.enum_pointer;
-			case spelling == "struct_out": qt = operands.struct_pointer;
-			case spelling == "void_out": qt = operands.void_pointer;
-			case spelling == "complex_arg": qt = operands.complex_double;
-			case spelling == "float_arg" || spelling == "unknown_float": qt = type_store::FLOAT;
-			default: qt = type_store::INT;
-		}
-	}
-	else
-	{
-		return parser_postfix::PARSING_FAILED~;
-	}
+fn parser_result::Result? CallHandler.handle_builtin_call(&self, parser::Parser* p, type_store::NodeIndex callee,
+	tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @dynamic
+	=> builtin_call::dispatch(null, p, callee, l_paren, args, eval);
 
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = qt } });
-	p.advance();
-	return { .node = node, .qt = qt, .val = val };
+fn void seed_operand(parser::Parser* p, String name, type_store::QualType qt)
+{
+	type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .name_tok = 0, .qt = qt } });
+	p.define_symbol({ .name = p.comp.intern_string(name), .kind = symbol_stack::SymbolKind.DEF,
+		.qt = qt, .node = decl });
+}
+
+<* Declare the operand variables the call texts below use, with the types from `operands`. *>
+fn void seed_call_operands(parser::Parser* p, CallOperands* operands)
+{
+	seed_operand(p, "char_arg", type_store::CHAR);
+	seed_operand(p, "last", type_store::INT);
+	seed_operand(p, "unknown", type_store::INT);
+	seed_operand(p, "ap", operands.void_pointer);
+	seed_operand(p, "out", operands.int_pointer);
+	seed_operand(p, "const_out", operands.const_int_pointer);
+	seed_operand(p, "float_out", operands.float_pointer);
+	seed_operand(p, "vector_arg", operands.int_vector);
+	seed_operand(p, "atomic_int_pointer", operands.atomic_int_pointer);
+	seed_operand(p, "short_out", operands.short_pointer);
+	seed_operand(p, "bool_out", operands.bool_pointer);
+	seed_operand(p, "enum_out", operands.enum_pointer);
+	seed_operand(p, "struct_out", operands.struct_pointer);
+	seed_operand(p, "void_out", operands.void_pointer);
+	seed_operand(p, "complex_arg", operands.complex_double);
+	seed_operand(p, "float_arg", type_store::FLOAT);
+	seed_operand(p, "unknown_float", type_store::FLOAT);
 }
 
 <* Operand fixtures for the identifier spellings in builtin_call_argument.
@@ -163,11 +120,11 @@ fn void check_builtin_call(String text, bool eval, String diag_fragment = "", ui
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
+		CallHandler handler;
+		parser::Parser p;
+		p.init(&pp, &handler);
+		p.bind_finalized_tokens();
+		seed_call_operands(&p, &operands);
 		if (in_variadic_function || in_fixed_function)
 		{
 			type_store::FuncParam[2] params = {
@@ -181,13 +138,12 @@ fn void check_builtin_call(String text, bool eval, String diag_fragment = "", ui
 			p.function_context = { .active = true, .variadic = in_variadic_function,
 				.named_param_count = (uint)param_count, .function_qt = function_qt };
 		}
-		builtin_call::Dispatcher dispatcher;
-		parser_postfix::CallbackParts postfix_parts = { .context = &operands, .primary = &builtin_primary, .nested = &builtin_call_argument };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .builtin_call = &dispatcher, .parts = &postfix_parts };
-		parser_result::Result? maybe_result = postfix.parse(eval);
+		parser_result::Result? maybe_result = p.parse_postfix_expr(eval);
 		if (diag_fragment.len != 0)
 		{
-			assert(d.messages.len() == 1, "expected one builtin-call diagnostic, got %d", d.messages.len());
+			// Trailing notes (such as the implicit-builtin header note) belong to the one diagnostic.
+			for (sz i = 1; i < d.messages.len(); i++) assert(d.messages[i].kind == diagnostics::MessageKind.NOTE,
+				"expected one builtin-call diagnostic, got %d", d.messages.len());
 			assert(d.messages[0].text.contains(diag_fragment), "unexpected diagnostic: %s", d.messages[0].text);
 			assert(d.messages[0].has_location);
 			assert(d.messages[0].location.line_no == 1);
@@ -224,7 +180,7 @@ fn void check_builtin_call(String text, bool eval, String diag_fragment = "", ui
 				assert(result.val.is_none(), "expected an unavailable builtin-call value");
 			}
 		}
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -242,8 +198,10 @@ fn void builtin_va_start_checks_current_function_and_arguments() @test
 		"second argument to 'va_start' is not the last named parameter", 24, false, 0, false, false, true);
 	check_builtin_call("__builtin_va_start(ap, last)\n", true, "", 0,
 		false, 0, false, false, true);
-	check_builtin_call("va_start(ap, last)\n", true, "", 0,
-		false, 0, false, false, true);
+	// The bare library name resolves to the builtin through the primary grammar,
+	// which warns that it is implicitly declared (no <stdarg.h> include).
+	check_builtin_call("va_start(ap, last)\n", true,
+		"implicitly declaring library function 'va_start'", 1, false, 0, false, false, true);
 	check_builtin_call("__builtin_va_start(ap, last, 2)\n", true,
 		"expected closing ')'", 24, false, 0, false, false, true);
 }
@@ -306,15 +264,12 @@ fn void builtin_overflow_call_preserves_original_argument_nodes_and_types() @tes
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		builtin_call::Dispatcher dispatcher;
-		parser_postfix::CallbackParts postfix_parts = { .context = &operands, .primary = &builtin_primary, .nested = &builtin_call_argument };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .builtin_call = &dispatcher, .parts = &postfix_parts };
-		parser_result::Result? maybe_result = postfix.parse(true);
+		CallHandler handler;
+		parser::Parser p;
+		p.init(&pp, &handler);
+		p.bind_finalized_tokens();
+		seed_call_operands(&p, &operands);
+		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
 		assert(d.messages.len() == 0, "unexpected overflow builtin-call diagnostic");
 		parser_result::Result result = maybe_result!!;
 		assert(result.qt.eql(type_store::BOOL, &comp), "overflow builtin result must stay bool");
@@ -337,7 +292,7 @@ fn void builtin_overflow_call_preserves_original_argument_nodes_and_types() @tes
 		}
 		assert(call.builtin_call.args[2].qt(&p.tree).eql(operands.int_pointer, &comp),
 			"overflow result argument should retain its original pointer type");
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -379,15 +334,12 @@ fn void check_builtin_call_diagnostics(String text, String fragment, uint expect
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		builtin_call::Dispatcher dispatcher;
-		parser_postfix::CallbackParts postfix_parts = { .context = &operands, .primary = &builtin_primary, .nested = &builtin_call_argument };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .builtin_call = &dispatcher, .parts = &postfix_parts };
-		parser_result::Result? maybe_result = postfix.parse(true);
+		CallHandler handler;
+		parser::Parser p;
+		p.init(&pp, &handler);
+		p.bind_finalized_tokens();
+		seed_call_operands(&p, &operands);
+		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
 		assert(d.messages.len() == (sz)expected_count, "expected %d builtin-call diagnostic(s), got %d",
 			expected_count, d.messages.len());
 		for (sz i = 0; i < d.messages.len(); i++)
@@ -402,7 +354,7 @@ fn void check_builtin_call_diagnostics(String text, String fragment, uint expect
 		parser_result::Result result = maybe_result!!;
 		assert(result.node.get(&p.tree).kind == tree::NodeKind.BUILTIN_CALL_EXPR,
 			"builtin-call diagnostics should preserve the builtin-call AST node");
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -435,22 +387,19 @@ fn void check_builtin_call_type(String text, String expected, String triple = ""
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		builtin_call::Dispatcher dispatcher;
-		parser_postfix::CallbackParts postfix_parts = { .context = &operands, .primary = &builtin_primary, .nested = &builtin_call_argument };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .builtin_call = &dispatcher, .parts = &postfix_parts };
-		parser_result::Result? maybe_result = postfix.parse(true);
+		CallHandler handler;
+		parser::Parser p;
+		p.init(&pp, &handler);
+		p.bind_finalized_tokens();
+		seed_call_operands(&p, &operands);
+		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
 		assert(d.messages.len() == 0, "unexpected builtin-call diagnostic");
 		parser_result::Result result = maybe_result!!;
 		assert(result.node.get(&p.tree).kind == tree::NodeKind.BUILTIN_CALL_EXPR,
 			"recognized builtin calls should retain the builtin-call AST node");
 		String got = result.qt.tprint(&comp);
 		assert(got == expected, "expected builtin-call result type '%s', got '%s'", expected, got);
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -543,15 +492,12 @@ fn void check_arm_exclusive_call(String text, String[] diag_fragments, uint[] di
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		builtin_call::Dispatcher dispatcher;
-		parser_postfix::CallbackParts postfix_parts = { .context = &operands, .primary = &builtin_primary, .nested = &builtin_call_argument };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .builtin_call = &dispatcher, .parts = &postfix_parts };
-		parser_result::Result? maybe_result = postfix.parse(true);
+		CallHandler handler;
+		parser::Parser p;
+		p.init(&pp, &handler);
+		p.bind_finalized_tokens();
+		seed_call_operands(&p, &operands);
+		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
 		assert(d.messages.len() == diag_fragments.len, "expected %d ARM exclusive diagnostic(s), got %d",
 			diag_fragments.len, d.messages.len());
 		for (sz i = 0; i < (sz)diag_fragments.len; i++)
@@ -573,7 +519,7 @@ fn void check_arm_exclusive_call(String text, String[] diag_fragments, uint[] di
 			// The parse outcome of a diagnosed call is not pinned here; only its diagnostics are.
 			if (catch maybe_result) {}
 		}
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();

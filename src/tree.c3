@@ -1145,7 +1145,7 @@ fn void Tree.set_node(&self, Node node, sz index)
 	repr.tok = 0;
 	switch (node.kind.family)
 	{
-		case DECL: self.encode_decl(node, &repr);
+		case DECL: repr = self.encode_decl(node);
 		case STMT:
 		case EXPR: self.encode_expr_stmt(node, &repr);
 	}

@@ -9,8 +9,8 @@
 //   regBitSize/memBitSize/immBitSize, isSigned, toReg) are enum associated
 //   values. `exact` stands for Zig's `toReg() != .none` (the operand names one
 //   specific register, so only that register matches).
-// - Only x86_64 rows are generated, so `findByMnemonic`'s feature filter
-//   reduces to nothing; the "shortest encoding" choice uses `Entry.estimate_len`.
+// - x86_64 baseline rows plus approved legacy SSE/SSE2 and selected x87 rows
+//   are generated; the "shortest encoding" choice uses `Entry.estimate_len`.
 // - Operands also carry symbol and label references; those classify as `rel32`
 //   (branch/call targets) or rip-relative memory, which an assembler or a later
 //   machine-code emitter turns into relocations.
@@ -203,8 +203,12 @@ fn Op Operand.op(self)
 				case RIP: return Op.RIP;
 				case EIP: return Op.EIP;
 				case IP: return Op.IP;
+				case ST0: return Op.ST0;
+				case XMM0: return Op.XMM0;
 				default: break;
 			}
+			if (self.reg.class == X87) return Op.ST;
+			if (self.reg.class == SSE) return Op.XMM;
 			switch (self.reg.bits)
 			{
 				case 8: return Op.R8;
@@ -244,7 +248,7 @@ fn usz Entry.estimate_len(&self)
 	usz len = self.opc_len;
 	switch (self.mode)
 	{
-		case SHORT: case LONG: case REX: len += 1;
+		case SHORT: case LONG: case REX: case WAIT: len += 1;
 		case REX_SHORT: len += 2;
 		default: break;
 	}

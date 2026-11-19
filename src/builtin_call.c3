@@ -4,7 +4,7 @@ module aro::builtin_call;
 import aro::builtin_defs::aarch64, aro::builtin_defs::arm, aro::builtin_defs::common;
 import aro::builtin_eval, aro::builtins, aro::builtin_properties;
 import aro::lang_opts;
-import aro::parser, aro::diagnostics, aro::parser_postfix, aro::parser_result;
+import aro::parser, aro::diagnostics, aro::parser_result;
 import aro::tree, aro::tokens, aro::type_store, aro::value;
 import std::core::dstring;
 
@@ -516,7 +516,7 @@ fn void? check_va_start_arg(parser::Parser* p, tokens::TokenIndex builtin_tok,
 
 		type_store::NodeIndex last_arg = args[1];
 		tree::Node arg_node = last_arg.get(&p.tree);
-		// PostfixParser applies lvalue conversion and vararg promotions before
+		// parse_postfix_expr applies lvalue conversion and vararg promotions before
 		// the builtin hook, while Zig skips them for this argument. Peel those
 		// implicit casts so the original decl-ref remains visible here.
 		while (arg_node.kind == tree::NodeKind.CAST && arg_node.cast.implicit)
@@ -549,16 +549,6 @@ fn parser_result::Result? builtin_argument_type_error(parser::Parser* p, type_st
 	return parser::PARSING_FAILED~;
 }
 
-<* `parser::IBuiltinCall` over `dispatch`. Stateless; install with `.builtin_call = &dispatcher`. *>
-struct Dispatcher (parser::IBuiltinCall)
-{
-	bool unused;
-}
-
-fn parser_result::Result? Dispatcher.parse_builtin_call(&self, parser::Parser* p, type_store::NodeIndex callee,
-	tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @dynamic
-	=> dispatch(null, p, callee, l_paren, args, eval);
-
 <* Validate calls for known builtins. Unknown names and custom-typecheck builtins
    without a ported call rule return NO_BUILTIN_CALL so the ordinary call path
    retains its existing behavior. *>
@@ -566,14 +556,14 @@ fn parser_result::Result? dispatch(void* context, parser::Parser* p,
 	type_store::NodeIndex callee, tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval)
 {
 	tree::Node callee_node = callee.get(&p.tree);
-	if (callee_node.kind != tree::NodeKind.BUILTIN_REF) return parser_postfix::NO_BUILTIN_CALL~;
+	if (callee_node.kind != tree::NodeKind.BUILTIN_REF) return parser::NO_BUILTIN_CALL~;
 	tokens::TokenIndex builtin_tok = callee_node.builtin_ref.name_tok;
 	String name = p.tree.tok_slice(builtin_tok);
 	builtins::Expanded? maybe_expanded = p.comp.builtins.get_or_create(p.comp, name);
-	if (catch maybe_expanded) return parser_postfix::NO_BUILTIN_CALL~;
+	if (catch maybe_expanded) return parser::NO_BUILTIN_CALL~;
 	builtins::Expanded expanded = maybe_expanded;
 	type_store::Func? maybe_fn = expanded.qt.get_func(p.comp);
-	if (catch maybe_fn) return parser_postfix::NO_BUILTIN_CALL~;
+	if (catch maybe_fn) return parser::NO_BUILTIN_CALL~;
 	type_store::Func fn_ty = maybe_fn;
 	bool custom = expanded.attributes.custom_typecheck;
 	uint expected = 0;
@@ -610,7 +600,7 @@ fn parser_result::Result? dispatch(void* context, parser::Parser* p,
 			// va_start. The remaining custom va_start tags are intentionally left
 			// to ordinary call handling: __builtin_ms_va_start,
 			// __builtin_c23_va_start, and __builtin_zos_va_start.
-			return parser_postfix::NO_BUILTIN_CALL~;
+			return parser::NO_BUILTIN_CALL~;
 		}
 	}
 	else

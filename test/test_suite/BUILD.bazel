@@ -34,7 +34,8 @@ filegroup(
 
 [test_suite_area(area) for area in AREAS]
 
-# Native Linux x86-64 cases: compile with aro_c3 (-O1 by default), link with
+# Native Linux x86-64 cases: compile with aro_c3 using the default -O1, -O0,
+# -O2, --x86-64-spill-all, -fintegrated-as, or -fno-integrated-as, link with
 # the declared cc, run and compare the exit status. Other hosts skip them.
 test_suite_area("run", native = True)
 
@@ -43,6 +44,13 @@ test_suite_area(
     name = "test_suite_run_o0",
     native = True,
     env = {"ARO_C3_OPT": "-O0"},
+)
+
+test_suite_area(
+    "run",
+    name = "test_suite_run_o2",
+    native = True,
+    env = {"ARO_C3_OPT": "-O2"},
 )
 
 test_suite_area(
@@ -59,12 +67,21 @@ test_suite_area(
     env = {"ARO_C3_FLAGS": "-fintegrated-as"},
 )
 
+test_suite_area(
+    "run",
+    name = "test_suite_run_system_as",
+    native = True,
+    env = {"ARO_C3_FLAGS": "-fno-integrated-as"},
+)
+
 test_suite(
     name = "all",
     tests = ["test_suite_" + area for area in AREAS] + [
         "test_suite_run",
         "test_suite_run_o0",
+        "test_suite_run_o2",
         "test_suite_run_spill_all",
         "test_suite_run_integrated_as",
+        "test_suite_run_system_as",
     ],
 )

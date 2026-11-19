@@ -237,6 +237,16 @@ fn void verbose_ir_does_not_enable_hidden_ir_verification() @test
 	check(verify_only.verbose_ir, false);
 }
 
+fn void codegen_todo_report_flag_is_recorded() @test
+{
+	DriverOptions opts;
+	opts.init(mem);
+	defer opts.free();
+	check(opts.codegen_todo_report, false);
+	parse_options(&opts, { "aro", "--codegen-todo-report", "source.c" });
+	check(opts.codegen_todo_report, true);
+}
+
 fn void debug_format_enum_contract_is_available() @test
 {
 	CodeGenOptions options = code_gen_options::DEFAULT;
@@ -276,9 +286,11 @@ fn void integrated_assembler_options_follow_argument_order() @test
 	opts.init(mem);
 	defer opts.free();
 	check(opts.integrated_as, false);
+	check(opts.has_integrated_as, false);
 
 	parse_options(&opts, { "aro", "-fintegrated-as", "source.c" });
 	check(opts.integrated_as, true);
+	check(opts.has_integrated_as, true);
 	parse_options(&opts, { "aro", "-fno-integrated-as", "source.c" });
 	check(opts.integrated_as, false);
 

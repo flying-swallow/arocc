@@ -125,14 +125,17 @@ fn Unpacked PrimitiveValue.unpack(self)
 
 fn void wide_raise(FloatStatus* status, FloatStatus flags) @local
 {
-	if (status) *status = *status | flags;
+	if (status) * status = *status | flags;
 }
 
 <* Number of significant bits of x (0 for 0). *>
 fn int wide_bitlen(uint128 x) @local => x == 0 ? 0 : 128 - (int)x.clz();
 
 fn uint128 wide_f128_bits(F128Bits x) @local => (uint128)x.hi << 64 | (uint128)x.lo;
-fn F128Bits wide_f128_from(uint128 x) @local => { .lo = (ulong)x, .hi = (ulong)(x >> 64) };
+fn F128Bits wide_f128_from(uint128 x) @local =>
+{
+	.lo = (ulong)x, .hi = (ulong)(x >> 64)
+};
 
 <* Low `n` bits set, 0 <= n <= 128. *>
 fn uint128 wide_low_mask(long n) @local
@@ -306,13 +309,13 @@ fn F128Bits PrimitiveValue.to_f128(self)
 			uint128 sign = u.sign ? (uint128)1 << 127 : 0;
 			switch (u.cls)
 			{
-				case NAN:
-					return wide_f128_from(sign | (uint128)0x7FFF << 112 | u.sig << (112 - fmt.frac_bits));
-				case INFINITE:
-					return inf(F128, u.sign).f128();
-				default:
-					return round_pack(F128, u.sign, u.exp, u.sig, false).f128();
-			}
+			case NAN:
+				return wide_f128_from(sign | (uint128)0x7FFF << 112 | u.sig << (112 - fmt.frac_bits));
+			case INFINITE:
+				return inf(F128, u.sign).f128();
+			default:
+				return round_pack(F128, u.sign, u.exp, u.sig, false).f128();
+		}
 	}
 }
 
@@ -335,7 +338,11 @@ fn PrimitiveValue from_f128(F128Bits x, PrimitiveType dest, RoundingMode rm = NE
 			{
 				ulong lo = (ulong)(u.sig >> 49) | 0x8000_0000_0000_0000;
 				ushort hi = u.sign ? 0xFFFF : 0x7FFF;
-				return f80_value({ .lo = lo, .hi = hi });
+				return f80_value(
+				{
+					.lo = lo, .hi = hi
+				}
+				);
 			}
 			FloatFormat fmt = dest.format;
 			uint128 quiet_bit = (uint128)1 << (fmt.frac_bits - 1);
@@ -395,15 +402,15 @@ fn WideU256 wide_shr256(WideU256 x, long n, bool* sticky) @local
 	if (n <= 0) return x;
 	if (n >= 256)
 	{
-		if (x.hi != 0 || x.lo != 0) *sticky = true;
+		if (x.hi != 0 || x.lo != 0) * sticky = true;
 		return {};
 	}
 	if (n >= 128)
 	{
-		if (x.lo != 0 || (x.hi & wide_low_mask(n - 128)) != 0) *sticky = true;
+		if (x.lo != 0 || (x.hi & wide_low_mask(n - 128)) != 0) * sticky = true;
 		return { .hi = 0, .lo = x.hi >> (n - 128) };
 	}
-	if ((x.lo & wide_low_mask(n)) != 0) *sticky = true;
+	if ((x.lo & wide_low_mask(n)) != 0) * sticky = true;
 	return { .hi = x.hi >> n, .lo = (x.lo >> n) | (x.hi << (128 - n)) };
 }
 
@@ -685,7 +692,7 @@ fn bool wide_f128_nan_rules(PrimitiveValue a, PrimitiveValue b, F128Bits* out, F
 	{
 		wide_raise(status, { .invalid = true });
 	}
-	*out = an ? a.quiet().f128() : b.quiet().f128();
+	* out = an ? a.quiet().f128() : b.quiet().f128();
 	return true;
 }
 
@@ -825,7 +832,11 @@ fn PrimitiveValue wide_fma_exact(Unpacked x, Unpacked y, Unpacked z, FloatStatus
 	int shp = 250 - (wide_bitlen256(p) - 1);
 	int shz = 250 - (wide_bitlen(z.sig) - 1);
 	WideU256 a = wide_shl256(p, shp);
-	WideU256 b = wide_shl256({ .hi = 0, .lo = z.sig }, shz);
+	WideU256 b = wide_shl256(
+	{
+		.hi = 0, .lo = z.sig
+	}
+	, shz);
 	long ea = (long)x.exp + y.exp - shp;
 	long eb = (long)z.exp - shz;
 	bool sa = ps;

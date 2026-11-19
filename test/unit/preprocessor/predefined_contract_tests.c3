@@ -98,8 +98,6 @@ fn void provider_and_features() @test
 	test::eq(target::parse_feature_name(X86_64, "avx512vbmi")!!, Feature.X86_AVX512VBMI);
 	test::eq(target::parse_feature_name(AARCH64, "sme2")!!, Feature.AARCH64_SME2);
 	test::eq(target::parse_feature_name(WASM32, "tail_call")!!, Feature.WASM_TAIL_CALL);
-	// Every Feature fits in FeatureSet.
-	test::eq((usz)Feature::len <= target::FEATURE_WORDS * 64, true);
 	// wasm features are contiguous and in Zig declaration (alphabetical) order.
 	String prev = "";
 	usz wasm_count;

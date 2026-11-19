@@ -1,16 +1,14 @@
-// Primary and postfix expression productions for the typed C3 parser.
-// Identifier resolution, generic selection, casts and compound literals remain
-// callbacks because they depend on outer grammar state. GNU statement
-// expressions use a separate callback for their compound-statement body.
-module aro::parser_postfix;
+// Postfix expression grammar on Parser (`parse_postfix_expr`): calls,
+// subscripts, member access, postfix `++`/`--`, compound literals and GNU
+// statement expressions, whose compound body comes from the parser handler.
+module aro::parser;
 import aro::primitive_value;
-import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
+import aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::compilation, aro::lang_opts;
 import aro::string_interner, aro::bigint;
 import aro::builtins, aro::builtin_defs::common;
 import std::collections::list;
 
-excuse PARSING_FAILED;
 <* The optional builtin-call hook does not recognize this callee and wants ordinary call handling. *>
 excuse NO_BUILTIN_CALL;
 
@@ -34,11 +32,6 @@ fn bool is_unpromoted_builtin_callee(parser::Parser* p, type_store::NodeIndex ca
 	return false;
 }
 
-// Callback shapes used by CallbackParts (test builds only).
-alias PrimaryExpression @feat(TESTING) = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias NestedExpression @feat(TESTING) = fn parser_result::Result?(void* context, parser::Parser* p, tokens::Precedence min_prec, bool eval);
-alias CompoundLiteralExpression @feat(TESTING) = fn parser_result::Result?(void* context, parser::Parser* p,
-	tokens::TokenIndex opening_tok, type_store::QualType qt, bool eval);
 
 <* Parsed statement-expression compound. `qt` is the type of the final
    expression statement, or void when the compound has no final expression. *>
@@ -48,10 +41,6 @@ struct StatementExpressionBodyResult
 	type_store::QualType qt;
 }
 
-<* Parse the compound statement starting at the current `{`. The callback
-   owns statement grammar and returns its compound node plus final expression
-   type; it must leave the parser at the token after the matching `}`. *>
-alias StatementExpressionBodyParser @feat(TESTING) = fn StatementExpressionBodyResult?(void* context, parser::Parser* p, bool eval);
 
 struct AttributeDeclSpanCheckpoint
 {
@@ -60,101 +49,13 @@ struct AttributeDeclSpanCheckpoint
 	uint len;
 }
 
-<* GNU statement expressions `({ ... })`, supplied by the statement grammar. *>
-interface IStatementExpressionBody
-{
-	<* Parse the compound statement starting at the current `{` and return its
-	   node plus the type of its final expression statement (void when none).
-	   Must leave the parser at the token after the matching `}`. *>
-	fn StatementExpressionBodyResult? parse_statement_expression_body(parser::Parser* p, bool eval);
-}
 
-struct PostfixParser
-{
-	parser::Parser* parser;
-	<* `parse_primary` and `parse_nested` productions. *>
-	parser::IExpressionParts parts;
-	<* Statement expressions; null when `({` is not a statement expression. *>
-	IStatementExpressionBody statement_body;
-	<* Builtin-call semantic checking; null when calls are never builtins. *>
-	parser::IBuiltinCall builtin_call;
-}
-
-fn parser_result::Result? PostfixParser.primary(&self, bool eval)
-{
-	parser::IExpressionParts g = self.parts;
-	if (!g || !& g.parse_primary)
-	{
-		self.parser.grammar_unavailable()!; return PARSING_FAILED~;
-	}
-	return g.parse_primary(self.parser, eval);
-}
-
-fn parser_result::Result? PostfixParser.nested(&self, tokens::Precedence min_prec, bool eval)
-{
-	parser::IExpressionParts g = self.parts;
-	if (!g || !& g.parse_nested)
-	{
-		self.parser.grammar_unavailable()!; return PARSING_FAILED~;
-	}
-	return g.parse_nested(self.parser, min_prec, eval);
-}
-
-<*
- An IExpressionParts / IStatementExpressionBody over plain callbacks, for
- focused grammar tests that supply individual productions. Test builds only. A
- null callback is HOOK_ABSENT. `expression_context`, when set, is passed to
- `nested` instead of `context`.
-*>
-struct CallbackParts (parser::IExpressionParts, IStatementExpressionBody) @feat(TESTING)
-{
-	void* context;
-	void* expression_context;
-	PrimaryExpression operand;
-	PrimaryExpression primary;
-	NestedExpression nested;
-	CompoundLiteralExpression compound_literal;
-	void* statement_expression_context;
-	StatementExpressionBodyParser statement_expression_body;
-}
-
-fn parser_result::Result? CallbackParts.parse_operand(&self, parser::Parser* p, bool eval) @dynamic @feat(TESTING)
-{
-	if (!self.operand) return parser::HOOK_ABSENT~;
-	return self.operand(self.context, p, eval);
-}
-
-fn parser_result::Result? CallbackParts.parse_primary(&self, parser::Parser* p, bool eval) @dynamic @feat(TESTING)
-{
-	if (!self.primary) return parser::HOOK_ABSENT~;
-	return self.primary(self.context, p, eval);
-}
-
-fn parser_result::Result? CallbackParts.parse_nested(&self, parser::Parser* p, tokens::Precedence min_prec, bool eval) @dynamic @feat(TESTING)
-{
-	if (!self.nested) return parser::HOOK_ABSENT~;
-	return self.nested(self.expression_context ? self.expression_context: self.context, p, min_prec, eval);
-}
-
-fn parser_result::Result? CallbackParts.parse_compound_literal(&self, parser::Parser* p, tokens::TokenIndex opening_tok,
-	type_store::QualType qt, bool eval) @dynamic @feat(TESTING)
-{
-	if (!self.compound_literal) return parser::HOOK_ABSENT~;
-	return self.compound_literal(self.context, p, opening_tok, qt, eval);
-}
-
-fn StatementExpressionBodyResult? CallbackParts.parse_statement_expression_body(&self, parser::Parser* p, bool eval) @dynamic @feat(TESTING)
-{
-	if (!self.statement_expression_body) return parser::HOOK_ABSENT~;
-	return self.statement_expression_body(self.statement_expression_context, p, eval);
-}
-
-<* Helper for a primary-expression callback after it has recognized and parsed
-   the `(type-name)` prefix of a compound literal. *>
-fn parser_result::Result? PostfixParser.parse_compound_literal(&self, tokens::TokenIndex l_paren, type_store::QualType qt,
+<* Compound literal initializer and node, after the `(type-name)` prefix has been
+   parsed; the current token is the `{`. *>
+fn parser_result::Result? Parser.parse_compound_literal(&self, tokens::TokenIndex l_paren, type_store::QualType qt,
 	tree::CompoundLiteralStorageClass storage = tree::CompoundLiteralStorageClass.AUTO, bool thread_local = false, bool eval = true)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	parser::InitContext context = p.init_context;
 	if (storage == tree::CompoundLiteralStorageClass.STATIC || thread_local || !p.function_context.active)
 	{
@@ -182,30 +83,17 @@ fn parser_result::Result? PostfixParser.parse_compound_literal(&self, tokens::To
 	return { .node = literal, .qt = qt, .val = value::NONE };
 }
 
-fn bool PostfixParser.at(self, tokenizer::TokenId id)
-{
-	parser::Parser* p = self.parser;
-	return !p.at_eof() && p.tree.tokens[(usz)p.tok_i].id == id;
-}
-
-fn void? PostfixParser.expect(&self, tokenizer::TokenId id)
-{
-	return self.parser.expect(id);
-}
 
 <* Undo state that a failed compound callback may have left behind. Parsed
    declarations are abandoned with the malformed expression, so their tree
    attributes and attribute-map entries must be removed together. *>
-fn void PostfixParser.restore_statement_expression_state(&self, usz scope_depth, bool extension_suppressed,
+fn void Parser.restore_statement_expression_state(&self, usz scope_depth, bool extension_suppressed,
 	usz attribute_count, usz attribute_extra_count, list::List{AttributeDeclSpanCheckpoint} * saved_decl_attrs)
 {
-	parser::Parser* p = self.parser;
-	if (p.symbols_initialized)
-	{
-		// SymbolStack retains popped scopes, so resetting active_len also
-		// reactivates the original scopes without clearing their contents.
-		p.symbols.active_len = scope_depth;
-	}
+	parser::Parser* p = self;
+	// SymbolStack retains popped scopes, so resetting active_len also
+	// reactivates the original scopes without clearing their contents.
+	p.symbols.active_len = scope_depth;
 	p.extension_suppressed = extension_suppressed;
 	while (p.tree.attr_map.attributes.len() > (sz)attribute_count) p.tree.attr_map.attributes.pop()!!;
 	while (p.tree.attr_map.extra.len() > (sz)attribute_extra_count) p.tree.attr_map.extra.pop()!!;
@@ -216,13 +104,30 @@ fn void PostfixParser.restore_statement_expression_state(&self, usz scope_depth,
 	}
 }
 
-<* Parse the GNU `({ ... })` primary form when its statement-body owner is
-   bound. The callback returns the compound and its final expression type;
-   this layer owns the surrounding parentheses, diagnostics, and STMT_EXPR. *>
-fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens::TokenIndex l_paren,
+<* Parse the compound statement starting at the current `{` through the handler's
+   statement grammar, and type it by its final expression statement (void when
+   none). Leaves the parser at the token after the matching `}`. *>
+fn StatementExpressionBodyResult? Parser.parse_statement_expression_body(&self, bool eval) @noinline
+{
+	type_store::NodeIndex body = self.handler.handle_statement_expression_body(self, eval)!;
+	tree::Node compound = body.get(&self.tree);
+	if (compound.kind != tree::NodeKind.COMPOUND_STMT) return PARSING_FAILED~;
+	type_store::QualType result_qt = type_store::VOID;
+	if (compound.compound_stmt.body.len != 0)
+	{
+		type_store::NodeIndex last = compound.compound_stmt.body[compound.compound_stmt.body.len - 1];
+		if (last.get(&self.tree).kind.family == tree::NodeFamily.EXPR) result_qt = last.qt(&self.tree);
+	}
+	return { .body = body, .qt = result_qt };
+}
+
+<* Parse the GNU `({ ... })` primary form when the handler provides statement
+   bodies. The handler parses the compound; this layer owns the surrounding
+   parentheses, diagnostics, scope/attribute rollback and STMT_EXPR. *>
+fn parser_result::Result? Parser.parse_statement_expression(&self, tokens::TokenIndex l_paren,
 	tokens::TokenIndex l_brace, bool eval)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	Diagnostic.GNU_STATEMENT_EXPRESSION.@emit(p, l_brace)!;
 	if (!p.function_context.active)
 	{
@@ -230,7 +135,7 @@ fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens
 		return PARSING_FAILED~;
 	}
 
-	usz saved_scope_depth = p.symbols_initialized ? p.symbols.active_len : 0;
+	usz saved_scope_depth = p.symbols.active_len;
 	bool saved_extension_suppressed = p.extension_suppressed;
 	usz saved_attribute_count = (usz)p.tree.attr_map.attributes.len();
 	usz saved_attribute_extra_count = (usz)p.tree.attr_map.extra.len();
@@ -249,7 +154,7 @@ fn parser_result::Result? PostfixParser.parse_statement_expression(&self, tokens
 	defer if (!completed) self.restore_statement_expression_state(saved_scope_depth,
 		saved_extension_suppressed, saved_attribute_count, saved_attribute_extra_count, &saved_decl_attrs);
 
-	StatementExpressionBodyResult body = self.statement_body.parse_statement_expression_body(p, eval)!;
+	StatementExpressionBodyResult body = self.parse_statement_expression_body(eval)!;
 	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
 	completed = true;
 
@@ -467,10 +372,10 @@ fn void? check_single_subscript(parser::Parser* p, parser_result::Result base, p
  A valid integer index gets C integer promotion once the roles are known. Clang
  `__single` bases are checked against the raw operands (check_single_subscript).
 *>
-fn parser_result::Result? PostfixParser.array_subscript(&self, parser_result::Result array_before,
+fn parser_result::Result? Parser.array_subscript(&self, parser_result::Result array_before,
 	parser_result::Result index_before, tokens::TokenIndex bracket)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	parser_result::Result ptr = array_before;
 	parser_result::Result index = index_before;
 	ptr.value_conversion(p);
@@ -644,9 +549,9 @@ fn parser_result::Result? field_access_extra(parser::Parser* p, type_store::Node
 }
 
 <* Zig `expectIdentifier`: consume an identifier token, or report the expected-token diagnostic and fail. *>
-fn tokens::TokenIndex? PostfixParser.expect_identifier(&self)
+fn tokens::TokenIndex? Parser.expect_identifier(&self)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	if (!p.is_at(tokenizer::TokenId.IDENTIFIER) && !p.is_at(tokenizer::TokenId.EXTENDED_IDENTIFIER))
 	{
 		p.expected_token_diag(tokenizer::TokenId.IDENTIFIER)!;
@@ -664,10 +569,10 @@ fn tokens::TokenIndex? PostfixParser.expect_identifier(&self)
  pointed-to record, stops the suffix. An invalid base yields an invalid member
  access without lookup.
 *>
-fn parser_result::Result? PostfixParser.field_access(&self, parser_result::Result lhs,
+fn parser_result::Result? Parser.field_access(&self, parser_result::Result lhs,
 	tokens::TokenIndex name_tok, bool is_arrow, tokens::TokenIndex access_tok)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	if (lhs.qt.is_invalid())
 	{
 		type_store::NodeIndex node = p.tree.add_node(
@@ -734,35 +639,32 @@ fn parser_result::Result? PostfixParser.field_access(&self, parser_result::Resul
 }
 
 <*
- Parse a primary expression and all supported postfix suffixes. The primary
-   callback owns identifier/literal resolution, generic selection and the
-   parenthesized/type-name/compound-literal ambiguities. In particular it
-   should call Parser.parse_type_name and Parser.parse_body rather than
-   treating those forms as ordinary expressions. When bound, this parser
-   recognizes `({ ... })` before invoking the primary callback.
+ Parse a primary expression (`parse_primary_expr`) and all postfix suffixes.
+ When the handler provides statement bodies, `({ ... })` is recognized here
+ before the primary grammar runs.
 *>
-fn parser_result::Result? PostfixParser.parse(&self, bool eval = true)
+fn parser_result::Result? Parser.parse_postfix_expr(&self, bool eval = true)
 {
 	// Kept minimal: this frame is live across every nested primary expression;
 	// the postfix operators are applied out of line.
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	parser_result::Result? maybe_lhs;
-	if (self.statement_body && p.is_at(tokenizer::TokenId.L_PAREN) && p.is_at(tokenizer::TokenId.L_BRACE, 1))
+	if (self.handler && &self.handler.handle_statement_expression_body && p.is_at(tokenizer::TokenId.L_PAREN) && p.is_at(tokenizer::TokenId.L_BRACE, 1))
 	{
 		maybe_lhs = self.parse_statement_expression_at_paren(eval);
 	}
 	else
 	{
-		maybe_lhs = self.primary(eval);
+		maybe_lhs = self.parse_primary_expr(eval);
 	}
 	if (catch f = maybe_lhs) return f~;
 	return self.parse_postfix_operators(maybe_lhs, eval);
 }
 
 <* Apply `++ -- [] () . ->` to a parsed primary expression. *>
-fn parser_result::Result? PostfixParser.parse_postfix_operators(&self, parser_result::Result lhs, bool eval) @noinline
+fn parser_result::Result? Parser.parse_postfix_operators(&self, parser_result::Result lhs, bool eval) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	while (!p.at_eof())
 	{
 		tokenizer::TokenId id = p.tree.tokens[(usz)p.tok_i].id;
@@ -780,9 +682,9 @@ fn parser_result::Result? PostfixParser.parse_postfix_operators(&self, parser_re
 	return lhs;
 }
 
-fn parser_result::Result? PostfixParser.parse_statement_expression_at_paren(&self, bool eval) @noinline
+fn parser_result::Result? Parser.parse_statement_expression_at_paren(&self, bool eval) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	tokens::TokenIndex l_paren = p.tok_i;
 	p.advance();
 	tokens::TokenIndex l_brace = p.tok_i;
@@ -811,20 +713,20 @@ fn parser_result::Result? parse_postfix_update(parser::Parser* p, parser_result:
 }
 
 <* `lhs[index]`. *>
-fn parser_result::Result? PostfixParser.parse_subscript(&self, parser_result::Result lhs, bool eval) @noinline
+fn parser_result::Result? Parser.parse_subscript(&self, parser_result::Result lhs, bool eval) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	tokens::TokenIndex bracket = p.tok_i;
 	p.advance();
-	parser_result::Result index = self.nested(tokens::PREC_ANY, eval)!;
+	parser_result::Result index = self.parse_expr_prec(tokens::Precedence.ANY, eval)!;
 	if (catch f = p.expect_closing(tokenizer::TokenId.R_BRACKET, bracket)) return f~;
 	return self.array_subscript(lhs, index, bracket);
 }
 
 <* `lhs.name` / `lhs->name`. *>
-fn parser_result::Result? PostfixParser.parse_member_access(&self, parser_result::Result lhs, tokenizer::TokenId id) @noinline
+fn parser_result::Result? Parser.parse_member_access(&self, parser_result::Result lhs, tokenizer::TokenId id) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	bool is_arrow = id == tokenizer::TokenId.ARROW;
 	tokens::TokenIndex access_tok = p.tok_i;
 	p.advance();
@@ -838,10 +740,10 @@ fn parser_result::Result? PostfixParser.parse_member_access(&self, parser_result
 }
 
 <* A call `lhs(args...)` after `lhs` has been parsed. Out of line so the
-  call-checking locals do not enlarge every recursive `PostfixParser.parse` frame. *>
-fn parser_result::Result? PostfixParser.parse_call(&self, parser_result::Result lhs, bool eval) @noinline
+  call-checking locals do not enlarge every recursive `parse_postfix_expr` frame. *>
+fn parser_result::Result? Parser.parse_call(&self, parser_result::Result lhs, bool eval) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 		tokens::TokenIndex l_paren = p.tok_i;
 		p.advance();
 		parser_result::Result func = lhs;
@@ -883,7 +785,7 @@ fn parser_result::Result? PostfixParser.parse_call(&self, parser_result::Result 
 		args.init(p.comp.gpa);
 		defer args.free();
 		tokens::TokenIndex first_after = l_paren;
-		if (!self.at(tokenizer::TokenId.R_PAREN))
+		if (!self.is_at(tokenizer::TokenId.R_PAREN))
 		{
 			uint arg_index = 0;
 			while (true)
@@ -900,7 +802,7 @@ fn parser_result::Result? PostfixParser.parse_call(&self, parser_result::Result 
 						.typed = arg_index < typed_params_len,
 					}: {};
 					defer p.va_arg_pack_call = old_pack_context;
-					maybe_arg = self.nested(tokens::PREC_ASSIGN, eval);
+					maybe_arg = self.parse_expr_prec(tokens::Precedence.ASSIGN, eval);
 				}
 				if (catch f = maybe_arg) return f~;
 				parser_result::Result arg = maybe_arg;
@@ -945,7 +847,7 @@ fn parser_result::Result? PostfixParser.parse_call(&self, parser_result::Result 
 
 				arg.save_value(p);
 				args.push(arg.node);
-				if (!self.at(tokenizer::TokenId.COMMA)) break;
+				if (!self.is_at(tokenizer::TokenId.COMMA)) break;
 				if (is_va_arg_pack) Diagnostic.VA_PACK_NON_FINAL_ARG.@emit(p, pack_tok)!;
 				p.advance();
 				arg_index++;
@@ -953,9 +855,9 @@ fn parser_result::Result? PostfixParser.parse_call(&self, parser_result::Result 
 		}
 		tokens::TokenIndex r_paren = p.tok_i;
 		if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
-		if (self.builtin_call)
+		if (self.handler && &self.handler.handle_builtin_call)
 		{
-			parser_result::Result? maybe_builtin = self.builtin_call.parse_builtin_call(p,
+			parser_result::Result? maybe_builtin = self.handler.handle_builtin_call(p,
 				lhs.node, l_paren, args.array_view(), eval);
 			if (catch builtin_fault = maybe_builtin)
 			{

@@ -1,72 +1,14 @@
-// Focused operator regressions for the expression engine using the same
-// finalized preprocessor tokens and seeded scope model as
-// parser_expression_tests.c3. The unary callback is intentionally tiny: the
-// owning C grammar supplies casts, postfix forms, and full primary parsing.
-// Source-derived boundary: this callback supplies primary expressions while
-// parser_expression owns grouping and the built-in unary operator productions.
-// Pointer/null cases still require seeded pointer values and types.
+// Focused operator regressions for the expression grammar, parsed from
+// finalized preprocessor tokens by the real Parser productions. Identifiers
+// resolve through symbols seeded as CONSTEXPR so they carry typed constant
+// values (integers, pointers, floats, complex) into folding.
 module parser_operator_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::value_interner;
 import aro::lang_opts;
 import std::core::mem::allocators;
-
-excuse PRIMARY_CALLBACK_FAILURE;
-
-fn parser_result::Result? fail_primary(void* context, parser::Parser* p, bool eval)
-{
-	return PRIMARY_CALLBACK_FAILURE~;
-}
-
-struct OperatorContext
-{
-	symbol_stack::SymbolStack* symbols;
-	StringId x_name;
-	StringId y_name;
-}
-
-fn parser_result::Result? parse_seeded_primary(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser_expression::NO_EXPRESSION~;
-	OperatorContext* ctx = (OperatorContext*)context;
-	tokens::TokenIndex tok = p.tok_i;
-	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
-	parser_result::Result result;
-	if (id == tokenizer::TokenId.IDENTIFIER)
-	{
-		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-		StringId name;
-		if (spelling == "y") { name = ctx.y_name; }
-		else if (spelling == "x") { name = ctx.x_name; }
-		else { unreachable("unexpected identifier in operator fixture"); }
-		Symbol symbol = ctx.symbols.lookup(name, symbol_stack::ScopeKind.VARS)!!;
-		NodeIndex ref = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
-			.decl_ref = { .qt = symbol.qt, .decl = symbol.node, .name_tok = tok } });
-		result.init(ref, symbol.qt, eval ? symbol.val : value::NONE);
-	}
-	else
-	{
-		if (id != tokenizer::TokenId.PP_NUM) unreachable("unexpected token in integer operator fixture");
-		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-		long n;
-		if (spelling == "0") { n = 0; }
-		else if (spelling == "1") { n = 1; }
-		else if (spelling == "2") { n = 2; }
-		else if (spelling == "3") { n = 3; }
-		else if (spelling == "32") { n = 32; }
-		else if (spelling == "250") { n = 250; }
-		else { unreachable("unexpected integer token in operator fixture"); }
-		NodeIndex literal = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-			.literal = { .literal_tok = tok, .qt = type_store::INT } });
-		// Integer literals keep their constant value even when an enclosing
-		// conditional or short-circuit expression suppresses evaluation.
-		result.init(literal, type_store::INT, value::int_i64(n, p.comp));
-	}
-	p.advance();
-	return result;
-}
 
 // Source-derived: arithmetic expectations use Value's wrapping integer
 // contract; overflow is reported by Value.add/sub/mul as true. Exact integer
@@ -87,35 +29,27 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
 		StringId x = comp.intern_string("x");
 		StringId y = comp.intern_string("y");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
 		type_store::QualType x_qt = const_x ? x_type.with_qualifiers({ .is_const = true }) : x_type;
 		if (volatile_x) x_qt.is_volatile = true;
-		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = x_qt } });
+		NodeIndex xd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = x_qt } });
 		type_store::QualType y_qt = unsigned_y && y_type.eql(type_store::INT, &comp) ? type_store::UINT : y_type;
 		if (atomic_y) y_qt = comp.type_store.put(type_store::type_atomic(y_qt));
 		if (const_y) y_qt.is_const = true;
 		if (volatile_y) y_qt.is_volatile = true;
 		value::Value y_val = unsigned_y ? value::int_u64((ulong)(y_number < 0 ? 0xFFFF_FFFF : y_number), &comp) : value::int_i64(y_number < 0 ? 1 : y_number, &comp);
-		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = y_qt } });
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = x_qt, .node = xd, .val = value::int_i64(x_number, &comp) });
-		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = y_qt, .node = yd, .val = y_val });
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
-		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result? parsed = expression.parse(tokens::PREC_ANY, eval);
+		NodeIndex yd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = y_qt } });
+		p.define_symbol({ .name = x, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = x_qt, .node = xd, .val = value::int_i64(x_number, &comp) });
+		p.define_symbol({ .name = y, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = y_qt, .node = yd, .val = y_val });
+		parser_result::Result? parsed = p.parse_expr_prec(tokens::Precedence.ANY, eval);
 		if (catch parse_error = parsed)
 		{
 			assert(expect_failure, "unexpected operator parse failure");
-			assert(parse_error == parser_expression::PARSING_FAILED);
+			assert(parse_error == parser::PARSING_FAILED);
 		}
 		else
 		{
@@ -163,7 +97,7 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 				if (lhs.kind == tree::NodeKind.CAST) { assert(lhs.cast.qt.eql(type_store::INT, &comp)); }
 				else { assert(lhs.literal.qt.eql(type_store::INT, &comp)); }
 			}
-			if (!eval || want_none) { assert(result.val.is_none()); }
+			if (want_none) { assert(result.val.is_none()); }
 			else if (expect_pointer)
 			{
 				assert(result.val.is(primitive_value::PrimitiveType.POINTER, &comp));
@@ -179,57 +113,12 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 			assert(d.messages.len() > 0, "invalid integer operator fixture failed without a diagnostic");
 			if (expected_failure_message != "") test::eq(d.messages[0].text, expected_failure_message);
 		}
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
 	}
 	assert(ta.allocation_count() == 0);
-}
-
-struct PointerContext
-{
-	symbol_stack::SymbolStack* symbols;
-	StringId pointer_name;
-	StringId second_pointer_name;
-}
-
-fn parser_result::Result? parse_pointer_primary(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser_expression::NO_EXPRESSION~;
-	PointerContext* ctx = (PointerContext*)context;
-	tokens::TokenIndex tok = p.tok_i;
-	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
-	parser_result::Result result;
-	if (id == tokenizer::TokenId.IDENTIFIER)
-	{
-		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-		StringId name;
-		if (spelling == "q") { name = ctx.second_pointer_name; }
-		else if (spelling == "p") { name = ctx.pointer_name; }
-		else { unreachable("unexpected identifier in pointer operator fixture"); }
-		Symbol symbol = ctx.symbols.lookup(name, symbol_stack::ScopeKind.VARS)!!;
-		NodeIndex ref = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
-			.decl_ref = { .qt = symbol.qt, .decl = symbol.node, .name_tok = tok } });
-		result.init(ref, symbol.qt, eval ? symbol.val : value::NONE);
-	}
-	else
-	{
-		if (id != tokenizer::TokenId.PP_NUM) unreachable("unexpected token in pointer operator fixture");
-		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-		long number;
-		if (spelling == "0") { number = 0; }
-		else if (spelling == "1") { number = 1; }
-		else if (spelling == "2") { number = 2; }
-		else { unreachable("unexpected integer token in pointer operator fixture"); }
-		NodeIndex literal = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-			.literal = { .literal_tok = tok, .qt = type_store::INT } });
-		result.init(literal, type_store::INT, value::int_i64(number, p.comp));
-	}
-	p.advance();
-	return result;
 }
 
 fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualType expected_qt, bool expected_boolean = false, bool expect_pointer = false, ulong pointer_offset = 0, bool expect_ptrdiff = false, type_store::QualType pointer_qt = type_store::INT_POINTER, type_store::QualType second_pointer_qt = type_store::INT_POINTER, bool bounds_safety = false, bool expect_failure = false, bool expect_none = false, uint expected_warnings = uint::max, bool make_single_pointer = false, bool zero_size_pointee = false, bool seed_overflowing_offset = false, bool incomplete_pointee = false, bool expect_rhs_pointer_cast = false, bool distinct_pointees = false)
@@ -272,13 +161,11 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
 		StringId pointer_name = comp.intern_string("p");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex declaration = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = pointer_qt } });
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = pointer_qt } });
 		uint pointer_node = (uint)declaration;
 		ulong initial_pointer_offset = 0;
 		if (seed_overflowing_offset)
@@ -290,21 +177,15 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 			pointer_offset = ((ulong)1 << (ptrdiff_bits - 1)) + 4;
 		}
 		Value pointer_value = value::pointer({ .node = pointer_node, .offset = value::int_u64(initial_pointer_offset, &comp).ref() }, &comp);
-		symbols.define({ .name = pointer_name, .kind = symbol_stack::SymbolKind.DEF, .qt = pointer_qt, .node = declaration, .val = pointer_value });
+		p.define_symbol({ .name = pointer_name, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = pointer_qt, .node = declaration, .val = pointer_value });
 		StringId second_pointer_name = comp.intern_string("q");
-		NodeIndex second_declaration = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = second_pointer_qt } });
-		symbols.define({ .name = second_pointer_name, .kind = symbol_stack::SymbolKind.DEF, .qt = second_pointer_qt, .node = second_declaration, .val = pointer_value });
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		PointerContext context = { .symbols = &symbols, .pointer_name = pointer_name, .second_pointer_name = second_pointer_name };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_pointer_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result? maybe_result = expression.parse();
+		NodeIndex second_declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = second_pointer_qt } });
+		p.define_symbol({ .name = second_pointer_name, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = second_pointer_qt, .node = second_declaration, .val = pointer_value });
+		parser_result::Result? maybe_result = p.parse_expr_prec();
 		if (catch parse_error = maybe_result)
 		{
 			assert(expect_failure, "unexpected pointer operator parse failure");
-			assert(parse_error == parser_expression::PARSING_FAILED);
+			assert(parse_error == parser::PARSING_FAILED);
 		}
 		else
 		{
@@ -361,9 +242,7 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 			expected_message.appendf(" refers past the last possible element in %d-bit address space containing %d-bit (%d-byte) elements (max possible %d elements)", comp.type_store.intptr.bit_sizeof(&comp), element_size * 8, element_size, max_elements);
 			test::eq(d.messages[0].text, expected_message.str_view());
 		}
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -426,7 +305,7 @@ fn void signed_unsigned_and_comparison_operators() @test
 fn void assignment_and_compound_assignment_shapes() @test
 {
 	// Variable declaration references are lvalues in Tree.is_lval_extra; the
-	// expression callback supplies no assignment result value, as expected.
+	// assignment expression carries no result value, as expected.
 	check_int_expr("-2\n", tree::NodeKind.NEGATE_EXPR, -2);
 	check_int_expr("++x\n", tree::NodeKind.PRE_INC_EXPR, -2147483648, false, false, true, false, false, false, false, false, 1);
 	check_int_expr("--x\n", tree::NodeKind.PRE_DEC_EXPR, 2147483646);
@@ -489,14 +368,18 @@ fn void pointer_arithmetic_subtraction_and_null_comparison() @test
 fn void macro_expansion_and_eval_suppression() @test
 {
 	check_int_expr("#define TWO 2\nTWO + 2\n", tree::NodeKind.ADD_EXPR, 4);
-	check_int_expr("2 + 2\n", tree::NodeKind.ADD_EXPR, 0, true, false, false);
-	check_int_expr("0 ? 2 : 1\n", tree::NodeKind.COND_EXPR, 0, true, false, false);
+	// Unevaluated operands (sizeof/typeof, untaken arms) still fold: constant
+	// expressions do not depend on evaluation; only diagnostics are suppressed.
+	check_int_expr("2 + 2\n", tree::NodeKind.ADD_EXPR, 4, false, false, false);
+	check_int_expr("0 ? 2 : 1\n", tree::NodeKind.COND_EXPR, 1, false, false, false);
+	check_int_expr("2 / 0\n", tree::NodeKind.DIV_EXPR, 0, true, false, false, false, false, false, false, false, 0);
+	check_int_expr("2 << 32\n", tree::NodeKind.SHL_EXPR, 0, false, false, false, false, false, false, false, false, 0);
 }
 
 fn void const_expression_entry_accepts_integer_expression() @test
 {
 	// The public integer_const_expr entry point is the parser's integer-only
-	// constant-expression production; this fixture's primary callback emits int.
+	// constant-expression production; the literal operands are int.
 	TrackingAllocator ta;
 	ta.init(mem);
 	defer ta.free();
@@ -510,18 +393,15 @@ fn void const_expression_entry_accepts_integer_expression() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		OperatorContext context = {};
-		parser_result::Result result = p.integer_const_expr_with_primary(&context, &parse_seeded_primary)!!;
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		parser_result::Result result = p.integer_const_expr()!!;
 		assert(p.at_eof(), "integer constant expression fixture left trailing tokens");
 		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(result.qt.eql(type_store::INT, &comp));
 		assert(result.val.to_i64(&comp)!! == 4);
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -544,58 +424,18 @@ fn void integer_const_expr_rejects_noninteger_result() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
 		StringId x = comp.intern_string("x");
 		Value one = value::intern(&comp, primitive_value::f64_value(0x3FF0_0000_0000_0000));
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex declaration = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = declaration, .val = one });
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		OperatorContext context = { .symbols = &symbols, .x_name = x };
-		parser_result::Result? result = p.integer_const_expr_with_primary(&context, &parse_seeded_primary);
-		if (catch parse_error = result) { assert(parse_error == parser_expression::PARSING_FAILED); }
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
+		p.define_symbol({ .name = x, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = type_store::DOUBLE, .node = declaration, .val = one });
+		parser_result::Result? result = p.integer_const_expr();
+		if (catch parse_error = result) { assert(parse_error == parser::PARSING_FAILED); }
 		else { assert(false, "noninteger expression accepted as an integer constant expression"); }
 		assert(d.messages.len() == 1, "noninteger integer-constant expression should diagnose once");
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void primary_callback_fault_is_propagated() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("callback-fault.c", "x\n")!!;
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		parser_postfix::CallbackParts expression_parts = { .operand = &fail_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		fault failure = @catch(expression.parse(tokens::PREC_ANY));
-		assert(failure == PRIMARY_CALLBACK_FAILURE, "primary callback fault was changed by the operator parser");
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -611,7 +451,7 @@ fn void comma_and_conditional_preserve_operator_shape() @test
 	// Source-derived GNU binary conditional: the condition is also the true arm.
 	check_int_expr("2 ?: 1\n", tree::NodeKind.BINARY_COND_EXPR, 2);
 	check_int_expr("0 ?: 2\n", tree::NodeKind.BINARY_COND_EXPR, 2);
-	check_int_expr("1 ? 2 : 3\n", tree::NodeKind.COND_EXPR, 0, true, false, false);
+	check_int_expr("1 ? 2 : 3\n", tree::NodeKind.COND_EXPR, 2, false, false, false);
 }
 
 fn void conditional_uses_common_type_of_both_arms() @test
@@ -631,26 +471,18 @@ fn void conditional_uses_common_type_of_both_arms() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
 		StringId x = comp.intern_string("x");
 		StringId y = comp.intern_string("y");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::INT } });
-		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		NodeIndex xd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::INT } });
+		NodeIndex yd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
 		Value one = value::int_i64(1, &comp);
 		Value double_one = value::intern(&comp, primitive_value::f64_value(0x3FF0_0000_0000_0000));
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::INT, .node = xd, .val = one });
-		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = yd, .val = double_one });
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result result = expression.parse()!!;
+		p.define_symbol({ .name = x, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = type_store::INT, .node = xd, .val = one });
+		p.define_symbol({ .name = y, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = type_store::DOUBLE, .node = yd, .val = double_one });
+		parser_result::Result result = p.parse_expr_prec()!!;
 		assert(p.at_eof(), "conditional expression fixture left trailing tokens");
 		assert(result.node.kind(&p.tree) == tree::NodeKind.COND_EXPR);
 		assert(result.qt.eql(type_store::DOUBLE, &comp));
@@ -659,9 +491,7 @@ fn void conditional_uses_common_type_of_both_arms() @test
 		Node converted_else = conditional.conditional.else_expr.get(&p.tree);
 		assert(converted_else.kind == tree::NodeKind.CAST);
 		assert(converted_else.cast.kind == tree::CastKind.INT_TO_FLOAT);
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -694,19 +524,14 @@ fn void short_circuit_and_invalid_forms() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		OperatorContext context = {};
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result? bad = expression.parse();
-		if (catch parse_error = bad) { assert(parse_error == parser_expression::PARSING_FAILED); }
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		parser_result::Result? bad = p.parse_expr_prec();
+		if (catch parse_error = bad) { assert(parse_error == parser::PARSING_FAILED); }
 		else { assert(false, "incomplete binary expression parsed"); }
 		assert(d.messages.len() > 0, "malformed binary expression failed without a diagnostic");
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -731,32 +556,22 @@ fn void float_operands_keep_arithmetic_ast_type() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
 		StringId x = comp.intern_string("x");
 		StringId y = comp.intern_string("y");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
-		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		NodeIndex xd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
+		NodeIndex yd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::DOUBLE } });
 		Value one = value::intern(&comp, primitive_value::f64_value(0x3FF0_0000_0000_0000));
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = xd, .val = one });
-		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::DOUBLE, .node = yd, .val = one });
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result result = expression.parse()!!;
+		p.define_symbol({ .name = x, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = type_store::DOUBLE, .node = xd, .val = one });
+		p.define_symbol({ .name = y, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = type_store::DOUBLE, .node = yd, .val = one });
+		parser_result::Result result = p.parse_expr_prec()!!;
 		assert(p.at_eof(), "floating operator fixture left trailing tokens");
 		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(result.qt.eql(type_store::DOUBLE, &comp));
 		assert(result.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4000_0000_0000_0000);
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -790,67 +605,57 @@ fn void complex_arithmetic_and_unary_conjugation_fold() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
 		StringId x = comp.intern_string("x");
 		StringId y = comp.intern_string("y");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex xd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = complex_double } });
-		NodeIndex yd = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = complex_double } });
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = complex_double, .node = xd, .val = x_value });
-		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = complex_double, .node = yd, .val = y_value });
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		OperatorContext context = { .symbols = &symbols, .x_name = x, .y_name = y };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_primary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result addition = expression.parse()!!;
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		NodeIndex xd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = complex_double } });
+		NodeIndex yd = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = complex_double } });
+		p.define_symbol({ .name = x, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = complex_double, .node = xd, .val = x_value });
+		p.define_symbol({ .name = y, .kind = symbol_stack::SymbolKind.CONSTEXPR, .qt = complex_double, .node = yd, .val = y_value });
+		parser_result::Result addition = p.parse_expr_prec()!!;
 		assert(!p.at_eof(), "complex operator fixture lost the separator");
 		assert(addition.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
 		assert(addition.qt.eql(complex_double, &comp));
 		assert(addition.val.opt_ref == sum_value.opt_ref);
 		p.advance();
-		parser_result::Result conjugation = expression.parse()!!;
+		parser_result::Result conjugation = p.parse_expr_prec()!!;
 		assert(!p.at_eof(), "complex operator fixture lost the separator after conjugation");
 		assert(conjugation.node.kind(&p.tree) == tree::NodeKind.BIT_NOT_EXPR);
 		assert(conjugation.qt.eql(complex_double, &comp));
 		assert(conjugation.val.opt_ref == conjugate_value.opt_ref);
 		p.advance();
-		parser_result::Result imaginary_x = expression.parse()!!;
+		parser_result::Result imaginary_x = p.parse_expr_prec()!!;
 		assert(imaginary_x.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_x.qt.eql(type_store::DOUBLE, &comp));
 		// Source-derived vector: x has real=1.0 and imaginary=2.0.
 		assert(imaginary_x.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4000_0000_0000_0000);
 		p.advance();
-		parser_result::Result real_x = expression.parse()!!;
+		parser_result::Result real_x = p.parse_expr_prec()!!;
 		assert(real_x.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_x.qt.eql(type_store::DOUBLE, &comp));
 		assert(real_x.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x3FF0_0000_0000_0000);
 		p.advance();
-		parser_result::Result imaginary_y = expression.parse()!!;
+		parser_result::Result imaginary_y = p.parse_expr_prec()!!;
 		assert(imaginary_y.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_y.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4010_0000_0000_0000);
 		p.advance();
-		parser_result::Result real_y = expression.parse()!!;
+		parser_result::Result real_y = p.parse_expr_prec()!!;
 		assert(real_y.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_y.val.to_float(primitive_value::PrimitiveType.F64, &comp).float_bits() == 0x4008_0000_0000_0000);
 		p.advance();
-		parser_result::Result imaginary_int = expression.parse()!!;
+		parser_result::Result imaginary_int = p.parse_expr_prec()!!;
 		assert(imaginary_int.node.kind(&p.tree) == tree::NodeKind.IMAG_EXPR);
 		assert(imaginary_int.qt.eql(type_store::INT, &comp));
 		assert(imaginary_int.val.to_i64(&comp)!! == 0);
 		p.advance();
-		parser_result::Result real_int = expression.parse()!!;
+		parser_result::Result real_int = p.parse_expr_prec()!!;
 		assert(real_int.node.kind(&p.tree) == tree::NodeKind.REAL_EXPR);
 		assert(real_int.qt.eql(type_store::INT, &comp));
 		assert(real_int.val.to_i64(&comp)!! == 2);
 		assert(p.at_eof(), "GNU real/imag fixture left trailing tokens");
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();

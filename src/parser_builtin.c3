@@ -1,10 +1,10 @@
 // Typed parsers for specialized expression builtins. The caller supplies the
-// same expression productions used elsewhere and installs the BuiltinParser
-// as ExpressionParser's optional `parser::IBuiltinParser`.
+// same expression productions used elsewhere and routes the parser handler's
+// `handle_builtin_primary_expression` to `BuiltinParser.parse_builtin_primary`.
 module aro::parser_builtin;
 import aro::parser, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer;
 import aro::type_store, aro::value, aro::compilation, aro::diagnostics, aro::lang_opts;
-import aro::builtins, aro::builtin_defs::common, aro::parser_expression;
+import aro::builtins, aro::builtin_defs::common;
 import aro::string_interner;
 import aro::bigint;
 import std::collections::list;
@@ -16,7 +16,7 @@ excuse PARSING_FAILED;
    `expressions` grammar, whose productions must consume exactly one expression
    and leave the parser at its following token. `parser` is set on each
    `parse_builtin_primary` call. *>
-struct BuiltinParser (parser::IBuiltinParser)
+struct BuiltinParser
 {
 	parser::Parser* parser;
 	parser::IExpressionGrammar expressions;
@@ -39,15 +39,15 @@ fn parser_result::Result? BuiltinParser.integer_const_expr(&self, parser::ConstD
 	return g.integer_constant_expression(self.parser, mode, eval);
 }
 
-<* ExpressionParser builtin hook. It resolves the source spelling through the
+<* Builtin primary hook (`IParserHandler.handle_builtin_primary_expression`). It resolves the source spelling through the
    normal builtin cache, dispatches only the supported common tags, and leaves
    every other identifier to ordinary primary-expression parsing. *>
-fn parser_result::Result? BuiltinParser.parse_builtin_primary(&self, parser::Parser* p, bool eval) @dynamic
+fn parser_result::Result? BuiltinParser.parse_builtin_primary(&self, parser::Parser* p, bool eval)
 {
 	BuiltinParser* configured = self;
 	String spelling = p.tree.tok_slice(p.tok_i);
 	builtins::Expanded? maybe_expanded = p.comp.builtins.get_or_create(p.comp, spelling);
-	if (catch maybe_expanded) return parser_expression::NO_EXPRESSION~;
+	if (catch maybe_expanded) return parser::NO_EXPRESSION~;
 	builtins::Expanded expanded = maybe_expanded;
 	BuiltinParser active = *configured;
 	active.parser = p;
@@ -61,7 +61,7 @@ fn parser_result::Result? BuiltinParser.parse_builtin_primary(&self, parser::Par
 	expanded.tag == common::TAG___BUILTIN_OFFSETOF ||
 	expanded.tag == common::TAG___BUILTIN_BITOFFSETOF ||
 	expanded.tag == common::TAG___BUILTIN_TYPES_COMPATIBLE_P;
-	if (!specialized) return parser_expression::NO_EXPRESSION~;
+	if (!specialized) return parser::NO_EXPRESSION~;
 	tokens::TokenIndex builtin_tok = p.tok_i;
 	p.advance();
 	if (expanded.tag == common::TAG___BUILTIN_BIT_CAST) return active.bit_cast(builtin_tok, eval);
@@ -74,7 +74,7 @@ fn parser_result::Result? BuiltinParser.parse_builtin_primary(&self, parser::Par
 	if (expanded.tag == common::TAG___BUILTIN_OFFSETOF) return active.offsetof(builtin_tok, false, eval);
 	if (expanded.tag == common::TAG___BUILTIN_BITOFFSETOF) return active.offsetof(builtin_tok, true, eval);
 	if (expanded.tag == common::TAG___BUILTIN_TYPES_COMPATIBLE_P) return active.types_compatible(builtin_tok);
-	return parser_expression::NO_EXPRESSION~;
+	return parser::NO_EXPRESSION~;
 }
 
 fn void? BuiltinParser.open(&self)

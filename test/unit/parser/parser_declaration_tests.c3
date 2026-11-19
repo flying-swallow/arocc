@@ -281,8 +281,8 @@ fn void malformed_function_recovery_preserves_following_translation_unit_state()
 		state.initial_scopes = (uint)p.symbols.active_len;
 		tree::Tree result = p.parse()!!;
 		assert(state.saw_following_declaration, "recovery must continue to the following declaration");
-		assert(!p.symbols_initialized && p.symbols.active_len == 0,
-			"translation-unit symbols must be released after recovery");
+		assert(p.symbols.active_len == state.initial_scopes,
+			"recovery must unwind to the translation-unit scope");
 		result.free(); p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);

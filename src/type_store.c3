@@ -116,14 +116,17 @@ enum BuiltinType : char
 *>
 bitstruct QualType : uint
 {
-	bool is_const : 0;
-	bool is_volatile : 1;
-	bool is_restrict : 2;
-	uint index : 3..30;
-	bool builtin : 31;
+	bool is_const: 0;
+	bool is_volatile: 1;
+	bool is_restrict: 2;
+	uint index: 3..30;
+	bool builtin: 31;
 }
 
-fn QualType BuiltinType.qt(self) @inline => { .builtin = true, .index = self.ordinal };
+fn QualType BuiltinType.qt(self) @inline =>
+{
+	.builtin = true, .index = self.ordinal
+};
 
 const QualType INVALID = { .builtin = true, .index = BuiltinType.INVALID.ordinal };
 const QualType AUTO_TYPE = { .builtin = true, .index = BuiltinType.AUTO_TYPE.ordinal };
@@ -207,7 +210,7 @@ enum TypeTag : char
  - `rank_class`: the C conversion rank before the size term (`int_rank`);
  - `unsigned_of`: the unsigned type of the same rank (`make_int_unsigned`).
 *>
-enum TypeInt : char (BuiltinType builtin, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, Signedness sign, char rank_class, TypeInt unsigned_of)
+enum TypeInt : char(BuiltinType builtin, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, Signedness sign, char rank_class, TypeInt unsigned_of)
 {
 	CHAR { CHAR, "char", CHAR, CHAR, 0, SIGNED, 2, UCHAR },
 	SCHAR { SCHAR, "signed char", SCHAR, CHAR, 0, SIGNED, 2, UCHAR },
@@ -236,7 +239,7 @@ enum TypeInt : char (BuiltinType builtin, String name, BuilderSpecifierTag build
  - `rank`: the floating conversion rank (`float_rank`).
  FLOAT128X is not supported: `bits` and `float_rank` reject it.
 *>
-enum TypeFloat : char (BuiltinType builtin, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, uint rank)
+enum TypeFloat : char(BuiltinType builtin, String name, BuilderSpecifierTag builder, CType ctype, ushort fixed_bits, uint rank)
 {
 	BF16 { BF16, "__bf16", BF16, FLOAT, 16, 0 },
 	FP16 { FP16, "__fp16", FP16, FLOAT, 16, 2 },
@@ -257,7 +260,7 @@ enum TypeFloat : char (BuiltinType builtin, String name, BuilderSpecifierTag bui
 }
 
 <* Type.StorageFloat: non-arithmetic floats. *>
-enum StorageFloat : char (ushort bits, uint alignment, String name)
+enum StorageFloat : char(ushort bits, uint alignment, String name)
 {
 	MFP8 { 8, 1, "__mfp8" },
 }
@@ -270,7 +273,7 @@ struct BitInt
 }
 
 <* Type.Pointer.Nullability; `str` is Zig's `Nullability.str` (DEFAULT has none). *>
-enum Nullability : char (String str)
+enum Nullability : char(String str)
 {
 	DEFAULT { "" },
 	NONNULL { "_Nonnull" },
@@ -298,7 +301,7 @@ enum FuncKind : char
 }
 
 <* Type.Func.CallingConvention; `name` is Zig's tag name (printed with `{t}`). *>
-enum CallingConvention : char (String name)
+enum CallingConvention : char(String name)
 {
 	DEFAULT { "default" },
 	CDECL { "cdecl" },
@@ -567,15 +570,15 @@ struct Repr
 <* Repr.FuncAttrs (packed struct(u32)): kind in bits 0..1, cc in bits 2..5. *>
 bitstruct FuncAttrs : uint
 {
-	char kind : 0..1;
-	char cc : 2..5;
+	char kind: 0..1;
+	char cc: 2..5;
 }
 
 <* Repr.PointerAttrs (packed struct(u32)): bounds in bits 0..1, nullability in bits 2..4. *>
 bitstruct PointerAttrs : uint
 {
-	char bounds : 0..1;
-	char nullability : 2..4;
+	char bounds: 0..1;
+	char nullability: 2..4;
 }
 
 <* Out-of-line function payload (FUNC_ONE..FUNC_ATTRIBUTED); `params` is owned by the store. *>
@@ -639,33 +642,90 @@ struct TypeStore
 // Construction helpers (Zig default-initialized literals)
 // ---------------------------------------------------------------------------
 
-fn Type type_int(TypeInt k) => { .tag = INT, .int_ty = k };
-fn Type type_float(TypeFloat k) => { .tag = FLOAT, .float_ty = k };
-fn Type type_pointer(QualType child) => { .tag = POINTER, .pointer = { .child = child } };
-fn Type type_decayed_pointer(QualType child, QualType decayed) => { .tag = POINTER, .pointer = { .child = child, .has_decayed = true, .decayed = decayed } };
-fn Type type_array(QualType elem, ArrayLenKind kind, ulong len = 0) => { .tag = ARRAY, .array = { .elem = elem, .len = { .kind = kind, .len = len } } };
-fn Type type_vla(QualType elem, NodeIndex expr) => { .tag = ARRAY, .array = { .elem = elem, .len = { .kind = VARIABLE, .expr = expr } } };
-fn Type type_func(QualType ret, FuncKind kind, FuncParam[] params, CallingConvention cc = DEFAULT) => { .tag = FUNC, .func = { .return_type = ret, .kind = kind, .params = params, .cc = cc } };
-fn Type type_bit_int(ushort bits, Signedness s) => { .tag = BIT_INT, .bit_int = { .bits = bits, .signedness = s } };
-fn Type type_complex(QualType child) => { .tag = COMPLEX, .complex = child };
-fn Type type_atomic(QualType child) => { .tag = ATOMIC, .atomic = child };
-fn Type type_vector(QualType elem, uint len, VectorKind kind = GENERIC) => { .tag = VECTOR, .vector = { .elem = elem, .len = len, .kind = kind } };
-fn Type type_typedef(QualType base, StringId name, NodeIndex decl_node) => { .tag = TYPEDEF, .type_def = { .base = base, .name = name, .decl_node = decl_node } };
-fn Type type_typeof(QualType base) => { .tag = TYPEOF, .type_of = { .base = base } };
-fn Type type_typeof_expr(QualType base, NodeIndex expr) => { .tag = TYPEOF, .type_of = { .base = base, .has_expr = true, .expr = expr } };
-fn Type type_block(QualType func, Nullability nullability = DEFAULT) => { .tag = BLOCK, .block = { .func = func, .nullability = nullability } };
+fn Type type_int(TypeInt k) =>
+{
+	.tag = INT, .int_ty = k
+};
+fn Type type_float(TypeFloat k) =>
+{
+	.tag = FLOAT, .float_ty = k
+};
+fn Type type_pointer(QualType child) =>
+{
+	.tag = POINTER, .pointer = { .child = child }
+};
+fn Type type_decayed_pointer(QualType child, QualType decayed) =>
+{
+	.tag = POINTER, .pointer = { .child = child, .has_decayed = true, .decayed = decayed }
+};
+fn Type type_array(QualType elem, ArrayLenKind kind, ulong len = 0) =>
+{
+	.tag = ARRAY, .array = { .elem = elem, .len = { .kind = kind, .len = len } }
+};
+fn Type type_vla(QualType elem, NodeIndex expr) =>
+{
+	.tag = ARRAY, .array = { .elem = elem, .len = { .kind = VARIABLE, .expr = expr } }
+};
+fn Type type_func(QualType ret, FuncKind kind, FuncParam[] params, CallingConvention cc = DEFAULT) =>
+{
+	.tag = FUNC, .func = { .return_type = ret, .kind = kind, .params = params, .cc = cc }
+};
+fn Type type_bit_int(ushort bits, Signedness s) =>
+{
+	.tag = BIT_INT, .bit_int = { .bits = bits, .signedness = s }
+};
+fn Type type_complex(QualType child) =>
+{
+	.tag = COMPLEX, .complex = child
+};
+fn Type type_atomic(QualType child) =>
+{
+	.tag = ATOMIC, .atomic = child
+};
+fn Type type_vector(QualType elem, uint len, VectorKind kind = GENERIC) =>
+{
+	.tag = VECTOR, .vector = { .elem = elem, .len = len, .kind = kind }
+};
+fn Type type_typedef(QualType base, StringId name, NodeIndex decl_node) =>
+{
+	.tag = TYPEDEF, .type_def = { .base = base, .name = name, .decl_node = decl_node }
+};
+fn Type type_typeof(QualType base) =>
+{
+	.tag = TYPEOF, .type_of = { .base = base }
+};
+fn Type type_typeof_expr(QualType base, NodeIndex expr) =>
+{
+	.tag = TYPEOF, .type_of = { .base = base, .has_expr = true, .expr = expr }
+};
+fn Type type_block(QualType func, Nullability nullability = DEFAULT) =>
+{
+	.tag = BLOCK, .block = { .func = func, .nullability = nullability }
+};
 <* An incomplete struct (or union, with `is_union`) forward declaration. *>
 fn Type type_record_incomplete(StringId name, bool is_union = false, NodeOptIndex decl_node = NODE_NULL)
-	=> { .tag = is_union ? UNION : STRUCT, .record = { .name = name, .decl_node = decl_node } };
+=>
+{
+	.tag = is_union ? UNION : STRUCT, .record = { .name = name, .decl_node = decl_node }
+};
 fn Type type_record(StringId name, RecordField[] fields, RecordLayout layout, bool is_union = false, NodeOptIndex decl_node = NODE_NULL)
-	=> { .tag = is_union ? UNION : STRUCT, .record = { .name = name, .decl_node = decl_node, .has_layout = true, .layout = layout, .fields = fields } };
+=>
+{
+	.tag = is_union ? UNION : STRUCT, .record = { .name = name, .decl_node = decl_node, .has_layout = true, .layout = layout, .fields = fields }
+};
 
 <* A record field with Zig's defaults (no name token, not a bitfield, zero layout, no decl). *>
 fn RecordField record_field(StringId name, QualType qt)
-	=> { .qt = qt, .name = name, .bit_width = BIT_WIDTH_NULL, .field_decl = NODE_NULL };
+=>
+{
+	.qt = qt, .name = name, .bit_width = BIT_WIDTH_NULL, .field_decl = NODE_NULL
+};
 
 fn FuncParam func_param(QualType qt, StringId name = string_interner::EMPTY)
-	=> { .qt = qt, .name = name, .node = NODE_NULL };
+=>
+{
+	.qt = qt, .name = name, .node = NODE_NULL
+};
 
 // ---------------------------------------------------------------------------
 // QualType basics
@@ -680,15 +740,20 @@ fn bool QualType.is_c23_auto(self) => self.is_builtin_type(C23_AUTO);
 fn bool QualType.is_auto(self) => self.is_auto_type() || self.is_c23_auto();
 fn bool QualType.is_declarator_combine(self) => self.is_builtin_type(DECLARATOR_COMBINE);
 fn bool QualType.is_qualified(self) => self.is_const || self.is_volatile || self.is_restrict;
-fn QualType QualType.unqualified(self) => { .builtin = self.builtin, .index = self.index };
+fn QualType QualType.unqualified(self) =>
+{
+	.builtin = self.builtin, .index = self.index
+};
 
 fn QualType QualType.with_qualifiers(self, QualType quals_from)
-	=> { .builtin = self.builtin, .index = self.index, .is_const = quals_from.is_const, .is_volatile = quals_from.is_volatile, .is_restrict = quals_from.is_restrict };
+=>
+{
+	.builtin = self.builtin, .index = self.index, .is_const = quals_from.is_const, .is_volatile = quals_from.is_volatile, .is_restrict = quals_from.is_restrict
+};
 
 fn bool Pointer.any_attrs(self) => self.bounds != C || self.nullability != DEFAULT;
 
 fn bool ArrayLen.is_sized(self) => self.kind == FIXED || self.kind == STATIC;
-
 
 // ---------------------------------------------------------------------------
 // Store lifecycle
@@ -763,7 +828,10 @@ fn QualType TypeStore.put(&self, Type ty)
 		case INT: return ty.int_ty.builtin.qt();
 		case FLOAT: return ty.float_ty.builtin.qt();
 		case STORAGE_FLOAT: return MFP8;
-		default: return { .index = self.put_extra(ty) };
+		default: return
+		{
+			.index = self.put_extra(ty)
+		};
 	}
 }
 
@@ -829,28 +897,32 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			{
 				switch (func.kind)
 				{
-					case NORMAL: repr.tag = FUNC_ZERO;
-					case VARIADIC: repr.tag = FUNC_VARIADIC_ZERO;
-					case OLD_STYLE: repr.tag = FUNC_OLD_STYLE_ZERO;
-				}
-				if (func.cc != DEFAULT)
-				{
-					repr.tag = FUNC_ATTRIBUTED_ZERO;
-					repr.data[1] = (uint)attr;
-				}
+				case NORMAL: repr.tag = FUNC_ZERO;
+				case VARIADIC: repr.tag = FUNC_VARIADIC_ZERO;
+				case OLD_STYLE: repr.tag = FUNC_OLD_STYLE_ZERO;
 			}
-			else
+			if (func.cc != DEFAULT)
 			{
-				repr.data[1] = (uint)self.funcs.len();
-				self.funcs.push({ .params = copy_slice(self.gpa, func.params), .attrs = attr });
-				switch (func.kind)
-				{
-					case NORMAL: repr.tag = n == 1 ? FUNC_ONE : FUNC;
-					case VARIADIC: repr.tag = n == 1 ? FUNC_VARIADIC_ONE : FUNC_VARIADIC;
-					case OLD_STYLE: repr.tag = n == 1 ? FUNC_OLD_STYLE_ONE : FUNC_OLD_STYLE;
-				}
-				if (func.cc != DEFAULT) repr.tag = n == 1 ? FUNC_ATTRIBUTED_ONE : FUNC_ATTRIBUTED;
+				repr.tag = FUNC_ATTRIBUTED_ZERO;
+				repr.data[1] = (uint)attr;
 			}
+		}
+		else
+		{
+			repr.data[1] = (uint)self.funcs.len();
+			self.funcs.push(
+			{
+				.params = copy_slice(self.gpa, func.params), .attrs = attr
+			}
+			);
+			switch (func.kind)
+			{
+				case NORMAL: repr.tag = n == 1 ? FUNC_ONE : FUNC;
+				case VARIADIC: repr.tag = n == 1 ? FUNC_VARIADIC_ONE : FUNC_VARIADIC;
+				case OLD_STYLE: repr.tag = n == 1 ? FUNC_OLD_STYLE_ONE : FUNC_OLD_STYLE;
+			}
+			if (func.cc != DEFAULT) repr.tag = n == 1 ? FUNC_ATTRIBUTED_ONE : FUNC_ATTRIBUTED;
+		}
 		case POINTER:
 			Pointer p = ty.pointer;
 			repr.data[0] = (uint)p.child;
@@ -880,29 +952,29 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.data[0] = (uint)a.elem;
 			switch (a.len.kind)
 			{
-				case INCOMPLETE:
-					repr.tag = ARRAY_INCOMPLETE;
-				case FIXED:
-				case STATIC:
-					repr.tag = a.len.kind == FIXED ? ARRAY_FIXED : ARRAY_STATIC;
-					repr.data[1] = (uint)self.extra.len();
-					self.extra.push((uint)(a.len.len & 0xFFFF_FFFF));
-					self.extra.push((uint)(a.len.len >> 32));
-				case VARIABLE:
-					repr.tag = ARRAY_VARIABLE;
-					repr.data[1] = (uint)a.len.expr;
-				case UNSPECIFIED_VARIABLE:
-					repr.tag = ARRAY_UNSPECIFIED_VARIABLE;
-			}
+			case INCOMPLETE:
+				repr.tag = ARRAY_INCOMPLETE;
+			case FIXED:
+			case STATIC:
+				repr.tag = a.len.kind == FIXED ? ARRAY_FIXED : ARRAY_STATIC;
+				repr.data[1] = (uint)self.extra.len();
+				self.extra.push((uint)(a.len.len & 0xFFFF_FFFF));
+				self.extra.push((uint)(a.len.len >> 32));
+			case VARIABLE:
+				repr.tag = ARRAY_VARIABLE;
+				repr.data[1] = (uint)a.len.expr;
+			case UNSPECIFIED_VARIABLE:
+				repr.tag = ARRAY_UNSPECIFIED_VARIABLE;
+		}
 		case VECTOR:
 			switch (ty.vector.kind)
 			{
-				case GENERIC: repr.tag = VECTOR;
-				case NEON: repr.tag = VECTOR_NEON;
-				case NEON_POLY: repr.tag = VECTOR_NEON_POLY;
-			}
-			repr.data[0] = (uint)ty.vector.elem;
-			repr.data[1] = ty.vector.len;
+			case GENERIC: repr.tag = VECTOR;
+			case NEON: repr.tag = VECTOR_NEON;
+			case NEON_POLY: repr.tag = VECTOR_NEON_POLY;
+		}
+		repr.data[0] = (uint)ty.vector.elem;
+		repr.data[1] = ty.vector.len;
 		case STRUCT:
 		case UNION:
 			Record r = ty.record;
@@ -917,7 +989,11 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			}
 			repr.tag = is_union ? UNION : STRUCT;
 			repr.data[1] = (uint)self.records.len();
-			self.records.push({ .decl_node = r.decl_node, .layout = r.layout, .fields = copy_slice(self.gpa, r.fields) });
+			self.records.push(
+			{
+				.decl_node = r.decl_node, .layout = r.layout, .fields = copy_slice(self.gpa, r.fields)
+			}
+			);
 		case ENUM:
 			EnumType e = ty.enum_ty;
 			if (e.incomplete)
@@ -944,7 +1020,11 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.tag = e.fixed ? ENUM_FIXED : ENUM;
 			repr.data[0] = (uint)e.tag;
 			repr.data[1] = (uint)self.enums.len();
-			self.enums.push({ .name = e.name, .decl_node = e.decl_node, .fields = copy_slice(self.gpa, e.fields) });
+			self.enums.push(
+			{
+				.name = e.name, .decl_node = e.decl_node, .fields = copy_slice(self.gpa, e.fields)
+			}
+			);
 		case TYPEOF:
 			repr.data[0] = (uint)ty.type_of.base;
 			if (ty.type_of.has_expr)
@@ -1011,9 +1091,18 @@ fn Type QualType.get_type(self, Compilation* comp)
 	{
 		switch ((BuiltinType)self.index)
 		{
-			case VOID: return { .tag = VOID };
-			case BOOL: return { .tag = BOOL };
-			case NULLPTR_T: return { .tag = NULLPTR_T };
+			case VOID: return
+			{
+				.tag = VOID
+			};
+			case BOOL: return
+			{
+				.tag = BOOL
+			};
+			case NULLPTR_T: return
+			{
+				.tag = NULLPTR_T
+			};
 			case CHAR: return type_int(CHAR);
 			case SCHAR: return type_int(SCHAR);
 			case UCHAR: return type_int(UCHAR);
@@ -1045,7 +1134,10 @@ fn Type QualType.get_type(self, Compilation* comp)
 			case DFLOAT64: return type_float(DFLOAT64);
 			case DFLOAT128: return type_float(DFLOAT128);
 			case DFLOAT64X: return type_float(DFLOAT64X);
-			case MFP8: return { .tag = STORAGE_FLOAT, .storage_float = MFP8 };
+			case MFP8: return
+			{
+				.tag = STORAGE_FLOAT, .storage_float = MFP8
+			};
 			case VOID_POINTER: return type_pointer(VOID);
 			case CHAR_POINTER: return type_pointer(CHAR);
 			case INT_POINTER: return type_pointer(INT);
@@ -1121,14 +1213,23 @@ fn Type QualType.get_type(self, Compilation* comp)
 			EnumData ed = ts.enums[d1];
 			return { .tag = ENUM, .enum_ty = {
 				.has_tag = true, .tag = qt_from(d0), .fixed = repr.tag == ENUM_FIXED, .incomplete = false,
-				.name = ed.name, .decl_node = ed.decl_node, .fields = ed.fields } };
+				.name = ed.name, .decl_node = ed.decl_node, .fields = ed.fields
+			} };
 		case ENUM_INCOMPLETE:
-			return { .tag = ENUM, .enum_ty = {
-				.incomplete = true, .name = (StringId)d0, .decl_node = (NodeIndex)d1 } };
+			return
+			{
+				.tag = ENUM, .enum_ty = {
+					.incomplete = true, .name = (StringId)d0, .decl_node = (NodeIndex)d1
+				}
+			};
 		case ENUM_INCOMPLETE_FIXED:
-			return { .tag = ENUM, .enum_ty = {
-				.has_tag = true, .tag = qt_from(d0), .fixed = true, .incomplete = true,
-				.name = (StringId)ts.extra[d1], .decl_node = (NodeIndex)ts.extra[(sz)d1 + 1] } };
+			return
+			{
+				.tag = ENUM, .enum_ty = {
+					.has_tag = true, .tag = qt_from(d0), .fixed = true, .incomplete = true,
+					.name = (StringId)ts.extra[d1], .decl_node = (NodeIndex)ts.extra[(sz)d1 + 1]
+				}
+			};
 		case TYPEOF: return type_typeof(qt_from(d0));
 		case TYPEOF_EXPR: return type_typeof_expr(qt_from(d0), (NodeIndex)d1);
 		case TYPEDEF: return type_typedef(qt_from(d0), (StringId)ts.extra[d1], (NodeIndex)ts.extra[(sz)d1 + 1]);
@@ -1146,7 +1247,10 @@ fn BaseType QualType.base(self, Compilation* comp)
 		{
 			case TYPEOF: cur = ty.type_of.base;
 			case TYPEDEF: cur = ty.type_def.base;
-			default: return { .ty = ty, .qt = cur };
+			default: return
+			{
+				.ty = ty, .qt = cur
+			};
 		}
 	}
 }
@@ -1201,7 +1305,7 @@ fn QualType QualType.child_type(self, Compilation* comp)
 		case POINTER: return b.ty.pointer.child;
 		case ARRAY: return b.ty.array.elem;
 		case VECTOR: return b.ty.vector.elem;
-		case BLOCK: return b.qt; // special case: block's childType is always itself
+		case BLOCK: return b.qt;  // special case: block's childType is always itself
 		default: unreachable("type has no child type");
 	}
 }

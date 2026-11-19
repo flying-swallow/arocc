@@ -150,8 +150,8 @@ template tok:offset text
   `gnu_imaginary_constant`, `float_literal_in_expr`, `unsupported_str_cat`,
   `empty_char_literal_error`, `unterminated_char_literal_error`. The C3
   templates are the same names upper-cased with `DIAG_` (number_value and
-  text_literal_semantics return them as `NumberValueDiag` /
-  `TextSemanticsDiag`).
+  text_literal_semantics return them as `Diagnostic` values
+  (no separate enum)).
 - `tok` is the index of the token within the vector's input (always 0 except
   for multi-token `string` runs).
 - `offset` is the byte offset added to that token's location: 0 for the start

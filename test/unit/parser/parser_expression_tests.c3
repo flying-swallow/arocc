@@ -1,51 +1,12 @@
-// Tests the expression parser with preprocessed tokens and a seeded symbol
-// scope. The callback supplies primary tokens; unary and parenthesis parsing
-// are part of the expression engine under test.
+// Tests the expression grammar on preprocessed tokens through the real
+// primary/postfix/binary productions, with symbols seeded into the parser.
 module parser_expression_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_expression, aro::parser_postfix, aro::parser_result;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
 import aro::parser_frontend;
 import std::core::mem::allocators;
-
-struct UnaryContext
-{
-	symbol_stack::SymbolStack* symbols;
-	StringId identifier;
-	StringId second_identifier;
-	uint suppressed_primaries;
-}
-
-fn parser_result::Result? parse_seeded_unary(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser_expression::NO_EXPRESSION~;
-	UnaryContext* ctx = (UnaryContext*)context;
-	tokens::TokenIndex tok = p.tok_i;
-	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
-	parser_result::Result result;
-	if (id == tokenizer::TokenId.IDENTIFIER)
-	{
-		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-		StringId name = spelling == "y" ? ctx.second_identifier : ctx.identifier;
-		Symbol symbol = ctx.symbols.lookup(name, symbol_stack::ScopeKind.VARS)!!;
-		NodeIndex ref = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
-			.decl_ref = { .qt = symbol.qt, .decl = symbol.node, .name_tok = tok } });
-		result.init(ref, symbol.qt, symbol.val);
-	}
-	else
-	{
-		// The fixture accepts only the small integer literals used below.
-		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-		long literal_value = spelling == "0" ? 0 : spelling == "1" ? 1 : 2;
-		if (!eval) ctx.suppressed_primaries++;
-		NodeIndex literal = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-			.literal = { .literal_tok = tok, .qt = type_store::INT } });
-		result.init(literal, type_store::INT, eval ? value::int_i64(literal_value, p.comp) : value::NONE);
-	}
-	p.advance();
-	return result;
-}
 
 alias TypeNameProbeFn = fn parser::TypeNameProbe?(void* context, parser::Parser* p);
 
@@ -59,71 +20,33 @@ struct ProbeHandler (parser::IParserHandler)
 fn parser::TypeNameProbe? ProbeHandler.handle_typed_type_name_probe(&self, parser::Parser* p) @dynamic
 	=> self.probe(null, p);
 
-fn parser::TypeNameProbe? probe_int_type_name(void* context, parser::Parser* p)
-{
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return { .matched = false };
-	p.advance();
-	return { .matched = true, .qt = type_store::INT };
-}
-
-// Source-derived scope: this helper tests expression-engine semantics with a
-// deliberately tiny primary callback, not the owning C grammar's unary parser.
+<* Parse `text` as one expression and check its node kind and folded value.
+   With `expect_failure` the parse must fail instead. A successful parse must
+   emit no diagnostic: unevaluated operands (the skipped arm of `&&`, `||`,
+   `?:`) are not evaluated, so a `1/0` there stays silent. *>
 fn void check_expression(String text, tree::NodeKind expected_kind, long expected_value,
-	bool expect_failure = false, uint expected_suppressed = 0, bool conditional_right_assoc = false)
+	bool expect_failure = false, bool conditional_right_assoc = false)
 {
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
+	ExpressionFixture f;
+	f.init(text);
+	defer f.free();
+	parser_result::Result? maybe_result = f.parser.expr();
+	if (catch parse_error = maybe_result)
 	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("expr.c", text)!!;
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
-		StringId x = comp.intern_string("x");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
-		UnaryContext context = { .symbols = &symbols, .identifier = x, .second_identifier = x };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result? maybe_result = expression.parse();
-		if (catch parse_error = maybe_result)
-		{
-			assert(expect_failure, "unexpected expression parse failure");
-			assert(parse_error == parser_expression::PARSING_FAILED || parse_error == parser_expression::NO_EXPRESSION ||
-				parse_error == parser::PARSING_FAILED);
-		}
-		else
-		{
-			assert(!expect_failure, "malformed expression unexpectedly parsed");
-			parser_result::Result result = maybe_result;
-			assert(result.node.kind(&p.tree) == expected_kind);
-			assert(result.val.to_i64(&comp)!! == expected_value);
-			if (conditional_right_assoc)
-			{
-				Node outer = result.node.get(&p.tree);
-				assert(outer.conditional.else_expr.get(&p.tree).kind == tree::NodeKind.COND_EXPR);
-			}
-		}
-		assert(context.suppressed_primaries == expected_suppressed);
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
-		pp.free();
-		comp.free();
-		d.free();
+		assert(expect_failure, "unexpected expression parse failure");
+		assert(parse_error == parser::PARSING_FAILED || parse_error == parser::NO_EXPRESSION);
+		return;
 	}
-	assert(ta.allocation_count() == 0);
+	assert(!expect_failure, "malformed expression unexpectedly parsed");
+	parser_result::Result result = maybe_result;
+	assert(result.node.kind(&f.parser.tree) == expected_kind);
+	assert(result.val.to_i64(&f.comp)!! == expected_value);
+	if (conditional_right_assoc)
+	{
+		Node outer = result.node.get(&f.parser.tree);
+		assert(outer.conditional.else_expr.get(&f.parser.tree).kind == tree::NodeKind.COND_EXPR);
+	}
+	assert(f.diagnostics.messages.len() == 0);
 }
 
 fn void unary_and_parenthesized_expressions() @test
@@ -137,94 +60,51 @@ fn void unary_and_parenthesized_expressions() @test
 
 fn void sizeof_type_name_has_no_expression_operand() @test
 {
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("expr.c", "sizeof(int)\n")!!;
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		ProbeHandler int_probe = { .probe = &probe_int_type_name };
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d, .handler = &int_probe };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
-		UnaryContext context;
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result result = expression.parse()!!;
-		assert(result.node.kind(&p.tree) == tree::NodeKind.SIZEOF_EXPR);
-		assert((ulong)result.val.to_i64(&comp)!! == type_store::INT.sizeof_or_null(&comp)!!);
-		Node node = result.node.get(&p.tree);
-		assert(node.type_info.expr == type_store::NODE_NULL);
-		assert(node.type_info.operand_qt.eql(type_store::INT, &comp));
-		p.tree.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
+	ExpressionFixture f;
+	f.init("sizeof(int)\n");
+	defer f.free();
+	parser_result::Result result = f.parser.expr()!!;
+	assert(result.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
+	assert((ulong)result.val.to_i64(&f.comp)!! == type_store::INT.sizeof_or_null(&f.comp)!!);
+	Node node = result.node.get(&f.parser.tree);
+	assert(node.type_info.expr == type_store::NODE_NULL);
+	assert(node.type_info.operand_qt.eql(type_store::INT, &f.comp));
 }
 
 fn void alignof_type_name_has_no_expression_operand() @test
 {
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		comp.langopts.standard = lang_opts::Standard.C23;
-		Source src = comp.add_source_from_buffer("expr.c", "alignof(int)\n")!!;
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		ProbeHandler int_probe = { .probe = &probe_int_type_name };
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d, .handler = &int_probe };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
-		UnaryContext context;
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result result = expression.parse()!!;
-		assert(result.node.kind(&p.tree) == tree::NodeKind.ALIGNOF_EXPR);
-		assert(result.val.to_i64(&comp)!! == type_store::INT.alignof(&comp));
-		Node node = result.node.get(&p.tree);
-		assert(node.type_info.expr == type_store::NODE_NULL);
-		assert(node.type_info.operand_qt.eql(type_store::INT, &comp));
-		p.tree.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
+	ExpressionFixture f;
+	f.init("alignof(int)\n", "expr.c", lang_opts::Standard.C23);
+	defer f.free();
+	parser_result::Result result = f.parser.expr()!!;
+	assert(result.node.kind(&f.parser.tree) == tree::NodeKind.ALIGNOF_EXPR);
+	assert(result.val.to_i64(&f.comp)!! == type_store::INT.alignof(&f.comp));
+	Node node = result.node.get(&f.parser.tree);
+	assert(node.type_info.expr == type_store::NODE_NULL);
+	assert(node.type_info.operand_qt.eql(type_store::INT, &f.comp));
 }
 
 fn void conditional_expression_is_right_associative() @test
 {
 	// Source-derived: Parser.zig's conditional production recurses at the same
-	// precedence for its else arm, making the operator right associative.
-	check_expression("1 ? 2 : 0 ? 1 : 2\n", tree::NodeKind.COND_EXPR, 2,
-		false, 3, true);
+	// precedence for its else arm, making the operator right associative. Only
+	// the selected arms are evaluated, so the `1/0` arms stay silent.
+	check_expression("1 ? 2 : 0 ? 1/0 : 1/0\n", tree::NodeKind.COND_EXPR, 2,
+		false, true);
 }
 
 fn void logical_and_conditional_short_circuit_suppresses_evaluation() @test
 {
-	check_expression("0 && 2\n", tree::NodeKind.BOOL_AND_EXPR, 0, false, 1);
-	check_expression("1 || 2\n", tree::NodeKind.BOOL_OR_EXPR, 1, false, 1);
-	check_expression("1 ? 2 : 0\n", tree::NodeKind.COND_EXPR, 2, false, 1);
+	// Control: an evaluated `1/0` is diagnosed (and has no value).
+	ExpressionFixture f;
+	f.init("1 && 1/0\n");
+	parser_result::Result control = f.parser.expr()!!;
+	assert(control.node.kind(&f.parser.tree) == tree::NodeKind.BOOL_AND_EXPR);
+	assert(has_expression_diagnostic(&f, "division by zero is undefined"));
+	f.free();
+	check_expression("0 && 1/0\n", tree::NodeKind.BOOL_AND_EXPR, 0);
+	check_expression("1 || 1/0\n", tree::NodeKind.BOOL_OR_EXPR, 1);
+	check_expression("1 ? 2 : 1/0\n", tree::NodeKind.COND_EXPR, 2);
 }
 
 fn void malformed_conditional_expression_fails() @test
@@ -236,106 +116,33 @@ fn void malformed_conditional_expression_fails() @test
 
 fn void binary_expression_uses_preprocessed_tokens_and_seeded_symbol_types() @test
 {
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("expr.c", "#define EXPR x\nEXPR + 2\n")!!;
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!!;
-
-		symbol_stack::SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
-		StringId x = comp.intern_string("x");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex decl = tree.add_node({ .kind = tree::NodeKind.VARIABLE,
-			.variable = { .name_tok = 0, .qt = type_store::INT } });
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::INT,
-			.node = decl, .val = value::int_i64(3, &comp) });
-
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
-		UnaryContext context = { .symbols = &symbols, .identifier = x, .second_identifier = x };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result result = expression.parse()!!;
-		assert(result.qt.eql(type_store::INT, &comp));
-		assert(result.node.kind(&p.tree) == tree::NodeKind.ADD_EXPR);
-		assert(result.val.to_i64(&comp)!! == 5);
-		assert(p.tok_i == 3 && p.at_eof());
-
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
+	ExpressionFixture f;
+	f.init("#define EXPR x\nEXPR + 2\n");
+	defer f.free();
+	f.seed_symbol("x", symbol_stack::SymbolKind.CONSTEXPR, type_store::INT, value::int_i64(3, &f.comp));
+	parser_result::Result result = f.parser.expr()!!;
+	assert(result.qt.eql(type_store::INT, &f.comp));
+	assert(result.node.kind(&f.parser.tree) == tree::NodeKind.ADD_EXPR);
+	assert(result.val.to_i64(&f.comp)!! == 5);
+	assert(f.parser.tok_i == 3 && f.parser.at_eof());
 }
 
 fn void assignment_expression_is_right_associative() @test
 {
-	// The callback's seeded identifiers each have type int; no constant value
-	// is needed to check the shape of the right-associative assignment tree.
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("assign.c", "x = y = 2\n")!!;
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
-		pp.add_token(eof)!!;
-		SymbolStack symbols;
-		symbols.init(&ta);
-		symbols.push_scope();
-		StringId x = comp.intern_string("x");
-		StringId y = comp.intern_string("y");
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		NodeIndex x_decl = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .name_tok = 0, .qt = type_store::INT } });
-		NodeIndex y_decl = tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .name_tok = 0, .qt = type_store::INT } });
-		symbols.define({ .name = x, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::INT, .node = x_decl });
-		symbols.define({ .name = y, .kind = symbol_stack::SymbolKind.DEF, .qt = type_store::INT, .node = y_decl });
-		// The unary fixture resolves each identifier through the seeded scope
-		// and emits the literal for the final primary.
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)p.tree.tokens.len;
-		UnaryContext context = { .symbols = &symbols, .identifier = x, .second_identifier = y };
-		parser_postfix::CallbackParts expression_parts = { .context = &context, .operand = &parse_seeded_unary };
-		parser_expression::ExpressionParser expression = { .parser = &p, .parts = &expression_parts };
-		parser_result::Result result = expression.parse()!!;
-		assert(result.node.kind(&p.tree) == tree::NodeKind.ASSIGN_EXPR);
-		Node inner = result.node.get(&p.tree);
-		assert(inner.binary.rhs.get(&p.tree).kind == tree::NodeKind.ASSIGN_EXPR);
-		p.tree.free();
-		symbols.pop_scope();
-		symbols.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
+	ExpressionFixture f;
+	f.init("x = y = 2\n");
+	defer f.free();
+	f.seed_symbol("x", symbol_stack::SymbolKind.DEF, type_store::INT);
+	f.seed_symbol("y", symbol_stack::SymbolKind.DEF, type_store::INT);
+	parser_result::Result result = f.parser.expr()!!;
+	assert(result.node.kind(&f.parser.tree) == tree::NodeKind.ASSIGN_EXPR);
+	Node inner = result.node.get(&f.parser.tree);
+	assert(inner.binary.rhs.get(&f.parser.tree).kind == tree::NodeKind.ASSIGN_EXPR);
 }
 
-// The parser-owned entry points below deliberately use the finalized token
-// stream and the real PrimaryParser/PostfixParser composition. The small type
-// name probe models the grammar-owned typedef lookup needed for cast ambiguity.
+// Expression fixture over the finalized token stream and the real expression
+// grammar. The small type name probe models the grammar-owned typedef lookup
+// needed for cast ambiguity.
 struct ExpressionFixture
 {
 	TrackingAllocator allocator;
@@ -451,10 +258,8 @@ fn void parser_owned_address_of_local_object_carries_pointer_value() @test
 	f.init("&object\n");
 	defer f.free();
 	NodeIndex object_decl = f.seed_symbol("object", symbol_stack::SymbolKind.DEF, type_store::INT);
-	UnaryContext context = { .symbols = &f.parser.symbols,
-		.identifier = f.comp.intern_string("object"), .second_identifier = f.comp.intern_string("object") };
 
-	parser_result::Result address = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
+	parser_result::Result address = f.parser.expr()!!;
 	assert(address.node.kind(&f.parser.tree) == tree::NodeKind.ADDR_OF_EXPR);
 	assert(address.val.is(primitive_value::PrimitiveType.POINTER, &f.comp));
 	primitive_value::PrimitiveValue pointer = f.comp.interner.get(address.val.ref());
@@ -489,9 +294,7 @@ fn void parser_owned_sizeof_alignof_disambiguate_type_names_and_expressions() @t
 	f.free();
 	f.init("sizeof(object)\n");
 	NodeIndex object_decl = f.seed_symbol("object", symbol_stack::SymbolKind.DEF, type_store::INT);
-	UnaryContext context = { .symbols = &f.parser.symbols,
-		.identifier = f.comp.intern_string("object"), .second_identifier = f.comp.intern_string("object") };
-	parser_result::Result sized_expression = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
+	parser_result::Result sized_expression = f.parser.expr()!!;
 	assert(sized_expression.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	Node sized_expression_node = sized_expression.node.get(&f.parser.tree);
 	assert(sized_expression_node.type_info.expr != type_store::NODE_NULL);
@@ -510,9 +313,7 @@ fn void parser_owned_type_name_probe_restores_only_nonmatches_and_propagates_fau
 	defer f.free();
 	f.seed_symbol("object", symbol_stack::SymbolKind.DEF, type_store::INT);
 	f.probe_handler.probe = &expression_type_name_probe_consuming_miss;
-	UnaryContext context = { .symbols = &f.parser.symbols,
-		.identifier = f.comp.intern_string("object"), .second_identifier = f.comp.intern_string("object") };
-	parser_result::Result miss = f.parser.expr_with_primary(&context, &parse_seeded_unary)!!;
+	parser_result::Result miss = f.parser.expr()!!;
 	assert(miss.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	assert(miss.node.get(&f.parser.tree).type_info.expr != type_store::NODE_NULL);
 	assert(f.parser.at_eof(), "a consuming non-match must restore the expression cursor");
@@ -561,8 +362,7 @@ fn void parser_owned_unary_folding_respects_eval_suppression() @test
 	ExpressionFixture f;
 	f.init("sizeof(3)\n");
 	defer f.free();
-	UnaryContext context = { .symbols = &f.parser.symbols };
-	parser_result::Result unevaluated_size = f.parser.expr_with_primary(&context, &parse_seeded_unary, false)!!;
+	parser_result::Result unevaluated_size = f.parser.expr(false)!!;
 	assert(unevaluated_size.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
 	// sizeof computes its result from the checked type even when its enclosing
 	// expression suppresses value evaluation.
@@ -570,8 +370,7 @@ fn void parser_owned_unary_folding_respects_eval_suppression() @test
 
 	f.free();
 	f.init("__imag 7\n");
-	context = { .symbols = &f.parser.symbols };
-	parser_result::Result suppressed_imaginary_part = f.parser.expr_with_primary(&context, &parse_seeded_unary, false)!!;
+	parser_result::Result suppressed_imaginary_part = f.parser.expr(false)!!;
 	assert(suppressed_imaginary_part.node.kind(&f.parser.tree) == tree::NodeKind.IMAG_EXPR);
 	assert(suppressed_imaginary_part.val.is_none());
 }
@@ -833,10 +632,10 @@ fn void parser_owned_generic_missing_association_reports_expected_type() @test
 	assert(has_expression_diagnostic(&f, "expected a type"));
 }
 
-fn void parser_owned_unavailable_statement_and_specialized_builtin_forms_fail() @test
+fn void parser_owned_statement_expression_unavailable_without_body_grammar() @test
 {
-	// Source-derived: statement expressions and specialized builtin primaries
-	// are explicit unavailable productions in this parser composition.
+	// Statement expressions need the handler's statement grammar; this fixture
+	// has none. Specialized builtin primaries and compound literals do not.
 	ExpressionFixture f;
 	f.init("({ 1; })\n");
 	defer f.free();
@@ -856,11 +655,9 @@ fn void parser_owned_unavailable_statement_and_specialized_builtin_forms_fail() 
 
 	f.free();
 	f.init("(int){ 1 }\n");
-	parser_result::Result? compound_literal = f.parser.expr();
-	if (catch compound_literal) {}
-	else { assert(false, "unbound typed compound-literal seam should report unavailable"); }
-	assert(has_expression_diagnostic(&f, "compound literal expressions are unavailable in this parser composition"));
-	assert(f.parser.tree.tokens[(usz)f.parser.tok_i].id == tokenizer::TokenId.L_BRACE);
+	parser_result::Result compound_literal = f.parser.expr()!!;
+	assert(compound_literal.node.kind(&f.parser.tree) == tree::NodeKind.COMPOUND_LITERAL_EXPR);
+	assert(f.parser.at_eof());
 }
 
 fn void parser_owned_constexpr_references_respect_symbol_kind_and_restore_folding_mode() @test

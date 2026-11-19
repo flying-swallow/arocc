@@ -1,7 +1,7 @@
 // Focused direct-AST tests for Result's type conversions.
 module parser_result_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_postfix, aro::parser_result, aro::tree, aro::type_store, aro::value, aro::value_interner;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_result, aro::tree, aro::type_store, aro::value, aro::value_interner;
 import aro::preprocessor, aro::source, aro::symbol_stack, aro::tokens;
 import std::core::mem::allocators;
 
@@ -627,8 +627,7 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 
 		// A file-scope compound literal has static duration and uses the same
 		// value requirement even when its storage-class argument is AUTO.
-		parser_postfix::PostfixParser postfix = { .parser = &p };
-		parser_result::Result compound = postfix.parse_compound_literal(0, type_store::INT)!!;
+		parser_result::Result compound = p.parse_compound_literal(0, type_store::INT)!!;
 		assert(compound.node.kind(&p.tree) == tree::NodeKind.COMPOUND_LITERAL_EXPR);
 		assert(diags.messages.len() == 3);
 		test::eq(diags.messages[2].text, "initializer element is not a compile-time constant");
@@ -636,7 +635,7 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 		// A thread-local compound literal also has static duration inside a
 		// function, so it cannot inherit the runtime initializer context.
 		p.set_function_context({ .active = true });
-		postfix.parse_compound_literal(0, type_store::INT, tree::CompoundLiteralStorageClass.AUTO, true, false)!!;
+		p.parse_compound_literal(0, type_store::INT, tree::CompoundLiteralStorageClass.AUTO, true, false)!!;
 		assert(diags.messages.len() == 4);
 		test::eq(diags.messages[3].text, "initializer element is not a compile-time constant");
 

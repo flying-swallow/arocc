@@ -5,7 +5,7 @@ module builtin_expression_tests;
 import aro::primitive_value;
 import aro::builtin_eval, aro::builtin_defs::common, aro::builtins;
 import aro::compilation, aro::diagnostics, aro::parser, aro::parser_builtin, aro::parser_result;
-import aro::parser_expression, aro::parser_frontend;
+import aro::parser_frontend;
 import aro::target, aro::lang_opts;
 import aro::attribute, aro::attribute_map;
 import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
@@ -115,30 +115,16 @@ fn parser_result::Result? parse_choose_constant(void* context, parser::Parser* p
 	return parse_choose_operand(context, p, eval);
 }
 
-fn parser_result::Result? parse_offset_integer_primary(void* context, parser::Parser* p, bool eval)
-{
-	(void)context;
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.PP_NUM) return parser_builtin::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-	long n = spelling == "0" ? 0 : spelling == "1" ? 1 : spelling == "2" ? 2 : spelling == "3" ? 3 : 4;
-	NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	return { .node = node, .qt = type_store::INT,
-		.val = eval ? value::int_i64(n, p.comp) : value::NONE };
-}
-
 fn parser_result::Result? parse_offset_integer_constant(void* context, parser::Parser* p,
 	parser::ConstDeclFoldingMode mode, bool eval)
 {
 	CallbackContext* ctx = (CallbackContext*)context;
 	ctx.constant_calls++;
-	return p.integer_const_expr_with_primary(null, &parse_offset_integer_primary, eval, mode);
+	return p.integer_const_expr(eval, mode);
 }
 
 fn parser_result::Result? parse_offset_assignment_expression(void* context, parser::Parser* p, bool eval)
-	=> p.assign_expr_with_primary(null, &parse_offset_integer_primary, eval);
+	=> p.assign_expr(eval);
 
 fn parser_result::Result? parse_nonconstant_offset_index(void* context, parser::Parser* p,
 	parser::ConstDeclFoldingMode mode, bool eval)

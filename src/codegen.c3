@@ -61,6 +61,90 @@ struct EmittedVariable
 	String name;
 }
 
+struct TodoReportEntry
+{
+	String kind;
+	uint count;
+	String first_fn;
+}
+
+struct TodoReportHit
+{
+	String kind;
+	String definition;
+}
+
+<* Distinct unsupported codegen kinds and the definitions that hit them. *>
+struct TodoReport
+{
+	Allocator allocator;
+	List{TodoReportEntry} entries;
+	List{TodoReportHit} hits;
+	List{String} skipped_definitions;
+	uint definitions_total;
+}
+
+fn void TodoReport.init(&self, Allocator allocator)
+{
+	*self = { .allocator = allocator };
+	self.entries.init(allocator);
+	self.hits.init(allocator);
+	self.skipped_definitions.init(allocator);
+}
+
+fn void TodoReport.free(&self)
+{
+	foreach (entry : self.entries)
+	{
+		alloc::free(self.allocator, entry.kind.ptr);
+		alloc::free(self.allocator, entry.first_fn.ptr);
+	}
+	foreach (hit : self.hits)
+	{
+		alloc::free(self.allocator, hit.kind.ptr);
+		alloc::free(self.allocator, hit.definition.ptr);
+	}
+	foreach (definition : self.skipped_definitions) alloc::free(self.allocator, definition.ptr);
+	self.entries.free();
+	self.hits.free();
+	self.skipped_definitions.free();
+	*self = {};
+}
+
+<* Count a definition once even when it reaches the same unsupported path repeatedly. *>
+fn void TodoReport.record(&self, String kind, String definition)
+{
+	foreach (hit : self.hits)
+	{
+		if (hit.kind == kind && hit.definition == definition) return;
+	}
+	self.hits.push({ .kind = kind.copy(self.allocator), .definition = definition.copy(self.allocator) });
+
+	bool first_definition_hit = true;
+	foreach (existing : self.skipped_definitions)
+	{
+		if (existing == definition)
+		{
+			first_definition_hit = false;
+			break;
+		}
+	}
+	if (first_definition_hit) self.skipped_definitions.push(definition.copy(self.allocator));
+
+	foreach (&entry : self.entries)
+	{
+		if (entry.kind == kind)
+		{
+			entry.count++;
+			return;
+		}
+	}
+	self.entries.push(
+	{
+		.kind = kind.copy(self.allocator), .count = 1, .first_fn = definition.copy(self.allocator),
+	});
+}
+
 <* CodeGen's public fault is compilation::FATAL_ERROR; allocations panic on OOM. *>
 struct CodeGen
 {
@@ -105,6 +189,14 @@ struct CodeGen
 	ir::Ref return_label;
 	bool has_compound_assign_dummy;
 	ir::Ref compound_assign_dummy;
+	<* Aggregate return storage for the function currently being lowered. *>
+	bool aggregate_return;
+	AggClass aggregate_return_class;
+	ulong aggregate_return_size;
+	ir::Ref aggregate_return_slot;
+	ir::Ref sret_pointer;
+	bool keep_going;
+	TodoReport* todo_report;
 }
 
 <*
@@ -114,6 +206,15 @@ struct CodeGen
 *>
 fn void? CodeGen.fail(&self, String text)
 {
+	if (self.keep_going)
+	{
+		String kind = text;
+		while (kind.ends_with("\n")) kind = kind[:kind.len - 1];
+		String definition = self.current_fn.len == 0 ? "<file scope>" : self.current_fn;
+		assert(self.todo_report != null, "keep-going CodeGen requires a TODO report");
+		self.todo_report.record(kind, definition);
+		return compilation::FATAL_ERROR~;
+	}
 	self.comp.diagnostics.add(
 		{
 			.kind = diagnostics::MessageKind.FATAL_ERROR, .text = text
@@ -128,10 +229,13 @@ fn void? CodeGen.fail(&self, String text)
  the Zig implementation.
  @return? compilation::FATAL_ERROR
 *>
-fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = -1)
+fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = -1,
+	bool keep_going = false, TodoReport* todo_report = null)
 {
 	compilation::Compilation* comp = tree.comp;
-	CodeGen c = { .tree = tree, .comp = comp, .pp = pp, .tu_id = tu_id };
+	CodeGen c = { .tree = tree, .comp = comp, .pp = pp, .tu_id = tu_id,
+		.keep_going = keep_going, .todo_report = todo_report };
+	if (keep_going) assert(todo_report != null, "keep-going CodeGen requires a TODO report");
 	c.builder.init(comp.gpa, &comp.interner);
 	c.symbols.init(comp.gpa);
 	c.emitted_block_statics.init(comp.gpa);
@@ -189,10 +293,41 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 				break;
 			case FUNCTION:
 				if (decl.function.body.is_null() || decl.function.is_inline) continue;
-				c.gen_fn(decl_index, decl.function)!;
+				if (keep_going)
+				{
+					todo_report.definitions_total++;
+					if (catch f = c.gen_fn(decl_index, decl.function))
+					{
+						if (f != compilation::FATAL_ERROR) return f~;
+						c.builder.abort_fn();
+						continue;
+					}
+				}
+				else
+				{
+					c.gen_fn(decl_index, decl.function)!;
+				}
 			case VARIABLE:
-				c.gen_var(decl.variable, decl_index)!;
+				if (keep_going)
+				{
+					todo_report.definitions_total++;
+					if (catch f = c.gen_root_var(decl.variable, decl_index))
+					{
+						if (f != compilation::FATAL_ERROR) return f~;
+						continue;
+					}
+				}
+				else
+				{
+					c.gen_var(decl.variable, decl_index)!;
+				}
 			case GLOBAL_ASM:
+				if (keep_going)
+				{
+					todo_report.definitions_total++;
+					todo_report.record("TODO global assembly", "<global assembly>");
+					continue;
+				}
 				c.fail("TODO global assembly")!;
 				unreachable();
 			default:
@@ -200,6 +335,16 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 		}
 	}
 	return c.builder.finish();
+}
+
+<* Set a useful report name while lowering a file-scope variable. *>
+fn void? CodeGen.gen_root_var(&self, tree::NodeVariable variable, type_store::NodeIndex declaration)
+{
+	String old_current_fn = self.current_fn;
+	String source_name = self.tree.tok_slice(variable.name_tok);
+	self.current_fn = self.symbol_name(source_name, self.has_internal_linkage(declaration));
+	defer self.current_fn = old_current_fn;
+	return self.gen_var(variable, declaration);
 }
 
 <* Return a previously allocated name for a block-scope static, if any. *>
@@ -356,9 +501,11 @@ fn String CodeGen.symbol_name(&self, String name, bool internal)
 }
 
 <*
- Convert a C type to its backend IR type. Struct layouts are interned by
- unqualified type; unions, blocks, complex/atomic types, VLAs, bitfields and
- nullptr_t retain the source TODO diagnostics.
+ Convert a C type to its backend IR type. Struct layouts and opaque union byte
+ arrays are interned by unqualified type. Struct bitfields remain a type-
+representation TODO for aggregate IR values; their member accesses lower
+independently through typed storage units. Blocks, complex/atomic types, VLAs
+and nullptr_t are also unsupported.
  @return? compilation::FATAL_ERROR
 *>
 fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
@@ -392,8 +539,16 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 			self.record_cache.set(cache_key, record_type);
 			return record_type;
 		case UNION:
-			self.fail("TODO lower union types")!;
-			unreachable();
+			uint cache_key = (uint)base.qt.unqualified();
+			if (try cached = self.record_cache.get(cache_key)) return cached;
+			value_interner::InternerRef union_type = self.builder.interner.put(
+				{
+					.tag = ARRAY_TY,
+					.array_ty = { .len = base.qt.sizeof(self.comp), .child = value_interner::REF_I8 }
+				}
+			);
+			self.record_cache.set(cache_key, union_type);
+			return union_type;
 		case POINTER: return value_interner::REF_PTR;
 		case FUNC: return value_interner::REF_FUNC;
 		case BLOCK:
@@ -477,6 +632,20 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	self.current_fn = name;
 	self.static_counter = 0;
 	type_store::Func func_type = function.qt.base(self.comp).ty.func;
+	self.aggregate_return = self.is_record_value(func_type.return_type);
+	self.aggregate_return_class = AggClass.IGNORE;
+	self.aggregate_return_size = 0;
+	self.aggregate_return_slot = ir::NONE;
+	self.sret_pointer = ir::NONE;
+	if (self.aggregate_return)
+	{
+		AggClassResult return_class = self.classify_record(func_type.return_type)!;
+		// Preserve gen_type's existing diagnostic for records with unsupported
+		// bitfield layouts; ordinary aggregates use address-based expression values.
+		self.gen_type(func_type.return_type)!;
+		self.aggregate_return_class = return_class.kind;
+		self.aggregate_return_size = func_type.return_type.sizeof(self.comp);
+	}
 	self.ret_nodes.clear();
 	// C3 deviation: Zig never clears `symbols`, so a name could resolve to an
 	// earlier function's ALLOC. Locals are per function.
@@ -491,13 +660,108 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	self.continue_vla_depth = 0;
 	self.current_compound = (type_store::NodeIndex)type_store::NODE_NULL;
 	self.builder.start_fn();
+	uint gp_index = 0;
+	uint sse_index = 0;
+	uint stack_offset = 0;
+	if (self.aggregate_return && self.aggregate_return_class == AggClass.MEMORY)
+	{
+		self.sret_pointer = self.builder.add_arg_at(value_interner::REF_PTR,
+			ir::ArgLocationKind.GP_REGISTER, gp_index, 0);
+		gp_index++;
+	}
+	if (self.aggregate_return && self.aggregate_return_class == AggClass.INTEGER)
+	{
+		uint padded_size = (uint)((self.aggregate_return_size + 7) / 8 * 8);
+		self.aggregate_return_slot = self.builder.add_alloc(padded_size, 8);
+		self.gen_zero_fill(self.aggregate_return_slot, padded_size)!;
+	}
 	foreach (param : func_type.params)
 	{
-		ir::Ref arg = self.builder.add_arg(self.gen_type(param.qt)!);
+		ir::Ref alloc;
 		uint size = (uint)param.qt.sizeof(self.comp);
 		uint alignment = param.qt.alignof(self.comp);
-		ir::Ref alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
-		self.builder.add_store(alloc, arg);
+		bool is_f80 = param.qt.is(self.comp, type_store::TypeTag.FLOAT) && param.qt.bit_sizeof(self.comp) == 80;
+		if (is_f80)
+		{
+			// x87 long double occupies a padded 16-byte object slot, even on
+			// targets where its C type alignment is smaller.
+			size = 16;
+			alignment = 16;
+		}
+		if (self.is_record_value(param.qt))
+		{
+			AggClassResult class = self.classify_record(param.qt)!;
+			self.gen_type(param.qt)!;
+			uint words = class.kind == AggClass.INTEGER ? (uint)class.eightbyte_count : 0;
+			uint allocation_size = size;
+			if (class.kind == AggClass.INTEGER && words * 8 > allocation_size) allocation_size = words * 8;
+			alloc = self.builder.add_alloc(allocation_size, alignment, param.qt.is_volatile);
+			if (class.kind == AggClass.INTEGER)
+			{
+				bool in_registers = gp_index + words <= 6;
+				for (uint word = 0; word < words; word++)
+				{
+					ir::Ref arg;
+					if (in_registers)
+					{
+						arg = self.builder.add_arg_at(value_interner::REF_I64,
+							ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
+					}
+					else
+					{
+						arg = self.builder.add_arg_at(value_interner::REF_I64,
+							ir::ArgLocationKind.STACK, stack_offset, 8);
+						stack_offset += 8;
+					}
+					self.builder.add_store(self.ptr_at(alloc, (ulong)word * 8), arg);
+				}
+			}
+			else if (class.kind == AggClass.MEMORY)
+			{
+				uint rounded_size = (uint)((size + 7) / 8 * 8);
+				ir::Ref arg = self.builder.add_arg_at(value_interner::REF_PTR,
+					ir::ArgLocationKind.STACK, stack_offset, rounded_size, true);
+				stack_offset += rounded_size;
+				self.gen_copy(alloc, arg, size)!;
+			}
+		}
+		else
+		{
+			ir::Ref arg;
+			if (is_f80)
+			{
+				// The incoming stack area starts at rbp+16, which is 16-byte
+				// aligned. Keep this argument aligned after any preceding spills.
+				stack_offset = (stack_offset + 15) / 16 * 16;
+				arg = self.builder.add_arg_at(self.gen_type(param.qt)!,
+					ir::ArgLocationKind.STACK, stack_offset, 16);
+				stack_offset += 16;
+			}
+			else if (param.qt.is(self.comp, type_store::TypeTag.FLOAT))
+			{
+				self.ensure_scalar_float_width(param.qt)!;
+				if (sse_index < 8)
+				{
+					arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.SSE_REGISTER, sse_index++, 0);
+				}
+				else
+				{
+					arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.STACK, stack_offset, 8);
+					stack_offset += 8;
+				}
+			}
+			else if (gp_index < 6)
+			{
+				arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
+			}
+			else
+			{
+				arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.STACK, stack_offset, 8);
+				stack_offset += 8;
+			}
+			alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
+			self.builder.add_store(alloc, arg);
+		}
 		self.symbols.push(
 			{
 				.name = param.name, .value = alloc
@@ -510,7 +774,31 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	// C3 deviations from Zig genFn: a void RET carries NONE (not ref 0), `return;`
 	// jumps reach a placed `return` block, and the single-return shortcut only
 	// replaces the body's final jump when that jump really is the return jump.
-	if (self.ret_nodes.len() == 0)
+	if (self.aggregate_return)
+	{
+		if (!self.builder.block_terminated()) self.builder.add_jump(self.return_label);
+		self.builder.start_block(self.return_label);
+		if (self.aggregate_return_class == AggClass.INTEGER)
+		{
+			ir::Ref low = self.builder.add_inst(ir::InstTag.LOAD,
+				{ .ref = self.aggregate_return_slot }, value_interner::REF_I64);
+			if (self.aggregate_return_size > 8)
+			{
+				ir::Ref high = self.builder.add_inst(ir::InstTag.LOAD,
+					{ .ref = self.ptr_at(self.aggregate_return_slot, 8) }, value_interner::REF_I64);
+				self.builder.add_return_pair(low, high);
+			}
+			else
+			{
+				self.builder.add_return(low);
+			}
+		}
+		else
+		{
+			self.builder.add_return(self.aggregate_return_class == AggClass.MEMORY ? self.sret_pointer : ir::NONE);
+		}
+	}
+	else if (self.ret_nodes.len() == 0)
 	{
 		if (!self.builder.block_terminated()) self.builder.add_jump(self.return_label);
 		self.builder.start_block(self.return_label);

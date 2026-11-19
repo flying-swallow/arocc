@@ -175,14 +175,14 @@ fn bool? QualType.print_prologue(self, Compilation* comp, bool desugar, OutStrea
 		case VECTOR:
 			switch (base.vector.kind)
 			{
-				case GENERIC:
-					io::fprintf(w, "__attribute__((__vector_size__(%d * sizeof(", base.vector.len)!;
-					base.vector.elem.print_prologue(comp, desugar, w)!;
-					w.write(")))) ")!;
-				case NEON: io::fprintf(w, "__attribute__((neon_vector_type(%d))) ", base.vector.len)!;
-				case NEON_POLY: io::fprintf(w, "__attribute__((neon_polyvector_type(%d))) ", base.vector.len)!;
-			}
-			base.vector.elem.print_prologue(comp, desugar, w)!;
+			case GENERIC:
+				io::fprintf(w, "__attribute__((__vector_size__(%d * sizeof(", base.vector.len)!;
+				base.vector.elem.print_prologue(comp, desugar, w)!;
+				w.write(")))) ")!;
+			case NEON: io::fprintf(w, "__attribute__((neon_vector_type(%d))) ", base.vector.len)!;
+			case NEON_POLY: io::fprintf(w, "__attribute__((neon_polyvector_type(%d))) ", base.vector.len)!;
+		}
+		base.vector.elem.print_prologue(comp, desugar, w)!;
 		case STRUCT: io::fprintf(w, "struct %s", base.record.name.lookup(comp))!;
 		case UNION: io::fprintf(w, "union %s", base.record.name.lookup(comp))!;
 		case ENUM:
@@ -242,21 +242,21 @@ fn void? QualType.print_epilogue(self, Compilation* comp, bool desugar, OutStrea
 				w.write_byte('[')!;
 				switch (array.len.kind)
 				{
-					case FIXED:
-					case STATIC: io::fprintf(w, "%d", array.len.len)!;
-					case INCOMPLETE: break;
-					case UNSPECIFIED_VARIABLE: w.write_byte('*')!;
-					case VARIABLE: w.write("<expr>")!;
-				}
-				bool is_static = array.len.kind == STATIC;
-				if (is_static) w.write("static")!;
-				if (self.is_restrict)
-				{
-					if (is_static || self.is_const || self.is_volatile) w.write_byte(' ')!;
-					w.write("restrict")!;
-				}
-				w.write_byte(']')!;
-				ty = array.elem.get_type(comp);
+				case FIXED:
+				case STATIC: io::fprintf(w, "%d", array.len.len)!;
+				case INCOMPLETE: break;
+				case UNSPECIFIED_VARIABLE: w.write_byte('*')!;
+				case VARIABLE: w.write("<expr>")!;
+			}
+			bool is_static = array.len.kind == STATIC;
+			if (is_static) w.write("static")!;
+			if (self.is_restrict)
+			{
+				if (is_static || self.is_const || self.is_volatile) w.write_byte(' ')!;
+				w.write("restrict")!;
+			}
+			w.write_byte(']')!;
+			ty = array.elem.get_type(comp);
 			case TYPEOF:
 				if (!desugar) return;
 				ty = ty.type_of.base.get_type(comp);
@@ -317,12 +317,12 @@ fn void? QualType.dump(self, Compilation* comp, OutStream w)
 				w.write("*")!;
 				switch (pointer.bounds)
 				{
-					case SINGLE: w.write("single ")!;
-					case UNSAFE_INDEXABLE: w.write("unsafe_indexable ")!;
-					case C: break;
-				}
-				pointer.child.dump(comp, w)!;
+				case SINGLE: w.write("single ")!;
+				case UNSAFE_INDEXABLE: w.write("unsafe_indexable ")!;
+				case C: break;
 			}
+			pointer.child.dump(comp, w)!;
+		}
 		case FUNC:
 			w.write(ty.func.kind == OLD_STYLE ? "kr (" : "fn (")!;
 			dump_params(ty.func, comp, w)!;
@@ -333,24 +333,24 @@ fn void? QualType.dump(self, Compilation* comp, OutStream w)
 		case ARRAY:
 			switch (ty.array.len.kind)
 			{
-				case FIXED: io::fprintf(w, "[%d]", ty.array.len.len)!;
-				case STATIC: io::fprintf(w, "[static %d]", ty.array.len.len)!;
-				case INCOMPLETE: w.write("[]")!;
-				case UNSPECIFIED_VARIABLE: w.write("[*]")!;
-				case VARIABLE: w.write("[<expr>]")!;
-			}
-			ty.array.elem.dump(comp, w)!;
+			case FIXED: io::fprintf(w, "[%d]", ty.array.len.len)!;
+			case STATIC: io::fprintf(w, "[static %d]", ty.array.len.len)!;
+			case INCOMPLETE: w.write("[]")!;
+			case UNSPECIFIED_VARIABLE: w.write("[*]")!;
+			case VARIABLE: w.write("[<expr>]")!;
+		}
+		ty.array.elem.dump(comp, w)!;
 		case VECTOR:
 			String kind;
 			switch (ty.vector.kind)
 			{
-				case GENERIC: kind = "vector";
-				case NEON: kind = "neon_vector";
-				case NEON_POLY: kind = "neon_polyvector";
-			}
-			io::fprintf(w, "%s(%d, ", kind, ty.vector.len)!;
-			ty.vector.elem.dump(comp, w)!;
-			w.write(")")!;
+			case GENERIC: kind = "vector";
+			case NEON: kind = "neon_vector";
+			case NEON_POLY: kind = "neon_polyvector";
+		}
+		io::fprintf(w, "%s(%d, ", kind, ty.vector.len)!;
+		ty.vector.elem.dump(comp, w)!;
+		w.write(")")!;
 		case TYPEOF:
 			w.write("typeof(")!;
 			if (ty.type_of.has_expr) w.write("<expr>: ")!;
@@ -418,58 +418,58 @@ fn String? specifier_str(Compilation* comp, QualType qt)
 		case FLOAT:
 			switch (ty.float_ty)
 			{
-				case BF16:
-				case FP16:
-				case FLOAT16:
-				case FLOAT:
-				case DOUBLE:
-				case LONG_DOUBLE:
-				case FLOAT128: return float_name(ty.float_ty);
-				default: return NO_SPECIFIER_STR~;
-			}
+			case BF16:
+			case FP16:
+			case FLOAT16:
+			case FLOAT:
+			case DOUBLE:
+			case LONG_DOUBLE:
+			case FLOAT128: return float_name(ty.float_ty);
+			default: return NO_SPECIFIER_STR~;
+		}
 		case STORAGE_FLOAT: return ty.storage_float.name;
 		case COMPLEX:
 			Type c = ty.complex.base(comp).ty;
 			switch (c.tag)
 			{
-				case INT:
-					switch (c.int_ty)
-					{
-						case CHAR: return "_Complex char";
-						case SCHAR: return "_Complex signed char";
-						case UCHAR: return "_Complex unsigned char";
-						case SHORT: return "_Complex short";
-						case USHORT: return "_Complex unsigned short";
-						case INT: return "_Complex int";
-						case UINT: return "_Complex unsigned int";
-						case LONG: return "_Complex long";
-						case ULONG: return "_Complex unsigned long";
-						case LONG_LONG: return "_Complex long long";
-						case ULONG_LONG: return "_Complex unsigned long long";
-						case INT128: return "_Complex __int128";
-						case UINT128: return "_Complex unsigned __int128";
-						case INT24: return "_Complex __int24";
-						case UINT24: return "_Complex unsigned __int24";
-					}
-				case BIT_INT: return NO_SPECIFIER_STR~;
-				case FLOAT:
-					switch (c.float_ty)
-					{
-						case FP16:
-						case BF16:
-						case DFLOAT32:
-						case DFLOAT64:
-						case DFLOAT128:
-						case DFLOAT64X: unreachable("no complex form");
-						case FLOAT16: return "_Complex _Float16";
-						case FLOAT: return "_Complex float";
-						case DOUBLE: return "_Complex double";
-						case LONG_DOUBLE: return "_Complex long double";
-						case FLOAT128: return "_Complex __float128";
-						default: return NO_SPECIFIER_STR~;
-					}
-				default: unreachable("complex of a non-arithmetic type");
+			case INT:
+				switch (c.int_ty)
+				{
+				case CHAR: return "_Complex char";
+				case SCHAR: return "_Complex signed char";
+				case UCHAR: return "_Complex unsigned char";
+				case SHORT: return "_Complex short";
+				case USHORT: return "_Complex unsigned short";
+				case INT: return "_Complex int";
+				case UINT: return "_Complex unsigned int";
+				case LONG: return "_Complex long";
+				case ULONG: return "_Complex unsigned long";
+				case LONG_LONG: return "_Complex long long";
+				case ULONG_LONG: return "_Complex unsigned long long";
+				case INT128: return "_Complex __int128";
+				case UINT128: return "_Complex unsigned __int128";
+				case INT24: return "_Complex __int24";
+				case UINT24: return "_Complex unsigned __int24";
 			}
+			case BIT_INT: return NO_SPECIFIER_STR~;
+			case FLOAT:
+				switch (c.float_ty)
+				{
+				case FP16:
+				case BF16:
+				case DFLOAT32:
+				case DFLOAT64:
+				case DFLOAT128:
+				case DFLOAT64X: unreachable("no complex form");
+				case FLOAT16: return "_Complex _Float16";
+				case FLOAT: return "_Complex float";
+				case DOUBLE: return "_Complex double";
+				case LONG_DOUBLE: return "_Complex long double";
+				case FLOAT128: return "_Complex __float128";
+				default: return NO_SPECIFIER_STR~;
+			}
+			default: unreachable("complex of a non-arithmetic type");
+		}
 		default: return NO_SPECIFIER_STR~;
 	}
 }

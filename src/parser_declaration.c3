@@ -2,13 +2,13 @@
 // specifiers and binds them to the reusable declarator, initializer and
 // statement productions.
 module aro::parser_declaration;
-import aro::parser, aro::parser_statement, aro::parser_result, aro::parser_declarator, aro::parser_asm;
+import aro::parser, aro::parser_statement, aro::parser_result, aro::parser_declarator;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::symbol_stack;
 import aro::string_interner, aro::value, aro::diagnostics, aro::bigint;
 import aro::lang_opts, aro::compilation, aro::value_interner;
 import aro::attribute;
 import aro::attribute_wip, aro::parser_attribute;
-import aro::parser_primary, aro::text_literal_semantics;
+import aro::text_literal_semantics;
 import aro::source;
 import aro::pragmas::pack;
 import std::collections::list;
@@ -134,11 +134,11 @@ fn parser_result::Result? DeclarationParser.parse_auto_type_initializer(&self, p
 {
 	p.push_scope();
 	defer p.pop_scope();
-	p.define_symbol({ .kind = symbol_stack::SymbolKind.DEF, .name = name, .qt = type_store::INVALID,
+	// While deducing, the binding keeps the auto placeholder type: parse_identifier
+	// reports any reference to it as self-initialization.
+	type_store::QualType binding_qt = !deduce ? type_store::INVALID : auto_type ? type_store::AUTO_TYPE : type_store::C23_AUTO;
+	p.define_symbol({ .kind = symbol_stack::SymbolKind.DEF, .name = name, .qt = binding_qt,
 		.tok = name_tok, .node = declaration, .val = value::NONE });
-	parser::AutoTypeDeclContext previous_auto_type_decl = p.auto_type_decl;
-	if (deduce) p.auto_type_decl = { .active = true, .name = name, .node = declaration };
-	defer p.auto_type_decl = previous_auto_type_decl;
 
 	parser::InitContext context = constexpr_decl ? parser::InitContext.CONSTEXPR :
 		static_duration ? parser::InitContext.STATIC : parser::InitContext.RUNTIME;
@@ -443,10 +443,12 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 		// Only an unnamed bit-field (`int : 3;`) has an abstract member declarator.
 		bool member_abstract = p.is_at(tokenizer::TokenId.COLON);
 		DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = field_wip };
-		parser_declarator::ParsedDeclarator field_decl = self.declarator_parser(p, &callback_context).parse_declarator(spec.qt, member_abstract)!;
+		// Snapshot before the declarator: attributes after `*` belong to this
+		// declarator only and are dropped by `restore(declarator_state)` below.
 		AttributeUseSnapshot attribute_use_state;
 		attribute_use_state.init(p, field_wip);
 		defer attribute_use_state.free();
+		parser_declarator::ParsedDeclarator field_decl = self.declarator_parser(p, &callback_context).parse_declarator(spec.qt, member_abstract)!;
 		self.append_attributes(p, field_wip)!;
 		type_store::QualType field_qt = field_wip.apply_type_attrs(p, field_decl.qt)!;
 		field_qt = field_wip.apply_pending_calling_conventions(p, field_qt)!;
@@ -655,6 +657,15 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		{
 			p.tree.root_decls.push(maybe_member_assert!!);
 			continue;
+		}
+		// Zig recordDeclItem: `__extension__ recordDecl` suppresses extension diagnostics
+		// for this member (glibc: `__extension__ unsigned long long int __value64;`).
+		bool saved_member_extension = p.extension_suppressed;
+		defer p.extension_suppressed = saved_member_extension;
+		if (p.is_at(tokenizer::TokenId.KEYWORD_EXTENSION))
+		{
+			p.advance();
+			p.extension_suppressed = true;
 		}
 		tokens::TokenIndex member_start = p.tok_i;
 		attribute_wip::State member_state = field_wip.state(true);
@@ -1930,11 +1941,13 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 		}
 		while (true)
 		{
-			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
+			// Zig: per-declarator attribute state is taken before the declarator,
+			// so attributes after `*` do not leak into the next declarator.
 			attribute_wip::State declarator_state = wip.state(false);
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
+			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
 			self.append_attributes(p, &wip)!;
 			type_store::QualType parsed_qt = wip.apply_type_attrs(p, parsed.qt)!;
 			parsed_qt = wip.apply_pending_calling_conventions(p, parsed_qt)!;
@@ -2191,13 +2204,12 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 	if (p.is_at(tokenizer::TokenId.COMMA))
 	{
 		p.advance();
-		if (p.at_eof() || !parser_primary::is_string_token(p.tree.tokens[(usz)p.tok_i].id))
+		if (p.at_eof() || !parser::is_string_token(p.tree.tokens[(usz)p.tok_i].id))
 		{
 			Diagnostic.EXPECTED_STR_LITERAL.@emit(p, p.tok_i)!;
 			return PARSING_FAILED~;
 		}
-		parser_primary::PrimaryParser primary = { .parser = p };
-		parser_result::Result maybe_message = primary.parse_string(p.tok_i)!;
+		parser_result::Result maybe_message = p.parse_string(p.tok_i)!;
 		message = maybe_message;
 		has_message = true;
 	}
@@ -2242,6 +2254,27 @@ fn type_store::NodeIndex? DeclarationParser.parse_static_assert(&self, parser::P
 	if (has_message) message_node = (type_store::NodeOptIndex)message.node;
 	return p.tree.add_node({ .kind = tree::NodeKind.STATIC_ASSERT,
 		.static_assert = { .assert_tok = static_assert_tok, .cond = res.node, .message = message_node } });
+}
+
+<* Zig `Parser.decl`: a file-scope declaration without declaration specifiers
+   (`foo (a) { ... }`, `*p;`, `(f)(void);`) is implicit int; `Builder.finish`
+   reports the missing specifier for the selected standard. `name name` is an
+   unknown type name instead. NO_DECL_SPEC when the tokens cannot start a declarator. *>
+fn DeclSpec? DeclarationParser.implicit_int_decl_spec(&self, parser::Parser* p)
+{
+	tokenizer::TokenId id = p.tree.tokens[(usz)p.tok_i].id;
+	if (id != tokenizer::TokenId.ASTERISK && id != tokenizer::TokenId.L_PAREN)
+	{
+		if (!id.is_identifier()) return NO_DECL_SPEC~;
+		if (p.tree.tokens[(usz)p.tok_i + 1].id.is_identifier())
+		{
+			Diagnostic.UNKNOWN_TYPE_NAME.@emit(p, p.tok_i, p.tree.tok_slice(p.tok_i))!;
+			p.advance();
+			return { .qt = type_store::INVALID, .recognized = true };
+		}
+	}
+	type_store::Builder builder = { .parser = p };
+	return { .qt = builder.finish()!, .recognized = true };
 }
 
 <* Parse a complete declaration and append its declaration nodes to a local
@@ -2292,6 +2325,27 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		p.tree.root_decls.push(static_assert_node);
 		return (type_store::NodeIndex)0;
 	}
+	// Zig rootItem / compoundStmtItem: `__extension__ decl` parses the declaration
+	// with extension diagnostics suppressed (glibc: `__extension__ typedef struct`).
+	if (p.is_at(tokenizer::TokenId.KEYWORD_EXTENSION))
+	{
+		tokens::TokenIndex ext_tok = p.tok_i;
+		p.advance();
+		bool saved_extension = p.extension_suppressed;
+		defer p.extension_suppressed = saved_extension;
+		p.extension_suppressed = true;
+		// Zig rootItem: a bare `__extension__;` is consumed without a diagnostic.
+		if (!local && p.is_at(tokenizer::TokenId.SEMICOLON))
+		{
+			p.advance();
+			return (type_store::NodeIndex)0;
+		}
+		type_store::NodeIndex? ext_decl = self.parse_declaration_impl(p, local, prefix_attributes);
+		// Block scope: not a declaration, so rewind and let the statement parser read
+		// `__extension__` as a unary expression operator.
+		if (local && @catch(ext_decl) == tree::NULL_NODE) p.tok_i = ext_tok;
+		return ext_decl;
+	}
 	if (local && prefix_attributes != null)
 	{
 		// Prefix statement attributes are parsed by StatementParser before it
@@ -2304,12 +2358,14 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 	usz first_spec_node = (usz)p.tree.nodes.len();
 	DeclSpec? maybe_spec = self.parse_decl_spec(p, &wip);
 	fault spec_fault = @catch(maybe_spec);
+	DeclSpec implicit_spec = {};
+	bool reported_no_type = false;
 	if (spec_fault)
 	{
 		if (spec_fault != NO_DECL_SPEC) return spec_fault~;
 		if (local) return tree::NULL_NODE~; // not a declaration: the statement parser tries an expression
 		// Zig `externalDeclaration`: file-scope `asm("...");`.
-		type_store::NodeIndex? global_asm = parser_asm::parse_global_asm(p);
+		type_store::NodeIndex? global_asm = p.parse_global_asm();
 		if (catch asm_fault = global_asm)
 		{
 			if (asm_fault != parser::NOT_ASM) return asm_fault~;
@@ -2328,14 +2384,23 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			p.tree.root_decls.push(self.add_empty_declaration(p, semicolon));
 			return (type_store::NodeIndex)0;
 		}
-		Diagnostic.EXPECTED_EXTERNAL_DECL.@emit(p, p.diag_index())!;
-		// At file scope an unexpected compound statement is one malformed item.
-		// Skip its balanced body so each token inside it does not produce another
-		// expected-external-declaration diagnostic.
-		if (p.is_at(tokenizer::TokenId.L_BRACE)) p.recover();
-		return PARSING_FAILED~;
+		// Only when no specifier tokens were consumed (a failed `__typeof (f)` leaves the
+		// cursor mid-declaration; Zig takes this path only at the declaration start).
+		DeclSpec? maybe_implicit = NO_DECL_SPEC~;
+		if (p.tok_i == first_tok) maybe_implicit = self.implicit_int_decl_spec(p);
+		if (catch implicit_fault = maybe_implicit)
+		{
+			if (implicit_fault != NO_DECL_SPEC) return implicit_fault~;
+			Diagnostic.EXPECTED_EXTERNAL_DECL.@emit(p, p.diag_index())!;
+			// At file scope an unexpected compound statement is one malformed item.
+			// Skip its balanced body so each token inside it does not produce another
+			// expected-external-declaration diagnostic.
+			if (p.is_at(tokenizer::TokenId.L_BRACE)) p.recover();
+			return PARSING_FAILED~;
+		}
+		implicit_spec = maybe_implicit;
 	}
-	DeclSpec spec = maybe_spec!!;
+	DeclSpec spec = spec_fault ? implicit_spec : maybe_spec!!;
 	list::List{type_store::NodeIndex} declarations;
 	declarations.init(p.comp.gpa);
 	defer declarations.free();
@@ -2376,14 +2441,16 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		bool warned_auto_single_declarator = false;
 		while (true)
 		{
-			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
+			// Zig `declarator_attr_state`: taken before the declarator, so attributes
+			// after `*` do not leak into the next declarator.
 			attribute_wip::State declarator_wip_state = wip.state(false);
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
+			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
 			// Zig `initDeclarator`: attributes, optional asm label, attributes.
 			self.append_attributes(p, &wip)!;
-			parser_asm::AsmLabel? asm_label = parser_asm::parse_asm_label(p);
+			parser::AsmLabel? asm_label = p.parse_asm_label();
 			if (catch label_fault = asm_label)
 			{
 				if (label_fault != parser::NOT_ASM) return label_fault~;
@@ -2469,7 +2536,16 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				else { Diagnostic.EXPECTED_FN_BODY.@emit(p, p.diag_index())!; }
 				return PARSING_FAILED~;
 			}
-			if (function_type && (function_body_follows || old_style_declaration_list_follows || old_style_definition_context))
+			bool is_function_definition = function_type && (function_body_follows || old_style_declaration_list_follows || old_style_definition_context);
+			// GCC pedwarn: C90 implicit int is fine for a function definition, but a
+			// declaration with neither type nor storage class is not (gcc.dg/decl-nospec-*.c).
+			// From C99 the missing type specifier itself is already diagnosed.
+			if (spec_fault && !is_function_definition && !reported_no_type && !p.comp.langopts.standard.at_least(C99))
+			{
+				reported_no_type = true;
+				Diagnostic.DATA_DEFINITION_NO_TYPE.@emit(p, first_tok)!;
+			}
+			if (is_function_definition)
 			{
 				list::List{type_store::FuncParam} extra_kr_params;
 				extra_kr_params.init(p.comp.gpa);
@@ -2631,25 +2707,24 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			}
 			else
 			{
-				bool initializer_present = has_initializer;
-				if (initializer_present) p.advance();
+				if (has_initializer) p.advance();
 				type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = {
 					.name_tok = name_tok, .qt = qt,
 					.storage_class = variable_storage_class(
-						spec.storage_class == StorageClass.EXTERN && initializer_present ? StorageClass.NONE : spec.storage_class),
+						spec.storage_class == StorageClass.EXTERN && has_initializer ? StorageClass.NONE : spec.storage_class),
 					.thread_local = spec.thread_local, .implicit = false,
 					.initializer = type_store::NODE_NULL, .definition = type_store::NODE_NULL,
 				} });
 				type_store::NodeOptIndex previous = type_store::NODE_NULL;
 				bool static_duration = !local || spec.storage_class == StorageClass.STATIC ||
 					spec.storage_class == StorageClass.EXTERN || spec.thread_local;
-				if (!has_auto_type && !initializer_present)
+				if (!has_auto_type && !has_initializer)
 				{
 					self.bind_declaration_symbol(p, name, qt, name_tok, node, false,
-						local ? spec.storage_class != StorageClass.EXTERN : initializer_present,
+						local ? spec.storage_class != StorageClass.EXTERN : has_initializer,
 						spec.constexpr_decl, &previous)!;
 				}
-				if (initializer_present)
+				if (has_initializer)
 				{
 					if (spec.storage_class == StorageClass.EXTERN)
 					{
@@ -2683,7 +2758,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					initialized.variable.qt = completed_qt;
 					p.tree.set_node(initialized, (sz)node);
 					self.bind_declaration_symbol(p, name, completed_qt, name_tok, node, false,
-						local ? spec.storage_class != StorageClass.EXTERN : initializer_present,
+						local ? spec.storage_class != StorageClass.EXTERN : has_initializer,
 						spec.constexpr_decl, &previous)!;
 					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
 					if (symbol.node == node)
@@ -2698,11 +2773,11 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					if (has_auto_type)
 					{
 						self.bind_declaration_symbol(p, name, qt, name_tok, node, false,
-							local ? spec.storage_class != StorageClass.EXTERN : initializer_present,
+							local ? spec.storage_class != StorageClass.EXTERN : has_initializer,
 							spec.constexpr_decl, &previous)!;
 					}
 				}
-				if (!initializer_present && !has_auto_type && !local && spec.storage_class != StorageClass.EXTERN)
+				if (!has_initializer && !has_auto_type && !local && spec.storage_class != StorageClass.EXTERN)
 				{
 					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
 					if (symbol.node == node && symbol.kind == symbol_stack::SymbolKind.DECL)

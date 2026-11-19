@@ -305,14 +305,12 @@ fn void function_void_parameter_lists_follow_c_conventions() @test
 		p.init(&pp, &declarations);
 		tree::Tree result = p.parse()!!;
 
-		// Rejected parameter lists recover as Zig does (Parser.zig ~1186-1264): the
-		// parser resumes at the next declaration start, so the `int value` inside
-		// `bad(void, int value)` and `bad_qualified(const void, int value)` is parsed
-		// as a file-scope declaration. The ')' follows it instead of ';', so the
-		// expectation fails (Parser.zig ~1799), but the declaration is already
-		// appended and the stray `value` stays. `later` recovers at its own ';'.
-		assert(result.root_decls.len() == 4,
-			"sole void prototypes should be retained and rejected lists should leave their recovered stray declarations");
+		// Rejected parameter lists recover past the rest of their declaration
+		// (Parser.recover_from closes the open `(`), so unlike Zig the `int value`
+		// inside `bad(void, int value)` is not re-parsed as a stray file-scope
+		// declaration: only the two valid prototypes remain.
+		assert(result.root_decls.len() == 2,
+			"sole void prototypes should be retained and rejected lists should not leave stray declarations");
 		tree::Node function = result.root_decls[0].get(&result);
 		tree::Node qualified_function = result.root_decls[1].get(&result);
 		assert(function.kind == tree::NodeKind.FUNCTION && qualified_function.kind == tree::NodeKind.FUNCTION);
@@ -321,19 +319,11 @@ fn void function_void_parameter_lists_follow_c_conventions() @test
 		assert(function_type.kind == type_store::FuncKind.NORMAL && qualified_function_type.kind == type_store::FuncKind.NORMAL);
 		assert(function_type.params.len == 0 && qualified_function_type.params.len == 0,
 			"a sole void parameter should produce a normal function type with no parameters");
-		tree::Node stray_first = result.root_decls[2].get(&result);
-		tree::Node stray_second = result.root_decls[3].get(&result);
-		assert(stray_first.kind == tree::NodeKind.VARIABLE && stray_second.kind == tree::NodeKind.VARIABLE);
-		assert(result.tok_slice(stray_first.variable.name_tok) == "value");
-		assert(result.tok_slice(stray_second.variable.name_tok) == "value");
-		assert(d.messages.len() == 6,
-			"invalid void positions and qualifiers should be diagnosed, including the errors from recovering their stray declarators");
+		assert(d.messages.len() == 4, "invalid void positions and qualifiers should be diagnosed without recovery cascades");
 		test::eq(d.messages[0].text, "'void' must be the only parameter if specified");
-		test::eq(d.messages[1].text, "expected ';', found ')'");
-		test::eq(d.messages[2].text, "'void' must be the only parameter if specified");
-		test::eq(d.messages[3].text, "'void' parameter cannot be qualified");
-		test::eq(d.messages[4].text, "expected ';', found ')'");
-		test::eq(d.messages[5].text, "'void' must be the first parameter if specified");
+		test::eq(d.messages[1].text, "'void' must be the only parameter if specified");
+		test::eq(d.messages[2].text, "'void' parameter cannot be qualified");
+		test::eq(d.messages[3].text, "'void' must be the first parameter if specified");
 
 		result.free();
 		p.free();

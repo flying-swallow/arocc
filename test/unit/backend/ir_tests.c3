@@ -218,6 +218,31 @@ fn void builder_transfers_blocks_and_owned_inputs() @test
 	f.free();
 }
 
+fn void builder_add_call_hi_places_it_after_its_call() @test
+{
+	Fixture f;
+	f.init();
+	defer f.free();
+	f.builder.start_fn();
+	Ref callee = f.builder.add_symbol("pair_result", value_interner::REF_FUNC);
+	Ref call = f.builder.add_call(callee, {}, value_interner::REF_I64);
+	Ref high = f.builder.add_call_hi(call);
+	f.builder.add_return(call);
+	f.builder.finish_fn("call_pair");
+	f.graph = f.builder.finish();
+
+	ir::Decl* decl = &f.graph.decls[0];
+	check(decl.body[1], call);
+	check(decl.body[2], high);
+	check(decl.instructions[(sz)high].tag, InstTag.CALL_HI);
+	check(decl.instructions[(sz)high].data.ref, call);
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	assert(ir_opt::verify(&f.graph, &errors), "builder CALL_HI must satisfy the IR verifier");
+}
+
 const target::Host HOST = { target::Arch.X86_64, target::OsTag.LINUX, target::Abi.GNU };
 
 fn target::Target renderer_target()

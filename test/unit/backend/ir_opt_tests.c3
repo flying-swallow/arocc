@@ -981,6 +981,24 @@ fn void verifier_rejects_malformed_ir() @test
 	}
 }
 
+fn void verifier_rejects_call_hi_separated_from_referenced_call() @test
+{
+	HandIrFixture f;
+	f.init();
+	f.builder.start_fn();
+	Ref callee = f.builder.add_symbol("pair_result", value_interner::REF_FUNC);
+	Ref call = f.builder.add_call_abi(callee, {}, {}, {}, value_interner::REF_I64);
+	Ref lhs = f.add_int_constant(1, value_interner::REF_I64);
+	Ref rhs = f.add_int_constant(2, value_interner::REF_I64);
+	f.builder.add_inst(ir::InstTag.ADD, { .bin = { .lhs = lhs, .rhs = rhs } }, value_interner::REF_I64);
+	// Use add_inst to make malformed IR: add_call_hi correctly forbids this gap.
+	f.builder.add_inst(ir::InstTag.CALL_HI, { .ref = call }, value_interner::REF_I64);
+	f.builder.add_return(call);
+	f.builder.finish_fn("call_hi_not_adjacent");
+	f.expect_verify_failure();
+	f.free();
+}
+
 fn bool cfg_has_back_edge(ir_opt::Cfg* cfg)
 {
 	cfg.compute_dominators();
@@ -2081,5 +2099,102 @@ fn void o2_does_not_inline_callee_with_vla() @test
 	ir::Decl* func = find_function(&f.graph, "caller");
 	assert(count_body_tag(func, ir::InstTag.CALL) == 1, "a callee with a VLA is not inlined");
 	assert(count_body_tag(func, ir::InstTag.DYN_ALLOC) == 0, "the caller does not inherit the VLA");
+	f.free();
+}
+
+fn void o1_preserves_va_start_and_its_storage_operand() @test
+{
+	HandIrFixture f;
+	f.init();
+	f.builder.start_fn();
+	ir::Ref va_storage = f.builder.add_alloc(24, 8);
+	f.builder.add_va_start(va_storage);
+	f.builder.add_return(ir::NONE);
+	f.builder.finish_fn("start_va_list");
+	f.run_o1();
+
+	ir::Decl* function = find_function(&f.graph, "start_va_list");
+	assert(count_body_tag(function, ir::InstTag.VA_START) == 1,
+		"O1 must preserve VA_START as an effectful instruction");
+	assert(has_index(function.body, va_storage) &&
+		function.instructions[(sz)va_storage].tag == ir::InstTag.ALLOC,
+		"O1 must preserve the VA_START storage allocation it reads");
+	bool saw_va_start_for_storage = false;
+	foreach (ref : function.body)
+	{
+		ir::Inst* inst = &function.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.VA_START)
+		{
+			saw_va_start_for_storage = inst.data.ref == va_storage;
+			break;
+		}
+	}
+	assert(saw_va_start_for_storage, "VA_START must keep its original storage address through O1");
+	f.free();
+}
+
+fn void o2_does_not_inline_callee_with_va_start() @test
+{
+	HandIrFixture f;
+	f.init();
+	f.builder.start_fn();
+	ir::Ref callee_va_list = f.builder.add_arg(value_interner::REF_PTR);
+	f.builder.add_va_start(callee_va_list);
+	f.builder.add_return(ir::NONE);
+	f.builder.finish_fn("start_va_list", ir::Linkage.INTERNAL);
+
+	f.builder.start_fn();
+	ir::Ref caller_va_list = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref callee = f.builder.add_symbol("start_va_list", value_interner::REF_FUNC);
+	ir::Ref[1] args = { caller_va_list };
+	f.builder.add_call(callee, args[..], value_interner::REF_VOID);
+	f.builder.add_return(ir::NONE);
+	f.builder.finish_fn("caller");
+	f.run_o2();
+
+	ir::Decl* start = find_function(&f.graph, "start_va_list");
+	ir::Decl* caller = find_function(&f.graph, "caller");
+	assert(count_body_tag(start, ir::InstTag.VA_START) == 1,
+		"the variadic callee must retain its VA_START instruction");
+	assert(count_calls_to(caller, "start_va_list") == 1,
+		"O2 must leave calls to a callee containing VA_START intact");
+	assert(count_body_tag(caller, ir::InstTag.VA_START) == 0,
+		"the callee's VA_START must not be moved into its caller");
+	f.free();
+}
+
+fn void o1_preserves_float_addition_of_zero() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("double add_zero(double x) { return x + 0.0; }\n");
+	f.run_o1();
+
+	ir::Decl* function = find_function(&f.graph, "add_zero");
+	assert(count_body_tag(function, ir::InstTag.FADD) == 1,
+		"O1 must preserve floating-point addition of zero because it can change signed zero");
+	f.free();
+}
+
+fn void lowers_va_start_va_arg_va_end() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"int f(int n, ...) { __builtin_va_list ap; "
+		"__builtin_va_start(ap,n); int x=__builtin_va_arg(ap,int); "
+		"__builtin_va_end(ap); return x; }\n");
+
+	String dump = f.dump();
+	assert(dump.contains("    va_start ptr_ty "), "source lowering should emit va_start");
+	assert(dump.contains("cmp_ult i32 ") && dump.contains(", i32 48"),
+		"va_arg should compare gp_offset against the 48-byte register save limit");
+	assert(dump.contains(" = phi {"), "va_arg should merge register and overflow addresses with a PHI");
+	alloc::free(&f.ta, dump.ptr);
+
+	f.run_o1();
+	f.verify_graph();
+	assert(count_body_tag(find_function(&f.graph, "f"), ir::InstTag.VA_START) == 1,
+		"O1 should preserve the source-generated VA_START");
 	f.free();
 }

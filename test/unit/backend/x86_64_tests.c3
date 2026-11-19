@@ -18,6 +18,35 @@ fn Encoded assert_encoded(Mnemonic mnemonic, Operand[] ops, char[] expected)
 	return encoded;
 }
 
+fn uint count_sequence(char[] bytes, char[] sequence)
+{
+	if (sequence.len == 0) return 0;
+	uint count = 0;
+	usz offset = 0;
+	while (offset + sequence.len <= bytes.len)
+	{
+		bool matches = true;
+		for (usz i = 0; i < sequence.len; i++)
+		{
+			if (bytes[(sz)(offset + i)] != sequence[(sz)i])
+			{
+				matches = false;
+				break;
+			}
+		}
+		if (matches)
+		{
+			count++;
+			offset += sequence.len;
+		}
+		else
+		{
+			offset++;
+		}
+	}
+	return count;
+}
+
 fn void encode_zi_and_immediate_modrm_rows() @test
 {
 	// add eax, 1000
@@ -114,6 +143,41 @@ fn void encode_grouped_modrm_rows() @test
 	assert_encoded(MOVSXD, { x86_64::reg_op(RAX), x86_64::reg_op(EAX) }, (char[]){ 0x48, 0x63, 0xc0 });
 }
 
+fn void encode_x87_long_double_memory_and_stack_rows() @test
+{
+	assert(x86_64::X87_REGS[0] == ST0 && x86_64::X87_REGS[7] == ST7,
+		"the x87 register table covers ST0 through ST7");
+	// Long-double loads/stores use the x87 80-bit memory forms.
+	assert_encoded(FLD, { x86_64::mem_op(RBP, -16, 80) }, (char[]){ 0xdb, 0x6d, 0xf0 });
+	assert_encoded(FSTP, { x86_64::mem_op(RBP, -16, 80) }, (char[]){ 0xdb, 0x7d, 0xf0 });
+	// Store and pop ST0 directly, preserving the extended precision value.
+	assert_encoded(FSTP, { x86_64::reg_op(ST0) }, (char[]){ 0xdd, 0xd8 });
+	assert_encoded(FILD, { x86_64::mem_op(RAX, 0, 64) }, (char[]){ 0xdf, 0x28 });
+	assert_encoded(FISTP, { x86_64::mem_op(RAX, 0, 64) }, (char[]){ 0xdf, 0x38 });
+	assert_encoded(FISTTP, { x86_64::mem_op(RAX, 0, 64) }, (char[]){ 0xdd, 0x08 });
+	// ST(i) is carried in the low three bits of the opcode's final byte.
+	assert_encoded(FADD, { x86_64::reg_op(ST0), x86_64::reg_op(ST3) }, (char[]){ 0xd8, 0xc3 });
+	assert_encoded(FADDP, { x86_64::reg_op(ST1), x86_64::reg_op(ST0) }, (char[]){ 0xde, 0xc1 });
+	assert_encoded(FSUBR, { x86_64::reg_op(ST3), x86_64::reg_op(ST0) }, (char[]){ 0xdc, 0xe3 });
+	assert_encoded(FUCOMIP, { x86_64::reg_op(ST0), x86_64::reg_op(ST1) }, (char[]){ 0xdf, 0xe9 });
+	assert_encoded(FLDCW, { x86_64::mem_op(RBP, -2, 16) }, (char[]){ 0xd9, 0x6d, 0xfe });
+	assert_encoded(FNSTCW, { x86_64::mem_op(RBP, -2, 16) }, (char[]){ 0xd9, 0x7d, 0xfe });
+	assert_encoded(FSTCW, { x86_64::mem_op(RBP, -2, 16) }, (char[]){ 0x9b, 0xd9, 0x7d, 0xfe });
+}
+
+fn void encode_movaps_register_and_memory_rows() @test
+{
+	assert(x86_64::XMM_REGS[0] == XMM0 && x86_64::XMM_REGS[7] == XMM7 && x86_64::XMM_REGS[15] == XMM15,
+		"XMM register table must cover the SysV save registers and extended registers");
+	assert(x86_64::XMM_REGS[15].is_extended(), "xmm15 requires an extended-register prefix");
+	// movaps xmm0, xmm1
+	assert_encoded(MOVAPS, { x86_64::reg_op(XMM0), x86_64::reg_op(XMM1) }, (char[]){ 0x0f, 0x28, 0xc1 });
+	// movaps xmmword ptr [rbp - 16], xmm0
+	assert_encoded(MOVAPS, { x86_64::mem_op(RBP, -16, 128), x86_64::reg_op(XMM0) }, (char[]){ 0x0f, 0x29, 0x45, 0xf0 });
+	// Extended XMM operands set both REX.R and REX.B.
+	assert_encoded(MOVAPS, { x86_64::reg_op(XMM9), x86_64::reg_op(XMM12) }, (char[]){ 0x45, 0x0f, 0x28, 0xcc });
+}
+
 fn void encode_rip_relative_and_branch_fixups() @test
 {
 	// lea rax, [rip + sym]
@@ -174,6 +238,7 @@ fn void registers_and_conditions_follow_bits_zig() @test
 	assert(x86_64::SYSV_INT_PARAM_REGS[0] == RDI && x86_64::SYSV_INT_PARAM_REGS[5] == R9);
 	foreach (cc : Condition::values) assert(cc.negated.negated == cc, "%s", cc);
 	assert(Condition.L.negated == GE && Condition.B.set == SETB && Condition.A.jump == JA);
+	assert(Condition.P.negated == NP && Condition.NP.set == SETNP && Condition.P.jump == JP);
 }
 
 struct Fixture
@@ -327,6 +392,37 @@ fn void build_signed_division_fixture(Fixture* f)
 	f.builder.finish_fn("quot");
 }
 
+fn void build_i32_call_fixture(Fixture* f, uint argument_count, String function_name, String callee_name)
+{
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol(callee_name, value_interner::REF_FUNC);
+	ir::Ref[8] args = {};
+	for (uint i = 0; i < argument_count; i++)
+	{
+		int128 argument_value = (int128)(i + 1);
+		value_interner::InternerRef value = f.interner.put(primitive_value::int_key(argument_value));
+		args[i] = f.builder.add_constant(value, value_interner::REF_I32);
+	}
+	ir::Ref result = f.builder.add_call(callee, args[:(usz)argument_count], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn(function_name);
+}
+
+fn void assert_text_lines_in_order(String text, String[] lines, String context)
+{
+	sz offset = 0;
+	foreach (line : lines)
+	{
+		sz? found = text[(sz)offset..].index_of(line);
+		if (catch found_err = found)
+		{
+			unreachable("%s: missing ordered line '%s' after byte %d", context, line, offset);
+		}
+		sz index = found;
+		offset += index + line.len;
+	}
+}
+
 fn void lowers_signed_division_and_return() @test
 {
 	Fixture f;
@@ -436,6 +532,376 @@ fn void lowers_seven_live_builder_values_in_register_mode() @test
 	assert(text.contains("sum_seven_live:"), "seven simultaneously live Builder values lower successfully");
 	assert(text.contains("\tmov dword ptr [rbp - 56], eax"),
 		"a non-ARG value spills to its existing frame slot under register pressure");
+}
+
+fn void lowers_eight_i32_call_stack_arguments_in_spill_all_order() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_i32_call_fixture(&f, 8, "calls_eight_i32", "consume_eight_i32");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+
+	assert_text_lines_in_order(text, {
+		"\tsub rsp, 16\n",
+		"\tmov qword ptr [rsp], rax\n",
+		"\tmov qword ptr [rsp + 8], rax\n",
+		"\tmov edi, 1\n",
+		"\tmov esi, 2\n",
+		"\tmov edx, 3\n",
+		"\tmov ecx, 4\n",
+		"\tmov r8d, 5\n",
+		"\tmov r9d, 6\n",
+		"\tcall consume_eight_i32@PLT\n",
+		"\tadd rsp, 16\n",
+	}, "eight-I32 spill-all call");
+	assert(text.contains("\tmov eax, 7\n\tmov qword ptr [rsp], rax\n") &&
+		text.contains("\tmov eax, 8\n\tmov qword ptr [rsp + 8], rax\n"),
+		"the two outgoing slots receive arguments seven and eight");
+}
+
+fn void lowers_explicit_narrow_extensions_as_i32_sysv_call_arguments() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol("consume_widened_narrow_values", value_interner::REF_FUNC);
+
+	ir::Ref signed_i8 = f.builder.add_constant(f.interner.put(primitive_value::int_key(-128)), value_interner::REF_I8);
+	ir::Ref unsigned_i8 = f.builder.add_constant(f.interner.put(primitive_value::uint_key(255)), value_interner::REF_I8);
+	ir::Ref signed_i16 = f.builder.add_constant(f.interner.put(primitive_value::int_key(-300)), value_interner::REF_I16);
+	ir::Ref unsigned_i16 = f.builder.add_constant(f.interner.put(primitive_value::uint_key(65535)), value_interner::REF_I16);
+	ir::Ref unsigned_i8_b = f.builder.add_constant(f.interner.put(primitive_value::uint_key(128)), value_interner::REF_I8);
+	ir::Ref signed_i16_b = f.builder.add_constant(f.interner.put(primitive_value::int_key(-1)), value_interner::REF_I16);
+	ir::Ref signed_i8_b = f.builder.add_constant(f.interner.put(primitive_value::int_key(-3)), value_interner::REF_I8);
+	ir::Ref unsigned_i16_b = f.builder.add_constant(f.interner.put(primitive_value::uint_key(32768)), value_interner::REF_I16);
+
+	ir::Ref[8] args = {
+		f.builder.add_inst(SEXT, { .ref = signed_i8 }, value_interner::REF_I32),
+		f.builder.add_inst(ZEXT, { .ref = unsigned_i8 }, value_interner::REF_I32),
+		f.builder.add_inst(SEXT, { .ref = signed_i16 }, value_interner::REF_I32),
+		f.builder.add_inst(ZEXT, { .ref = unsigned_i16 }, value_interner::REF_I32),
+		f.builder.add_inst(ZEXT, { .ref = unsigned_i8_b }, value_interner::REF_I32),
+		f.builder.add_inst(SEXT, { .ref = signed_i16_b }, value_interner::REF_I32),
+		f.builder.add_inst(SEXT, { .ref = signed_i8_b }, value_interner::REF_I32),
+		f.builder.add_inst(ZEXT, { .ref = unsigned_i16_b }, value_interner::REF_I32),
+	};
+	ir::Ref result = f.builder.add_call(callee, args[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("calls_with_widened_narrow_values");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+
+	assert(text.contains("\tmovsx eax, al\n") && text.contains("\tmovzx eax, al\n") &&
+		text.contains("\tmovsx eax, ax\n") && text.contains("\tmovzx eax, ax\n"),
+		"signed and unsigned byte and word inputs are explicitly extended to 32 bits");
+	assert_text_lines_in_order(text, {
+		"\tmov edi, dword ptr [rbp -",
+		"\tmov esi, dword ptr [rbp -",
+		"\tmov edx, dword ptr [rbp -",
+		"\tmov ecx, dword ptr [rbp -",
+		"\tmov r8d, dword ptr [rbp -",
+		"\tmov r9d, dword ptr [rbp -",
+	}, "widened narrow register arguments");
+	assert_text_lines_in_order(text, {
+		"\tmov eax, dword ptr [rbp -",
+		"\tmov qword ptr [rsp], rax\n",
+		"\tmov eax, dword ptr [rbp -",
+		"\tmov qword ptr [rsp + 8], rax\n",
+	}, "widened narrow stack arguments");
+	assert(text.contains("\tcall consume_widened_narrow_values@PLT\n"),
+		"the eight widened values are passed to the callee");
+}
+
+fn void lowers_seven_i32_call_with_sixteen_byte_stack_padding() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_i32_call_fixture(&f, 7, "calls_seven_i32", "consume_seven_i32");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+
+	assert_text_lines_in_order(text, {
+		"\tsub rsp, 16\n",
+		"\tmov qword ptr [rsp], rax\n",
+		"\tmov edi, 1\n",
+		"\tmov esi, 2\n",
+		"\tmov edx, 3\n",
+		"\tmov ecx, 4\n",
+		"\tmov r8d, 5\n",
+		"\tmov r9d, 6\n",
+		"\tcall consume_seven_i32@PLT\n",
+		"\tadd rsp, 16\n",
+	}, "seven-I32 padded call");
+	assert(!text.contains("qword ptr [rsp + 8]"),
+		"one stack argument still reserves sixteen bytes without storing padding as another argument");
+}
+
+fn void lowers_eight_incoming_i32_stack_arguments_in_both_modes() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref[8] args;
+	for (usz i = 0; i < args.len; i++) args[i] = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref sum = f.builder.add_inst(ADD, { .bin = { .lhs = args[6], .rhs = args[7] } }, value_interner::REF_I32);
+	f.builder.add_return(sum);
+	f.builder.finish_fn("sum_eight_incoming_i32");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	ir::Ir graph = f.builder.finish();
+	defer graph.free();
+	String spill_text = x86_64::render_asm(&graph, &f.ta, &errors, true)!!;
+	defer alloc::free(&f.ta, spill_text.ptr);
+	assert(spill_text.contains("dword ptr [rbp + 16]") && spill_text.contains("dword ptr [rbp + 24]"),
+		"spill-all loads incoming arguments seven and eight from their stack slots");
+
+	String register_text = x86_64::render_asm(&graph, &f.ta, &errors)!!;
+	defer alloc::free(&f.ta, register_text.ptr);
+	assert(register_text.contains("dword ptr [rbp + 16]") && register_text.contains("dword ptr [rbp + 24]"),
+		"register mode loads incoming arguments seven and eight from their stack slots");
+}
+
+fn void renders_eight_i32_stack_call_to_object_with_one_relocation() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_i32_call_fixture(&f, 8, "object_calls_eight_i32", "consume_eight_i32");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	ir::Ir graph = f.builder.finish();
+	defer graph.free();
+	object::Object* obj = ir::render_object(&graph, &f.ta, object_target(), &errors)!!;
+	defer obj.deinit();
+	elf::Elf* e = (elf::Elf*)obj.implementation;
+	elf::SectionData* text = elf_section(e, "text");
+	assert(text.relocs.len() == 1,
+		"the eight-argument stack call renders successfully with one call-target relocation");
+}
+
+fn void lowers_va_start_sysv_register_save_area_to_text_and_object() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref va_list = f.builder.add_alloc(24, 8);
+	f.builder.add_va_start(va_list);
+	f.builder.add_return(ir::NONE);
+	f.builder.finish_fn("variadic_start");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	ir::Ir graph = f.builder.finish();
+	defer graph.free();
+	String assembly = x86_64::render_asm(&graph, &f.ta, &errors, true)!!;
+	defer alloc::free(&f.ta, assembly.ptr);
+
+	// One named integer parameter consumes the first eight-byte GP save slot.
+	assert(assembly.contains("\ttest al, al\n\tje "),
+		"the prologue should skip XMM saves when AL is zero");
+	assert(assembly.contains("\tmov qword ptr [rbp - 208], rdi\n") &&
+		assembly.contains("\tmov qword ptr [rbp - 168], r9\n"),
+		"the register save area must cover all six SysV integer argument registers");
+	assert(assembly.contains("\tmovaps xmmword ptr [rbp - 160], xmm0\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 144], xmm1\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 128], xmm2\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 112], xmm3\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 96], xmm4\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 80], xmm5\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 64], xmm6\n") &&
+		assembly.contains("\tmovaps xmmword ptr [rbp - 48], xmm7\n"),
+		"the aligned register save area must cover xmm0 through xmm7");
+	assert(count_sequence(assembly, "\tmovaps xmmword ptr [rbp -") == 8,
+		"the prologue must emit one MOVAPS save for each SysV vector argument register");
+	int reg_save_area_base_offset = 208;
+	assert(reg_save_area_base_offset % 16 == 0,
+		"the register save area base must satisfy MOVAPS alignment");
+	assert(assembly.contains("\tmov dword ptr [rcx], 8\n") &&
+		assembly.contains("\tmov dword ptr [rcx + 4], 48\n"),
+		"va_start must initialize gp_offset and fp_offset for the named argument");
+	assert(assembly.contains("\tlea rax, [rbp + 16]\n") &&
+		assembly.contains("\tlea rax, [rbp - 208]\n"),
+		"va_start must initialize overflow_arg_area and reg_save_area");
+
+	object::Object* obj = ir::render_object(&graph, &f.ta, object_target(), &errors)!!;
+	defer obj.deinit();
+	elf::Elf* e = (elf::Elf*)obj.implementation;
+	elf::SectionData* text = elf_section(e, "text");
+	assert(count_sequence(text.bytes.array_view(), (char[]){ 0x0f, 0x29 }) == 8,
+		"ELF .text must contain the eight encoded MOVAPS register-save stores");
+
+	Fixture plain;
+	plain.init();
+	defer { plain.builder.free(); plain.interner.free(); plain.ta.free(); }
+	plain.builder.start_fn();
+	plain.builder.add_arg(value_interner::REF_I64);
+	plain.builder.add_alloc(24, 8);
+	plain.builder.add_return(ir::NONE);
+	plain.builder.finish_fn("nonvariadic_footprint");
+	String plain_assembly = render(&plain, &errors, true)!!;
+	defer alloc::free(&plain.ta, plain_assembly.ptr);
+	assert(plain_assembly.contains("nonvariadic_footprint:\n\tpush rbp\n\tmov rbp, rsp\n\tsub rsp, 32\n"),
+		"the same argument and allocation footprint without VA_START should retain its 32-byte frame");
+	assert(!plain_assembly.contains("movaps") && !plain_assembly.contains("\ttest al, al\n"),
+		"a function without VA_START should emit no vector saves or save-area guard");
+}
+
+fn void lowers_va_start_explicit_stack_aggregate_footprints() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	f.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, 0, 0);
+	f.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, 2, 0);
+	ir::Ref aggregate = f.builder.add_arg_at(value_interner::REF_PTR,
+		ir::ArgLocationKind.STACK, 0, 24, true);
+	f.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.STACK, 24, 8);
+	ir::Ref va_list = f.builder.add_alloc(24, 8);
+	f.builder.add_va_start(va_list);
+	f.builder.add_return(aggregate);
+	f.builder.finish_fn("explicit_stack_varargs");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	ir::Ir graph = f.builder.finish();
+	defer graph.free();
+	String assembly = x86_64::render_asm(&graph, &f.ta, &errors, true)!!;
+	defer alloc::free(&f.ta, assembly.ptr);
+
+	assert(assembly.contains("\tmov dword ptr [rcx], 16\n"),
+		"gp_offset must count explicitly assigned GP ARGs");
+	assert(assembly.contains("\tlea rax, [rbp + 16]\n"),
+		"a memory-address ARG must retain the incoming aggregate's stack address");
+	assert(assembly.contains("\tlea rax, [rbp + 48]\n"),
+		"overflow_arg_area must advance by the aggregate footprint and following stack word");
+
+	Fixture legacy;
+	legacy.init();
+	defer { legacy.builder.free(); legacy.interner.free(); legacy.ta.free(); }
+	legacy.builder.start_fn();
+	for (usz i = 0; i < 8; i++) legacy.builder.add_arg(value_interner::REF_I64);
+	ir::Ref legacy_va_list = legacy.builder.add_alloc(24, 8);
+	legacy.builder.add_va_start(legacy_va_list);
+	legacy.builder.add_return(ir::NONE);
+	legacy.builder.finish_fn("ordinal_stack_varargs");
+	ir::Ir legacy_graph = legacy.builder.finish();
+	defer legacy_graph.free();
+	String legacy_assembly = x86_64::render_asm(&legacy_graph, &legacy.ta, &errors, true)!!;
+	defer alloc::free(&legacy.ta, legacy_assembly.ptr);
+	assert(legacy_assembly.contains("\tmov dword ptr [rcx], 48\n") &&
+		legacy_assembly.contains("\tlea rax, [rbp + 32]\n"),
+		"legacy ordinal ARGs must use six GP words followed by stack words");
+}
+
+fn void lowers_return_pair_from_rdx_then_rax_before_epilogue() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref low = f.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, 0, 0);
+	ir::Ref high = f.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, 1, 0);
+	f.builder.add_return_pair(low, high);
+	f.builder.finish_fn("returns_pair");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tmov rdx, qword ptr [rbp - 16]\n",
+		"\tmov rax, qword ptr [rbp - 8]\n",
+		"\tleave\n",
+		"\tret\n",
+	}, "RET_PAIR return register order");
+}
+
+fn void lowers_call_hi_and_stores_both_return_registers() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol("returns_pair", value_interner::REF_FUNC);
+	ir::Ref call = f.builder.add_call_abi(callee, {}, {}, {}, value_interner::REF_I64);
+	ir::Ref high = f.builder.add_call_hi(call);
+	f.builder.add_return_pair(call, high);
+	f.builder.finish_fn("calls_pair");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tcall returns_pair@PLT\n",
+		"\tmov qword ptr [rbp - 8], rax\n",
+		"\tmov qword ptr [rbp - 16], rdx\n",
+		"\tmov rdx, qword ptr [rbp - 16]\n",
+		"\tmov rax, qword ptr [rbp - 8]\n",
+		"\tleave\n",
+		"\tret\n",
+	}, "CALL/CALL_HI paired return registers");
+}
+
+fn void lowers_stack_only_struct_copy_without_consuming_gp_registers() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref first_scalar = f.builder.add_constant(
+		f.interner.put(primitive_value::int_key(11)), value_interner::REF_I64);
+	ir::Ref record_storage = f.builder.add_alloc(16, 8);
+	ir::Ref second_scalar = f.builder.add_constant(
+		f.interner.put(primitive_value::int_key(33)), value_interner::REF_I64);
+	ir::Ref callee = f.builder.add_symbol("consume_record_and_scalars", value_interner::REF_FUNC);
+	ir::Ref[3] args = { first_scalar, record_storage, second_scalar };
+	bool[3] stack_only = { false, true, false };
+	uint[3] memory_copy_bytes = { 0, 16, 0 };
+	ir::Ref call = f.builder.add_call_abi(callee, args[..], stack_only[..], memory_copy_bytes[..], value_interner::REF_I64);
+	f.builder.add_return(call);
+	f.builder.finish_fn("calls_with_stack_record");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tsub rsp, 16\n",
+		"\tmov rax, qword ptr [r11]\n",
+		"\tmov qword ptr [rsp], rax\n",
+		"\tmov rax, qword ptr [r11 + 8]\n",
+		"\tmov qword ptr [rsp + 8], rax\n",
+		"\tmov rdi, 11\n",
+		"\tmov rsi, 33\n",
+		"\tcall consume_record_and_scalars@PLT\n",
+	}, "stack-only record call argument placement");
 }
 
 fn void lowers_loop_invariant_phi_with_backedge_in_register_mode() @test
@@ -783,24 +1249,246 @@ fn void object_emits_common_as_shn_common() @test
 	assert(read_elf_le(emitted, (usz)(symbol + 16), 8) == 37, "COMMON symbol preserves its size");
 }
 
-fn void floating_point_reports_lowering_todo() @test
+fn void encode_scalar_float_moves_and_conversion() @test
+{
+	// movsd xmm0, qword ptr [rbp - 8]
+	assert_encoded(MOVSD, { x86_64::reg_op(XMM0), x86_64::mem_op(RBP, -8, 64) },
+		(char[]){ 0xf2, 0x0f, 0x10, 0x45, 0xf8 });
+	// movss xmm9, xmm1
+	assert_encoded(MOVSS, { x86_64::reg_op(XMM9), x86_64::reg_op(XMM1) },
+		(char[]){ 0xf3, 0x44, 0x0f, 0x10, 0xc9 });
+	// movq rax, xmm0
+	assert_encoded(MOVQ, { x86_64::reg_op(RAX), x86_64::reg_op(XMM0) },
+		(char[]){ 0x66, 0x48, 0x0f, 0x7e, 0xc0 });
+	// cvtsi2sd xmm8, rax
+	assert_encoded(CVTSI2SD, { x86_64::reg_op(XMM8), x86_64::reg_op(RAX) },
+		(char[]){ 0xf2, 0x4c, 0x0f, 0x2a, 0xc0 });
+	// addss xmm0, xmm1
+	assert_encoded(ADDSS, { x86_64::reg_op(XMM0), x86_64::reg_op(XMM1) },
+		(char[]){ 0xf3, 0x0f, 0x58, 0xc1 });
+	// ucomisd xmm0, qword ptr [rbp - 8]
+	assert_encoded(UCOMISD, { x86_64::reg_op(XMM0), x86_64::mem_op(RBP, -8, 64) },
+		(char[]){ 0x66, 0x0f, 0x2e, 0x45, 0xf8 });
+	// setnp al (ordered), setp cl (unordered)
+	assert_encoded(SETNP, { x86_64::reg_op(AL) }, (char[]){ 0x0f, 0x9b, 0xc0 });
+	assert_encoded(SETP, { x86_64::reg_op(CL) }, (char[]){ 0x0f, 0x9a, 0xc1 });
+}
+
+fn void lowers_mixed_integer_and_double_call_arguments() @test
 {
 	Fixture f;
 	f.init();
 	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
 	f.builder.start_fn();
-	ir::Ref x = f.builder.add_arg(value_interner::REF_F64);
-	f.builder.add_inst(RET, { .ref = x }, value_interner::REF_NORETURN);
-	f.builder.finish_fn("half");
+	ir::Ref callee = f.builder.add_symbol("consume_mixed_float_abi", value_interner::REF_FUNC);
+	ir::Ref int_a = f.builder.add_constant(f.interner.put(primitive_value::int_key(11)), value_interner::REF_I32);
+	ir::Ref double_a = f.builder.add_constant(f.interner.put(primitive_value::f64_value(0x3ff8_0000_0000_0000)), value_interner::REF_F64);
+	ir::Ref int_b = f.builder.add_constant(f.interner.put(primitive_value::int_key(22)), value_interner::REF_I32);
+	ir::Ref double_b = f.builder.add_constant(f.interner.put(primitive_value::f64_value(0x4004_0000_0000_0000)), value_interner::REF_F64);
+	ir::Ref[4] args = { int_a, double_a, int_b, double_b };
+	ir::Ref call = f.builder.add_call(callee, args[..], value_interner::REF_I32);
+	f.builder.add_return(call);
+	f.builder.finish_fn("calls_mixed_float_abi");
+
 	ir::ErrorList errors;
 	errors.init(&f.ta);
 	defer errors.free();
-	// ErrorList borrows decl names (as in Zig), so inspect it before freeing the Ir.
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tmov edi, 11\n"), "the first integer argument uses rdi");
+	assert(text.contains("\tmovsd xmm0,"), "the first double argument uses xmm0");
+	assert(text.contains("\tmov esi, 22\n"), "the second integer argument uses rsi");
+	assert(text.contains("\tmovsd xmm1,"), "the second double argument uses xmm1");
+	assert(text.contains("\tmov eax, 2\n"), "al reports the two vector argument registers used");
+	assert(text.contains("\tcall consume_mixed_float_abi@PLT\n"), "the mixed-ABI call is emitted");
+}
+
+fn void lowers_double_call_result_from_xmm0() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol("return_double_float_abi", value_interner::REF_FUNC);
+	ir::Ref call = f.builder.add_call(callee, {}, value_interner::REF_F64);
+	f.builder.add_return(call);
+	f.builder.finish_fn("calls_double_float_abi");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tcall return_double_float_abi@PLT\n"), "the double-return call is emitted");
+	assert(text.contains("\tmovsd qword ptr [rbp -") && text.contains("], xmm0\n"),
+		"the double call result is stored from xmm0");
+}
+
+fn void lowers_ninth_double_parameter_from_incoming_stack() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref[9] args;
+	for (usz i = 0; i < args.len; i++) args[i] = f.builder.add_arg(value_interner::REF_F64);
+	f.builder.add_return(args[8]);
+	f.builder.finish_fn("returns_ninth_double_argument");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tmovsd xmm0, qword ptr [rbp + 16]\n"),
+		"the ninth double parameter is loaded from the first incoming stack slot");
+}
+
+fn void lowers_f64_constant_load_store_to_text_and_object() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref area = f.builder.add_alloc(8, 8);
+	value_interner::InternerRef pi = f.interner.put(primitive_value::f64_value(0x4009_21fb_5444_2d18));
+	ir::Ref constant = f.builder.add_constant(pi, value_interner::REF_F64);
+	f.builder.add_store(area, constant);
+	ir::Ref loaded = f.builder.add_inst(LOAD, { .ref = area }, value_interner::REF_F64);
+	f.builder.add_return(loaded);
+	f.builder.finish_fn("double_constant_load_store");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
 	ir::Ir graph = f.builder.finish();
 	defer graph.free();
-	assert(@catch(x86_64::render_asm(&graph, &f.ta, &errors)) == ir::LOWER_FAIL);
-	test::eq(errors.name_at(0), "half");
-	test::eq(errors.message_at(0), "TODO: floating point lowering");
+	String text = x86_64::render_asm(&graph, &f.ta, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains(".L.flt.0:"), "the double constant is emitted in the floating-point pool");
+	assert(text.contains("movsd") && text.contains(".L.flt.0"),
+		"the generated function loads the pooled double and stores it through its local address");
+
+	object::Object* obj = ir::render_object(&graph, &f.ta, object_target(), &errors)!!;
+	defer obj.deinit();
+	elf::Elf* e = (elf::Elf*)obj.implementation;
+	elf::SectionData* rodata = elf_section(e, "rodata");
+	elf::Symbol* float_symbol = elf_symbol(e, ".L.flt.0");
+	assert(float_symbol.defined && float_symbol.section == rodata && float_symbol.size == 8,
+		"the object file defines the double constant as an eight-byte read-only symbol");
+	assert(float_symbol.offset + float_symbol.size <= (ulong)rodata.bytes.len(),
+		"the double constant fits inside the object file's read-only section");
+	char[8] expected = { 0x18, 0x2d, 0x44, 0x54, 0xfb, 0x21, 0x09, 0x40 };
+	for (usz i = 0; i < expected.len; i++)
+	{
+		assert(rodata.bytes[(sz)(float_symbol.offset + i)] == expected[i],
+			"wrong byte %d in the emitted double constant", i);
+	}
+	elf::SectionData* text_section = elf_section(e, "text");
+	bool has_constant_relocation = false;
+	foreach (relocation : text_section.relocs)
+	{
+		if (relocation.symbol != float_symbol) continue;
+		assert(relocation.kind == object::RelocKind.PC32.value && relocation.addend == -4,
+			"the pooled double is addressed with a PC32 relocation");
+		has_constant_relocation = true;
+	}
+	assert(has_constant_relocation, "object .text references the pooled double constant");
+}
+
+fn void lowers_fneg_with_sixteen_byte_mask_alignment() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref input = f.builder.add_arg(value_interner::REF_F32);
+	ir::Ref negated = f.builder.add_inst(FNEG, { .ref = input }, value_interner::REF_F32);
+	f.builder.add_return(negated);
+	f.builder.finish_fn("negates_float");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\t.section .rodata\n\t.p2align 4\n.L.flt.0:\n"),
+		"the FNEG mask's 16-byte alignment directive precedes its pooled label");
+}
+
+fn void lowers_float_arithmetic_negation_and_nan_aware_comparisons() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref f32_left = f.builder.add_constant(f.interner.put(primitive_value::f32_value(0x3fc0_0000)), value_interner::REF_F32);
+	ir::Ref f32_right = f.builder.add_constant(f.interner.put(primitive_value::f32_value(0x4020_0000)), value_interner::REF_F32);
+	ir::Ref f64_left = f.builder.add_constant(f.interner.put(primitive_value::f64_value(0x3ff8_0000_0000_0000)), value_interner::REF_F64);
+	ir::Ref f64_right = f.builder.add_constant(f.interner.put(primitive_value::f64_value(0x4008_0000_0000_0000)), value_interner::REF_F64);
+	f.builder.add_inst(FADD, { .bin = { f32_left, f32_right } }, value_interner::REF_F32);
+	f.builder.add_inst(FSUB, { .bin = { f32_left, f32_right } }, value_interner::REF_F32);
+	f.builder.add_inst(FMUL, { .bin = { f32_left, f32_right } }, value_interner::REF_F32);
+	f.builder.add_inst(FDIV, { .bin = { f32_left, f32_right } }, value_interner::REF_F32);
+	f.builder.add_inst(FADD, { .bin = { f64_left, f64_right } }, value_interner::REF_F64);
+	f.builder.add_inst(FSUB, { .bin = { f64_left, f64_right } }, value_interner::REF_F64);
+	f.builder.add_inst(FMUL, { .bin = { f64_left, f64_right } }, value_interner::REF_F64);
+	f.builder.add_inst(FDIV, { .bin = { f64_left, f64_right } }, value_interner::REF_F64);
+	f.builder.add_inst(FNEG, { .ref = f32_left }, value_interner::REF_F32);
+	f.builder.add_inst(FNEG, { .ref = f64_left }, value_interner::REF_F64);
+	f.builder.add_inst(FCMP_OEQ, { .bin = { f32_left, f32_right } }, value_interner::REF_I1);
+	f.builder.add_inst(FCMP_UNE, { .bin = { f32_left, f32_right } }, value_interner::REF_I1);
+	f.builder.add_inst(FCMP_OLT, { .bin = { f64_left, f64_right } }, value_interner::REF_I1);
+	f.builder.add_inst(FCMP_OLE, { .bin = { f64_left, f64_right } }, value_interner::REF_I1);
+	f.builder.add_inst(FCMP_OGT, { .bin = { f64_left, f64_right } }, value_interner::REF_I1);
+	ir::Ref ge = f.builder.add_inst(FCMP_OGE, { .bin = { f64_left, f64_right } }, value_interner::REF_I1);
+	f.builder.add_return(ge);
+	f.builder.finish_fn("float_arithmetic_compare");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	foreach (mnemonic : (String[]){ "addss", "addsd", "subss", "subsd", "mulss", "mulsd", "divss", "divsd" })
+		assert(text.contains(mnemonic), "float arithmetic lowering emits %s", mnemonic);
+	assert(text.contains("xorps") && text.contains("xorpd"), "float negation flips the sign bit at both widths");
+	assert(text.contains("ucomiss") && text.contains("ucomisd"), "float comparisons use unordered-aware compare instructions");
+	assert(text.contains("setnp") && text.contains("setp") && text.contains("and al, cl") && text.contains("or al, cl"),
+		"ordered comparisons mask unordered results, while != accepts unordered values");
+}
+
+fn void lowers_float_conversions_including_unsigned_64_bit_paths() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref u64max = f.builder.add_constant(f.interner.put(primitive_value::uint_key(0xffff_ffff_ffff_ffff)), value_interner::REF_I64);
+	ir::Ref i64neg = f.builder.add_constant(f.interner.put(primitive_value::int_key(-42)), value_interner::REF_I64);
+	ir::Ref f64_threshold = f.builder.add_constant(f.interner.put(primitive_value::f64_value(0x43e0_0000_0000_0000)), value_interner::REF_F64);
+	ir::Ref f32_threshold = f.builder.add_constant(f.interner.put(primitive_value::f32_value(0x5f00_0000)), value_interner::REF_F32);
+	ir::Ref f64_value = f.builder.add_constant(f.interner.put(primitive_value::f64_value(0x4045_8000_0000_0000)), value_interner::REF_F64);
+	ir::Ref f32_value = f.builder.add_constant(f.interner.put(primitive_value::f32_value(0x3fc0_0000)), value_interner::REF_F32);
+	f.builder.add_inst(UITOFP, { .ref = u64max }, value_interner::REF_F64);
+	f.builder.add_inst(UITOFP, { .ref = u64max }, value_interner::REF_F32);
+	f.builder.add_inst(SITOFP, { .ref = i64neg }, value_interner::REF_F64);
+	f.builder.add_inst(FPTOUI, { .ref = f64_threshold }, value_interner::REF_I64);
+	f.builder.add_inst(FPTOUI, { .ref = f32_threshold }, value_interner::REF_I64);
+	f.builder.add_inst(FPTOSI, { .ref = f64_value }, value_interner::REF_I64);
+	f.builder.add_inst(FPEXT, { .ref = f32_value }, value_interner::REF_F64);
+	ir::Ref narrowed = f.builder.add_inst(FPTRUNC, { .ref = f64_value }, value_interner::REF_F32);
+	f.builder.add_return(narrowed);
+	f.builder.finish_fn("float_conversions");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("cvtsi2sd") && text.contains("cvtsi2ss") && text.contains("shr rcx, 1") && text.contains("addsd xmm0, xmm0"),
+		"uint64-to-float lowers its high-bit half-shift path for F32 and F64");
+	assert(text.contains("cvttsd2si") && text.contains("cvttss2si") && text.contains("subsd") && text.contains("subss"),
+		"float-to-uint64 lowers threshold subtraction for F32 and F64");
+	assert(text.contains("shl rcx, 63"), "the upper uint64 conversion path restores bit 63");
+	assert(text.contains("cvtss2sd") && text.contains("cvtsd2ss"), "FPEXT and FPTRUNC use scalar width conversions");
 }
 
 fn void external_and_defined_symbol_calls_use_correct_relocations() @test
@@ -935,7 +1623,7 @@ fn void identical_string_constants_share_one_assembly_label() @test
 		".Lpass_strings.entry.0:\n"
 		"\tlea rdi, [rip + .L.str.0]\n"
 		"\tlea rsi, [rip + .L.str.0]\n"
-		"\txor eax, eax\n"
+		"\tmov eax, 0\n"
 		"\tcall consume_strings@PLT\n"
 		"\tmov dword ptr [rbp - 8], eax\n"
 		"\tmov eax, dword ptr [rbp - 8]\n"

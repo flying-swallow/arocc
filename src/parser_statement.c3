@@ -2,11 +2,11 @@
 // recognition and active function metadata are supplied by the declaration
 // owner because this module does not own those productions.
 module aro::parser_statement;
-import aro::attribute, aro::attribute_wip, aro::compilation, aro::parser, aro::parser_asm, aro::parser_attribute, aro::parser_expression, aro::parser_primary, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
+import aro::attribute, aro::attribute_wip, aro::compilation, aro::parser, aro::parser_attribute, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
 import aro::type_store, aro::lang_opts, aro::bigint, aro::attribute_map;
 import aro::parser_declaration;
-import aro::parser_builtin, aro::parser_declarator, aro::parser_postfix, aro::text_literal;
-import std::collections::list;
+import aro::parser_builtin, aro::parser_declarator, aro::text_literal;
+import std::collections::list, std::collections::map;
 import std::core::dstring;
 import std::core::mem;
 import aro::value;
@@ -47,14 +47,17 @@ struct StatementParser (parser::IAddressOfLabel)
 	ILocalDeclarationTestProbe local_declaration_probe @feat(TESTING);
 	parser_attribute::AttributeBuffer* prefix_declaration_attributes;
 	bool prefix_declaration_attributes_consumed;
-	<* GNU asm statement grammar; null when asm statements are not parsed. *>
-	parser::IAsmParser asm_parser;
 	uint loop_depth;
 	uint switch_depth;
 	bool switch_has_default;
 	tokens::TokenIndex switch_default_tok;
 	type_store::QualType switch_qt;
 	list::List{SwitchCaseEntry} switch_case_values;
+	<* Single-value cases: interned value ref -> index in `switch_case_values`. Equal
+	   integer values share one ref, so lookup replaces a linear overlap scan. *>
+	HashMap{uint, uint} switch_case_singles;
+	<* Indices of range cases (`start != end`) in `switch_case_values`. *>
+	list::List{uint} switch_case_ranges;
 	bool has_switch_case_values;
 	bool function_has_address_of_label;
 	tokens::TokenIndex computed_goto_tok;
@@ -125,7 +128,7 @@ fn parser_result::Result? StatementParser.integer_const_expr(&self, parser::Pars
 		if (absent == parser::HOOK_ABSENT) maybe_result = self.expr(p, true);
 	}
 	fault parse_fault = @catch(maybe_result);
-	if (parse_fault) return (parse_fault == parser_expression::NO_EXPRESSION ? PARSING_FAILED : parse_fault)~;
+	if (parse_fault) return (parse_fault == parser::NO_EXPRESSION ? PARSING_FAILED : parse_fault)~;
 	if (!@ok(maybe_result)) return PARSING_FAILED~;
 	parser_result::Result result = maybe_result!;
 	if (!result.qt.is_invalid() && !result.qt.is_real_int(p.comp))
@@ -330,11 +333,8 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, pars
 	{
 		return self.parse_label_statement(p, check_unused);
 	}
-	if (self.asm_parser)
-	{
-		type_store::NodeIndex asm_node;
-		if (self.parse_asm_statement_into(p, &asm_node)!) return asm_node;
-	}
+	type_store::NodeIndex asm_node;
+	if (parse_asm_statement_into(p, &asm_node)!) return asm_node;
 	if (p.at_eof()) return self.parse_declaration_or_expression_statement(p, check_unused);
 	switch (p.tree.tokens[(usz)p.tok_i].id)
 	{
@@ -356,9 +356,9 @@ fn type_store::NodeIndex? StatementParser.parse_attributed_statement(&self, pars
 }
 
 <* GNU `asm` statement hook: false when the tokens are not an asm statement. *>
-fn bool? StatementParser.parse_asm_statement_into(&self, parser::Parser* p, type_store::NodeIndex* out) @noinline
+fn bool? parse_asm_statement_into(parser::Parser* p, type_store::NodeIndex* out) @noinline
 {
-	type_store::NodeIndex? maybe_asm = self.asm_parser.parse_asm_statement(p);
+	type_store::NodeIndex? maybe_asm = p.parse_asm_statement();
 	if (catch __fault = maybe_asm)
 	{
 		// NOT_ASM: not an asm statement, continue with the other statement forms.
@@ -496,15 +496,26 @@ fn type_store::NodeIndex? StatementParser.parse_switch_statement(&self, parser::
 	type_store::QualType old_switch_qt = self.switch_qt;
 	bool old_has_case_values = self.has_switch_case_values;
 	list::List{SwitchCaseEntry} old_case_values = self.switch_case_values;
+	HashMap{uint, uint} old_case_singles = self.switch_case_singles;
+	list::List{uint} old_case_ranges = self.switch_case_ranges;
 	self.switch_has_default = false;
 	self.switch_default_tok = 0;
 	self.switch_qt = cond.qt;
+	self.switch_case_values = {};
 	self.switch_case_values.init(p.comp.gpa);
+	self.switch_case_singles = {};
+	self.switch_case_singles.init(p.comp.gpa);
+	self.switch_case_ranges = {};
+	self.switch_case_ranges.init(p.comp.gpa);
 	self.has_switch_case_values = true;
 	defer
 	{
 		self.switch_case_values.free();
+		self.switch_case_singles.free();
+		self.switch_case_ranges.free();
 		self.switch_case_values = old_case_values;
+		self.switch_case_singles = old_case_singles;
+		self.switch_case_ranges = old_case_ranges;
 		self.has_switch_case_values = old_has_case_values;
 		self.switch_has_default = old_default;
 		self.switch_default_tok = old_default_tok;
@@ -521,9 +532,83 @@ fn type_store::NodeIndex? StatementParser.parse_switch_statement(&self, parser::
 	);
 }
 
-<* `case expr[...expr]: stmt` / `default: stmt`. Out of line so its locals only occupy the stack while this
- statement kind is being parsed, not at every nesting level. *>
+<* One `case expr[...expr]:` / `default:` label, parsed before its statement. *>
+struct CaseLabel
+{
+	tokens::TokenIndex kw;
+	bool is_default;
+	type_store::NodeIndex value_node;
+	type_store::NodeOptIndex end_node;
+}
+
+<* `case expr[...expr]: stmt` / `default: stmt`. Directly chained labels
+   (`case 1: case 2: ... stmt`) are parsed in a loop and their nodes built
+   inside-out afterwards, so label count does not grow the stack. Out of line so
+   its locals only occupy the stack while this statement kind is being parsed. *>
 fn type_store::NodeIndex? StatementParser.parse_case_statement(&self, parser::Parser* p, bool check_unused) @noinline
+{
+	CaseLabel first;
+	self.parse_case_label(p, &first)!;
+	if (!p.is_at(tokenizer::TokenId.KEYWORD_CASE) && !p.is_at(tokenizer::TokenId.KEYWORD_DEFAULT))
+	{
+		type_store::NodeIndex body = self.parse_statement(p, true)!;
+		return self.finish_case_label(p, first, body);
+	}
+	list::List{CaseLabel} chain;
+	chain.init(p.comp.gpa);
+	defer chain.free();
+	chain.push(first);
+	while (p.is_at(tokenizer::TokenId.KEYWORD_CASE) || p.is_at(tokenizer::TokenId.KEYWORD_DEFAULT))
+	{
+		CaseLabel label;
+		self.parse_case_label(p, &label)!;
+		chain.push(label);
+	}
+	type_store::NodeIndex body = self.parse_statement(p, true)!;
+	// Innermost label first: same node and diagnostic order as recursive parsing.
+	for (sz i = chain.len(); i > 0; i--)
+	{
+		body = self.finish_case_label(p, chain[i - 1], body)!;
+	}
+	return body;
+}
+
+<* The first recorded case overlapping `[start, end]`, if any. *>
+fn SwitchCaseEntry? StatementParser.overlapping_case(&self, parser::Parser* p, value::Value start, value::Value end)
+{
+	if (start.opt_ref == end.opt_ref)
+	{
+		if (try index = self.switch_case_singles.get((uint)start.opt_ref)) return self.switch_case_values[index];
+		foreach (index : self.switch_case_ranges)
+		{
+			SwitchCaseEntry entry = self.switch_case_values[index];
+			if (switch_case_ranges_overlap(entry, start, end, p)) return entry;
+		}
+		return NO_MORE_ELEMENT~;
+	}
+	foreach (entry : self.switch_case_values)
+	{
+		if (switch_case_ranges_overlap(entry, start, end, p)) return entry;
+	}
+	return NO_MORE_ELEMENT~;
+}
+
+fn void StatementParser.add_case_value(&self, SwitchCaseEntry entry)
+{
+	uint index = (uint)self.switch_case_values.len();
+	self.switch_case_values.push(entry);
+	if (entry.start.opt_ref == entry.end.opt_ref)
+	{
+		self.switch_case_singles.set((uint)entry.start.opt_ref, index);
+	}
+	else
+	{
+		self.switch_case_ranges.push(index);
+	}
+}
+
+<* A case/default label up to and including its `:`, with value checks. *>
+fn void? StatementParser.parse_case_label(&self, parser::Parser* p, CaseLabel* out) @noinline
 {
 	bool is_default = p.is_at(tokenizer::TokenId.KEYWORD_DEFAULT);
 	tokens::TokenIndex kw = p.tok_i;
@@ -611,14 +696,7 @@ fn type_store::NodeIndex? StatementParser.parse_case_statement(&self, parser::Pa
 		}
 		else
 		{
-			SwitchCaseEntry? previous = NO_MORE_ELEMENT~;
-			foreach (entry : self.switch_case_values)
-			{
-				if (switch_case_ranges_overlap(entry, case_value, case_end_value, p))
-				{
-					previous = entry; break;
-				}
-			}
+			SwitchCaseEntry? previous = self.overlapping_case(p, case_value, case_end_value);
 			if (@ok(previous))
 			{
 				Diagnostic.DUPLICATE_SWITCH_CASE.@emit(p, kw + 1, p.fmt_value(case_value, case_qt))!;
@@ -626,17 +704,19 @@ fn type_store::NodeIndex? StatementParser.parse_case_statement(&self, parser::Pa
 			}
 			else
 			{
-				self.switch_case_values.push(
-					{
-						.start = case_value, .end = case_end_value, .tok = case_expr_tok
-					}
-				);
+				self.add_case_value({ .start = case_value, .end = case_end_value, .tok = case_expr_tok });
 			}
 		}
 	}
-	type_store::NodeIndex? maybe_body = self.parse_statement(p, true);
-	if (catch __fault = maybe_body) return __fault~;
-	if (is_default)
+	*out = { .kw = kw, .is_default = is_default, .value_node = value_node, .end_node = end_node };
+	return;
+}
+
+<* Build the CASE_STMT / DEFAULT_STMT node for `label` around its parsed body. *>
+fn type_store::NodeIndex? StatementParser.finish_case_label(&self, parser::Parser* p, CaseLabel label, type_store::NodeIndex body)
+{
+	tokens::TokenIndex kw = label.kw;
+	if (label.is_default)
 	{
 		if (self.switch_depth == 0)
 		{
@@ -653,13 +733,13 @@ fn type_store::NodeIndex? StatementParser.parse_case_statement(&self, parser::Pa
 		}
 		return p.tree.add_node(
 			{
-				.kind = tree::NodeKind.DEFAULT_STMT, .default_stmt = { .default_tok = kw, .body = maybe_body }
+				.kind = tree::NodeKind.DEFAULT_STMT, .default_stmt = { .default_tok = kw, .body = body }
 			}
 		);
 	}
 	return p.tree.add_node(
 		{
-			.kind = tree::NodeKind.CASE_STMT, .case_stmt = { .case_tok = kw, .start = value_node, .end = end_node, .body = maybe_body }
+			.kind = tree::NodeKind.CASE_STMT, .case_stmt = { .case_tok = kw, .start = label.value_node, .end = label.end_node, .body = body }
 		}
 	);
 }
@@ -768,7 +848,7 @@ fn type_store::NodeIndex? StatementParser.parse_for_statement(&self, parser::Par
 		parser_result::Result? maybe_init = self.expr(p, true);
 		if (catch __fault = maybe_init)
 		{
-			if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+			if (__fault != parser::NO_EXPRESSION) return __fault~;
 		}
 		if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		if (@ok(maybe_init))
@@ -783,7 +863,7 @@ fn type_store::NodeIndex? StatementParser.parse_for_statement(&self, parser::Par
 	parser_result::Result? maybe_cond = self.expr(p, true);
 	if (catch __fault = maybe_cond)
 	{
-		if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		if (__fault != parser::NO_EXPRESSION) return __fault~;
 	}
 	if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 	type_store::NodeOptIndex cond_node = type_store::NODE_NULL;
@@ -799,7 +879,7 @@ fn type_store::NodeIndex? StatementParser.parse_for_statement(&self, parser::Par
 	parser_result::Result? maybe_incr = self.expr(p, true);
 	if (catch __fault = maybe_incr)
 	{
-		if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		if (__fault != parser::NO_EXPRESSION) return __fault~;
 	}
 	if (catch p.expect_closing(tokenizer::TokenId.R_PAREN, opener)) return PARSING_FAILED~;
 	type_store::NodeOptIndex incr = type_store::NODE_NULL;
@@ -897,7 +977,7 @@ fn type_store::NodeIndex? StatementParser.parse_return_statement(&self, parser::
 	parser_result::Result? maybe_expr = self.expr(p, true);
 	if (catch __fault = maybe_expr)
 	{
-		if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		if (__fault != parser::NO_EXPRESSION) return __fault~;
 	}
 	if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 	type_store::QualType ret_qt = self.has_function_context ? self.function_return_qt : type_store::INVALID;
@@ -1005,11 +1085,10 @@ fn NoreturnKind StatementParser.node_is_noreturn(&self, parser::Parser* p, type_
 fn bool recoverable_statement_item_fault(fault f)
 {
 	if (f == compilation::FATAL_ERROR || f == mem::OUT_OF_MEMORY || f == parser::HOOK_ABSENT) return false;
-	return f == parser::PARSING_FAILED || f == parser_asm::PARSING_FAILED || f == parser_builtin::PARSING_FAILED ||
+	return f == parser::PARSING_FAILED || f == parser_builtin::PARSING_FAILED ||
 	f == parser_declaration::PARSING_FAILED || f == parser_declarator::PARSING_FAILED ||
-	f == parser_expression::PARSING_FAILED || f == parser_postfix::PARSING_FAILED ||
-	f == parser_primary::PARSING_FAILED || f == PARSING_FAILED || f == text_literal::PARSING_FAILED ||
-	f == parser_expression::NO_EXPRESSION;
+	f == PARSING_FAILED || f == text_literal::PARSING_FAILED ||
+	f == parser::NO_EXPRESSION;
 }
 
 <* Skip a failed compound item from the parser's failure position. A true
@@ -1283,7 +1362,7 @@ fn type_store::NodeIndex? StatementParser.parse_declaration_or_expression_statem
 	parser_result::Result? maybe_expr = self.expr(p, true);
 	if (catch __fault = maybe_expr)
 	{
-		if (__fault != parser_expression::NO_EXPRESSION) return __fault~;
+		if (__fault != parser::NO_EXPRESSION) return __fault~;
 	}
 	if (@ok(maybe_expr))
 	{

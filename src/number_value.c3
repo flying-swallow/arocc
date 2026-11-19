@@ -45,6 +45,8 @@ bitstruct NumberDiags : char
 	bool hex_float_no_significand : 2;
 	bool float_literal_in_expr : 3;
 	bool gnu_imaginary_constant : 4;
+	<* C90 typed an unsuffixed decimal above LONG_MAX as unsigned long (GCC c-lex). *>
+	bool c90_unsigned_decimal : 5;
 }
 
 <* Run `@body` with each set flag's Diagnostic as a compile-time constant, in emission order. *>
@@ -52,6 +54,7 @@ macro void NumberDiags.@each(self; @body($diag))
 {
 	if (self.int_literal_too_big) @body(Diagnostic.INT_LITERAL_TOO_BIG);
 	if (self.implicitly_unsigned_literal) @body(Diagnostic.IMPLICITLY_UNSIGNED_LITERAL);
+	if (self.c90_unsigned_decimal) @body(Diagnostic.C90_UNSIGNED_DECIMAL);
 	if (self.hex_float_no_significand) @body(Diagnostic.HEX_FLOAT_NO_SIGNIFICAND);
 	if (self.float_literal_in_expr) @body(Diagnostic.FLOAT_LITERAL_IN_EXPR);
 	if (self.gnu_imaginary_constant) @body(Diagnostic.GNU_IMAGINARY_CONSTANT);
@@ -183,7 +186,10 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 		return res;
 	}
 	bool is_signed = suffix.is_signed_integer();
-	if (is_signed && base == 10)
+	// C90 6.1.3.2: unsuffixed and `l` decimals try int, long, unsigned long; being
+	// unsigned there is standard, not the C99 "implicitly unsigned" extension.
+	bool c90_decimal = is_signed && base == 10 && !comp.langopts.standard.at_least(C99);
+	if (is_signed && base == 10 && !c90_decimal)
 	{
 		// Normal driver setup initializes named types while generating builtin
 		// macros. Raw parser clients can skip that step, so match Zig's intmax
@@ -205,6 +211,7 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 	{
 		QualType[3] unsigned_qts = { type_store::UINT, type_store::ULONG, type_store::ULONG_LONG };
 		QualType[3] decimal_qts = { type_store::INT, type_store::LONG, type_store::LONG_LONG };
+		QualType[4] c90_decimal_qts = { type_store::INT, type_store::LONG, type_store::ULONG, type_store::LONG_LONG };
 		QualType[6] other_qts = {
 			type_store::INT, type_store::UINT, type_store::LONG,
 			type_store::ULONG, type_store::LONG_LONG, type_store::ULONG_LONG,
@@ -213,6 +220,10 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 		if (!is_signed)
 		{
 			qts = &unsigned_qts;
+		}
+		else if (c90_decimal)
+		{
+			qts = &c90_decimal_qts;
 		}
 		else if (base == 10)
 		{
@@ -230,6 +241,7 @@ fn NumberValue fixed_size_int(Compilation* comp, char base, String bytes, Suffix
 			{
 				res.qt = qt;
 				found = true;
+				if (c90_decimal && qt == type_store::ULONG) res.diags.c90_unsigned_decimal = true;
 				break;
 			}
 		}

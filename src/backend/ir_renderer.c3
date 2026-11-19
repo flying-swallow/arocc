@@ -109,6 +109,11 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			return_ty = decl.instructions[(sz)inst.data.ref].ty;
 			break;
 		}
+		if (inst.tag == RET_PAIR)
+		{
+			return_ty = decl.instructions[(sz)inst.data.bin.lhs].ty;
+			break;
+		}
 	}
 	if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, "internal ")!;
 	self.write_type(return_ty, term)!;
@@ -165,6 +170,10 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case RET:
 				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    ret ")!;
 				if (inst.data.ref != NONE) self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
+			case RET_PAIR:
+				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    ret_pair ")!;
+				self.write_ref(decl, refs, inst.data.bin.lhs, term)!; term.set_color(ansi::Color.RESET)!;
+				io::write_all(w, ", ")!; self.write_ref(decl, refs, inst.data.bin.rhs, term)!; w.write_byte('\n')!;
 			case ALLOC:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++;
 				io::write_all(w, "alloc ")!; IrDumpRole.ATTRIBUTE.apply(term)!; io::write_all(w, "size ")!; IrDumpRole.LITERAL.apply(term)!; io::fprintf(w, "%d", inst.data.alloc.size)!;
@@ -181,11 +190,16 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 				io::write_all(w, "stack_save\n")!;
 			case STACK_RESTORE:
 				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    stack_restore ")!; self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
+			case VA_START:
+				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    va_start ")!; self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
 			case CALL:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "call ")!;
 				self.write_ref(decl, refs, inst.data.call.func, term)!; term.set_color(ansi::Color.RESET)!; w.write_byte('(')!;
 				foreach (usz i, arg : inst.data.call.args) { if (i) io::write_all(w, ", ")!; self.write_ref(decl, refs, arg, term)!; term.set_color(ansi::Color.RESET)!; }
 				io::write_all(w, ")\n")!;
+			case CALL_HI:
+				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "call_hi ")!;
+				self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
 			case PHI:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "phi")!; term.set_color(ansi::Color.RESET)!; io::write_all(w, " {")!;
 				foreach (input : inst.data.phi) { io::write_all(w, "\n        ")!; self.write_label(decl, labels, input.label, term)!; term.set_color(ansi::Color.RESET)!; io::write_all(w, " => ")!; self.write_ref(decl, refs, input.value, term)!; term.set_color(ansi::Color.RESET)!; }
@@ -193,9 +207,16 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case LOAD:
 			case BIT_NOT:
 			case NEGATE:
+			case FNEG:
 			case TRUNC:
 			case ZEXT:
 			case SEXT:
+			case FPTOSI:
+			case FPTOUI:
+			case SITOFP:
+			case UITOFP:
+			case FPEXT:
+			case FPTRUNC:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", inst.tag.name)!;
 				self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
 			case BIT_OR:
@@ -221,6 +242,16 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case UDIV:
 			case SREM:
 			case UREM:
+			case FADD:
+			case FSUB:
+			case FMUL:
+			case FDIV:
+			case FCMP_OEQ:
+			case FCMP_UNE:
+			case FCMP_OLT:
+			case FCMP_OLE:
+			case FCMP_OGT:
+			case FCMP_OGE:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", inst.tag.name)!;
 				self.write_ref(decl, refs, inst.data.bin.lhs, term)!; term.set_color(ansi::Color.RESET)!; io::write_all(w, ", ")!;
 				self.write_ref(decl, refs, inst.data.bin.rhs, term)!; w.write_byte('\n')!;

@@ -283,6 +283,8 @@ fn void backend_data_only_modes_and_unsupported_cases() @test
 		argv.init(tmem);
 		argv.push("aro");
 		argv.push("-O0");
+		// Counts the injected assembler child: pin the system assembler path.
+		argv.push("-fno-integrated-as");
 		if (mode.len) argv.push(mode);
 		argv.push("--target=x86_64-linux-gnu");
 		argv.push("-nostdinc");

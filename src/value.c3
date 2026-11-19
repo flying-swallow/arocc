@@ -349,8 +349,25 @@ fn bool Value.add(&res, Value lhs, Value rhs, QualType qt, Compilation* comp)
 	return overflowed;
 }
 
-<* Value.negate: res = 0 - val. *>
-fn bool Value.negate(&res, Value val, QualType qt, Compilation* comp) => res.sub(ZERO, val, qt, comp);
+<* Value.negate: float sign flips preserve every other bit; integers use 0 - val. *>
+fn bool Value.negate(&res, Value val, QualType qt, Compilation* comp)
+{
+	ScalarKind scalar_kind = qt.scalar_kind(comp);
+	if (scalar_kind == FLOAT)
+	{
+		*res = intern(comp, val.to_float(width_of(qt, comp), comp).neg());
+		return false;
+	}
+	if (scalar_kind == COMPLEX_FLOAT)
+	{
+		PrimitiveType w = element_width_of(qt, comp);
+		PrimitiveValue real = val.to_float(w, comp).neg();
+		PrimitiveValue imag = val.imag(w, comp).neg();
+		*res = intern(comp, primitive_value::complex_key(real, imag));
+		return false;
+	}
+	return res.sub(ZERO, val, qt, comp);
+}
 
 <* Value.decrement: res = val - 1. *>
 fn bool Value.decrement(&res, Value val, QualType qt, Compilation* comp) => res.sub(val, ONE, qt, comp);

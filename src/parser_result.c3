@@ -605,6 +605,100 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 	}
 }
 
+<* C 6.6p6 integer constant expression, judged from the AST: integer, character
+   and enumeration constants, sizeof/_Alignof, and unary, binary and conditional
+   operators over them; casts only to integer types, and a floating constant only
+   as the immediate operand of such a cast. A folded value alone is not enough:
+   `static const int ZERO` reads an object, and `(int)+0.0` folds but is not an ICE
+   (gcc.dg/c90-const-expr-3.c). *>
+fn bool is_integer_constant_expr(parser::Parser* p, type_store::NodeIndex index, bool float_ok = false)
+{
+	tree::Node n = index.get(&p.tree);
+	switch (n.kind)
+	{
+		case INT_LITERAL:
+		case CHAR_LITERAL:
+		case BOOL_LITERAL:
+		case ENUMERATION_REF:
+		case SIZEOF_EXPR:
+		case ALIGNOF_EXPR:
+			return true;
+		case FLOAT_LITERAL:
+			return float_ok;
+		case PAREN_EXPR:
+			return is_integer_constant_expr(p, n.unary.operand, float_ok);
+		case PLUS_EXPR:
+		case NEGATE_EXPR:
+		case BIT_NOT_EXPR:
+		case BOOL_NOT_EXPR:
+			return is_integer_constant_expr(p, n.unary.operand);
+		case BOOL_OR_EXPR:
+		case BOOL_AND_EXPR:
+		case BIT_OR_EXPR:
+		case BIT_XOR_EXPR:
+		case BIT_AND_EXPR:
+		case EQUAL_EXPR:
+		case NOT_EQUAL_EXPR:
+		case LESS_THAN_EXPR:
+		case LESS_THAN_EQUAL_EXPR:
+		case GREATER_THAN_EXPR:
+		case GREATER_THAN_EQUAL_EXPR:
+		case SHL_EXPR:
+		case SHR_EXPR:
+		case ADD_EXPR:
+		case SUB_EXPR:
+		case MUL_EXPR:
+		case DIV_EXPR:
+		case MOD_EXPR:
+			return is_integer_constant_expr(p, n.binary.lhs) && is_integer_constant_expr(p, n.binary.rhs);
+		case COND_EXPR:
+			if (!is_integer_constant_expr(p, n.conditional.cond)) return false;
+			// C99 6.6p3: operators like `,` are allowed in an arm that is not
+			// evaluated (gcc.dg/c99-const-expr-2.c); C90 requires both arms.
+			if (p.comp.langopts.standard.at_least(C99))
+			{
+				if (try cond = p.tree.value_of(n.conditional.cond))
+				{
+					return is_integer_constant_expr(p, cond.to_bool(p.comp) ? n.conditional.then_expr : n.conditional.else_expr);
+				}
+			}
+			return is_integer_constant_expr(p, n.conditional.then_expr) &&
+				is_integer_constant_expr(p, n.conditional.else_expr);
+		case CAST:
+			if (n.cast.kind == tree::CastKind.LVAL_TO_RVAL || !n.cast.qt.is_int(p.comp)) return false;
+			// An explicit cast to an integer type may take a floating constant
+			// directly; implicit conversions under it keep that permission.
+			return is_integer_constant_expr(p, n.cast.operand, n.cast.implicit ? float_ok : true);
+		default:
+			return false;
+	}
+}
+
+<* C 6.3.2.3p3: an integer constant expression with value 0, or such an
+   expression cast to `void *` (unqualified void). *>
+fn bool Result.is_null_pointer_constant(&self, parser::Parser* p)
+{
+	if (self.val.is_none()) return false;
+	if (self.qt.is_int(p.comp)) return self.val.is_zero(p.comp);
+	if (!self.qt.is_pointer(p.comp)) return false;
+	type_store::QualType child = self.qt.child_type(p.comp);
+	if (!child.is(p.comp, type_store::TypeTag.VOID) || child.is_const || child.is_volatile || child.is_restrict) return false;
+	if (self.val.opt_ref != value::NULL.opt_ref && !self.val.is_zero(p.comp)) return false;
+	// Only an integer constant expression cast directly to `void *`: not
+	// `(void *)(void *)0` or `(void *)(char *)0` (gcc.dg/c90-const-expr-2.c).
+	tree::Node n = self.node.get(&p.tree);
+	while (n.kind == tree::NodeKind.PAREN_EXPR) n = n.unary.operand.get(&p.tree);
+	if (n.kind != tree::NodeKind.CAST || n.cast.implicit) return false;
+	type_store::NodeIndex inner = n.cast.operand;
+	while (true)
+	{
+		tree::Node in = inner.get(&p.tree);
+		if (in.kind != tree::NodeKind.CAST || !in.cast.implicit || in.cast.qt.is_int(p.comp)) break;
+		inner = in.cast.operand;
+	}
+	return inner.qt(&p.tree).is_int(p.comp) && is_integer_constant_expr(p, inner);
+}
+
 fn void Result.null_to_pointer(&self, parser::Parser* p, type_store::QualType dest)
 {
 	if (!self.qt.is(p.comp, type_store::TypeTag.NULLPTR_T) && !self.val.is_zero(p.comp)) return;
@@ -623,15 +717,22 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 		self.qt = dest;
 		self.implicit_cast(p, tree::CastKind.BOOL_TO_POINTER);
 	}
+	else if (src.is_int && self.val.is_zero(p.comp) && is_integer_constant_expr(p, self.node))
+	{
+		// A zero integer constant converts to the null pointer (Zig/clang keep the
+		// value), so `(void *)0` stays a null pointer constant (C 6.3.2.3p3).
+		self.null_to_pointer(p, dest);
+	}
 	else if (src.is_int)
 	{
-		if (implicit && !self.val.is_zero(p.comp))
+		if (implicit)
 		{
 			Diagnostic.IMPLICIT_INT_TO_PTR.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 		}
-		// Integer and pointer representations depend on the target. Keep even
-		// integer-to-pointer constant values unavailable rather than guessing.
-		self.val = value::NONE;
+		// Keep the folded integer on its operand so static-initializer checks can
+		// recognize the address constant. The pointer result itself stays unknown:
+		// its representation depends on the target.
+		self.save_value(p);
 		self.qt = dest;
 		self.implicit_cast(p, tree::CastKind.INT_TO_POINTER);
 	}
@@ -1093,6 +1194,13 @@ fn tokens::TokenIndex? first_missing_value(parser::Parser* p, type_store::NodeIn
 				if (!saved.is_none()) return NO_MISSING_VALUE~;
 			}
 			return first_missing_value(p, node.cast.operand);
+		case tree::NodeKind.PAREN_EXPR:
+			// Parentheses are transparent: `(void *)(2)` (sqlite SQLITE_INT_TO_PTR).
+			if (try saved = p.tree.value_of(node_index))
+			{
+				if (!saved.is_none()) return NO_MISSING_VALUE~;
+			}
+			return first_missing_value(p, node.unary.operand);
 		default:
 			if (try saved = p.tree.value_of(node_index))
 			{

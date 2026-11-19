@@ -246,9 +246,19 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 
 		// String constants are referenced through RIP-relative symbol relocations.
 		List{char}* strings = object::get_section(obj, object::SECTION_READ_ONLY_DATA);
+		ulong rodata_align = 1;
+		foreach (&decl : ir.decls)
+		{
+			if (decl.kind != ir::DeclKind.GLOBAL || !decl.is_definition() || decl.global.section != ir::DataSection.RODATA) continue;
+			ulong align = decl.global.align > 0 ? decl.global.align : 1;
+			if (align > rodata_align) rodata_align = align;
+		}
 		foreach (string : lowering.strings)
 		{
 			ulong offset = (ulong)strings.len();
+			while (offset % string.align != 0) { strings.push(0); offset++; }
+			if (string.align > rodata_align) rodata_align = string.align;
+			object::set_section_align(obj, object::SECTION_READ_ONLY_DATA, rodata_align);
 			strings.push_all(string.bytes);
 			String label = object::copy_name(obj, string.label);
 			object::declare_symbol(obj, object::SECTION_READ_ONLY_DATA, label, true, object::Linkage.INTERNAL,

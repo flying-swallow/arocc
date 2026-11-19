@@ -2,9 +2,8 @@
 // src/codegen/x86_64/bits.zig: registers and condition codes.
 //
 // Deviations (C3 port):
-// - Only the general-purpose, high-byte and instruction-pointer registers are
-//   ported (the IR lowering uses no x87/MMX/SSE/AVX state yet). Member order
-//   within those groups follows bits.zig.
+// - General-purpose, high-byte, X87, XMM and instruction-pointer registers are
+//   ported. Member order within those groups follows bits.zig.
 // - Register facts that bits.zig computes (`class`, `size`, `enc`) are enum
 //   associated values.
 // - Condition is restricted to the codes the lowering emits; `negate` maps to
@@ -24,7 +23,7 @@ enum RegClass : char
 	DR,
 }
 
-<* Zig `bits.Register` (general-purpose subset), with its 4-bit encoding and size. *>
+<* Zig `bits.Register` general-purpose, X87 and XMM subsets, with 4-bit encoding and size. *>
 enum Register : char (String name, char enc, ushort bits, RegClass class)
 {
 	RAX { "rax", 0, 64, GENERAL_PURPOSE },
@@ -100,6 +99,32 @@ enum Register : char (String name, char enc, ushort bits, RegClass class)
 	DH { "dh", 6, 8, GENERAL_PURPOSE },
 	BH { "bh", 7, 8, GENERAL_PURPOSE },
 
+	ST0 { "st0", 0, 80, X87 },
+	ST1 { "st1", 1, 80, X87 },
+	ST2 { "st2", 2, 80, X87 },
+	ST3 { "st3", 3, 80, X87 },
+	ST4 { "st4", 4, 80, X87 },
+	ST5 { "st5", 5, 80, X87 },
+	ST6 { "st6", 6, 80, X87 },
+	ST7 { "st7", 7, 80, X87 },
+
+	XMM0 { "xmm0", 0, 128, SSE },
+	XMM1 { "xmm1", 1, 128, SSE },
+	XMM2 { "xmm2", 2, 128, SSE },
+	XMM3 { "xmm3", 3, 128, SSE },
+	XMM4 { "xmm4", 4, 128, SSE },
+	XMM5 { "xmm5", 5, 128, SSE },
+	XMM6 { "xmm6", 6, 128, SSE },
+	XMM7 { "xmm7", 7, 128, SSE },
+	XMM8 { "xmm8", 8, 128, SSE },
+	XMM9 { "xmm9", 9, 128, SSE },
+	XMM10 { "xmm10", 10, 128, SSE },
+	XMM11 { "xmm11", 11, 128, SSE },
+	XMM12 { "xmm12", 12, 128, SSE },
+	XMM13 { "xmm13", 13, 128, SSE },
+	XMM14 { "xmm14", 14, 128, SSE },
+	XMM15 { "xmm15", 15, 128, SSE },
+
 	RIP { "rip", 0, 64, IP },
 	EIP { "eip", 0, 32, IP },
 	IP { "ip", 0, 16, IP },
@@ -110,14 +135,17 @@ const Register[16] GP64 = { RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10,
 const Register[16] GP32 = { EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI, R8D, R9D, R10D, R11D, R12D, R13D, R14D, R15D };
 const Register[16] GP16 = { AX, CX, DX, BX, SP, BP, SI, DI, R8W, R9W, R10W, R11W, R12W, R13W, R14W, R15W };
 const Register[16] GP8 = { AL, CL, DL, BL, SPL, BPL, SIL, DIL, R8B, R9B, R10B, R11B, R12B, R13B, R14B, R15B };
+const Register[8] X87_REGS = { ST0, ST1, ST2, ST3, ST4, ST5, ST6, ST7 };
+const Register[16] XMM_REGS = { XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7, XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15 };
 
 <*
- Zig `Register.toSize` for general-purpose registers: the same register at
- `bits` (8, 16, 32 or 64).
- @require self.class == GENERAL_PURPOSE && !self.is_high_byte()
+ Zig `Register.toSize`: the same general-purpose register at `bits` (8, 16,
+ 32 or 64), or the same XMM register (whose width is fixed at 128 bits).
+ @require self.class == GENERAL_PURPOSE || self.class == SSE
 *>
 fn Register Register.to_bits(self, ushort bits)
 {
+	if (self.class == SSE) return self;
 	switch (bits)
 	{
 		case 8: return GP8[self.enc];
@@ -127,11 +155,14 @@ fn Register Register.to_bits(self, ushort bits)
 	}
 }
 
+<* An XMM register. *>
+fn bool Register.is_sse(self) => self.class == SSE;
+
 <* ah, ch, dh or bh (Zig register class `gphi`). *>
 fn bool Register.is_high_byte(self) => self == AH || self == CH || self == DH || self == BH;
 
-<* Zig `Register.isExtended`: needs a REX.B/R/X bit (r8..r15 and their parts). *>
-fn bool Register.is_extended(self) => self.enc >= 8 && self.class == GENERAL_PURPOSE && !self.is_high_byte();
+<* Zig `Register.isExtended`: needs a REX.B/R/X bit (r8..r15 or xmm8..xmm15). *>
+fn bool Register.is_extended(self) => self.enc >= 8 && (self.class == GENERAL_PURPOSE || self.class == SSE) && !self.is_high_byte();
 
 <* Zig `bits.Condition` (subset), with the `set<cc>` / `j<cc>` mnemonics that test it. *>
 enum Condition : char (String name, Condition negated, Mnemonic set, Mnemonic jump)
@@ -156,4 +187,8 @@ enum Condition : char (String name, Condition negated, Mnemonic set, Mnemonic ju
 	LE { "le", G, SETLE, JLE },
 	<* not equal *>
 	NE { "ne", E, SETNE, JNE },
+	<* parity set (unordered floating-point comparison) *>
+	P { "p", NP, SETP, JP },
+	<* parity clear (ordered floating-point comparison) *>
+	NP { "np", P, SETNP, JNP },
 }

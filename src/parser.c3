@@ -65,9 +65,6 @@ interface IParserHandler
 	<* Specialized call parsing for builtin calls. *>
 	fn parser_result::Result? handle_builtin_call(Parser* p, type_store::NodeIndex callee,
 		tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @optional;
-	<* Typed compound literal; starts at the opening brace, `opening_tok` is the '('. *>
-	fn parser_result::Result? handle_compound_literal_primary(Parser* p, tokens::TokenIndex opening_tok,
-		type_store::QualType qt, bool eval) @optional;
 	<* Compound statement inside a GNU statement expression. *>
 	fn type_store::NodeIndex? handle_statement_expression_body(Parser* p, bool eval) @optional;
 }
@@ -94,53 +91,8 @@ interface IExpressionGrammar
 	fn parser_result::Result? integer_constant_expression(Parser* p, ConstDeclFoldingMode mode, bool eval);
 }
 
-<*
- Sub-expression productions the expression, postfix and primary grammars
- borrow from their composition. Every method is optional; a missing method or
- a HOOK_ABSENT fault means that production is unavailable.
-*>
-interface IExpressionParts
-{
-	<* A unary operand for the binary-operator engine (the postfix grammar). *>
-	fn parser_result::Result? parse_operand(Parser* p, bool eval) @optional;
-	<* A primary expression for the postfix grammar. *>
-	fn parser_result::Result? parse_primary(Parser* p, bool eval) @optional;
-	<* A nested expression of at least precedence `min_prec`. *>
-	fn parser_result::Result? parse_nested(Parser* p, tokens::Precedence min_prec, bool eval) @optional;
-	<* Typed compound literal; starts at the `{`, `opening_tok` is the `(`. *>
-	fn parser_result::Result? parse_compound_literal(Parser* p, tokens::TokenIndex opening_tok,
-		type_store::QualType qt, bool eval) @optional;
-}
-
-<* Calls to builtin functions with custom semantic checking, consulted by the
-   postfix grammar once a call's arguments are parsed. *>
-interface IBuiltinCall
-{
-	<* Build the call to `callee`. parser_postfix::NO_BUILTIN_CALL when `callee`
-	   is not a builtin this handler checks, so the ordinary call path runs. *>
-	fn parser_result::Result? parse_builtin_call(Parser* p, type_store::NodeIndex callee,
-		tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval);
-}
-
-<* Language builtins with custom grammar (`__builtin_offsetof`, `__builtin_va_arg`, ...),
-   consulted by the expression grammar before ordinary primary expressions. *>
-interface IBuiltinParser
-{
-	<* Parse the builtin at `p.tok_i`. parser_expression::NO_EXPRESSION, consuming
-	   nothing, when the identifier is not a specialized builtin. *>
-	fn parser_result::Result? parse_builtin_primary(Parser* p, bool eval);
-}
-
-<* `IAsmParser.parse_asm_statement`: the current token is not an asm keyword (Zig `null`). *>
+<* `Parser.parse_asm_statement` and friends: the current token is not an asm keyword (Zig `null`). *>
 excuse NOT_ASM;
-
-<* GNU asm statement grammar, installed by the statement parser's owner. *>
-interface IAsmParser
-{
-	<* Parse an asm statement at `p.tok_i`, consuming its trailing semicolon.
-	   NOT_ASM, consuming nothing, when the current token is not an asm keyword. *>
-	fn type_store::NodeIndex? parse_asm_statement(Parser* p);
-}
 
 <* No token at the requested lookahead (at/beyond EOF), or `eat` found a different token. *>
 excuse NO_TOKEN;
@@ -159,14 +111,6 @@ struct FunctionContext
 	type_store::NodeOptIndex func_ident;
 	<* Cached static variable generated for __PRETTY_FUNCTION__. *>
 	type_store::NodeOptIndex pretty_ident;
-}
-
-<* Auto-type declaration whose initializer is currently being parsed. *>
-struct AutoTypeDeclContext
-{
-	bool active;
-	string_interner::StringId name;
-	type_store::NodeIndex node;
 }
 
 <* Call-site context visible while parsing an argument expression. *>
@@ -207,7 +151,6 @@ struct Parser (IQueryable)
 	InitContext init_context;
 	FunctionContext function_context;
 	VaArgPackCallContext va_arg_pack_call;
-	AutoTypeDeclContext auto_type_decl;
 	<* Zig `maybe_unused_decl`: pending local declarations keyed by `(uint)NodeIndex`;
 	   value is true once the declaration is used. Owned; released by `Parser.free`. *>
 	HashMap{uint, bool} maybe_unused_decl;
@@ -225,8 +168,6 @@ struct Parser (IQueryable)
 	<* Diagnostic error count at body start, set by the declaration parser before a function
 	   body is parsed. `Parser.diagnose_unused_locals` skips reporting when errors grew since then. *>
 	uint local_unused_err_count;
-	bool initialized;
-	bool symbols_initialized;
 }
 
 <* Install or restore the function metadata visible to builtin parsers. Save
@@ -268,20 +209,18 @@ fn VaArgPackCallContext Parser.va_arg_pack_call_context(&self) => self.va_arg_pa
 <* Add or remove a nested lexical scope. Parser.init creates the outer scope. *>
 fn void Parser.push_scope(&self)
 {
-	assert(self.symbols_initialized);
 	self.symbols.push_scope();
 }
 
 fn void Parser.pop_scope(&self)
 {
-	assert(self.symbols_initialized && self.symbols.active_len > 1, "cannot pop the parser's outer scope");
+	assert(self.symbols.active_len > 1, "cannot pop the parser's outer scope");
 	self.symbols.pop_scope();
 }
 
 <* Seed a symbol in the current scope; declarator construction remains a grammar callback's job. *>
 fn void Parser.define_symbol(&self, symbol_stack::Symbol symbol)
 {
-	assert(self.symbols_initialized);
 	self.symbols.define(symbol);
 }
 
@@ -335,31 +274,19 @@ fn parser_result::Result? Parser.parse_initializer_with_context(&self, type_stor
 
 fn symbol_stack::Symbol? Parser.find_symbol(&self, string_interner::StringId name)
 {
-	assert(self.symbols_initialized);
 	return self.symbols.find_symbol(name);
 }
 
 fn bool? Parser.find_typedef(&self, string_interner::StringId name, tokens::TokenIndex name_tok, bool no_type_yet, symbol_stack::Symbol* out)
 {
-	assert(self.symbols_initialized);
 	symbol_stack::SymbolContext ctx = self.symbol_context();
 	return self.symbols.find_typedef(&ctx, name, name_tok, no_type_yet, out);
 }
 
 fn bool? Parser.find_tag(&self, string_interner::StringId name, tokenizer::TokenId kind, tokens::TokenIndex name_tok, tokenizer::TokenId next_tok_id, symbol_stack::Symbol* out)
 {
-	assert(self.symbols_initialized);
 	symbol_stack::SymbolContext ctx = self.symbol_context();
 	return self.symbols.find_tag(&ctx, name, kind, name_tok, next_tok_id, out);
-}
-
-<* Pop all active scopes, then free the retained scope storage. *>
-fn void Parser.release_symbols(&self)
-{
-	if (!self.symbols_initialized) return;
-	while (self.symbols.active_len > 0) self.symbols.pop_scope();
-	self.symbols.free();
-	self.symbols_initialized = false;
 }
 
 <* Apply the active constant declaration policy to a declaration reference.
@@ -398,7 +325,6 @@ fn void Parser.init(&self, preprocessor::Preprocessor* pp, IParserHandler handle
 	self.function_context.func_ident = type_store::NODE_NULL;
 	self.function_context.pretty_ident = type_store::NODE_NULL;
 	self.symbols.init(pp.comp.gpa);
-	self.symbols_initialized = true;
 	self.symbols.push_scope();
 	self.maybe_unused_decl.init(pp.comp.gpa);
 	self.maybe_unused_order.init(pp.comp.gpa);
@@ -407,7 +333,6 @@ fn void Parser.init(&self, preprocessor::Preprocessor* pp, IParserHandler handle
 	// The implicit-typedef callback may append generated tokens and grow the
 	// preprocessor list. Bind the final slice only after that callback runs.
 	self.tree.init(pp.comp, {});
-	self.initialized = true;
 }
 
 <* Current token index, clamped to the terminal end of the borrowed buffer. *>
@@ -418,7 +343,6 @@ fn tokens::TokenIndex Parser.current(&self) => self.tok_i;
  after implicit_typedefs so callbacks retain their existing token-growth behavior. *>
 fn void Parser.bind_finalized_tokens(&self)
 {
-	assert(self.initialized);
 	self.tree.tokens = self.pp.tokens.array_view();
 	self.tok_end = (tokens::TokenIndex)self.tree.tokens.len;
 	if (self.tok_i > self.tok_end) self.tok_i = self.tok_end;
@@ -681,6 +605,69 @@ fn bool Parser.at_eof(&self)
 	return self.tree.tokens[(usz)self.tok_i].id == EOF;
 }
 
+<* Recover after a root item failed partway: first close the parens, brackets
+ and braces the item opened in [start, tok_i) (a failure inside `__typeof (f)`
+ must not resume at `f` and parse it as a new declaration), then `recover`. *>
+fn void Parser.recover_from(&self, tokens::TokenIndex start)
+{
+	uint open = 0;
+	uint braces = 0;
+	for (tokens::TokenIndex i = start; i < self.tok_i; i++)
+	{
+		switch (self.tree.tokens[(usz)i].id)
+		{
+			case tokenizer::TokenId.L_BRACE: braces++; open++;
+			case tokenizer::TokenId.L_PAREN:
+			case tokenizer::TokenId.L_BRACKET:
+				open++;
+			case tokenizer::TokenId.R_BRACE: if (braces > 0) braces--; nextcase tokenizer::TokenId.R_PAREN;
+			case tokenizer::TokenId.R_PAREN:
+			case tokenizer::TokenId.R_BRACKET:
+				if (open > 0) open--;
+			default: break;
+		}
+	}
+	bool was_open = open > 0;
+	while (open > 0 && !self.at_eof())
+	{
+		tokenizer::TokenId id = self.tree.tokens[(usz)self.tok_i].id;
+		if (id == tokenizer::TokenId.KEYWORD_PRAGMA) return;
+		// Outside braces a `;` cannot be inside the declaration's parentheses:
+		// an unclosed `_BitInt(8 x;` ends there.
+		if (id == tokenizer::TokenId.SEMICOLON && braces == 0) break;
+		self.advance();
+		switch (id)
+		{
+			case tokenizer::TokenId.L_BRACE: braces++; open++;
+			case tokenizer::TokenId.L_PAREN:
+			case tokenizer::TokenId.L_BRACKET:
+				open++;
+			case tokenizer::TokenId.R_BRACE: if (braces > 0) braces--; nextcase tokenizer::TokenId.R_PAREN;
+			case tokenizer::TokenId.R_PAREN:
+			case tokenizer::TokenId.R_BRACKET:
+				open--;
+			default: break;
+		}
+	}
+	// Still inside the failed declaration (`__typeof (f) g;`): its remaining
+	// declarators are not new items. Stop at its `;`, a brace, or a keyword
+	// that starts a declaration; `recover` handles the rest.
+	while (was_open && !self.at_eof())
+	{
+		tokenizer::TokenId id = self.tree.tokens[(usz)self.tok_i].id;
+		if (id == tokenizer::TokenId.SEMICOLON)
+		{
+			self.advance();
+			return;
+		}
+		if (id == tokenizer::TokenId.L_BRACE || id == tokenizer::TokenId.R_BRACE || id == tokenizer::TokenId.KEYWORD_PRAGMA) break;
+		if (id.starts_declaration() && !id.is_identifier()) break;
+		if (id == tokenizer::TokenId.L_PAREN || id == tokenizer::TokenId.L_BRACKET) break;
+		self.advance();
+	}
+	self.recover();
+}
+
 <* Skip a malformed top-level construct through its semicolon or balanced
  close. A following declaration start and `[[` attribute introducer remain
  untouched for the next parse attempt. *>
@@ -826,12 +813,12 @@ fn void? Parser.grammar_unavailable(&self)
 <*
  Parse top-level declarations using the registered callback. Missing grammar
  produces a recoverable diagnostic and consumes one construct at a time.
- Fatal diagnostics propagate after the partially-built Tree is freed.
+ Fatal diagnostics propagate with the partially-built Tree still owned by the
+ Parser. Symbol scopes always stay with the Parser; `Parser.free` releases them.
  On success the caller owns the returned Tree; tokens remain borrowed from pp.
 *>
 fn Tree? Parser.parse(&self)
 {
-	assert(self.initialized);
 	// Like Zig Parser.parse's deferred parser-state cleanup, release per-parse
 	// unused-local tracking on every success and error return. The returned
 	// Tree has independent ownership and remains with the caller.
@@ -840,36 +827,20 @@ fn Tree? Parser.parse(&self)
 	defer self.file_scope_decls.free();
 	defer self.file_scope_decl_head.free();
 	self.comp.pragmas.before_parse(self.comp);
+	defer self.comp.pragmas.after_parse(self.comp);
 	if (self.handler && &self.handler.handle_implicit_typedefs)
 	{
 		fault f = @catch(self.handler.handle_implicit_typedefs(self));
-		if (f && f != HOOK_ABSENT)
-		{
-			self.tree.free();
-			self.release_symbols();
-			self.initialized = false;
-			self.comp.pragmas.after_parse(self.comp);
-			return f~;
-		}
+		if (f && f != HOOK_ABSENT) return f~;
 	}
 	self.bind_finalized_tokens();
 	while (!self.at_eof())
 	{
 		bool? replay_result = self.replay_pragma();
-		fault pragma_fault = @catch(replay_result);
-		if (pragma_fault)
-		{
-			self.tree.free();
-			self.release_symbols();
-			self.initialized = false;
-			self.comp.pragmas.after_parse(self.comp);
-			return pragma_fault~;
-		}
-		if (try handled = replay_result)
-		{
-			if (handled) continue;
-		}
+		if (catch pragma_fault = replay_result) return pragma_fault~;
+		if (replay_result) continue;
 		tokens::TokenIndex before = self.tok_i;
+		uint errors_before = self.diagnostics.errors;
 		fault declaration_fault = HOOK_ABSENT;
 		if (self.handler && &self.handler.handle_declaration) declaration_fault = @catch(self.handler.handle_declaration(self));
 		if (declaration_fault != HOOK_ABSENT)
@@ -877,45 +848,35 @@ fn Tree? Parser.parse(&self)
 			fault f = declaration_fault;
 			if (f)
 			{
-				bool? maybe_recoverable = self.is_recoverable_parse_fault(f);
-				if (catch classification_fault = maybe_recoverable)
+				if (!self.is_recoverable_parse_fault(f)!) return f~;
+				// A failed item must not pass silently once recovery skips it.
+				if (self.diagnostics.errors == errors_before)
 				{
-					self.tree.free();
-					self.release_symbols();
-					self.initialized = false;
-					self.comp.pragmas.after_parse(self.comp);
-					return classification_fault~;
-				}
-				if (maybe_recoverable)
-				{
-					if (before == self.tok_i)
+					// Mid-item silent failures so far are operands (unterminated
+					// string in an initializer, `(static int){1}`).
+					if (self.tok_i > before)
 					{
-						self.advance();
+						Diagnostic.EXPECTED_EXPR.@emit(self, self.tok_i - 1)!;
 					}
 					else
 					{
-						self.recover();
+						Diagnostic.EXPECTED_EXTERNAL_DECL.@emit(self, self.tok_i)!;
 					}
-					continue;
 				}
-				self.tree.free();
-				self.release_symbols();
-				self.initialized = false;
-				self.comp.pragmas.after_parse(self.comp);
-				return f~;
+				if (before == self.tok_i)
+				{
+					self.advance();
+				}
+				else
+				{
+					self.recover_from(before);
+				}
+				continue;
 			}
 		}
 		else
 		{
-			fault f = @catch(self.grammar_unavailable());
-			if (f)
-			{
-				self.tree.free();
-				self.release_symbols();
-				self.initialized = false;
-				self.comp.pragmas.after_parse(self.comp);
-				return f~;
-			}
+			self.grammar_unavailable()!;
 			self.recover();
 		}
 		if (before == self.tok_i && !self.at_eof()) self.advance();
@@ -923,20 +884,10 @@ fn Tree? Parser.parse(&self)
 	if (self.handler && &self.handler.handle_translation_unit_end)
 	{
 		fault finalization_fault = @catch(self.handler.handle_translation_unit_end(self));
-		if (finalization_fault && finalization_fault != HOOK_ABSENT)
-		{
-			self.tree.free();
-			self.release_symbols();
-			self.initialized = false;
-			self.comp.pragmas.after_parse(self.comp);
-			return finalization_fault~;
-		}
+		if (finalization_fault && finalization_fault != HOOK_ABSENT) return finalization_fault~;
 	}
 	Tree result = self.tree;
 	self.tree = {};
-	self.release_symbols();
-	self.initialized = false;
-	self.comp.pragmas.after_parse(self.comp);
 	return result;
 }
 
@@ -1023,17 +974,16 @@ fn void? Parser.diagnose_unused_locals(&self)
 	}
 }
 
-<* Release a context that was initialized but not successfully parsed. *>
+<* Release all parser-owned state. Safe after success, failure, or init-only. *>
 fn void Parser.free(&self)
 {
-	if (self.initialized)
-	{
-		self.tree.free();
-		self.maybe_unused_decl.free();
-		self.maybe_unused_order.free();
-		self.file_scope_decls.free();
-		self.file_scope_decl_head.free();
-	}
-	self.release_symbols();
+	self.tree.free();
+	self.maybe_unused_decl.free();
+	self.maybe_unused_order.free();
+	self.file_scope_decls.free();
+	self.file_scope_decl_head.free();
+	// Drop every active scope (including the outer one from init) before freeing storage.
+	self.symbols.active_len = 0;
+	self.symbols.free();
 	*self = {};
 }

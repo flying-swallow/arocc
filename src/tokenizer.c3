@@ -12,7 +12,7 @@
 // - `validPreprocessorExprStart` drops Zig's `.one` / `.zero`, which are not
 //   members of Token.Id (Zig never analyzed that function body).
 module aro::tokenizer;
-import aro::source, aro::lang_opts, aro::tree;
+import aro::source, aro::lang_opts, aro::tree, aro::tokens;
 
 excuse NO_LEXEME;
 
@@ -97,8 +97,8 @@ struct TokenProps
 	bool recovery_decl_start;
 	<* `starts_compound_item()`: tokens that can begin a statement or declaration in a block. *>
 	bool compound_item_start;
-	<* Binary operator precedence (tokens::Precedence); 0 = not a binary operator. *>
-	char binary_prec;
+	<* Binary operator precedence; ANY = not a binary operator. *>
+	tokens::Precedence binary_prec;
 	<* The keyword this one is an alternate spelling of (__asm__ -> asm); INVALID = none. *>
 	TokenId canonical;
 }
@@ -152,12 +152,12 @@ enum TokenId : char (String spelling, String category, TokenProps props)
 	UNTERMINATED_COMMENT { "", "", { .no_lexeme = true } },
 
 	BANG { "!", "", { .pp_expr_start = true } },
-	BANG_EQUAL { "!=", "", { .binary_prec = 10 } },
-	PIPE { "|", "", { .binary_prec = 7 } },
-	PIPE_PIPE { "||", "", { .binary_prec = 5 } },
-	PIPE_EQUAL { "|=", "", { .binary_prec = 2 } },
-	EQUAL { "=", "", { .binary_prec = 2 } },
-	EQUAL_EQUAL { "==", "", { .binary_prec = 10 } },
+	BANG_EQUAL { "!=", "", { .binary_prec = EQUALITY } },
+	PIPE { "|", "", { .binary_prec = BIT_OR } },
+	PIPE_PIPE { "||", "", { .binary_prec = BOOL_OR } },
+	PIPE_EQUAL { "|=", "", { .binary_prec = ASSIGN } },
+	EQUAL { "=", "", { .binary_prec = ASSIGN } },
+	EQUAL_EQUAL { "==", "", { .binary_prec = EQUALITY } },
 	L_PAREN { "(", "", { .pp_expr_start = true, .asm_open = true } },
 	R_PAREN { ")", "", { .pp_expr_start = true } },
 	L_BRACE { "{", "", { .digraph = true } },
@@ -166,37 +166,37 @@ enum TokenId : char (String spelling, String category, TokenProps props)
 	R_BRACKET { "]", "", { .digraph = true } },
 	PERIOD { ".", "", {} },
 	ELLIPSIS { "...", "", {} },
-	CARET { "^", "", { .binary_prec = 8 } },
-	CARET_EQUAL { "^=", "", { .binary_prec = 2 } },
-	PLUS { "+", "", { .pp_expr_start = true, .binary_prec = 13 } },
+	CARET { "^", "", { .binary_prec = BIT_XOR } },
+	CARET_EQUAL { "^=", "", { .binary_prec = ASSIGN } },
+	PLUS { "+", "", { .pp_expr_start = true, .binary_prec = ADDITIVE } },
 	PLUS_PLUS { "++", "", {} },
-	PLUS_EQUAL { "+=", "", { .binary_prec = 2 } },
-	MINUS { "-", "", { .pp_expr_start = true, .binary_prec = 13 } },
+	PLUS_EQUAL { "+=", "", { .binary_prec = ASSIGN } },
+	MINUS { "-", "", { .pp_expr_start = true, .binary_prec = ADDITIVE } },
 	MINUS_MINUS { "--", "", {} },
-	MINUS_EQUAL { "-=", "", { .binary_prec = 2 } },
-	ASTERISK { "*", "", { .binary_prec = 14 } },
-	ASTERISK_EQUAL { "*=", "", { .binary_prec = 2 } },
-	PERCENT { "%", "", { .binary_prec = 14 } },
-	PERCENT_EQUAL { "%=", "", { .binary_prec = 2 } },
+	MINUS_EQUAL { "-=", "", { .binary_prec = ASSIGN } },
+	ASTERISK { "*", "", { .binary_prec = MULTIPLICATIVE } },
+	ASTERISK_EQUAL { "*=", "", { .binary_prec = ASSIGN } },
+	PERCENT { "%", "", { .binary_prec = MULTIPLICATIVE } },
+	PERCENT_EQUAL { "%=", "", { .binary_prec = ASSIGN } },
 	ARROW { "->", "", {} },
 	COLON { ":", "", {} },
 	COLON_COLON { "::", "", {} },
 	SEMICOLON { ";", "", {} },
-	SLASH { "/", "", { .binary_prec = 14 } },
-	SLASH_EQUAL { "/=", "", { .binary_prec = 2 } },
-	COMMA { ",", "", { .binary_prec = 1 } },
-	AMPERSAND { "&", "", { .binary_prec = 9 } },
-	AMPERSAND_AMPERSAND { "&&", "", { .binary_prec = 6 } },
-	AMPERSAND_EQUAL { "&=", "", { .binary_prec = 2 } },
-	QUESTION_MARK { "?", "", { .binary_prec = 4 } },
-	ANGLE_BRACKET_LEFT { "<", "", { .binary_prec = 11 } },
-	ANGLE_BRACKET_LEFT_EQUAL { "<=", "", { .binary_prec = 11 } },
-	ANGLE_BRACKET_ANGLE_BRACKET_LEFT { "<<", "", { .binary_prec = 12 } },
-	ANGLE_BRACKET_ANGLE_BRACKET_LEFT_EQUAL { "<<=", "", { .binary_prec = 2 } },
-	ANGLE_BRACKET_RIGHT { ">", "", { .binary_prec = 11 } },
-	ANGLE_BRACKET_RIGHT_EQUAL { ">=", "", { .binary_prec = 11 } },
-	ANGLE_BRACKET_ANGLE_BRACKET_RIGHT { ">>", "", { .binary_prec = 12 } },
-	ANGLE_BRACKET_ANGLE_BRACKET_RIGHT_EQUAL { ">>=", "", { .binary_prec = 2 } },
+	SLASH { "/", "", { .binary_prec = MULTIPLICATIVE } },
+	SLASH_EQUAL { "/=", "", { .binary_prec = ASSIGN } },
+	COMMA { ",", "", { .binary_prec = COMMA } },
+	AMPERSAND { "&", "", { .binary_prec = BIT_AND } },
+	AMPERSAND_AMPERSAND { "&&", "", { .binary_prec = BOOL_AND } },
+	AMPERSAND_EQUAL { "&=", "", { .binary_prec = ASSIGN } },
+	QUESTION_MARK { "?", "", { .binary_prec = CONDITIONAL } },
+	ANGLE_BRACKET_LEFT { "<", "", { .binary_prec = COMPARISON } },
+	ANGLE_BRACKET_LEFT_EQUAL { "<=", "", { .binary_prec = COMPARISON } },
+	ANGLE_BRACKET_ANGLE_BRACKET_LEFT { "<<", "", { .binary_prec = SHIFT } },
+	ANGLE_BRACKET_ANGLE_BRACKET_LEFT_EQUAL { "<<=", "", { .binary_prec = ASSIGN } },
+	ANGLE_BRACKET_RIGHT { ">", "", { .binary_prec = COMPARISON } },
+	ANGLE_BRACKET_RIGHT_EQUAL { ">=", "", { .binary_prec = COMPARISON } },
+	ANGLE_BRACKET_ANGLE_BRACKET_RIGHT { ">>", "", { .binary_prec = SHIFT } },
+	ANGLE_BRACKET_ANGLE_BRACKET_RIGHT_EQUAL { ">>=", "", { .binary_prec = ASSIGN } },
 	TILDE { "~", "", { .pp_expr_start = true } },
 	HASH { "#", "", { .digraph = true } },
 	HASH_HASH { "##", "", { .digraph = true } },

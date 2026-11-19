@@ -76,6 +76,7 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 	bool reg_is_operand = false;
 	Operand reg_op = {};
 	bool opcode_reg = false;
+	uint opcode_reg_index = 0;
 	uint rex = 0;
 
 	switch (row.op_en)
@@ -96,7 +97,7 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 			reg_op = ops[0];
 			reg_code = (uint)reg_op.reg.enc;
 			reg_is_operand = true;
-		case O: case OI:
+		case O: case OI: case ZO: case OZ:
 			opcode_reg = true;
 		case Z: case ZI: case I: case D:
 			break;
@@ -104,20 +105,26 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 	}
 	switch (row.op_en)
 	{
-		case Z: case ZI: case I: case D: case O: case OI:
+		case Z: case ZI: case I: case D: case O: case OI: case ZO: case OZ:
 		case M: case MI: case M1: case MC: case MR: case RM: case RMI:
 			break;
 		default: return NO_ENCODING~;
 	}
+	if (row.op_en == ZO) opcode_reg_index = 1;
 	switch (row.mode)
 	{
-		case NONE: case SHORT: case LONG: case REX: case REX_SHORT: break;
+		case NONE: case SHORT: case LONG: case REX: case REX_SHORT: case WAIT: break;
 		default: return NO_ENCODING~;
 	}
 
-	if (row.mode == SHORT || row.mode == REX_SHORT) push_byte(&out, 0x66);
+	bool size_prefix = row.mode == SHORT || row.mode == REX_SHORT;
+	bool mandatory_prefix = row.opc_len > 1 &&
+		((uint)row.opc[0] == 0x66 || (uint)row.opc[0] == 0xf2 || (uint)row.opc[0] == 0xf3);
+	if (size_prefix) push_byte(&out, 0x66);
+	if (row.mode == WAIT) push_byte(&out, 0x9b);
+	if (mandatory_prefix && !(size_prefix && (uint)row.opc[0] == 0x66)) push_byte(&out, row.opc[0]);
 	if (row.mode == LONG) rex |= 0x08;
-	if (opcode_reg && ops[0].reg.is_extended()) rex |= 0x01;
+	if (opcode_reg && ops[opcode_reg_index].reg.is_extended()) rex |= 0x01;
 	if (reg_is_operand && reg_op.reg.is_extended()) rex |= 0x04;
 	if (has_modrm)
 	{
@@ -128,10 +135,10 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 	if (emit_rex && has_high_byte(ops)) return NO_ENCODING~;
 	if (emit_rex) push_byte(&out, (char)(0x40 | rex));
 
-	for (usz i = 0; i < (usz)row.opc_len; i++)
+	for (usz i = mandatory_prefix ? 1 : 0; i < (usz)row.opc_len; i++)
 	{
 		uint opcode = (uint)row.opc[i];
-		if (opcode_reg && i + 1 == (usz)row.opc_len) opcode += (uint)ops[0].reg.enc & 7;
+		if (opcode_reg && i + 1 == (usz)row.opc_len) opcode += (uint)ops[opcode_reg_index].reg.enc & 7;
 		push_byte(&out, (char)opcode);
 	}
 

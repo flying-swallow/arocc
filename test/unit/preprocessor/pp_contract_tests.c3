@@ -85,17 +85,17 @@ fn void expansion_chain_layout() @test
 
 fn void precedence_table() @test
 {
-	check(tokens::precedence(COMMA), tokens::PREC_COMMA);
-	check(tokens::precedence(PIPE_EQUAL), tokens::PREC_ASSIGN);
-	check(tokens::precedence(QUESTION_MARK), tokens::PREC_CONDITIONAL);
-	check(tokens::precedence(ANGLE_BRACKET_ANGLE_BRACKET_LEFT), tokens::PREC_SHIFT);
-	check(tokens::precedence(PERCENT), tokens::PREC_MULTIPLICATIVE);
-	check(tokens::precedence(IDENTIFIER), tokens::PREC_INVALID);
-	check(tokens::PREC_ASSIGN.next(tokens::PREC_ANY), tokens::PREC_ASSIGN);
-	check(tokens::PREC_CONDITIONAL.next(tokens::PREC_COMMA), tokens::PREC_COMMA);
-	check(tokens::PREC_MULTIPLICATIVE.next(tokens::PREC_ANY), 15);
-	assert(tokens::PREC_INVALID.lt(tokens::PREC_ANY));
-	assert(!tokens::PREC_SHIFT.lt(tokens::PREC_SHIFT));
+	check(tokens::precedence(COMMA), tokens::Precedence.COMMA);
+	check(tokens::precedence(PIPE_EQUAL), tokens::Precedence.ASSIGN);
+	check(tokens::precedence(QUESTION_MARK), tokens::Precedence.CONDITIONAL);
+	check(tokens::precedence(ANGLE_BRACKET_ANGLE_BRACKET_LEFT), tokens::Precedence.SHIFT);
+	check(tokens::precedence(PERCENT), tokens::Precedence.MULTIPLICATIVE);
+	check(tokens::precedence(IDENTIFIER), tokens::Precedence.INVALID);
+	check(tokens::Precedence.ASSIGN.next(tokens::Precedence.ANY), tokens::Precedence.ASSIGN);
+	check(tokens::Precedence.CONDITIONAL.next(tokens::Precedence.COMMA), tokens::Precedence.COMMA);
+	check(tokens::Precedence.MULTIPLICATIVE.next(tokens::Precedence.ANY), 15);
+	assert(tokens::Precedence.INVALID.lt(tokens::Precedence.ANY));
+	assert(!tokens::Precedence.SHIFT.lt(tokens::Precedence.SHIFT));
 }
 
 fn void raw_conversion() @test

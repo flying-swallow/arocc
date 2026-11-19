@@ -1,6 +1,6 @@
 // Focused tests for parser context ownership and token-buffer lifetime.
 module parser_context_tests;
-import aro::parser, aro::parser_builtin, aro::parser_declaration, aro::parser_postfix, aro::parser_result;
+import aro::parser, aro::parser_builtin, aro::parser_declaration, aro::parser_frontend, aro::parser_result;
 import aro::preprocessor, aro::tokens, aro::tokenizer, aro::tree;
 import aro::compilation, aro::diagnostics, aro::source;
 import aro::type_store, aro::symbol_stack, aro::string_interner, aro::value;
@@ -70,51 +70,6 @@ fn parser_result::Result? inspect_function_context_body(void* context, Parser* p
 	return { .node = node, .qt = type_store::INT };
 }
 
-struct VaPackPostfixCheck
-{
-	type_store::QualType callee_qt;
-	parser::VaArgPackCallContext[8] observed;
-	uint observed_count;
-}
-
-fn parser_result::Result? va_pack_test_primary(void* context, Parser* p, bool eval)
-{
-	VaPackPostfixCheck* check = (VaPackPostfixCheck*)context;
-	if (p.at_eof() || p.tree.tok_slice(p.tok_i) != "callee") return parser_postfix::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = check.callee_qt } });
-	p.advance();
-	return { .node = node, .qt = check.callee_qt };
-}
-
-fn parser_result::Result? va_pack_test_expression(void* context, Parser* p,
-	tokens::Precedence min_prec, bool eval)
-{
-	VaPackPostfixCheck* check = (VaPackPostfixCheck*)context;
-	if (p.at_eof()) return parser_postfix::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	tokens::TreeToken token = p.tree.tokens[(usz)tok];
-	assert(check.observed_count < check.observed.len);
-	check.observed[check.observed_count++] = p.va_arg_pack_call;
-	if (token.id == tokenizer::TokenId.IDENTIFIER && p.tree.tok_slice(tok) == "__builtin_va_arg_pack")
-	{
-		p.advance();
-		parser_builtin::BuiltinParser builtin = { .parser = p };
-		return builtin.va_arg_pack(tok);
-	}
-	if (token.id != tokenizer::TokenId.PP_NUM) return parser_postfix::PARSING_FAILED~;
-	p.advance();
-	if (p.is_at(tokenizer::TokenId.PLUS))
-	{
-		p.advance();
-		return va_pack_test_expression(context, p, min_prec, eval);
-	}
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	return { .node = node, .qt = type_store::INT };
-}
-
 fn void? check_eof_bounds(void* context, Parser* p)
 {
 	assert(p.current() == 0);
@@ -161,6 +116,7 @@ fn void parser_starts_at_index_zero_and_bounds_empty_and_eof_buffers() @test
 		check_eof_bounds(null, &p)!!;
 		Tree result = p.parse()!!;
 		result.free();
+		p.free();
 
 		pp.free();
 		comp.free();
@@ -256,6 +212,7 @@ fn void empty_translation_unit_owns_tree_only() @test
 		assert(result.tokens.len == 1);
 		assert(result.root_decls.len() == 0);
 		result.free();
+		p.free();
 
 		pp.free();
 		comp.free();
@@ -285,6 +242,7 @@ fn void declaration_callback_controls_cursor() @test
 		assert(p.current() == 1);
 		assert(result.tokens.len == 2);
 		result.free();
+		p.free();
 
 		pp.free();
 		comp.free();
@@ -489,7 +447,7 @@ fn void parser_symbol_lookup_shadowing_and_scope_reuse() @test
 		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
 		Parser p;
 		p.init(&pp);
-		assert(p.symbols_initialized && p.symbols.active_len == 1);
+		assert(p.symbols.active_len == 1);
 
 		string_interner::StringId ordinary = comp.intern_string("item");
 		string_interner::StringId alias_name = comp.intern_string("Alias");
@@ -546,9 +504,11 @@ fn void implicit_typedefs_run_inside_outer_scope_before_declarations() @test
 		p.init(&pp, &state);
 		Tree result = p.parse()!!;
 		assert(state.declaration_saw_typedef);
-		assert(!p.symbols_initialized && p.symbols.active_len == 0);
+		assert(p.symbols.active_len == 1);
 		assert(result.tokens.len == 2);
 		result.free();
+		p.free();
+		assert(p.symbols.active_len == 0);
 		pp.free();
 		comp.free();
 		d.free();
@@ -602,7 +562,7 @@ fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() 
 		assert(@catch(fatal.find_typedef(tag, 0, false, &found)) == compilation::FATAL_ERROR);
 		assert(d.errors == 1);
 		fatal.free();
-		assert(!fatal.symbols_initialized);
+		assert(fatal.symbols.active_len == 0);
 		pp.free();
 		comp.free();
 		d.free();
@@ -629,20 +589,23 @@ fn void parser_failure_cleanup_allows_later_success() @test
 		FailingDeclarationHandler failing_handler;
 		p.init(&pp, &failing_handler);
 		assert(@catch(p.parse()) == compilation::FATAL_ERROR);
-		assert(!p.initialized);
-		assert(!p.symbols_initialized && p.symbols.active_len == 0);
+		// A failed parse leaves its partial tree and scopes for Parser.free.
+		assert(p.symbols.active_len == 1);
+		p.free();
+		assert(p.symbols.active_len == 0);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].kind, diagnostics::MessageKind.FATAL_ERROR);
 		test::eq(d.messages[0].text, "fatal parser diagnostic");
 
-		// Reinitialize over the same borrowed token buffer and prove the failed
-		// tree's owned allocations were released before a clean parse succeeds.
+		// Reinitialize over the same borrowed token buffer; Parser.free above released
+		// the failed tree, so a clean parse succeeds without leaking.
 		RecoveringDeclarationHandler recovering_handler;
 		p.init(&pp, &recovering_handler);
 		Tree result = p.parse()!!;
 		assert(result.root_decls.len() == 0);
-		assert(!p.symbols_initialized && p.symbols.active_len == 0);
+		assert(p.symbols.active_len == 1);
 		result.free();
+		p.free();
 
 		pp.free();
 		comp.free();
@@ -801,19 +764,24 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 		assert(outside.qt.is_invalid());
 		test::eq(d.messages[0].text, "'__va_arg_pack' used outside a call");
 
+		// `callee` is a typed variadic function with one named parameter. The real
+		// postfix grammar sets the va_arg_pack call context per argument; the
+		// builtin's diagnostics show which context each pack saw.
 		type_store::FuncParam[1] params = { { .qt = type_store::INT } };
-		VaPackPostfixCheck check = { .callee_qt = comp.type_store.put(type_store::type_func(
-			type_store::INT, type_store::FuncKind.VARIADIC, params[..])) };
-		parser_postfix::CallbackParts postfix_parts = { .context = &check, .primary = &va_pack_test_primary, .nested = &va_pack_test_expression };
-		parser_postfix::PostfixParser postfix = { .parser = &p, .parts = &postfix_parts };
+		type_store::QualType callee_qt = comp.type_store.put(type_store::type_func(
+			type_store::INT, type_store::FuncKind.VARIADIC, params[..]));
+		type_store::NodeIndex callee_decl = p.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
+			.function = { .qt = callee_qt, .body = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
+		p.define_symbol({ .name = comp.intern_string("callee"), .kind = symbol_stack::SymbolKind.DECL,
+			.qt = callee_qt, .node = callee_decl });
+		parser_frontend::FrontendHandler handler;
+		handler.bind(&p);
 		parser::VaArgPackCallContext enclosing = { .active = true, .variadic = false, .typed = true };
 		p.va_arg_pack_call = enclosing;
 
-		parser_result::Result typed_nonfinal_call = postfix.parse()!!;
+		// Pack in the typed (named-parameter) slot, then followed by another argument.
+		parser_result::Result typed_nonfinal_call = p.parse_postfix_expr()!!;
 		assert(typed_nonfinal_call.node.get(&p.tree).kind == tree::NodeKind.CALL_EXPR);
-		assert(check.observed_count == 2);
-		assert(check.observed[0].active && check.observed[0].variadic && check.observed[0].typed);
-		assert(!check.observed[1].active);
 		assert(d.messages.len() == 3);
 		test::eq(d.messages[1].text, "'__va_arg_pack' passed as non-variadic argument");
 		test::eq(d.messages[2].text, "'__va_arg_pack' is not the final argument");
@@ -821,22 +789,24 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 		assert(p.va_arg_pack_call.variadic == enclosing.variadic);
 		assert(p.va_arg_pack_call.typed == enclosing.typed);
 
-		parser_result::Result untyped_final_call = postfix.parse()!!;
+		// Pack as the final, untyped (variadic) argument: accepted.
+		parser_result::Result untyped_final_call = p.parse_postfix_expr()!!;
 		assert(untyped_final_call.node.get(&p.tree).kind == tree::NodeKind.CALL_EXPR);
-		assert(check.observed_count == 4);
-		assert(!check.observed[2].active);
-		assert(check.observed[3].active && check.observed[3].variadic && !check.observed[3].typed);
 		assert(d.messages.len() == 3);
 		assert(p.va_arg_pack_call.active == enclosing.active);
 		assert(p.va_arg_pack_call.variadic == enclosing.variadic);
 		assert(p.va_arg_pack_call.typed == enclosing.typed);
 
-		parser_result::Result embedded_call = postfix.parse()!!;
-		assert(embedded_call.node.get(&p.tree).kind == tree::NodeKind.CALL_EXPR);
-		assert(check.observed_count == 6);
-		assert(!check.observed[4].active && !check.observed[5].active);
-		assert(d.messages.len() == 4);
-		test::eq(d.messages[3].text, "'__va_arg_pack' used outside a call");
+		// Pack nested inside an argument expression is not a direct argument: it
+		// sees no call context, and its invalid type then fails the `+` operand.
+		sz before_embedded = d.messages.len();
+		assert(@catch(p.parse_postfix_expr()) == parser::PARSING_FAILED);
+		bool saw_outside = false;
+		for (sz i = before_embedded; i < d.messages.len(); i++)
+		{
+			if (d.messages[i].text == "'__va_arg_pack' used outside a call") saw_outside = true;
+		}
+		assert(saw_outside);
 		assert(p.va_arg_pack_call.active == enclosing.active);
 		assert(p.va_arg_pack_call.variadic == enclosing.variadic);
 		assert(p.va_arg_pack_call.typed == enclosing.typed);

@@ -24,8 +24,8 @@
 //  - Zig stores a sentinel-terminated array (terminator entries plus a
 //    capacity-end marker); C3 uses `List{Location}`, which tracks length and
 //    capacity itself.
-//  - `Precedence` is a distinct `ichar` with PREC_* constants (Zig's
-//    non-exhaustive `enum(i8)`); `precedence(id)` replaces the direct enum array.
+//  - `Precedence` is an `ichar` constset (Zig's non-exhaustive `enum(i8)`);
+//    `precedence(id)` replaces the direct enum array.
 module aro::tokens;
 import aro::source, aro::tokenizer, aro::compilation, aro::diagnostics;
 import std::collections::list;
@@ -46,41 +46,43 @@ struct TreeToken
 // ---------------------------------------------------------------------------
 // Zig `Tree.Token.Precedence`
 
-typedef Precedence = ichar;
-
-const Precedence PREC_INVALID = (Precedence)-1;
-const Precedence PREC_ANY = (Precedence)0;
-const Precedence PREC_COMMA = (Precedence)1;
-const Precedence PREC_ASSIGN = (Precedence)2;
-const Precedence PREC_BINARY_CONDITIONAL = (Precedence)3;
-const Precedence PREC_CONDITIONAL = (Precedence)4;
-const Precedence PREC_BOOL_OR = (Precedence)5;
-const Precedence PREC_BOOL_AND = (Precedence)6;
-const Precedence PREC_BIT_OR = (Precedence)7;
-const Precedence PREC_BIT_XOR = (Precedence)8;
-const Precedence PREC_BIT_AND = (Precedence)9;
-const Precedence PREC_EQUALITY = (Precedence)10;
-const Precedence PREC_COMPARISON = (Precedence)11;
-const Precedence PREC_SHIFT = (Precedence)12;
-const Precedence PREC_ADDITIVE = (Precedence)13;
-const Precedence PREC_MULTIPLICATIVE = (Precedence)14;
+constset Precedence : ichar
+{
+	INVALID = -1,
+	ANY = 0,
+	COMMA,
+	ASSIGN,
+	BINARY_CONDITIONAL,
+	CONDITIONAL,
+	BOOL_OR,
+	BOOL_AND,
+	BIT_OR,
+	BIT_XOR,
+	BIT_AND,
+	EQUALITY,
+	COMPARISON,
+	SHIFT,
+	ADDITIVE,
+	MULTIPLICATIVE,
+	<* Operand of a cast or prefix operator: binds tighter than every binary operator. *>
+	UNARY,
+}
 
 <* Zig `Precedence.next`: ASSIGN and CONDITIONAL are right associative. *>
 fn Precedence Precedence.next(self, Precedence min)
 {
-	if (self == PREC_ASSIGN) return PREC_ASSIGN;
-	if (self == PREC_CONDITIONAL) return min;
+	if (self == ASSIGN) return ASSIGN;
+	if (self == CONDITIONAL) return min;
 	return (Precedence)((ichar)self + 1);
 }
 
 <* Zig `Precedence.lt`. *>
 fn bool Precedence.lt(self, Precedence b) => (ichar)self < (ichar)b;
 
-<* Zig `Tree.Token.precedence[id]`: PREC_INVALID for non-operators. *>
+<* Zig `Tree.Token.precedence[id]`: INVALID for non-operators. *>
 fn Precedence precedence(TokenId id)
 {
-	if (!id.props.binary_prec) return PREC_INVALID;
-	return (Precedence)id.props.binary_prec;
+	return id.props.binary_prec == ANY ? INVALID : id.props.binary_prec;
 }
 
 // ---------------------------------------------------------------------------

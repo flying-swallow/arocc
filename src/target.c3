@@ -752,10 +752,10 @@ fn Target? resolve_query(Query* q, Host h)
 		case DETERMINED_BY_ARCH_OS: model = baseline_model(arch, os_tag);
 	}
 	FeatureSet fs = model.feature_set();
-	fs.remove_set(q.cpu_features_sub);
-	fs.add_set(q.cpu_features_add);
+	fs.remove_all(q.cpu_features_sub);
+	fs.union_with(q.cpu_features_add);
 	fs.populate_dependencies();
-	fs.remove_set(q.cpu_features_sub);
+	fs.remove_all(q.cpu_features_sub);
 
 	return {
 		.cpu = { .arch = arch, .model = model, .features = fs },
@@ -878,7 +878,7 @@ fn Target? parse_triple(String arch_os_abi, Host h, String cpu = "", TripleError
 			{
 				query.cpu_model_kind = EXPLICIT;
 				query.cpu_model = EMPTY;
-				query.cpu_features_add.add(feature);
+				query.cpu_features_add.set(feature);
 			}
 		}
 	}
@@ -936,7 +936,7 @@ fn void? apply_cpu_features(Query* query, Arch arch, String cpu_features, bool h
 	}
 	if (has_sub_arch)
 	{
-		if (try feature = sub_arch.to_feature(arch)) query.cpu_features_add.add(feature);
+		if (try feature = sub_arch.to_feature(arch)) query.cpu_features_add.set(feature);
 	}
 	while (index < cpu_features.len)
 	{
@@ -951,7 +951,7 @@ fn void? apply_cpu_features(Query* query, Arch arch, String cpu_features, bool h
 			err.text = feature_name;
 			return UNKNOWN_CPU_FEATURE~;
 		}
-		if (op == '+') { query.cpu_features_add.add(f); } else { query.cpu_features_sub.add(f); }
+		if (op == '+') { query.cpu_features_add.set(f); } else { query.cpu_features_sub.set(f); }
 	}
 }
 

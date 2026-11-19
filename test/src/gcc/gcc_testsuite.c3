@@ -15,7 +15,9 @@
 // informational, GCC stays golden).
 //
 // Results go to <out>/results.jsonl (one std::encoding::json record per line)
-// and <out>/summary.md. The exit status is non-zero when any case crashes.
+// and <out>/summary.md. The exit status is non-zero when any case is FAIL,
+// CRASH or TIMEOUT; SKIP, UNSUPPORTED (check the harness cannot evaluate) and
+// DIFF (informational Zig differential) do not fail the run.
 // Not part of `bazel test //...` (targets are tagged manual): it is a worklist
 // for migrating cases into the main unit tests, not a gate.
 //
@@ -44,18 +46,24 @@ struct SuiteInfo
 	String name;
 	String rel;
 	String action;
+	<* Case file name glob. *>
+	String glob;
 }
 
 const SuiteInfo[*] SUITES = {
-	{
-		"compile", "gcc.c-torture/compile", "compile"
-	}
-	,
-	{ "execute", "gcc.c-torture/execute", "run" },
-	{ "ieee", "gcc.c-torture/execute/ieee", "run" },
-	{ "dg", "gcc.dg", "compile" },
-	{ "asm", "gcc.dg", "compile" },
+	{ "compile", "gcc.c-torture/compile", "compile", "*.c" },
+	{ "execute", "gcc.c-torture/execute", "run", "*.c" },
+	{ "ieee", "gcc.c-torture/execute/ieee", "run", "*.c" },
+	{ "dg", "gcc.dg", "compile", "*.c" },
+	{ "asm", "gcc.dg", "compile", "*.c" },
+	// gcc.target/x86_64/abi/abi-x86_64.exp: c-torture-execute of test_*.c linked
+	// with asm-support.S (assembled by the host cc, see abi_support_object).
+	{ "abi", "gcc.target/x86_64/abi", "run", "test_*.c" },
 };
+
+// abi-x86_64.exp additional_flags.
+const String[*] ABI_FLAGS = { "-W", "-Wall", "-Wno-abi" };
+const String ABI_SUPPORT_SOURCE = "asm-support.S";
 
 // gcc.dg/dg.exp DEFAULT_CFLAGS (used when a test has no dg-options).
 const String[*] DG_DEFAULT_FLAGS = { "-ansi", "-pedantic-errors" };
@@ -1216,6 +1224,11 @@ fn String[] aro_flags(Allocator a, Case* c, String[] * dropped_out)
 		foreach (f : TORTURE_FLAGS) flags.push(f);
 		given = c.options;
 	}
+	else if (c.suite == "abi")
+	{
+		foreach (f : ABI_FLAGS) flags.push(f);
+		given = c.options;
+	}
 	else
 	{
 		given = c.has_options ? c.options : DG_DEFAULT_FLAGS[..];
@@ -1499,6 +1512,10 @@ struct Options
 	double timeout;
 	String out;
 	String resource_dir;
+	<* -isystem dir with the abi suite's <xmmintrin.h> stand-in. *>
+	String abi_include;
+	<* asm-support.o for the abi suite (built before the run). *>
+	String abi_support;
 	bool selftest;
 }
 
@@ -1860,6 +1877,23 @@ fn Check check_asm(Allocator a, Case* c, String text)
 	return { "PASS", "", "" };
 }
 
+<* Assemble the abi suite's asm-support.S (the register `snapshot` routine) with
+   the host cc, as GCC's harness does for test scaffolding. It is not code under
+   test; aro's driver does not take .S inputs yet. *>
+fn String? abi_support_object(Allocator a, Options* args, String dir, String out_dir)
+{
+	String obj = string::format(a, "%s/asm-support.o", out_dir);
+	String src = py_join(tmem, dir, ABI_SUPPORT_SOURCE);
+	RunResult r = aro_harness::run(tmem, { "cc", "-c", "-o", obj, src },
+		{ .cwd = dir, .timeout_ms = (long)(args.timeout * 1000.0), .search_path = true, .merge_stderr = true });
+	if (!r.spawned || r.timed_out || r.returncode() != 0)
+	{
+		io::eprintfn("cannot assemble %s with the host cc (spawned=%s rc=%d):\n%s", src, r.spawned, r.returncode(), r.stdout);
+		return io::FILE_NOT_FOUND~;
+	}
+	return obj;
+}
+
 fn String[] compile_cmd(Allocator a, Options* args, Case* c, String[] flags, String action, String workdir)
 {
 	List{String} cmd;
@@ -1869,6 +1903,11 @@ fn String[] compile_cmd(Allocator a, Options* args, Case* c, String[] flags, Str
 	cmd.push(args.resource_dir);
 	cmd.push("-fno-color-diagnostics");
 	cmd.push_all(flags);
+	if (c.suite == "abi")
+	{
+		cmd.push("-isystem");
+		cmd.push(args.abi_include);
+	}
 	List{String} srcs;
 	srcs.init(a);
 	srcs.push(c.path);
@@ -1878,6 +1917,7 @@ fn String[] compile_cmd(Allocator a, Options* args, Case* c, String[] flags, Str
 		cmd.push("-o");
 		cmd.push(string::format(a, "%s/a.out", workdir));
 		cmd.push_all(srcs.array_view());
+		if (c.suite == "abi") cmd.push(args.abi_support);
 		cmd.push("-lm");
 	}
 	else if (action == "asm")
@@ -2172,6 +2212,13 @@ fn bool selftest()
 						}
 					}, 1).category == "unexpected-error", "check unexpected")) return false;
 		if (!@expect(check_expectations(tmem, &k, {}, 0).category == "missing-error", "check missing")) return false;
+		Case ac = { .suite = "abi", .path = "/s/test_x.c", .name = "test_x.c", .dir = "/s", .action = "run" };
+		String[] dropped;
+		String[] af = aro_flags(tmem, &ac, &dropped);
+		if (!@expect(af.len == 3 && af[0] == "-W" && af[2] == "-Wno-abi" && !dropped.len, "abi flags")) return false;
+		Options ao = { .aro = "aro", .abi_include = "/inc", .abi_support = "/o/asm-support.o" };
+		String acmd = string::tjoin(compile_cmd(tmem, &ao, &ac, af, "run", "/w"), " ");
+		if (!@expect(acmd.contains("-isystem /inc") && acmd.contains("/s/test_x.c /o/asm-support.o -lm"), "abi cmd")) return false;
 	};
 	io::printn("selftest ok");
 	return true;
@@ -2183,7 +2230,7 @@ fn bool selftest()
 
 const String USAGE = `usage: gcc_testsuite [-h] [--gcc-testsuite GCC_TESTSUITE] [--aro ARO] [--zig-arocc ZIG_AROCC] [--suite SUITE]
                      [--filter FILTER] [--jobs JOBS] [--timeout TIMEOUT] [--out OUT]
-                     [--resource-dir RESOURCE_DIR] [--selftest]
+                     [--resource-dir RESOURCE_DIR] [--abi-include ABI_INCLUDE] [--selftest]
 
 Run the GCC C testsuite against aro_c3, treating GCC's expectations as golden.
 
@@ -2201,6 +2248,8 @@ options:
   --out OUT
   --resource-dir RESOURCE_DIR
                         aro -resource-dir (builtin headers)
+  --abi-include ABI_INCLUDE
+                        dir with the abi suite's xmmintrin.h stand-in (default: test/src/gcc/abi_include)
   --selftest
 
 Under "bazel run" (BUILD_WORKSPACE_DIRECTORY set) the default testsuite root is the workspace's test/gcc.
@@ -2208,7 +2257,7 @@ Under "bazel run" (BUILD_WORKSPACE_DIRECTORY set) the default testsuite root is 
 
 const String[*] VALUE_OPTIONS = {
 	"--gcc-testsuite", "--aro", "--zig-arocc", "--suite", "--filter", "--jobs", "--timeout", "--out",
-	"--resource-dir",
+	"--resource-dir", "--abi-include",
 };
 const String[*] FLAG_OPTIONS = { "--selftest", "--help" };
 
@@ -2305,15 +2354,20 @@ fn int main(String[] argv)
 	String root = root_dir(mem);
 	args.gcc_testsuite = string::format(mem, "%s/test/gcc", root);
 	args.aro = string::format(mem, "%s/bazel-bin/aro_c3", root);
-	args.suite = "compile,execute,ieee,dg,asm";
+	args.suite = "compile,execute,ieee,dg,asm,abi";
 	args.filter = "*";
 	args.jobs = aro_harness::cpu_count();
 	args.timeout = 60.0;
 	String out_env = aro_harness::getenv(mem, "TEST_UNDECLARED_OUTPUTS_DIR");
 	args.out = out_env.len ? out_env : string::format(mem, "%s/aro-gcc-testsuite", aro_harness::temp_root(tmem));
 	args.resource_dir = root;
+	args.abi_include = string::format(mem, "%s/test/src/gcc/abi_include", root);
 	String ws = aro_harness::workspace_dir(mem);
-	if (ws.len) args.gcc_testsuite = string::format(mem, "%s/test/gcc", ws);
+	if (ws.len)
+	{
+		args.gcc_testsuite = string::format(mem, "%s/test/gcc", ws);
+		args.abi_include = string::format(mem, "%s/test/src/gcc/abi_include", ws);
+	}
 
 	for (sz i = 1; i < argv.len; i++)
 	{
@@ -2363,6 +2417,7 @@ fn int main(String[] argv)
 				args.timeout = t;
 			case "--out": args.out = value;
 			case "--resource-dir": args.resource_dir = value;
+			case "--abi-include": args.abi_include = value;
 			case "--selftest": args.selftest = true;
 		}
 	}
@@ -2371,6 +2426,7 @@ fn int main(String[] argv)
 	// Compiles run from each case's directory, so binaries must be absolute.
 	args.aro = py_absolute(mem, args.aro);
 	if (args.zig_arocc.len) args.zig_arocc = py_absolute(mem, args.zig_arocc);
+	args.abi_include = py_absolute(mem, args.abi_include);
 	if (!aro_harness::any_exists(args.aro)) return fatal(string::tformat("aro binary not found: %s (bazel build //:aro_c3)", args.aro));
 	if (args.zig_arocc.len && !aro_harness::any_exists(args.zig_arocc))
 	{
@@ -2385,13 +2441,13 @@ fn int main(String[] argv)
 	{
 		SuiteInfo* info = null;
 		foreach (&s : SUITES) if (s.name == name) info = s;
-		if (!info) return fatal(string::tformat("unknown suite %s; choose from compile, execute, ieee, dg, asm", py_repr(tmem, name)));
+		if (!info) return fatal(string::tformat("unknown suite %s; choose from compile, execute, ieee, dg, asm, abi", py_repr(tmem, name)));
 		String dir = py_join(mem, args.gcc_testsuite, info.rel);
 		String[]? names = aro_harness::list_sorted(mem, dir);
 		if (catch names) continue;
 		foreach (n : names)
 		{
-			if (!aro_harness::glob_match("*.c", n) || !aro_harness::glob_match(args.filter, n)) continue;
+			if (!aro_harness::glob_match(info.glob, n) || !aro_harness::glob_match(args.filter, n)) continue;
 			String p = string::format(mem, "%s/%s", dir, n);
 			String rel = string::format(mem, "%s/%s", info.rel, n);
 			Case* c = parse_case(mem, name, p, rel, info.action);
@@ -2410,6 +2466,14 @@ fn int main(String[] argv)
 		selected = mine.array_view();
 	}
 	if (catch aro_harness::mkdir_p(out_dir)) return fatal(string::tformat("cannot create %s", out_dir));
+	foreach (c : selected)
+	{
+		if (c.suite != "abi") continue;
+		String? obj = abi_support_object(mem, &args, c.dir, out_dir);
+		if (catch obj) return 1;
+		args.abi_support = obj;
+		break;
+	}
 	RunCtx ctx = { .cases = selected, .args = &args, .start = clock::now() };
 	ctx.results = mem::new_array(Object*, selected.len);
 	ctx.lock.init()!!;
@@ -2446,18 +2510,18 @@ fn int main(String[] argv)
 	sort_strings(status_names.array_view());
 	DString counts;
 	counts.init(mem);
-	sz crashes = 0;
+	sz failures = 0;
 	foreach (i, st : status_names)
 	{
 		sz n = 0;
 		foreach (r : results) if (field(r, "status") == st) n++;
-		if (st == "CRASH") crashes = n;
+		if (st == "FAIL" || st == "CRASH" || st == "TIMEOUT") failures += n;
 		if (i) counts.append(", ");
 		counts.appendf("%s %d", st, n);
 	}
 	io::printfn("%d cases in %.0fs: %s", results.len, (double)ctx.start.to_now() / 1e9, counts.str_view());
 	io::printfn("results: %s/results.jsonl\nsummary: %s/summary.md", out_dir, out_dir);
-	return crashes ? 1 : 0;
+	return failures ? 1 : 0;
 }
 
 // ---- Unit tests: the Python script's selftest() plus the Python string

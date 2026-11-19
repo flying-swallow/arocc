@@ -22,15 +22,26 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case LOAD:
 		case BIT_NOT:
 		case NEGATE:
+		case FNEG:
 		case TRUNC:
 		case ZEXT:
 		case SEXT:
+		case FPTOSI:
+		case FPTOUI:
+		case SITOFP:
+		case UITOFP:
+		case FPEXT:
+		case FPTRUNC:
 		case STACK_RESTORE:
+		case VA_START:
 			@body(&inst.data.ref);
 		case DYN_ALLOC:
 			@body(&inst.data.dyn_alloc.size);
 		case RET:
 			if (inst.data.ref != ir::NONE) @body(&inst.data.ref);
+		case RET_PAIR:
+			@body(&inst.data.bin.lhs);
+			@body(&inst.data.bin.rhs);
 		case STORE:
 		case BIT_OR:
 		case BIT_XOR:
@@ -55,6 +66,16 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case UDIV:
 		case SREM:
 		case UREM:
+		case FADD:
+		case FSUB:
+		case FMUL:
+		case FDIV:
+		case FCMP_OEQ:
+		case FCMP_UNE:
+		case FCMP_OLT:
+		case FCMP_OLE:
+		case FCMP_OGT:
+		case FCMP_OGE:
 			@body(&inst.data.bin.lhs);
 			@body(&inst.data.bin.rhs);
 		case BRANCH:
@@ -71,6 +92,8 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 			{
 				@body(&inst.data.call.args[i]);
 			}
+		case CALL_HI:
+			@body(&inst.data.ref);
 		case PHI:
 			foreach (i, input : inst.data.phi)
 			{
@@ -116,11 +139,13 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case LABEL_ADDR:
 		case JMP_VAL:
 		case CALL:
+		case CALL_HI:
 		case ALLOC:
 		case STORE:
 		case DYN_ALLOC:
 		case STACK_SAVE:
 		case STACK_RESTORE:
+		case VA_START:
 		case BIT_OR:
 		case BIT_XOR:
 		case BIT_AND:
@@ -144,13 +169,31 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case UDIV:
 		case SREM:
 		case UREM:
+		case FADD:
+		case FSUB:
+		case FMUL:
+		case FDIV:
+		case FCMP_OEQ:
+		case FCMP_UNE:
+		case FCMP_OLT:
+		case FCMP_OLE:
+		case FCMP_OGT:
+		case FCMP_OGE:
 		case RET:
+		case RET_PAIR:
 		case LOAD:
 		case BIT_NOT:
 		case NEGATE:
+		case FNEG:
 		case TRUNC:
 		case ZEXT:
 		case SEXT:
+		case FPTOSI:
+		case FPTOUI:
+		case SITOFP:
+		case UITOFP:
+		case FPEXT:
+		case FPTRUNC:
 		case SELECT:
 			break;
 	}
@@ -164,6 +207,7 @@ fn bool is_terminator(ir::InstTag tag)
 		case ir::InstTag.BRANCH:
 		case ir::InstTag.SWITCH:
 		case ir::InstTag.RET:
+		case ir::InstTag.RET_PAIR:
 		case ir::InstTag.JMP_VAL:
 			return true;
 		default: return false;
@@ -180,7 +224,9 @@ fn bool is_value_tag(ir::InstTag tag)
 		case ir::InstTag.BRANCH:
 		case ir::InstTag.SWITCH:
 		case ir::InstTag.RET:
+		case ir::InstTag.RET_PAIR:
 		case ir::InstTag.JMP_VAL:
+		case ir::InstTag.VA_START:
 			return false;
 		default: return true;
 	}
@@ -639,8 +685,14 @@ fn ir::Inst copy_inst_payload(ir::Decl* decl, ir::Inst inst)
 			inst.data.phi = inputs;
 		case ir::InstTag.CALL:
 			ir::Ref[] args = alloc::new_array(&decl.arena, ir::Ref, inst.data.call.args.len);
+			bool[] stack_only = alloc::new_array(&decl.arena, bool, inst.data.call.stack_only.len);
+			uint[] memory_copy_bytes = alloc::new_array(&decl.arena, uint, inst.data.call.memory_copy_bytes.len);
 			args[..] = inst.data.call.args[..];
+			stack_only[..] = inst.data.call.stack_only[..];
+			memory_copy_bytes[..] = inst.data.call.memory_copy_bytes[..];
 			inst.data.call.args = args;
+			inst.data.call.stack_only = stack_only;
+			inst.data.call.memory_copy_bytes = memory_copy_bytes;
 		case ir::InstTag.SWITCH:
 			value_interner::InternerRef[] values = alloc::new_array(&decl.arena, value_interner::InternerRef, inst.data.switch_data.values.len);
 			ir::Ref[] labels = alloc::new_array(&decl.arena, ir::Ref, inst.data.switch_data.labels.len);
@@ -1540,6 +1592,8 @@ fn ConstPropValue const_prop_eval(ir::Ir* graph, ir::Decl* decl, Cfg* cfg, bool[
 			ulong cast_bits = cast_operand.bits & const_prop_mask(src_width);
 			if (inst.tag == ir::InstTag.SEXT) cast_bits = (ulong)const_prop_signed(cast_bits, src_width);
 			return const_prop_constant(dst_width, cast_bits);
+		// Keep this evaluator's arithmetic cases integer-only. Float ops use
+		// distinct tags and must not be rewritten with integer bit semantics.
 		case ir::InstTag.ADD:
 		case ir::InstTag.SUB:
 		case ir::InstTag.MUL:
@@ -1887,6 +1941,7 @@ fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst)
 		case ir::InstTag.NEGATE:
 		case ir::InstTag.SELECT:
 		case ir::InstTag.PHI:
+		case ir::InstTag.CALL_HI:
 			return true;
 		case ir::InstTag.LOAD:
 			if ((usz)inst.data.ref >= (usz)decl.instructions.len) return false;
@@ -2147,9 +2202,12 @@ fn bool inline_unsupported_control(ir::Decl* decl)
 {
 	foreach (inst : decl.instructions)
 	{
+		if (inst.tag == ir::InstTag.RET_PAIR) return true;
 		if (inst.tag == ir::InstTag.LABEL_ADDR || inst.tag == ir::InstTag.JMP_VAL) return true;
 		// Dynamic stack allocation lives until the callee returns; inlining would leak it into the caller's frame.
 		if (inst.tag == ir::InstTag.DYN_ALLOC || inst.tag == ir::InstTag.STACK_SAVE) return true;
+		// va_start refers to the callee's variadic argument state and cannot move into a caller.
+		if (inst.tag == ir::InstTag.VA_START) return true;
 	}
 	return false;
 }
@@ -2218,6 +2276,18 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 	if ((usz)call_ref >= (usz)caller.instructions.len || !inline_body_contains(caller, call_ref)) return false;
 	ir::Inst* call = &caller.instructions[(sz)call_ref];
 	if (call.tag != ir::InstTag.CALL || (usz)call.data.call.func >= (usz)caller.instructions.len) return false;
+	foreach (copy_bytes : call.data.call.memory_copy_bytes) if (copy_bytes != 0) return false;
+	for (usz pos = 0; pos + 1 < (usz)caller.body.len; pos++)
+	{
+		if (caller.body[(sz)pos] != call_ref) continue;
+		ir::Ref next = caller.body[(sz)(pos + 1)];
+		if ((usz)next < (usz)caller.instructions.len)
+		{
+			ir::Inst next_inst = caller.instructions[(sz)next];
+			if (next_inst.tag == ir::InstTag.CALL_HI && next_inst.data.ref == call_ref) return false;
+		}
+		break;
+	}
 	ir::Ref call_func_ref = call.data.call.func;
 	if (caller.instructions[(sz)call_func_ref].tag != ir::InstTag.SYMBOL) return false;
 	usz callee_arg_count = inline_arg_count(callee);
@@ -2230,7 +2300,17 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 	// value-return behavior. Normal C functions have consistent return types.
 	Uses uses = compute_uses(caller, allocator);
 	bool call_is_used = uses.users[(sz)call_ref].len() != 0;
+	bool has_call_hi_user = false;
+	foreach (user_ref : uses.users[(sz)call_ref])
+	{
+		if ((usz)user_ref < (usz)caller.instructions.len && caller.instructions[(sz)user_ref].tag == ir::InstTag.CALL_HI)
+		{
+			has_call_hi_user = true;
+			break;
+		}
+	}
 	uses.free();
+	if (has_call_hi_user) return false;
 	usz return_count = 0;
 	bool returns_value = false;
 	bool returns_void = false;
@@ -2535,6 +2615,40 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 	{
 		return verify_error(errors, decl.name, "function body must place ARG instructions before its entry LABEL");
 	}
+	for (usz i = 0; i < arg_end; i++)
+	{
+		ir::Inst arg = decl.instructions[(sz)decl.body[i]];
+		if (arg.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER && arg.data.arg.location >= 6)
+		{
+			return verify_error(errors, decl.name, "ARG GP register index is out of range");
+		}
+		if (arg.data.arg.location_kind == ir::ArgLocationKind.SSE_REGISTER && arg.data.arg.location >= 8)
+		{
+			return verify_error(errors, decl.name, "ARG SSE register index is out of range");
+		}
+		if (arg.data.arg.location_kind == ir::ArgLocationKind.STACK &&
+			(arg.data.arg.location % 8 != 0 || arg.data.arg.stack_size < 8 ||
+			arg.data.arg.stack_size % 8 != 0 || arg.data.arg.stack_size > (uint)(int::max - 16) ||
+			arg.data.arg.location > (uint)(int::max - 16) - arg.data.arg.stack_size))
+		{
+			return verify_error(errors, decl.name, "ARG stack location or size is invalid");
+		}
+		if (arg.data.arg.location_kind != ir::ArgLocationKind.ORDINAL &&
+			arg.data.arg.location_kind != ir::ArgLocationKind.GP_REGISTER &&
+			arg.data.arg.location_kind != ir::ArgLocationKind.SSE_REGISTER &&
+			arg.data.arg.location_kind != ir::ArgLocationKind.STACK)
+		{
+			return verify_error(errors, decl.name, "ARG location kind is invalid");
+		}
+		if (arg.data.arg.stack_address && arg.data.arg.location_kind != ir::ArgLocationKind.STACK)
+		{
+			return verify_error(errors, decl.name, "ARG stack_address requires an incoming stack location");
+		}
+		if (arg.data.arg.location_kind != ir::ArgLocationKind.STACK && arg.data.arg.stack_size != 0)
+		{
+			return verify_error(errors, decl.name, "ARG stack_size requires an incoming stack location");
+		}
+	}
 	bool[] label_seen = alloc::new_array(allocator, bool, (sz)inst_count);
 	defer alloc::free(allocator, label_seen.ptr);
 	for (usz i = 0; i < inst_count; i++) label_seen[i] = false;
@@ -2545,6 +2659,33 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 	{
 		ir::Ref ref = decl.body[i];
 		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.CALL &&
+			(inst.data.call.stack_only.len != inst.data.call.args.len ||
+			inst.data.call.memory_copy_bytes.len != inst.data.call.args.len))
+		{
+			return verify_error(errors, decl.name, "CALL argument metadata must match the argument count");
+		}
+		if (inst.tag == ir::InstTag.CALL_HI)
+		{
+			if (i == 0 || inst.data.ref != decl.body[i - 1] ||
+				(usz)inst.data.ref >= inst_count || decl.instructions[(sz)inst.data.ref].tag != ir::InstTag.CALL)
+			{
+				return verify_error(errors, decl.name, "CALL_HI must immediately follow its referenced CALL");
+			}
+			if (inst.ty != value_interner::REF_I64)
+			{
+				return verify_error(errors, decl.name, "CALL_HI result must be i64");
+			}
+		}
+		if (inst.tag == ir::InstTag.RET_PAIR)
+		{
+			if ((usz)inst.data.bin.lhs >= inst_count || (usz)inst.data.bin.rhs >= inst_count ||
+				decl.instructions[(sz)inst.data.bin.lhs].ty != value_interner::REF_I64 ||
+				decl.instructions[(sz)inst.data.bin.rhs].ty != value_interner::REF_I64)
+			{
+				return verify_error(errors, decl.name, "RET_PAIR operands must be i64");
+			}
+		}
 		if (i == arg_end && inst.tag != ir::InstTag.LABEL)
 		{
 			return verify_error(errors, decl.name, "entry block must begin with a LABEL");

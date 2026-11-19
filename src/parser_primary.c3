@@ -1,37 +1,36 @@
-// Primary-expression grammar for the typed C3 parser. The owning expression
-// engine supplies nested expression parsing, while compound literal
-// initialization is an optional outer-grammar seam.
-module aro::parser_primary;
+// Primary-expression grammar on Parser (`parse_primary_expr`).
+module aro::parser;
 import aro::primitive_value;
-import aro::parser, aro::parser_result, aro::tree;
+import aro::parser_result, aro::tree;
 import aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::value_interner;
 import aro::number_value, aro::text_literal, aro::text_literal_semantics;
 import aro::symbol_stack, aro::string_interner;
-import aro::diagnostics, aro::parser_expression;
+import aro::diagnostics;
 import aro::builtins, aro::builtin_properties, aro::lang_opts;
 import std::collections::list;
 import std::core::dstring;
 
-excuse PARSING_FAILED;
 excuse CANNOT_CONCAT;
 
-struct PrimaryParser
-{
-	parser::Parser* parser;
-	<* `parse_nested` (required for parenthesized and cast operands) and the
-	   optional `parse_compound_literal`. *>
-	parser::IExpressionParts parts;
-}
-
-fn parser_result::Result? PrimaryParser.nested(&self, tokens::Precedence min_prec, bool eval)
-{
-	parser::IExpressionParts g = self.parts;
-	if (!g || !& g.parse_nested)
-	{
-		self.parser.grammar_unavailable()!; return PARSING_FAILED~;
-	}
-	return g.parse_nested(self.parser, min_prec, eval);
-}
+<*
+ Primary-expression grammar (C23 6.5.1 plus GNU/Clang extensions), the
+ leaves of the expression tree. `Parser.parse_primary_expr` reads one of:
+  - `( expr )`                        -> PAREN_EXPR, `expr` via `parse_expr_prec`
+  - `( type-name ) cast-expr`         -> cast, operand via `parse_expr_prec` at unary precedence
+  - `( type-name ) { init-list }`     -> compound literal (`parse_compound_literal`)
+  - identifier                        -> DECL_REF_EXPR / ENUMERATION_REF; unresolved
+                                         names try builtins, then (called, pre-C23)
+                                         an implicit function declaration
+  - number (`PP_NUM`, `#embed` byte), character and (adjacent, concatenated)
+    string literals
+  - `true`, `false`, `nullptr`
+  - `_Generic ( expr , assoc-list )`
+  - `__func__`, `__FUNCTION__`, `__PRETTY_FUNCTION__`
+ Anything else is `NO_EXPRESSION`. `({ ... })` statement expressions are not
+ handled here (`parse_postfix_expr` intercepts them); reaching one reports it
+ as unavailable. Postfix operators (calls, `[]`, `.`, `->`, `++`/`--`) belong to
+ parser_postfix.c3.
+*>
 
 struct GenericTypeEntry
 {
@@ -87,10 +86,10 @@ fn parser_result::Result? expected_expression(parser::Parser* p)
 fn bool is_builtin_name(String name) => name.len >= 10 && name[0 : 10] == "__builtin_";
 
 <* Zig primaryExpr's builtin lookup and implicit function declaration path. *>
-fn parser_result::Result? PrimaryParser.parse_unresolved_identifier(&self,
+fn parser_result::Result? Parser.parse_unresolved_identifier(&self,
 	tokens::TokenIndex tok, string_interner::StringId name_id, String name)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	builtins::Expanded? maybe_builtin = p.comp.builtins.get_or_create(p.comp, name);
 	if (try expanded = maybe_builtin)
 	{
@@ -156,10 +155,10 @@ fn parser_result::Result? PrimaryParser.parse_unresolved_identifier(&self,
 }
 
 <* Create a static const character array backing a predefined function-name identifier. *>
-fn type_store::NodeIndex PrimaryParser.make_predefined_identifier(&self, tokens::TokenIndex tok,
+fn type_store::NodeIndex Parser.make_predefined_identifier(&self, tokens::TokenIndex tok,
 	String contents)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	DString bytes;
 	bytes.init(tmem);
 	bytes.append_string(contents);
@@ -189,10 +188,10 @@ fn type_store::NodeIndex PrimaryParser.make_predefined_identifier(&self, tokens:
 	);
 }
 
-fn parser_result::Result? PrimaryParser.parse_predefined_identifier(&self,
+fn parser_result::Result? Parser.parse_predefined_identifier(&self,
 	tokens::TokenIndex tok, bool pretty)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	bool in_function = p.function_context.active;
 	type_store::NodeOptIndex ident = pretty ? p.function_context.pretty_ident : p.function_context.func_ident;
 	if (ident.is_null())
@@ -241,9 +240,9 @@ fn parser_result::Result? PrimaryParser.parse_predefined_identifier(&self,
 	return { .node = node, .qt = variable.variable.qt, .val = value::NONE };
 }
 
-fn parser_result::Result? PrimaryParser.parse_number(&self, tokens::TokenIndex tok)
+fn parser_result::Result? Parser.parse_number(&self, tokens::TokenIndex tok)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	tokens::TreeToken token = p.tree.tokens[(usz)tok];
 	number_value::NumberValue number = number_value::parse_number_token(p.comp,
 		p.tree.tok_slice(tok), token.loc, p.pp.expansion_slice(tok))!;
@@ -272,9 +271,9 @@ fn parser_result::Result? PrimaryParser.parse_number(&self, tokens::TokenIndex t
 	return { .node = node, .qt = number.qt, .val = number.val };
 }
 
-fn parser_result::Result? PrimaryParser.parse_char(&self, tokens::TokenIndex tok)
+fn parser_result::Result? Parser.parse_char(&self, tokens::TokenIndex tok)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	tokens::TreeToken token = p.tree.tokens[(usz)tok];
 	text_literal_semantics::CharLiteral literal = text_literal_semantics::char_literal(p.comp,
 		token.id, p.tree.tok_slice(tok), token.loc, p.pp.expansion_slice(tok))!;
@@ -299,9 +298,9 @@ fn parser_result::Result? PrimaryParser.parse_char(&self, tokens::TokenIndex tok
 	return { .node = node, .qt = literal.qt, .val = literal.val };
 }
 
-fn parser_result::Result? PrimaryParser.parse_string(&self, tokens::TokenIndex start)
+fn parser_result::Result? Parser.parse_string(&self, tokens::TokenIndex start)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	list::List{tokenizer::TokenId} ids;
 	ids.init(p.comp.gpa);
 	defer ids.free();
@@ -347,9 +346,9 @@ fn parser_result::Result? PrimaryParser.parse_string(&self, tokens::TokenIndex s
 	return { .node = node, .qt = literal.qt, .val = literal.val };
 }
 
-fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenIndex tok, bool eval)
+fn parser_result::Result? Parser.parse_identifier(&self, tokens::TokenIndex tok, bool eval)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	String name = p.tree.tok_slice(tok);
 	string_interner::StringId name_id = p.comp.intern_string(name);
 	symbol_stack::Symbol? maybe_symbol = p.find_symbol(name_id);
@@ -358,8 +357,8 @@ fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenInd
 		return self.parse_unresolved_identifier(tok, name_id, name);
 	}
 	symbol_stack::Symbol symbol = maybe_symbol;
-	if (p.auto_type_decl.active && name_id == p.auto_type_decl.name &&
-		symbol.node == p.auto_type_decl.node)
+	// Only an auto declaration's own initializer sees its binding with the placeholder type.
+	if (symbol.qt.is_auto())
 	{
 		p.advance();
 		Diagnostic.AUTO_TYPE_SELF_INITIALIZED.@emit(p, tok, name)!;
@@ -401,10 +400,10 @@ fn parser_result::Result? PrimaryParser.parse_identifier(&self, tokens::TokenInd
 	return { .node = node, .qt = symbol.qt, .val = val };
 }
 
-fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::TokenIndex l_paren, bool eval)
+fn parser_result::Result? Parser.parse_group_or_cast(&self, tokens::TokenIndex l_paren, bool eval)
 {
 	// Kept minimal: this frame is live across every nested parenthesis level.
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	p.advance();
 	parser::TypeNameProbe probe = p.probe_typed_type_name()!;
 	if (probe.matched) return self.parse_cast(l_paren, probe.qt, eval);
@@ -412,14 +411,14 @@ fn parser_result::Result? PrimaryParser.parse_group_or_cast(&self, tokens::Token
 	{
 		return unavailable(p, "statement expressions are unavailable in this parser composition", l_paren);
 	}
-	parser_result::Result? maybe_inside = self.nested(tokens::PREC_ANY, eval);
+	parser_result::Result? maybe_inside = self.parse_expr_prec(tokens::Precedence.ANY, eval);
 	if (catch f = maybe_inside) return nested_fault(p, f);
 	return finish_paren(p, maybe_inside, l_paren);
 }
 
 fn parser_result::Result? nested_fault(parser::Parser* p, fault f) @noinline
 {
-	if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
+	if (f == NO_EXPRESSION) return expected_expression(p);
 	return f~;
 }
 
@@ -438,35 +437,18 @@ fn parser_result::Result? finish_paren(parser::Parser* p, parser_result::Result 
 }
 
 <* `( type-name )` followed by a cast operand or a compound literal. *>
-fn parser_result::Result? PrimaryParser.parse_cast(&self, tokens::TokenIndex l_paren, type_store::QualType qt, bool eval) @noinline
+fn parser_result::Result? Parser.parse_cast(&self, tokens::TokenIndex l_paren, type_store::QualType qt, bool eval) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
-	if (p.is_at(tokenizer::TokenId.L_BRACE)) return self.parse_compound_literal_after_type(l_paren, qt, eval);
+	if (p.is_at(tokenizer::TokenId.L_BRACE)) return self.parse_compound_literal(l_paren, qt, eval: eval);
 	// A cast-expression is a unary expression or another cast-expression.
-	tokens::Precedence unary_only = (tokens::Precedence)((ichar)tokens::PREC_MULTIPLICATIVE + 1);
-	parser_result::Result? maybe_operand = self.nested(unary_only, eval);
+	tokens::Precedence unary_only = tokens::Precedence.UNARY;
+	parser_result::Result? maybe_operand = self.parse_expr_prec(unary_only, eval);
 	if (catch f = maybe_operand) return nested_fault(p, f);
 	return finish_cast(p, maybe_operand, qt, l_paren);
 }
 
-fn parser_result::Result? PrimaryParser.parse_compound_literal_after_type(&self, tokens::TokenIndex l_paren, type_store::QualType qt, bool eval) @noinline
-{
-	parser::Parser* p = self.parser;
-	parser::IExpressionParts g = self.parts;
-	if (g && &g.parse_compound_literal)
-	{
-		parser_result::Result? literal = g.parse_compound_literal(p, l_paren, qt, eval);
-		if (catch f = literal)
-		{
-			if (f != parser::HOOK_ABSENT) return f~;
-		} else
-		{
-			return literal;
-		}
-	}
-	return unavailable(p, "compound literal expressions are unavailable in this parser composition", l_paren);
-}
 
 <* Apply and diagnose the explicit cast of a parsed operand to `qt`. *>
 fn parser_result::Result? finish_cast(parser::Parser* p, parser_result::Result operand, type_store::QualType qt, tokens::TokenIndex l_paren) @noinline
@@ -496,14 +478,14 @@ fn parser_result::Result? finish_cast(parser::Parser* p, parser_result::Result o
 	return operand;
 }
 
-fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex generic_tok, bool eval)
+fn parser_result::Result? Parser.parse_generic(&self, tokens::TokenIndex generic_tok, bool eval)
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	if (catch f = p.expect(tokenizer::TokenId.L_PAREN)) return f~;
-	parser_result::Result? maybe_control = self.nested(tokens::PREC_CONDITIONAL, false);
+	parser_result::Result? maybe_control = self.parse_expr_prec(tokens::Precedence.CONDITIONAL, false);
 	if (catch f = maybe_control)
 	{
-		if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
+		if (f == NO_EXPRESSION) return expected_expression(p);
 		return f~;
 	}
 	parser_result::Result control = maybe_control;
@@ -583,10 +565,10 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 		tokens::TokenIndex expression_start = p.tok_i;
 		bool is_match = !is_default && !has_match && association_qt.eql(control.qt, p.comp);
 		bool evaluate_arm = is_match && eval;
-		parser_result::Result? maybe_arm = self.nested(tokens::PREC_ASSIGN, evaluate_arm);
+		parser_result::Result? maybe_arm = self.parse_expr_prec(tokens::Precedence.ASSIGN, evaluate_arm);
 		if (catch f = maybe_arm)
 		{
-			if (f == parser_expression::NO_EXPRESSION) return expected_expression(p);
+			if (f == NO_EXPRESSION) return expected_expression(p);
 			return f~;
 		}
 		parser_result::Result arm = maybe_arm;
@@ -639,7 +621,7 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 		{
 			tokens::TokenIndex after_expression = p.tok_i;
 			p.tok_i = default_entry.expression_start;
-			parser_result::Result maybe_selected = self.nested(tokens::PREC_ASSIGN, true)!;
+			parser_result::Result maybe_selected = self.parse_expr_prec(tokens::Precedence.ASSIGN, true)!;
 			selected = maybe_selected;
 			p.tok_i = after_expression;
 			tree::Node default_node = default_entry.node.get(&p.tree);
@@ -683,7 +665,7 @@ fn parser_result::Result? PrimaryParser.parse_generic(&self, tokens::TokenIndex 
 	return { .node = node, .qt = selected.qt, .val = selected.val };
 }
 
-<* `true`, `false` and `nullptr`. Out of line to keep `PrimaryParser.parse`, which
+<* `true`, `false` and `nullptr`. Out of line to keep `parse_primary_expr`, which
  is live across every nesting level, small. *>
 fn parser_result::Result? parse_keyword_constant(parser::Parser* p, tokens::TokenIndex tok, tokenizer::TokenId id) @noinline
 {
@@ -717,20 +699,20 @@ fn parser_result::Result? parse_keyword_constant(parser::Parser* p, tokens::Toke
 }
 
 <* Parse one primary-expression production. *>
-fn parser_result::Result? PrimaryParser.parse(&self, bool eval = true)
+fn parser_result::Result? Parser.parse_primary_expr(&self, bool eval = true)
 {
 	// Only `(` recurses; keep this frame minimal and parse the leaf forms out of line.
-	parser::Parser* p = self.parser;
-	if (p.at_eof()) return parser_expression::NO_EXPRESSION~;
+	parser::Parser* p = self;
+	if (p.at_eof()) return NO_EXPRESSION~;
 	tokens::TokenIndex tok = p.tok_i;
 	if (p.tree.tokens[(usz)tok].id == tokenizer::TokenId.L_PAREN) return self.parse_group_or_cast(tok, eval);
 	return self.parse_leaf(tok, eval);
 }
 
 <* Primary expressions other than parenthesized ones. *>
-fn parser_result::Result? PrimaryParser.parse_leaf(&self, tokens::TokenIndex tok, bool eval) @noinline
+fn parser_result::Result? Parser.parse_leaf(&self, tokens::TokenIndex tok, bool eval) @noinline
 {
-	parser::Parser* p = self.parser;
+	parser::Parser* p = self;
 	tokenizer::TokenId id = p.tree.tokens[(usz)tok].id;
 	if (id == tokenizer::TokenId.PP_NUM || id == tokenizer::TokenId.EMBED_BYTE)
 	{
@@ -755,5 +737,5 @@ fn parser_result::Result? PrimaryParser.parse_leaf(&self, tokens::TokenIndex tok
 		return self.parse_predefined_identifier(tok, false);
 	}
 	if (id == tokenizer::TokenId.MACRO_PRETTY_FUNC) return self.parse_predefined_identifier(tok, true);
-	return parser_expression::NO_EXPRESSION~;
+	return NO_EXPRESSION~;
 }

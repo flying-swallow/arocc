@@ -25,6 +25,7 @@
 // which Zig generates std/Target/<arch>.zig (MIT licensed). Only the
 // features listed are tracked; any other feature reads as absent.
 module aro::target;
+import aro::enum_bitset;
 
 enum FeatureFamily : char
 {
@@ -687,39 +688,7 @@ enum Feature : ushort (FeatureFamily family, String name)
 }
 
 <* Bit set over `Feature` (Zig Cpu.Feature.Set). *>
-const usz FEATURE_WORDS = 9;
-
-struct FeatureSet
-{
-	ulong[FEATURE_WORDS] bits;
-}
-
-fn bool FeatureSet.has(&self, Feature f) => (self.bits[(usz)f / 64] >> ((usz)f % 64)) & 1 != 0;
-fn void FeatureSet.add(&self, Feature f) => self.bits[(usz)f / 64] |= 1UL << ((usz)f % 64);
-fn void FeatureSet.remove(&self, Feature f) => self.bits[(usz)f / 64] &= ~(1UL << ((usz)f % 64));
-
-fn void FeatureSet.add_set(&self, FeatureSet other)
-{
-	for (usz i = 0; i < FEATURE_WORDS; i++) self.bits[i] |= other.bits[i];
-}
-
-fn void FeatureSet.remove_set(&self, FeatureSet other)
-{
-	for (usz i = 0; i < FEATURE_WORDS; i++) self.bits[i] &= ~other.bits[i];
-}
-
-fn bool FeatureSet.is_empty(&self)
-{
-	foreach (w : self.bits) if (w) return false;
-	return true;
-}
-
-fn FeatureSet feature_set(Feature[] fs)
-{
-	FeatureSet s;
-	foreach (f : fs) s.add(f);
-	return s;
-}
+alias FeatureSet = enum_bitset::EnumBitset{Feature};
 
 struct FeatureDeps
 {
@@ -912,7 +881,7 @@ fn void FeatureSet.populate_dependencies(&self)
 			foreach (f : dep.implies)
 			{
 				if (self.has(f)) continue;
-				self.add(f);
+				self.set(f);
 				changed = true;
 			}
 		}
@@ -1041,7 +1010,7 @@ enum CpuModel : ushort (String name, String llvm_name, FeatureFamily family, Fea
 <* The model's features with dependencies populated (Model.toCpu). *>
 fn FeatureSet CpuModel.feature_set(self)
 {
-	FeatureSet s = feature_set(self.features);
+	FeatureSet s = enum_bitset::of{Feature}(...self.features);
 	s.populate_dependencies();
 	return s;
 }

@@ -3,6 +3,7 @@ load("//tools:c3.bzl", "c3_test")
 # Unit tests: backend. One target per line so parallel additions merge cleanly.
 
 c3_test(name = "ir_tests", srcs = ["ir_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "bitset_tests", srcs = ["bitset_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "codegen_tests", srcs = ["codegen_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "ir_opt_tests", srcs = ["ir_opt_tests.c3"], deps = ["//:aro_c3_lib"])
 c3_test(name = "elf_tests", srcs = ["elf_tests.c3"], deps = ["//:aro_c3_lib"])

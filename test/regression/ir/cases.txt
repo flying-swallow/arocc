@@ -19,7 +19,7 @@ negative node           ir_probe invalid-symbol-body        typed-ir=build dump=
 # and src/codegen.c3 / codegen_nodes.c3. Each referenced test checks the
 # FATAL_ERROR result, exact diagnostic text, and fixture cleanup. These are
 # C3 source-derived checks, not executable Zig parity claims.
-negative type           codegen_tests.gen_ir_rejects_union_type             gen_ir=fatal diagnostic="TODO lower union types"
+supported type          codegen_tests.gen_ir_lowers_union_local_assignment gen_ir=build dump=complete renderer=not-requested
 negative type           codegen_tests.gen_ir_rejects_complex_type           gen_ir=fatal diagnostic="TODO lower complex types"
 negative type           codegen_tests.gen_ir_rejects_atomic_type             gen_ir=fatal diagnostic="TODO lower atomic types"
 negative type           codegen_tests.gen_ir_rejects_block_type              gen_ir=fatal diagnostic="TODO lower blocks"
@@ -57,7 +57,8 @@ negative builtin        codegen_tests.gen_ir_rejects_builtin_call             ge
 # Fatal inventory audit: all explicit `self.fail` / TODO-return paths in
 # src/codegen.c3 and codegen_nodes.c3 with corresponding Zig `c.fail` paths
 # are covered above. Shared dispatches enumerate every rejected kind. Existing
-# union, complex, atomic, block, VLA, bitfield, and genVar probes are retained.
+# complex, atomic, block, VLA, bitfield, and genVar probes are retained; union
+# values now have a supported probe above.
 # None of the explicit fatal boundaries was left untested: Tree payloads and
 # TypeStore constructors support all of these direct fixtures. Zig `unreachable`
 # branches are not fatal diagnostic boundaries and are outside this inventory.

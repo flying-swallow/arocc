@@ -129,7 +129,7 @@ fn TokenWithExpansionLocs PpExprParser.peek(&self)
 <*
  Zig `parse`: assert the 64-bit intmax restriction (the target's intmax_t,
  type_store::int_kind_qt(target.int_max_type()), must be INTMAX_WIDTH bits;
- wider intmax targets are unsupported, as in Zig); `binary_expr(PREC_ANY,
+ wider intmax targets are unsupported, as in Zig); `binary_expr(Precedence.ANY,
  true)`; a leftover token that is not EOF -> Diagnostic.INVALID_PREPROC_OPERATOR
  (the value is still returned). EXPR_FAILED where Zig returns null.
  @return? EXPR_FAILED, compilation::FATAL_ERROR
@@ -138,7 +138,7 @@ fn PpValue? PpExprParser.parse(&self)
 {
 	Compilation* comp = self.pp.comp;
 	assert(type_store::int_kind_qt(comp.target.int_max_type()).bit_sizeof(comp) == INTMAX_WIDTH, "only a 64-bit intmax_t is supported");
-	PpValue val = self.binary_expr(tokens::PREC_ANY, true)!;
+	PpValue val = self.binary_expr(tokens::Precedence.ANY, true)!;
 	TokenWithExpansionLocs last = self.peek();
 	if (last.id != EOF) self.pp.err(last, Diagnostic.INVALID_PREPROC_OPERATOR)!;
 	return val;
@@ -153,7 +153,7 @@ fn long wrap_i128(int128 r, bool* overflow) @local
 
 <*
  Zig `binaryExpr(min_prec, eval)`. Precedence climbing with tokens::precedence:
- stop when op_prec.lt(min_prec) or op_prec == PREC_ASSIGN. Short circuit:
+ stop when op_prec.lt(min_prec) or op_prec == Precedence.ASSIGN. Short circuit:
  && evaluates rhs only if eval and lhs true; || only if eval and lhs false;
  ?: then-branch only if eval and lhs true, else-branch only if eval and lhs
  zero. Usual arithmetic conversion (except ?:, <<, >>, comma, ||, &&): if
@@ -181,7 +181,7 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
 	{
 		TokenWithExpansionLocs tok = self.peek();
 		Precedence op_prec = tokens::precedence(tok.id);
-		if (op_prec.lt(min_prec) || op_prec == tokens::PREC_ASSIGN) return lhs;
+		if (op_prec.lt(min_prec) || op_prec == tokens::Precedence.ASSIGN) return lhs;
 
 		TokenWithExpansionLocs operator = self.next();
 		bool eval_rhs;
@@ -454,7 +454,7 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 			return EXPR_FAILED~;
 		case L_PAREN:
 			TokenWithExpansionLocs l_paren = self.next();
-			PpValue res = self.binary_expr(tokens::PREC_ANY, eval)!;
+			PpValue res = self.binary_expr(tokens::Precedence.ANY, eval)!;
 			TokenWithExpansionLocs r_paren = self.next();
 			if (r_paren.id != R_PAREN)
 			{

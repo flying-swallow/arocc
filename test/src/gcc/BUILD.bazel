@@ -3,9 +3,10 @@ load("//tools:c3.bzl", "c3_binary", "c3_main_test", "c3_test")
 # GCC C testsuite (copied into test/gcc) as golden cases: torture compile must
 # compile cleanly, torture execute/ieee must build, link and exit 0, gcc.dg must
 # match dg-error/dg-warning lines, asm compiles gcc.dg cases with -S and applies
-# their dg-final scan-assembler checks. Not gated: the suite targets are tagged
-# manual (skipped by `bazel test //...`) and serve as a worklist for migrating
-# cases into the main unit tests. summary.md/results.jsonl are in the test's
+# their dg-final scan-assembler checks, abi runs gcc.target/x86_64/abi (SysV ABI
+# conformance: test_*.c linked with asm-support.S, assembled by the host cc). A suite fails when any case is FAIL,
+# CRASH or TIMEOUT. The targets are tagged manual (skipped by `bazel test //...`)
+# and serve as a worklist for migrating cases into the main unit tests. summary.md/results.jsonl are in the test's
 # undeclared outputs. Run explicitly, e.g.
 #   bazel test //test/src/gcc:gcc_testsuite_execute
 #   bazel run //test/src/gcc:gcc_testsuite_run [-- --filter 'pr1*']
@@ -22,6 +23,7 @@ _GCC_TESTSUITE_SUITES = {
     "ieee": 1,
     "dg": 4,
     "asm": 1,
+    "abi": 1,
 }
 
 [c3_main_test(
@@ -31,10 +33,13 @@ _GCC_TESTSUITE_SUITES = {
     args = [
         "--aro",
         "$(rootpath //:aro_c3)",
+        "--abi-include",
+        "test/src/gcc/abi_include",
         "--suite",
         suite,
     ],
     data = [
+        "abi_include/xmmintrin.h",
         "//:aro_c3",
         "//test:gcc_testsuite",
     ],

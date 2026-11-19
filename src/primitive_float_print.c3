@@ -74,7 +74,10 @@ const ulong[26] RYU_POW5_TABLE = {
 };
 
 const ulong[2][13] RYU_POW5_SPLIT2 = {
-	{ 0, 1152921504606846976 },
+	{
+		0, 1152921504606846976
+	}
+	,
 	{ 0, 1490116119384765625 },
 	{ 1032610780636961552, 1925929944387235853 },
 	{ 7910200175544436838, 1244603055572228341 },
@@ -99,7 +102,10 @@ const uint[21] RYU_POW5_OFFSETS = {
 };
 
 const ulong[2][15] RYU_POW5_INV_SPLIT2 = {
-	{ 1, 2305843009213693952 },
+	{
+		1, 2305843009213693952
+	}
+	,
 	{ 5955668970331000884, 1784059615882449851 },
 	{ 8982663654677661702, 1380349269358112757 },
 	{ 7286864317269821294, 2135987035920910082 },
@@ -400,9 +406,9 @@ fn ulong f64_round_half_away(ulong bits)
 		if ((bits & 0x000F_FFFF_FFFF_FFFF) != 0) return bits | 0x0008_0000_0000_0000;
 		return bits;
 	}
-	if (e >= 1075) return bits; // |x| >= 2^52: already an integer
-	if (e < 1022) return sign; // |x| < 0.5
-	if (e == 1022) return sign | 0x3FF0_0000_0000_0000; // 0.5 <= |x| < 1
+	if (e >= 1075) return bits;  // |x| >= 2^52: already an integer
+	if (e < 1022) return sign;  // |x| < 0.5
+	if (e == 1022) return sign | 0x3FF0_0000_0000_0000;  // 0.5 <= |x| < 1
 	// 1 <= |x| < 2^52: `frac_bits` fraction bits lie below the binary point.
 	uint frac_bits = 1075 - e;
 	ulong mask = ((ulong)1 << frac_bits) - 1;

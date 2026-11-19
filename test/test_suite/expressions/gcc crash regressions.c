@@ -28,7 +28,7 @@ int cast_incomplete(int x)
 
 struct with_incomplete_bitfield {
     enum tree_code code : 8; // #error: field has incomplete type 'enum tree_code'
-}; // #error: expected external declaration
+}; // recovery skips the rest of the failed struct: no cascade error here
 
 void takes_incomplete(enum E e) {} // #error: parameter has incomplete type 'enum E'
 void call_incomplete(void) { takes_incomplete(0); }

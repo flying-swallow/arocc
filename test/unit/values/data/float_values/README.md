@@ -8,8 +8,8 @@
 
 Expected results for the float and complex paths of `src/aro/Value.zig` and for
 all of `src/aro/annex_g.zig`, at every width (f16, f32, f64, f80, f128). They
-are inputs for the plan 10 C3 port (`src/float_value.c3`,
-`float_soft_narrow.c3`, `float_soft_wide.c3`, `float_print.c3`, `annex_g.c3`)
+are inputs for the plan 10 C3 port (`src/primitive_float.c3`,
+`primitive_float_soft_narrow.c3`, `primitive_float_soft_wide.c3`, `primitive_float_print.c3`, `annex_g.c3`)
 and its test target `//test/unit/values:float_value_tests`. These files are test data
 only. No production target reads them, and nothing here needs Zig at build or
 test time.
@@ -153,7 +153,7 @@ probe carries its own copy of the Value.zig float logic and a verbatim copy of
 annex_g.zig. Each copy keeps the original's control flow and replaces the
 interner with plain values.
 
-## Answers to the open questions in `src/float_value.c3`
+## Answers to the open questions in `src/primitive_float.c3`
 
 ### 1. Default NaN sign per width
 

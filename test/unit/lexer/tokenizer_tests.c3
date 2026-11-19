@@ -844,8 +844,8 @@ fn void token_id_properties_are_consistent() @test
 		if (id.props.binary_prec) assert(!id.props.no_lexeme, "%s", id);
 		assert(!(id.props.char_literal && id.props.string_literal), "%s", id);
 	}
-	test::eq((long)tokens::precedence(TokenId.ASTERISK), (long)tokens::PREC_MULTIPLICATIVE);
-	test::eq((long)tokens::precedence(TokenId.SEMICOLON), (long)tokens::PREC_INVALID);
+	test::eq((long)tokens::precedence(TokenId.ASTERISK), (long)tokens::Precedence.MULTIPLICATIVE);
+	test::eq((long)tokens::precedence(TokenId.SEMICOLON), (long)tokens::Precedence.INVALID);
 	lang_opts::LangOpts off = { .digraphs = OFF };
 	lang_opts::LangOpts on = { .digraphs = ON };
 	assert(TokenId.HASH_HASH.allows_digraphs(on) && !TokenId.HASH_HASH.allows_digraphs(off) && !TokenId.PLUS.allows_digraphs(on));
