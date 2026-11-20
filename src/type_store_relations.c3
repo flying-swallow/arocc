@@ -39,7 +39,11 @@ fn Signedness QualType.signedness(self, Compilation* comp)
 			case POINTER:
 			case NULLPTR_T:
 			case BLOCK: return SIGNED;
-			case ENUM: return SIGNED;
+			// Zig returns .signed for every enum; follow the tag so an enum
+			// whose underlying type is unsigned int extends/compares unsigned.
+			case ENUM:
+				if (!ty.enum_ty.has_tag) return SIGNED;
+				ty = ty.enum_ty.tag.base(comp).ty;
 			default: unreachable("type has no signedness");
 		}
 	}

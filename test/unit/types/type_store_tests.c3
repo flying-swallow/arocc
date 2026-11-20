@@ -440,11 +440,13 @@ fn void promotions_and_ranks() @test
 		check(type_store::DFLOAT128.float_rank(comp), 93);
 		check(comp.type_store.put(type_store::type_complex(type_store::DOUBLE)).float_rank(comp), 6);
 
-		// Signedness: plain char follows the target, enums/pointers are signed.
+		// Signedness: plain char follows the target, enums follow their tag, pointers are signed.
 		assert(type_store::CHAR.signedness(comp) == SIGNED);
 		assert(type_store::BOOL.signedness(comp) == UNSIGNED);
 		assert(type_store::INT_POINTER.signedness(comp) == SIGNED);
-		assert(e_uc.signedness(comp) == SIGNED);
+		assert(e_uc.signedness(comp) == UNSIGNED);
+		QualType e_untagged = comp.type_store.put({ .tag = ENUM, .enum_ty = { .incomplete = true, .name = comp.intern_string("Inc") } });
+		assert(e_untagged.signedness(comp) == SIGNED);
 		comp.langopts.has_char_signedness_override = true;
 		comp.langopts.char_signedness_override = UNSIGNED;
 		assert(type_store::CHAR.signedness(comp) == UNSIGNED);
