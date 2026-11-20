@@ -1389,6 +1389,7 @@ enum Diagnostic : ushort (String fmt, MessageKind kind, DiagMeta meta, Diagnosti
 	SIGN_CONVERSION { "implicit conversion changes signedness: %s to %s", OFF, { .has_opt = true, .opt = Option.SIGN_CONVERSION }, PARSER },
 	FLOAT_OVERFLOW_CONVERSION { "implicit conversion of non-finite value from %s to %s is undefined", OFF, { .has_opt = true, .opt = Option.FLOAT_OVERFLOW_CONVERSION }, PARSER },
 	FLOAT_OUT_OF_RANGE { "implicit conversion of out of range value from %s to %s is undefined", WARNING, { .has_opt = true, .opt = Option.LITERAL_CONVERSION }, PARSER },
+	FLOAT_CAST_OUT_OF_RANGE { "conversion of out of range value from %s to %s is undefined; folded to %s", WARNING, { .has_opt = true, .opt = Option.LITERAL_CONVERSION }, PARSER },
 	FLOAT_ZERO_CONVERSION { "implicit conversion from %s to %s changes %svalue from %s to %s", OFF, { .has_opt = true, .opt = Option.FLOAT_ZERO_CONVERSION }, PARSER },
 	FLOAT_VALUE_CHANGED { "implicit conversion from %s to %s changes %svalue from %s to %s", WARNING, { .has_opt = true, .opt = Option.FLOAT_CONVERSION }, PARSER },
 	FLOAT_TO_INT { "implicit conversion turns floating-point number into integer: %s to %s", OFF, { .has_opt = true, .opt = Option.LITERAL_CONVERSION }, PARSER },

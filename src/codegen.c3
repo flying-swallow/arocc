@@ -173,9 +173,6 @@ struct CodeGen
 	<* Flags per node index (`LINKAGE_*` bits), built once by `index_internal_linkage` so
 	   `has_internal_linkage` and `is_root_declaration` avoid scanning `root_decls`. *>
 	HashMap{uint, char} linkage_flags;
-	bool has_cond_dummy_ty;
-	value_interner::InternerRef cond_dummy_ty;
-	bool bool_invert;
 	ir::Ref bool_end_label;
 	ir::Ref cond_dummy_ref;
 	ir::Ref continue_label;
@@ -846,24 +843,54 @@ fn ir::Ref? CodeGen.add_bin(&self, ir::InstTag tag, ir::Ref lhs, ir::Ref rhs, ty
 	return self.builder.add_inst(tag, { .bin = { .lhs = lhs, .rhs = rhs } }, self.gen_type(qt)!);
 }
 
-<* Emit a branch, collecting incoming values when a boolean expression ends here. *>
+<* A short-circuit exit. `value` is the whole condition's truth on this edge;
+it is only read when `label` is the enclosing `&&`/`||` exit (`bool_end_label`),
+where it becomes the phi input. *>
+struct BoolTarget
+{
+	ir::Ref label;
+	bool value;
+}
+
+fn BoolTarget true_target(ir::Ref label) => { .label = label, .value = true };
+fn BoolTarget false_target(ir::Ref label) => { .label = label, .value = false };
+
+<* Unconditional exit to `target`, recording its truth when it is the phi block. *>
+fn void? CodeGen.jump_to(&self, BoolTarget target)
+{
+	if (target.label == self.bool_end_label) self.add_bool_phi(target.value)!;
+	self.builder.add_jump(target.label);
+}
+
+<* Branch on the i1 `cond` (logically inverted when `negate`), recording phi
+inputs for edges that reach the enclosing `&&`/`||` exit. *>
+fn void? CodeGen.branch_to(&self, ir::Ref cond, BoolTarget on_true, BoolTarget on_false, bool negate)
+{
+	if (negate) @swap(on_true, on_false);
+	bool true_ends = on_true.label == self.bool_end_label;
+	bool false_ends = on_false.label == self.bool_end_label;
+	if (true_ends && false_ends)
+	{
+		// Both edges merge: the condition itself is the phi input.
+		if (on_true.value == on_false.value) return self.add_bool_phi(on_true.value);
+		ir::Ref value = cond;
+		if (!on_true.value)
+		{
+			ir::Ref zero = self.builder.add_constant(value::from_bool(false).ref(), value_interner::REF_I1);
+			value = self.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { .lhs = cond, .rhs = zero } }, value_interner::REF_I1);
+		}
+		self.phi_nodes.push({ .label = self.builder.current_label, .value = value });
+		return;
+	}
+	if (true_ends) self.add_bool_phi(on_true.value)!;
+	if (false_ends) self.add_bool_phi(on_false.value)!;
+	self.builder.add_branch(cond, on_true.label, on_false.label);
+}
+
+<* Plain conditional branch between two labels (no short-circuit phi). *>
 fn void? CodeGen.add_branch(&self, ir::Ref cond, ir::Ref true_label, ir::Ref false_label)
 {
-	if (true_label == self.bool_end_label)
-	{
-		if (false_label == self.bool_end_label)
-		{
-			self.phi_nodes.push(
-				{
-					.label = self.builder.current_label, .value = cond
-				}
-			);
-			return;
-		}
-		self.add_bool_phi(!self.bool_invert)!;
-	}
-	if (false_label == self.bool_end_label) self.add_bool_phi(self.bool_invert)!;
-	self.builder.add_branch(cond, true_label, false_label);
+	return self.branch_to(cond, true_target(true_label), false_target(false_label), false);
 }
 
 <* Add one constant incoming boolean value for a short circuit branch. *>

@@ -662,7 +662,7 @@ fn ir::Ref? CodeGen.gen_if_stmt(&self, type_store::NodeIndex node_index, tree::N
 	if (node.if_stmt.else_body.is_null())
 	{
 		ir::Ref end_label = self.builder.make_label("if.end");
-		self.gen_bool_expr(node.if_stmt.cond, then_label, end_label)!;
+		self.gen_cond_branch(node.if_stmt.cond, then_label, end_label)!;
 		self.builder.start_block(then_label);
 		self.gen_stmt(node.if_stmt.then_body)!;
 		self.builder.start_block(end_label);
@@ -670,7 +670,7 @@ fn ir::Ref? CodeGen.gen_if_stmt(&self, type_store::NodeIndex node_index, tree::N
 	}
 	ir::Ref else_label = self.builder.make_label("if.else");
 	ir::Ref end_label = self.builder.make_label("if.end");
-	self.gen_bool_expr(node.if_stmt.cond, then_label, else_label)!;
+	self.gen_cond_branch(node.if_stmt.cond, then_label, else_label)!;
 	self.builder.start_block(then_label);
 	self.gen_stmt(node.if_stmt.then_body)!;
 	self.builder.add_jump(end_label);
@@ -786,7 +786,7 @@ fn ir::Ref? CodeGen.gen_while_stmt(&self, type_store::NodeIndex node_index, tree
 	self.continue_label = cond_label;
 	self.break_label = end_label;
 	self.builder.start_block(cond_label);
-	self.gen_bool_expr(node.while_stmt.cond, body_label, end_label)!;
+	self.gen_cond_branch(node.while_stmt.cond, body_label, end_label)!;
 	self.builder.start_block(body_label);
 	self.gen_stmt(node.while_stmt.body)!;
 	self.builder.add_jump(cond_label);
@@ -815,7 +815,7 @@ fn ir::Ref? CodeGen.gen_do_while_stmt(&self, type_store::NodeIndex node_index, t
 	self.builder.start_block(body_label);
 	self.gen_stmt(node.do_while_stmt.body)!;
 	self.builder.start_block(cond_label);
-	self.gen_bool_expr(node.do_while_stmt.cond, body_label, end_label)!;
+	self.gen_cond_branch(node.do_while_stmt.cond, body_label, end_label)!;
 	self.builder.start_block(end_label);
 	return ir::NONE;
 }
@@ -862,7 +862,7 @@ fn ir::Ref? CodeGen.gen_for_stmt(&self, type_store::NodeIndex node_index, tree::
 	self.break_label = end_label;
 	ir::Ref cond_label = self.builder.make_label("for.cond");
 	self.builder.start_block(cond_label);
-	self.gen_bool_expr(node.for_stmt.cond.unwrap(), body_label, end_label)!;
+	self.gen_cond_branch(node.for_stmt.cond.unwrap(), body_label, end_label)!;
 	self.builder.start_block(body_label);
 	self.gen_stmt(node.for_stmt.body)!;
 	// Zig CodeGen makes for.cont but never starts it, leaving `continue` jumping
@@ -1170,24 +1170,13 @@ fn ir::Ref? CodeGen.gen_binary_cond_expr(&self, type_store::NodeIndex node_index
 	ir::Ref then_label = self.builder.make_label("ternary.then");
 	ir::Ref else_label = self.builder.make_label("ternary.else");
 	ir::Ref end_label = self.builder.make_label("ternary.end");
+	// `c ?: e` yields c's own value, so evaluate it once as a value and branch on it.
 	type_store::QualType cond_type = node.conditional.cond.qt(self.tree);
-	{
-		bool old_has_cond_dummy_ty = self.has_cond_dummy_ty;
-		value_interner::InternerRef old_cond_dummy_ty = self.cond_dummy_ty;
-		defer
-		{
-			self.has_cond_dummy_ty = old_has_cond_dummy_ty; self.cond_dummy_ty = old_cond_dummy_ty;
-		}
-		self.has_cond_dummy_ty = true;
-		self.cond_dummy_ty = self.gen_type(cond_type)!;
-		self.gen_bool_expr(node.conditional.cond, then_label, else_label)!;
-	}
+	ir::Ref cond_value = self.gen_expr(node.conditional.cond)!;
+	ir::Ref truth = self.gen_truth_compare(cond_value, cond_type, false)!;
+	self.add_branch(truth, then_label, else_label)!;
 	self.builder.start_block(then_label);
-	ir::Inst* dummy_inst = self.builder.instructions.get_ref((sz)self.cond_dummy_ref);
-	if (dummy_inst.ty == value_interner::REF_I1)
-	{
-		self.cond_dummy_ref = self.add_un(ir::InstTag.ZEXT, self.cond_dummy_ref, cond_type)!;
-	}
+	self.cond_dummy_ref = cond_value;
 	ir::Ref then_val = self.gen_expr(node.conditional.then_expr)!;
 	self.builder.add_jump(end_label);
 	ir::Ref then_exit = self.builder.current_label;
@@ -1217,7 +1206,7 @@ fn ir::Ref? CodeGen.gen_cond_expr(&self, type_store::NodeIndex node_index, tree:
 	ir::Ref then_label = self.builder.make_label("ternary.then");
 	ir::Ref else_label = self.builder.make_label("ternary.else");
 	ir::Ref end_label = self.builder.make_label("ternary.end");
-	self.gen_bool_expr(node.conditional.cond, then_label, else_label)!;
+	self.gen_cond_branch(node.conditional.cond, then_label, else_label)!;
 	self.builder.start_block(then_label);
 	ir::Ref then_val = self.gen_expr(node.conditional.then_expr)!;
 	self.builder.add_jump(end_label);
@@ -1256,9 +1245,9 @@ fn ir::Ref? CodeGen.gen_bool_or_expr(&self, type_store::NodeIndex node_index, tr
 	{
 		while (self.phi_nodes.len() > phi_top) self.phi_nodes.pop()!!;
 	}
-	self.gen_bool_expr(node.binary.lhs, bool_exit_label, false_label)!;
+	self.gen_bool_expr(node.binary.lhs, true_target(bool_exit_label), false_target(false_label))!;
 	self.builder.start_block(false_label);
-	self.gen_bool_expr(node.binary.rhs, bool_exit_label, bool_exit_label)!;
+	self.gen_bool_expr(node.binary.rhs, true_target(bool_exit_label), false_target(bool_exit_label))!;
 	self.builder.start_block(bool_exit_label);
 	ir::PhiInput[] phi_inputs = self.phi_nodes.array_view()[phi_top..];
 	ir::Ref phi = self.builder.add_phi(phi_inputs, value_interner::REF_I1);
@@ -1284,9 +1273,9 @@ fn ir::Ref? CodeGen.gen_bool_and_expr(&self, type_store::NodeIndex node_index, t
 	{
 		while (self.phi_nodes.len() > phi_top) self.phi_nodes.pop()!!;
 	}
-	self.gen_bool_expr(node.binary.lhs, true_label, bool_exit_label)!;
+	self.gen_bool_expr(node.binary.lhs, true_target(true_label), false_target(bool_exit_label))!;
 	self.builder.start_block(true_label);
-	self.gen_bool_expr(node.binary.rhs, bool_exit_label, bool_exit_label)!;
+	self.gen_bool_expr(node.binary.rhs, true_target(bool_exit_label), false_target(bool_exit_label))!;
 	self.builder.start_block(bool_exit_label);
 	ir::PhiInput[] phi_inputs = self.phi_nodes.array_view()[phi_top..];
 	ir::Ref phi = self.builder.add_phi(phi_inputs, value_interner::REF_I1);
@@ -1405,7 +1394,17 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 	}
 }
 
-fn void? CodeGen.gen_bool_expr(&self, type_store::NodeIndex base, ir::Ref true_label, ir::Ref false_label)
+<* Statement/ternary condition: branch to `then_label` when `node` is true. *>
+fn void? CodeGen.gen_cond_branch(&self, type_store::NodeIndex node, ir::Ref then_label, ir::Ref else_label)
+{
+	return self.gen_bool_expr(node, true_target(then_label), false_target(else_label));
+}
+
+<* Lower `node` as control flow: exit through `on_true` when the condition holds,
+`on_false` otherwise. `negate` is a pending `!`, pushed down to the leaves by
+De Morgan (`!(a && b)` = `!a || !b`, `!(a || b)` = `!a && !b`); the targets keep
+their meaning, so no inversion state lives on CodeGen. *>
+fn void? CodeGen.gen_bool_expr(&self, type_store::NodeIndex base, BoolTarget on_true, BoolTarget on_false, bool negate = false)
 {
 	type_store::NodeIndex node = base;
 	while (node.get(self.tree).kind == tree::NodeKind.PAREN_EXPR) node = node.get(self.tree).unary.operand;
@@ -1415,136 +1414,132 @@ fn void? CodeGen.gen_bool_expr(&self, type_store::NodeIndex base, ir::Ref true_l
 	{
 		if (!folded.is_pointer(self.comp))
 		{
-			bool truth = folded.to_bool(self.comp);
-			ir::Ref target = truth ? true_label : false_label;
-			if (target == self.bool_end_label) return self.add_bool_phi(truth != self.bool_invert);
-			self.builder.add_jump(target);
-			return;
+			return self.jump_to(folded.to_bool(self.comp) != negate ? on_true : on_false);
 		}
 	}
 	tree::Node n = node.get(self.tree);
 	switch (n.kind)
 	{
-		case BOOL_OR_EXPR:
-			if (try lhs = self.tree.value_of(n.binary.lhs))
-			{
-				if (lhs.to_bool(self.comp))
-				{
-					if (true_label == self.bool_end_label) return self.add_bool_phi(!self.bool_invert);
-					self.builder.add_jump(true_label);
-					return;
-				}
-				return self.gen_bool_expr(n.binary.rhs, true_label, false_label);
-			}
-			ir::Ref new_false_label = self.builder.make_label("bool_false");
-			self.gen_bool_expr(n.binary.lhs, true_label, new_false_label)!;
-			self.builder.start_block(new_false_label);
-			if (self.has_cond_dummy_ty) self.cond_dummy_ref = self.builder.add_constant(value_interner::REF_ONE, self.cond_dummy_ty);
-			return self.gen_bool_expr(n.binary.rhs, true_label, false_label);
-		case BOOL_AND_EXPR:
-			if (try lhs = self.tree.value_of(n.binary.lhs))
-			{
-				if (!lhs.to_bool(self.comp))
-				{
-					if (false_label == self.bool_end_label) return self.add_bool_phi(self.bool_invert);
-					self.builder.add_jump(false_label);
-					return;
-				}
-				return self.gen_bool_expr(n.binary.rhs, true_label, false_label);
-			}
-			ir::Ref new_true_label = self.builder.make_label("bool_true");
-			self.gen_bool_expr(n.binary.lhs, new_true_label, false_label)!;
-			self.builder.start_block(new_true_label);
-			if (self.has_cond_dummy_ty) self.cond_dummy_ref = self.builder.add_constant(value_interner::REF_ONE, self.cond_dummy_ty);
-			return self.gen_bool_expr(n.binary.rhs, true_label, false_label);
 		case BOOL_NOT_EXPR:
-			self.bool_invert = !self.bool_invert;
-			defer self.bool_invert = !self.bool_invert;
-			if (self.has_cond_dummy_ty) self.cond_dummy_ref = self.builder.add_constant(value_interner::REF_ZERO, self.cond_dummy_ty);
-			return self.gen_bool_expr(n.unary.operand, false_label, true_label);
+			return self.gen_bool_expr(n.unary.operand, on_true, on_false, !negate);
+		case BOOL_OR_EXPR:
+		case BOOL_AND_EXPR:
+			bool and_like = (n.kind == tree::NodeKind.BOOL_AND_EXPR) != negate;
+			if (try lhs = self.tree.value_of(n.binary.lhs))
+			{
+				bool lhs_truth = lhs.to_bool(self.comp) != negate;
+				if (and_like && !lhs_truth) return self.jump_to(on_false);
+				if (!and_like && lhs_truth) return self.jump_to(on_true);
+				return self.gen_bool_expr(n.binary.rhs, on_true, on_false, negate);
+			}
+			if (and_like)
+			{
+				ir::Ref rhs_label = self.builder.make_label("bool_true");
+				self.gen_bool_expr(n.binary.lhs, true_target(rhs_label), on_false, negate)!;
+				self.builder.start_block(rhs_label);
+			}
+			else
+			{
+				ir::Ref rhs_label = self.builder.make_label("bool_false");
+				self.gen_bool_expr(n.binary.lhs, on_true, false_target(rhs_label), negate)!;
+				self.builder.start_block(rhs_label);
+			}
+			return self.gen_bool_expr(n.binary.rhs, on_true, on_false, negate);
 		case EQUAL_EXPR:
 		case NOT_EQUAL_EXPR:
 		case LESS_THAN_EXPR:
 		case LESS_THAN_EQUAL_EXPR:
 		case GREATER_THAN_EXPR:
 		case GREATER_THAN_EQUAL_EXPR:
-			ir::InstTag tag = ir::InstTag.CMP_EQ;
 			if (n.binary.lhs.qt(self.tree).is(self.comp, type_store::TypeTag.FLOAT))
 			{
 				self.ensure_scalar_float_width(n.binary.lhs.qt(self.tree))!;
 			}
-			switch (n.kind)
+			ir::InstTag tag = self.compare_tag(n.kind, n.binary);
+			if (negate)
 			{
-			case EQUAL_EXPR:
-			case NOT_EQUAL_EXPR:
-			case LESS_THAN_EXPR:
-			case LESS_THAN_EQUAL_EXPR:
-			case GREATER_THAN_EXPR:
-			case GREATER_THAN_EQUAL_EXPR: tag = self.compare_tag(n.kind, n.binary);
-			default: unreachable();
-		}
-		ir::Ref cmp = self.gen_comparison(n.binary, tag)!;
-		if (self.has_cond_dummy_ty) self.cond_dummy_ref = cmp;
-		return self.add_branch(cmp, true_label, false_label);
+				if (try inverse = inverse_compare(tag))
+				{
+					tag = inverse;
+					negate = false;
+				}
+			}
+			ir::Ref cmp = self.gen_comparison(n.binary, tag)!;
+			return self.branch_to(cmp, on_true, on_false, negate);
 		case CAST:
 			if (n.cast.kind == tree::CastKind.BOOL_TO_INT)
 			{
 				ir::Ref operand = self.gen_expr(n.cast.operand)!;
-				if (self.has_cond_dummy_ty) self.cond_dummy_ref = operand;
-				return self.add_branch(operand, true_label, false_label);
+				return self.branch_to(operand, on_true, on_false, negate);
 			}
 		case BINARY_COND_EXPR:
+			// `c ?: e`: c true means the value is c itself (truthy).
 			if (try cond = self.tree.value_of(n.conditional.cond))
 			{
-				return self.gen_bool_expr(cond.to_bool(self.comp) ? n.conditional.then_expr: n.conditional.else_expr, true_label, false_label);
+				return self.gen_bool_expr(cond.to_bool(self.comp) ? n.conditional.cond : n.conditional.else_expr, on_true, on_false, negate);
 			}
-			ir::Ref new_false_label = self.builder.make_label("ternary.else");
-			self.gen_bool_expr(n.conditional.cond, true_label, new_false_label)!;
-			self.builder.start_block(new_false_label);
-			if (self.has_cond_dummy_ty) self.cond_dummy_ref = self.builder.add_constant(value_interner::REF_ONE, self.cond_dummy_ty);
-			return self.gen_bool_expr(n.conditional.else_expr, true_label, false_label);
+			ir::Ref else_label = self.builder.make_label("ternary.else");
+			self.gen_bool_expr(n.conditional.cond, negate ? on_false : on_true, false_target(else_label))!;
+			self.builder.start_block(else_label);
+			return self.gen_bool_expr(n.conditional.else_expr, on_true, on_false, negate);
 		case COND_EXPR:
 			if (try cond = self.tree.value_of(n.conditional.cond))
 			{
-				return self.gen_bool_expr(cond.to_bool(self.comp) ? n.conditional.then_expr: n.conditional.else_expr, true_label, false_label);
+				return self.gen_bool_expr(cond.to_bool(self.comp) ? n.conditional.then_expr : n.conditional.else_expr, on_true, on_false, negate);
 			}
-			ir::Ref new_true_label = self.builder.make_label("ternary.then");
-			ir::Ref new_false_label = self.builder.make_label("ternary.else");
-			self.gen_bool_expr(n.conditional.cond, new_true_label, new_false_label)!;
-			self.builder.start_block(new_true_label);
-			self.gen_bool_expr(n.conditional.then_expr, true_label, false_label)!;
-			self.builder.start_block(new_false_label);
-			if (self.has_cond_dummy_ty) self.cond_dummy_ref = self.builder.add_constant(value_interner::REF_ONE, self.cond_dummy_ty);
-			return self.gen_bool_expr(n.conditional.else_expr, true_label, false_label);
+			ir::Ref then_label = self.builder.make_label("ternary.then");
+			ir::Ref else_label = self.builder.make_label("ternary.else");
+			self.gen_cond_branch(n.conditional.cond, then_label, else_label)!;
+			self.builder.start_block(then_label);
+			self.gen_bool_expr(n.conditional.then_expr, on_true, on_false, negate)!;
+			self.builder.start_block(else_label);
+			return self.gen_bool_expr(n.conditional.else_expr, on_true, on_false, negate);
 		default:
 			break;
 	}
-	if (try val = self.tree.value_of(node))
-	{
-		if (!val.is_pointer(self.comp))
-		{
-			if (val.to_bool(self.comp))
-			{
-				if (true_label == self.bool_end_label) return self.add_bool_phi(!self.bool_invert);
-				self.builder.add_jump(true_label);
-			}
-			else
-			{
-				if (false_label == self.bool_end_label) return self.add_bool_phi(self.bool_invert);
-				self.builder.add_jump(false_label);
-			}
-			return;
-		}
-	}
 	type_store::QualType condition_type = node.qt(self.tree);
-	bool float_condition = condition_type.is(self.comp, type_store::TypeTag.FLOAT);
-	if (float_condition) self.ensure_scalar_float_width(condition_type)!;
-	ir::Ref lhs = self.gen_expr(node)!;
-	ir::Ref rhs = self.builder.add_constant(value::ZERO.ref(), self.gen_type(condition_type)!);
-	ir::InstTag truth_compare = float_condition ? ir::InstTag.FCMP_UNE : ir::InstTag.CMP_NE;
-	ir::Ref cmp = self.builder.add_inst(truth_compare, { .bin = { .lhs = lhs, .rhs = rhs } }, value_interner::REF_I1);
-	if (self.has_cond_dummy_ty) self.cond_dummy_ref = cmp;
-	self.add_branch(cmp, true_label, false_label)!;
+	ir::Ref cmp = self.gen_truth_compare(self.gen_expr(node)!, condition_type, negate)!;
+	return self.branch_to(cmp, on_true, on_false, false);
+}
+
+<* `value != 0` as i1, or `value == 0` when `negate` (exact for NaN: !(x != 0) is x == 0). *>
+fn ir::Ref? CodeGen.gen_truth_compare(&self, ir::Ref value, type_store::QualType qt, bool negate)
+{
+	bool is_float = qt.is(self.comp, type_store::TypeTag.FLOAT);
+	if (is_float) self.ensure_scalar_float_width(qt)!;
+	ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(qt)!);
+	ir::InstTag tag;
+	if (is_float)
+	{
+		tag = negate ? ir::InstTag.FCMP_OEQ : ir::InstTag.FCMP_UNE;
+	}
+	else
+	{
+		tag = negate ? ir::InstTag.CMP_EQ : ir::InstTag.CMP_NE;
+	}
+	return self.builder.add_inst(tag, { .bin = { .lhs = value, .rhs = zero } }, value_interner::REF_I1);
+}
+
+<* The compare computing the logical negation of `tag`. Ordered float compares
+have no unordered inverse in the IR (NaN), so the caller inverts the branch. *>
+fn ir::InstTag? inverse_compare(ir::InstTag tag)
+{
+	switch (tag)
+	{
+		case CMP_EQ: return ir::InstTag.CMP_NE;
+		case CMP_NE: return ir::InstTag.CMP_EQ;
+		case CMP_SLT: return ir::InstTag.CMP_SGTE;
+		case CMP_SGTE: return ir::InstTag.CMP_SLT;
+		case CMP_SLTE: return ir::InstTag.CMP_SGT;
+		case CMP_SGT: return ir::InstTag.CMP_SLTE;
+		case CMP_ULT: return ir::InstTag.CMP_UGTE;
+		case CMP_UGTE: return ir::InstTag.CMP_ULT;
+		case CMP_ULTE: return ir::InstTag.CMP_UGT;
+		case CMP_UGT: return ir::InstTag.CMP_ULTE;
+		case FCMP_OEQ: return ir::InstTag.FCMP_UNE;
+		case FCMP_UNE: return ir::InstTag.FCMP_OEQ;
+		default: return NOT_FOUND~;
+	}
 }
 
 fn bool is_va_end_tag(builtin_properties::BuiltinTag tag)
