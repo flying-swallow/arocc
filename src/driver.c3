@@ -13,7 +13,7 @@ import aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message, aro::pragma
 import aro::toolchain::gcc_version, aro::toolchain::multilib;
 import aro::value_interner;
 import std::io, std::io::file, std::io::path, std::io::os, std::os::env;
-import std::collections::list;
+import std::collections::list, std::collections::maybe;
 import std::core::dstring, std::core::string;
 
 excuse MISSING_ARGUMENT;
@@ -454,22 +454,22 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 	}
 	else if (arg == "-fuse-ld=")
 	{
-		opts.has_use_linker = false; opts.use_linker = "";
+		opts.use_linker.reset();
 	}
 	else if (arg.starts_with("-fuse-ld="))
 	{
-		opts.has_use_linker = true; opts.use_linker = arg[9..];
+		opts.use_linker.set(arg[9..]);
 	}
 	else if (arg.starts_with("--ld-path="))
 	{
-		opts.has_linker_path = true; opts.linker_path = arg[10..];
+		opts.linker_path.set(arg[10..]);
 	}
 	else if (arg.starts_with("--rtlib="))
 	{
 		String value = arg[8..];
 		if (value == "compiler-rt" || value == "libgcc" || value == "platform")
 		{
-			opts.has_rtlib = true; opts.rtlib = value;
+			opts.rtlib.set(value);
 		}
 		else if (sink == null)
 		{
@@ -485,7 +485,7 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 		String value = arg[12..];
 		if (value == "" || value == "none" || value == "platform" || value == "libunwind" || value == "libgcc")
 		{
-			opts.has_unwindlib = true; opts.unwindlib = value;
+			opts.unwindlib.set(value);
 		}
 		else if (sink == null)
 		{
@@ -626,11 +626,11 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 	}
 	else if (arg == "-pie")
 	{
-		opts.has_pie = true; opts.pie = true;
+		opts.pie.set(true);
 	}
 	else if (arg == "-no-pie" || arg == "-nopie")
 	{
-		opts.has_pie = true; opts.pie = false;
+		opts.pie.set(false);
 	}
 	else if (arg == "-r")
 	{
@@ -861,11 +861,11 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 			}
 			else if (arg == "--sysroot" || arg == "-isysroot")
 			{
-				opts.sysroot = v; opts.has_sysroot = true;
+				opts.sysroot.set(v);
 			}
 			else if (arg == "-resource-dir")
 			{
-				opts.resource_dir = v; opts.has_resource_dir = true;
+				opts.resource_dir.set(v);
 			}
 			else if (arg == "-mcpu")
 			{
@@ -898,19 +898,19 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		}
 		else if (arg.starts_with("--sysroot="))
 		{
-			opts.sysroot = arg[10..]; opts.has_sysroot = true;
+			opts.sysroot.set(arg[10..]);
 		}
 		else if (arg.starts_with("--resource-dir="))
 		{
-			opts.resource_dir = arg[15..]; opts.has_resource_dir = true;
+			opts.resource_dir.set(arg[15..]);
 		}
 		else if (arg.starts_with("-resource-dir="))
 		{
-			opts.resource_dir = arg[14..]; opts.has_resource_dir = true;
+			opts.resource_dir.set(arg[14..]);
 		}
 		else if (arg.starts_with("-isysroot"))
 		{
-			opts.sysroot = arg[9..]; opts.has_sysroot = true;
+			opts.sysroot.set(arg[9..]);
 		}
 		else if (arg == "-Wp,-v")
 		{
@@ -930,7 +930,7 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		}
 		else if (arg.starts_with("--sysroot="))
 		{
-			opts.sysroot = arg[10..]; opts.has_sysroot = true;
+			opts.sysroot.set(arg[10..]);
 		}
 		else if (arg.starts_with("-O"))
 		{
@@ -1119,21 +1119,21 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 	PicPolicy pic = pic_policy(opts, comp.target, sink)!;
 	comp.code_gen_options.pic_level = pic.level;
 	comp.code_gen_options.is_pie = pic.is_pie;
-	tc_opts.has_sysroot = opts.has_sysroot; tc_opts.sysroot = opts.sysroot;
+	tc_opts.sysroot = opts.sysroot;
 	tc_opts.user_lib_dirs = opts.lib_dirs.array_view();
-	tc_opts.has_resource_dir = opts.has_resource_dir; tc_opts.resource_dir = opts.resource_dir;
+	tc_opts.resource_dir = opts.resource_dir;
 	tc_opts.nobuiltininc = opts.nobuiltininc; tc_opts.nostdinc = opts.nostdinc; tc_opts.nostdlibinc = opts.nostdlibinc;
 	tc_opts.nostdlib = opts.nostdlib; tc_opts.nodefaultlibs = opts.nodefaultlibs;
 	tc_opts.nolibc = opts.nolibc; tc_opts.nostartfiles = opts.nostartfiles;
 	tc_opts.shared = opts.shared; tc_opts.is_static = opts.static_link;
-	tc_opts.has_pie = opts.has_pie; tc_opts.pie = opts.pie; tc_opts.relocatable = opts.relocatable;
+	tc_opts.pie = opts.pie; tc_opts.relocatable = opts.relocatable;
 	tc_opts.rdynamic = opts.rdynamic; tc_opts.shared_libgcc = opts.shared_libgcc;
 	tc_opts.static_libgcc = opts.static_libgcc; tc_opts.static_pie = opts.static_pie; tc_opts.strip = opts.strip;
-	tc_opts.has_use_linker = opts.has_use_linker; tc_opts.use_linker = opts.use_linker;
-	tc_opts.has_linker_path = opts.has_linker_path; tc_opts.linker_path = opts.linker_path;
-	tc_opts.has_rtlib = opts.has_rtlib; tc_opts.rtlib = opts.rtlib;
-	tc_opts.has_unwindlib = opts.has_unwindlib; tc_opts.unwindlib = opts.unwindlib;
-	tc_opts.has_raw_target_triple = opts.has_target_triple; tc_opts.raw_target_triple = opts.target_triple;
+	tc_opts.use_linker = opts.use_linker;
+	tc_opts.linker_path = opts.linker_path;
+	tc_opts.rtlib = opts.rtlib;
+	tc_opts.unwindlib = opts.unwindlib;
+	if (opts.has_target_triple) tc_opts.raw_target_triple.set(opts.target_triple);
 	return opts.macro_effects.array_view();
 }
 
@@ -1154,7 +1154,7 @@ fn void? unsupported_target_option(DriverOptions* opts, Target t, Diagnostics* s
 
 fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null)
 {
-	String linker = opts.has_use_linker ? opts.use_linker : system_defaults::LINKER;
+	String linker = opts.use_linker.get() ?? system_defaults::LINKER;
 	bool bfd = string_ieq(linker, "bfd");
 	bool pie_default = t.is_pie_default() == YES ||
 	(t.is_pie_default() == DEPENDS_ON_LINKER && bfd && t.cpu.arch == X86_64);

@@ -1,7 +1,7 @@
 // Reusable command-line state derived from src/aro/Driver.zig and
 // src/aro/Toolchain.zig. Strings in this structure are borrowed from argv.
 module aro::driver_options;
-import std::collections::list;
+import std::collections::list, std::collections::maybe;
 import aro::compilation;
 import aro::lang_opts;
 
@@ -155,21 +155,14 @@ struct DriverOptions
 	bool static_pie;
 	bool rdynamic;
 	bool strip;
-	bool has_use_linker;
-	String use_linker;
-	bool has_linker_path;
-	String linker_path;
-	bool has_rtlib;
-	String rtlib;
-	bool has_unwindlib;
-	String unwindlib;
-	bool has_pie;
-	bool pie;
+	Maybe{String} use_linker;
+	Maybe{String} linker_path;
+	Maybe{String} rtlib;
+	Maybe{String} unwindlib;
+	Maybe{bool} pie;
 	bool relocatable;
-	bool has_sysroot;
-	String sysroot;
-	bool has_resource_dir;
-	String resource_dir;
+	Maybe{String} sysroot;
+	Maybe{String} resource_dir;
 	bool warnings_as_errors;
 	bool ignore_warnings;
 	bool dependency_only;

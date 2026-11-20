@@ -12,6 +12,7 @@ import aro::lang_opts;
 import aro::toolchain;
 import std::collections::list;
 import std::core::mem::allocators;
+import std::collections::maybe;
 
 macro check(left, right)
 {
@@ -266,7 +267,7 @@ fn void pic_request_order_and_link_modes_are_recorded() @test
 		"-shared", "input.c",
 	});
 	check(opts.pic, driver_options::PicRequest.NO_PIC);
-	check(opts.pie, true);
+	check(opts.pie.get()!!, true);
 	check(opts.static_link, true);
 	check(opts.shared, true);
 }
@@ -369,11 +370,11 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 	check(opts.pthread, true);
 	check(opts.gnuc_version, "12.3.4");
 	check(opts.macro_backtrace_limit, uint::max);
-	check(opts.has_use_linker, true);
-	check(opts.use_linker, "bfd");
-	check(opts.linker_path, "/usr/bin/ld");
-	check(opts.rtlib, "compiler-rt");
-	check(opts.unwindlib, "libunwind");
+	check(opts.use_linker.has_value, true);
+	check(opts.use_linker.get()!!, "bfd");
+	check(opts.linker_path.get()!!, "/usr/bin/ld");
+	check(opts.rtlib.get()!!, "compiler-rt");
+	check(opts.unwindlib.get()!!, "libunwind");
 
 	Diagnostics d;
 	d.init_list(mem);
@@ -409,14 +410,14 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 	check(tc_opts.rdynamic, true);
 	check(tc_opts.strip, true);
 	check(tc_opts.relocatable, true);
-	check(tc_opts.has_use_linker, true);
-	check(tc_opts.use_linker, "bfd");
-	check(tc_opts.has_linker_path, true);
-	check(tc_opts.linker_path, "/usr/bin/ld");
-	check(tc_opts.has_rtlib, true);
-	check(tc_opts.rtlib, "compiler-rt");
-	check(tc_opts.has_unwindlib, true);
-	check(tc_opts.unwindlib, "libunwind");
+	check(tc_opts.use_linker.has_value, true);
+	check(tc_opts.use_linker.get()!!, "bfd");
+	check(tc_opts.linker_path.has_value, true);
+	check(tc_opts.linker_path.get()!!, "/usr/bin/ld");
+	check(tc_opts.rtlib.has_value, true);
+	check(tc_opts.rtlib.get()!!, "compiler-rt");
+	check(tc_opts.unwindlib.has_value, true);
+	check(tc_opts.unwindlib.get()!!, "libunwind");
 }
 
 fn void target_selection_resets_compiler_emulation() @test

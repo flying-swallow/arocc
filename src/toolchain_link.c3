@@ -5,14 +5,14 @@ module aro::toolchain;
 import aro::target;
 import aro::system_defaults;
 import aro::diagnostics;
-import std::collections::list;
+import std::collections::list, std::collections::maybe;
 
 excuse INVALID_LINKER_PATH;
 excuse UNSUPPORTED_LINKER_TARGET;
 
 fn RuntimeLibKind get_runtime_lib_kind(Toolchain* tc)
 {
-	String rtlib = tc.opts.has_rtlib ? tc.opts.rtlib : system_defaults::RTLIB;
+	String rtlib = tc.opts.rtlib.get() ?? system_defaults::RTLIB;
 	if (rtlib == "compiler-rt") return COMPILER_RT;
 	if (rtlib == "libgcc") return LIBGCC;
 	return tc.env.target.abi.is_android() ? COMPILER_RT : LIBGCC;
@@ -27,7 +27,7 @@ fn LibGCCKind get_libgcc_kind(Toolchain* tc)
 
 fn UnwindLibKind get_unwind_lib_kind(Toolchain* tc)
 {
-	String unwindlib = tc.opts.has_unwindlib ? tc.opts.unwindlib : system_defaults::UNWINDLIB;
+	String unwindlib = tc.opts.unwindlib.get() ?? system_defaults::UNWINDLIB;
 	if (unwindlib.len == 0 || unwindlib == "platform")
 	{
 		if (get_runtime_lib_kind(tc) == COMPILER_RT) return tc.env.target.abi.is_android() ? COMPILER_RT : NONE;
@@ -88,9 +88,8 @@ fn void add_runtime_libs(Toolchain* tc, List{String}* argv)
 The returned slice is borrowed or written into buf by get_program_path. *>
 fn String? select_linker_path(Toolchain* tc, char[] buf)
 {
-	if (tc.opts.has_linker_path)
+	if (try String path = tc.opts.linker_path.get())
 	{
-		String path = tc.opts.linker_path;
 		if (path.len)
 		{
 			bool has_slash = false;
@@ -101,7 +100,7 @@ fn String? select_linker_path(Toolchain* tc, char[] buf)
 		tc.fatal("invalid linker name in argument '--ld-path=%s'", path);
 		return INVALID_LINKER_PATH~;
 	}
-	String use_linker = tc.opts.has_use_linker ? tc.opts.use_linker : system_defaults::LINKER;
+	String use_linker = tc.opts.use_linker.get() ?? system_defaults::LINKER;
 	if (use_linker.len && use_linker != "ld")
 	{
 		String candidate;
@@ -130,7 +129,7 @@ fn String? select_linker_path(Toolchain* tc, char[] buf)
 			else { candidate = ""; }
 		}
 		if (candidate.len && tc.can_execute(candidate)) return candidate;
-		if (tc.opts.has_use_linker)
+		if (tc.opts.use_linker.has_value)
 		{
 			tc.fatal("invalid linker name in argument '-fuse-ld=%s'", use_linker);
 			return INVALID_LINKER_PATH~;
@@ -160,10 +159,10 @@ diagnostic reporting remain the caller's responsibility. *>
 fn void? append_linux_linker_policy(Toolchain* tc, String output_name, String[] link_objects, List{String}* argv)
 {
 	Target* t = &tc.env.target;
-	bool pie = !tc.opts.shared && !tc.opts.is_static && !tc.opts.relocatable && !tc.opts.static_pie && tc.opts.has_pie && tc.opts.pie;
+	bool pie = !tc.opts.shared && !tc.opts.is_static && !tc.opts.relocatable && !tc.opts.static_pie && (tc.opts.pie.get() ?? false);
 	bool static_link = tc.opts.is_static && !tc.opts.static_pie;
 	String emulation = t.ld_emulation_option();
-	if (tc.opts.static_pie && tc.opts.has_pie) tc.err("cannot specify 'nopie' along with 'static-pie'");
+	if (tc.opts.static_pie && tc.opts.pie.has_value) tc.err("cannot specify 'nopie' along with 'static-pie'");
 	String dynamic_linker = t.standard_dynamic_linker_path();
 	tc.linux_backend.append_linker_policy(tc, t, pie, tc.opts.static_pie, tc.opts.rdynamic, tc.opts.strip,
 		tc.opts.shared, static_link, tc.opts.relocatable, emulation, dynamic_linker, argv);

@@ -10,6 +10,7 @@ import aro::toolchain::multilib;
 import aro::compilation;
 import aro::system_defaults;
 import aro::diagnostics;
+import std::collections::maybe;
 import std::collections::list;
 import std::core::dstring;
 
@@ -27,22 +28,22 @@ enum UnwindLibKind : char { NONE, COMPILER_RT, LIBGCC }
 enum PathKind : char { LIBRARY, FILE, PROGRAM }
 enum InnerKind : char { UNINITIALIZED, LINUX, DARWIN, UNKNOWN }
 
-<* Zig Toolchain.Options. Optional booleans use has_* plus value fields. *>
+<* Zig Toolchain.Options. Zig optionals map to Maybe{T}; C3 forbids optional members. *>
 struct Options
 {
-	bool has_sysroot; String sysroot;
-	bool has_resource_dir; String resource_dir;
+	Maybe{String} sysroot;
+	Maybe{String} resource_dir;
 	bool nobuiltininc; bool nostdinc; bool nostdlibinc;
-	bool has_use_linker; String use_linker;
-	bool has_linker_path; String linker_path;
+	Maybe{String} use_linker;
+	Maybe{String} linker_path;
 	bool nodefaultlibs; bool nolibc; bool nostartfiles; bool nostdlib;
-	bool has_pie; bool pie;
+	Maybe{bool} pie;
 	bool rdynamic; bool relocatable;
-	bool has_rtlib; String rtlib;
+	Maybe{String} rtlib;
 	bool shared; bool shared_libgcc; bool is_static; bool static_libgcc; bool static_pie; bool strip;
-	bool has_unwindlib; String unwindlib;
+	Maybe{String} unwindlib;
 	String aro_name;
-	bool has_raw_target_triple; String raw_target_triple;
+	Maybe{String} raw_target_triple;
 	String path_env;
 	String[] user_lib_dirs;
 }
@@ -102,7 +103,7 @@ fn Target* Toolchain.get_target(&self) => &self.env.target;
 
 fn String Toolchain.get_sysroot(&self)
 {
-	return self.opts.has_sysroot ? self.opts.sysroot : self.env.sysroot;
+	return self.opts.sysroot.get() ?? self.env.sysroot;
 }
 
 fn void? Toolchain.discover(&self)
@@ -113,7 +114,7 @@ fn void? Toolchain.discover(&self)
 	{
 		self.inner = LINUX;
 		Env effective = self.env;
-		if (self.opts.has_sysroot) effective.sysroot = self.opts.sysroot;
+		if (try sysroot = self.opts.sysroot.get()) effective.sysroot = sysroot;
 		self.linux_backend.discover(&effective, &self.program_paths, &self.file_paths, system_defaults::ENABLE_LINKER_BUILD_ID)!;
 		self.has_selected_multilib = self.linux_backend.gcc.is_valid;
 		if (self.has_selected_multilib) self.selected_multilib = self.linux_backend.gcc.selected;
@@ -199,10 +200,11 @@ fn String dirname(String path)
 fn String Toolchain.get_program_path(&self, String name, char[] buf)
 {
 	char[64] prefixed;
-	if (self.opts.has_raw_target_triple && self.opts.raw_target_triple.len + name.len + 1 <= prefixed.len)
+	String triple = self.opts.raw_target_triple.get() ?? "";
+	if (triple.len && triple.len + name.len + 1 <= prefixed.len)
 	{
-		usz n = self.opts.raw_target_triple.len;
-		mem::copy(&prefixed[0], self.opts.raw_target_triple.ptr, (sz)n);
+		usz n = triple.len;
+		mem::copy(&prefixed[0], triple.ptr, (sz)n);
 		prefixed[n] = '-'; mem::copy(&prefixed[n + 1], name.ptr, (sz)name.len);
 		String candidate_name = (String)prefixed[:n + name.len + 1];
 		foreach (dir : self.program_paths)
@@ -330,9 +332,9 @@ fn void? Toolchain.add_system_include_dir_joined(&self, String[] parts, List{Inc
 
 fn void? Toolchain.add_builtin_include_dir(&self, List{IncludeDir}* includes)
 {
-	if (self.opts.has_resource_dir)
+	if (try resource_dir = self.opts.resource_dir.get())
 	{
-		String path = discovery::join(self.a, { self.opts.resource_dir, "include" });
+		String path = discovery::join(self.a, { resource_dir, "include" });
 		if (!self.env.exists(path)) { alloc::free(self.a, path.ptr); return RESOURCE_DIR_NOT_FOUND~; }
 		includes.push({ .kind = SYSTEM, .path = path });
 		return;

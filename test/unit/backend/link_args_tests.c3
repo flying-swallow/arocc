@@ -7,6 +7,7 @@ import aro::toolchain;
 import aro::toolchain::discovery;
 import std::collections::list;
 import std::core::mem, std::core::mem::allocators;
+import std::collections::maybe;
 
 macro check(left, right)
 {
@@ -83,7 +84,7 @@ fn void default_dynamic_exe_ubuntu() @test
 		.target = target::from_triple("x86_64-linux-gnu")!!,
 	};
 	toolchain::Toolchain tc;
-	tc.init(&arena, env, { .has_raw_target_triple = true, .raw_target_triple = "x86_64-linux-gnu" });
+	tc.init(&arena, env, { .raw_target_triple = maybe::value{String}("x86_64-linux-gnu") });
 	defer tc.free();
 	tc.discover()!!;
 	List{String} args;
@@ -146,7 +147,7 @@ fn void pie_and_rdynamic_strip() @test
 	defer arena.free();
 	toolchain::Toolchain tc;
 	tc.init(&arena, { .target = target::from_triple("x86_64-linux-gnu")!! }, {
-		.has_pie = true, .pie = true, .rdynamic = true, .strip = true,
+		.pie = maybe::value{bool}(true), .rdynamic = true, .strip = true,
 	});
 	tc.inner = toolchain::InnerKind.LINUX;
 	List{String} args;

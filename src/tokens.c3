@@ -88,9 +88,9 @@ fn Precedence precedence(TokenId id) => id.props.binary_prec == ANY ? INVALID : 
 <* Zig's packed `flags` struct (bit 0 first). *>
 bitstruct TokenFlags : char
 {
-	bool expansion_disabled : 0;
-	bool is_macro_arg : 1;
-	bool pragma_directive : 2;
+	bool expansion_disabled: 0;
+	bool is_macro_arg: 1;
+	bool pragma_directive: 2;
 }
 
 <*
@@ -118,7 +118,10 @@ fn TokenWithExpansionLocs from_raw(Token raw)
 }
 
 <* The token's location as a raw-token-style triple (used by diagnostics on raw tokens). *>
-fn Location raw_location(Token raw) => { .id = raw.source, .byte_offset = raw.start, .line = raw.line };
+fn Location raw_location(Token raw) =>
+{
+	.id = raw.source, .byte_offset = raw.start, .line = raw.line
+};
 
 <* Zig `expansionSlice`: the recorded locations (borrowed from the token; empty if none). *>
 fn Location[] TokenWithExpansionLocs.expansion_slice(self) => self.expansion_locs.array_view();
@@ -185,7 +188,11 @@ fn void? TokenWithExpansionLocs.check_ms_eof(self, Source src, Compilation* comp
 {
 	if (src.buf.len > self.loc.byte_offset && src.buf[self.loc.byte_offset] == 0x1A)
 	{
-		ExpandedLocation loc = src.line_col({ .id = src.id, .byte_offset = self.loc.byte_offset, .line = self.loc.line });
+		ExpandedLocation loc = src.line_col(
+		{
+			.id = src.id, .byte_offset = self.loc.byte_offset, .line = self.loc.line
+		}
+		);
 		comp.diagnostics.add(diagnostics::@message_at(Diagnostic.CTRL_Z_EOF, Diagnostic.CTRL_Z_EOF.fmt, loc))!;
 	}
 }

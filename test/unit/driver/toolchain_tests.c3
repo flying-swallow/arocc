@@ -13,6 +13,7 @@ import aro::system_defaults;
 import aro;
 import std::collections::list;
 import std::core::mem::allocators;
+import std::collections::maybe;
 
 macro check(left, right)
 {
@@ -58,8 +59,8 @@ fn void paths_with_spaces_and_cross_target_program_lookup() @test
 		tree.add_executable("/path bins/ld");
 		tree.add_executable("/path bins/path-tool");
 		Options opts = {
-			.has_raw_target_triple = true, .raw_target_triple = "aarch64-linux-gnu",
-			.has_linker_path = true, .linker_path = "ld",
+			.raw_target_triple = maybe::value{String}("aarch64-linux-gnu"),
+			.linker_path = maybe::value{String}("ld"),
 		};
 		discovery::Env env = {
 			.fs = tree.fs(), .path = "/path bins", .target = target::from_triple("x86_64-linux-gnu")!!,
@@ -119,7 +120,7 @@ fn void long_raw_triple_skips_prefixed_program_name() @test
 	toolchain::Toolchain tc;
 	tc.init(mem, {
 		.fs = tree.fs(), .target = target::from_triple("x86_64-linux-gnu")!!,
-	}, { .has_raw_target_triple = true, .raw_target_triple = triple });
+	}, { .raw_target_triple = maybe::value{String}(triple) });
 	defer tc.free();
 	tc.add_path_from_components({ "/tools" }, PROGRAM)!!;
 	char[128] buf;
@@ -138,7 +139,7 @@ fn void path_lookup_skips_empty_component() @test
 	toolchain::Toolchain tc;
 	tc.init(mem, {
 		.fs = tree.fs(), .path = ":/bin", .target = target::from_triple("x86_64-linux-gnu")!!,
-	}, { .has_raw_target_triple = true, .raw_target_triple = "x86_64-linux-gnu" });
+	}, { .raw_target_triple = maybe::value{String}("x86_64-linux-gnu") });
 	defer tc.free();
 	char[64] buf;
 	check(tc.get_program_path("ld", &buf), "/bin/ld");
@@ -152,7 +153,7 @@ fn void missing_program_returns_bare_name() @test
 	defer tree.free();
 	toolchain::Toolchain tc;
 	tc.init(mem, { .fs = tree.fs(), .target = target::from_triple("x86_64-linux-gnu")!! },
-		{ .has_linker_path = true, .linker_path = "missing-linker" });
+		{ .linker_path = maybe::value{String}("missing-linker") });
 	char[64] buf;
 	check(tc.get_program_path("missing-tool", &buf), "missing-tool");
 	check(@catch(tc.find_program_by_name("missing-tool", &buf)), discovery::NOT_FOUND);
@@ -219,7 +220,7 @@ fn void linux_linker_args_preserve_runtime_crt_and_mode_order() @test
 	toolchain::Toolchain pie_tc;
 	pie_tc.init(mem, { .target = target });
 	pie_tc.inner = LINUX;
-	pie_tc.opts = { .has_pie = true, .pie = true };
+	pie_tc.opts = { .pie = maybe::value{bool}(true) };
 	pie_tc.build_linker_args("", { "main.o" }, &args)!!;
 	String[23] pie_expected = {
 		"-pie", "--eh-frame-hdr", "-m", "elf_x86_64", "-dynamic-linker",
@@ -260,7 +261,7 @@ fn void linux_linker_args_preserve_runtime_crt_and_mode_order() @test
 	diagnostics::Diagnostics static_pie_d;
 	static_pie_d.init_list(mem);
 	static_pie_tc.init(mem, { .target = target }, {
-		.static_pie = true, .has_pie = true, .pie = true, .nostdlib = true,
+		.static_pie = true, .pie = maybe::value{bool}(true), .nostdlib = true,
 	});
 	static_pie_tc.diagnostics = &static_pie_d;
 	static_pie_tc.inner = LINUX;
@@ -284,8 +285,8 @@ fn void linux_unwindlib_libgcc_reports_error_and_keeps_unwind_arg() @test
 	diagnostics::Diagnostics d;
 	d.init_list(mem);
 	tc.init(mem, { .target = target::from_triple("x86_64-linux-gnu")!! }, {
-		.has_unwindlib = true, .unwindlib = "libunwind",
-		.has_rtlib = true, .rtlib = "libgcc",
+		.unwindlib = maybe::value{String}("libunwind"),
+		.rtlib = maybe::value{String}("libgcc"),
 	});
 	tc.diagnostics = &d;
 	tc.inner = LINUX;
@@ -335,7 +336,7 @@ fn void builtin_headers_resolve_from_installed_layout_and_validate_resource_dir(
 
 	toolchain::Toolchain explicit_tc;
 	explicit_tc.init(mem, { .fs = tree.fs(), .target = target::from_triple("x86_64-linux-gnu")!! },
-		{ .has_resource_dir = true, .resource_dir = "/missing/resource" });
+		{ .resource_dir = maybe::value{String}("/missing/resource") });
 	List{IncludeDir} explicit_includes;
 	explicit_includes.init(mem);
 	check(@catch(explicit_tc.add_builtin_include_dir(&explicit_includes)), toolchain::RESOURCE_DIR_NOT_FOUND);
@@ -451,7 +452,7 @@ fn void linux_system_includes_use_sysroot_and_multiarch_paths() @test
 	toolchain::Toolchain tc;
 	tc.init(mem, {
 		.fs = tree.fs(), .target = target::from_triple("x86_64-linux-gnu")!!,
-	}, { .has_sysroot = true, .sysroot = "/sr", .nobuiltininc = true });
+	}, { .sysroot = maybe::value{String}("/sr"), .nobuiltininc = true });
 	tc.inner = LINUX;
 	List{IncludeDir} includes;
 	includes.init(mem);
@@ -468,7 +469,7 @@ fn void linux_system_includes_use_sysroot_and_multiarch_paths() @test
 	toolchain::Toolchain rtems_tc;
 	rtems_tc.init(mem, {
 		.fs = tree.fs(), .target = target::from_triple("x86_64-rtems")!!,
-	}, { .has_sysroot = true, .sysroot = "/sr", .nobuiltininc = true });
+	}, { .sysroot = maybe::value{String}("/sr"), .nobuiltininc = true });
 	rtems_tc.inner = LINUX;
 	List{IncludeDir} rtems_includes;
 	rtems_includes.init(mem);
@@ -525,7 +526,7 @@ fn void linux_zig_test() @test
 		.target = target::from_triple("x86_64-linux-gnu")!!,
 	};
 	toolchain::Toolchain tc;
-	tc.init(&arena, env, { .has_raw_target_triple = true, .raw_target_triple = "x86_64-linux-gnu" });
+	tc.init(&arena, env, { .raw_target_triple = maybe::value{String}("x86_64-linux-gnu") });
 	defer tc.free();
 	tc.discover()!!;
 	check(system_defaults::ENABLE_LINKER_BUILD_ID, false);
