@@ -5,7 +5,7 @@ import aro::primitive_value;
 import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
 import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
-import aro::parser_frontend;
+import aro::parser_declaration;
 import std::core::mem::allocators;
 
 alias TypeNameProbeFn = fn parser::TypeNameProbe?(void* context, parser::Parser* p);
@@ -211,7 +211,7 @@ fn void ExpressionFixture.init(&self, String input, String path = "expr.c",
 	self.diagnostics.init_list(&self.allocator);
 	self.comp.init(&self.allocator, null, &self.diagnostics);
 	self.comp.langopts.standard = standard;
-	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 	source::Source src = self.comp.add_source_from_buffer(path, input)!!;
 	TokenWithExpansionLocs eof = self.pp.preprocess(src)!!;
 	self.pp.add_token(eof)!!;
@@ -647,10 +647,8 @@ fn void parser_owned_statement_expression_unavailable_without_body_grammar() @te
 	f.free();
 	f.init("__builtin_choose_expr(1, 2, 3)\n");
 	parser_result::Result builtin = f.parser.expr()!!;
-	tree::Node builtin_call = builtin.node.get(&f.parser.tree);
-	assert(builtin_call.kind == tree::NodeKind.BUILTIN_CALL_EXPR);
-	assert(f.parser.tree.tok_slice(builtin_call.builtin_call.builtin_tok) == "__builtin_choose_expr");
-	assert(!has_expression_diagnostic(&f, "specialized builtin primary expressions are unavailable"));
+	assert(builtin.node.kind(&f.parser.tree) == tree::NodeKind.BUILTIN_CHOOSE_EXPR);
+	assert(builtin.val.to_i64(&f.comp)!! == 2);
 	assert(f.parser.at_eof());
 
 	f.free();
@@ -793,7 +791,7 @@ fn bool has_function_definition(tree::Tree* result, String name)
 fn void predefined_func_identifier_is_valid_inside_function() @test
 {
 	// `__func__` inside a function body must parse without diagnostics. This
-	// needs a function body, so it uses the production FrontendHandler composition.
+	// needs a function body, so it uses the production DeclarationParser grammar.
 	TrackingAllocator ta;
 	ta.init(mem);
 	defer ta.free();
@@ -803,14 +801,14 @@ fn void predefined_func_identifier_is_valid_inside_function() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("predefined_inside.c",
 			"int f(void) { const char *name = __func__; return 0; }\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
@@ -839,14 +837,14 @@ fn void predefined_func_identifier_warns_at_file_scope() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("predefined_top_level.c",
 			"const char *name = __func__;\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 

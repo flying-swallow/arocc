@@ -24,17 +24,6 @@ struct CallOperands
 	type_store::QualType complex_double;
 }
 
-<* Parser handler that routes builtin calls to the production dispatcher; all
-   other grammar is the real expression grammar on Parser. *>
-struct CallHandler (parser::IParserHandler)
-{
-	bool unused;
-}
-
-fn parser_result::Result? CallHandler.handle_builtin_call(&self, parser::Parser* p, type_store::NodeIndex callee,
-	tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @dynamic
-	=> builtin_call::dispatch(null, p, callee, l_paren, args, eval);
-
 fn void seed_operand(parser::Parser* p, String name, type_store::QualType qt)
 {
 	type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
@@ -117,12 +106,11 @@ fn void check_builtin_call(String text, bool eval, String diag_fragment = "", ui
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		CallHandler handler;
 		parser::Parser p;
-		p.init(&pp, &handler);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		seed_call_operands(&p, &operands);
 		if (in_variadic_function || in_fixed_function)
@@ -261,12 +249,11 @@ fn void builtin_overflow_call_preserves_original_argument_nodes_and_types() @tes
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", "__builtin_add_overflow(char_arg, char_arg, out)\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		CallHandler handler;
 		parser::Parser p;
-		p.init(&pp, &handler);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		seed_call_operands(&p, &operands);
 		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
@@ -331,12 +318,11 @@ fn void check_builtin_call_diagnostics(String text, String fragment, uint expect
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		CallHandler handler;
 		parser::Parser p;
-		p.init(&pp, &handler);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		seed_call_operands(&p, &operands);
 		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
@@ -384,12 +370,11 @@ fn void check_builtin_call_type(String text, String expected, String triple = ""
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		CallHandler handler;
 		parser::Parser p;
-		p.init(&pp, &handler);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		seed_call_operands(&p, &operands);
 		parser_result::Result? maybe_result = p.parse_postfix_expr(true);
@@ -489,12 +474,11 @@ fn void check_arm_exclusive_call(String text, String[] diag_fragments, uint[] di
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		CallHandler handler;
 		parser::Parser p;
-		p.init(&pp, &handler);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		seed_call_operands(&p, &operands);
 		parser_result::Result? maybe_result = p.parse_postfix_expr(true);

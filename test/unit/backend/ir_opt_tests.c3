@@ -1,7 +1,7 @@
 // Source-to-IR optimization harness and structural analysis tests.
 module ir_opt_tests;
 import std, aro::backend::ir, aro::backend::ir_opt, aro::code_gen_options, aro::codegen, aro::compilation;
-import aro::diagnostics, aro::lang_opts, aro::parser, aro::parser_frontend, aro::predefined_macros;
+import aro::diagnostics, aro::lang_opts, aro::parser, aro::parser_declaration, aro::predefined_macros;
 import aro::preprocessor, aro::source, aro::target, aro::tokens, aro::tree, aro::type_store;
 import aro::value_interner, aro::primitive_value, std::core::dstring;
 
@@ -26,7 +26,7 @@ fn void OptFixture.init(&self)
 	self.comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
 	self.comp.langopts.set_target_options(&self.comp.target);
 	type_store::init_named_types(&self.comp);
-	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 }
 
 fn void OptFixture.lower(&self, String c_source)
@@ -42,7 +42,7 @@ fn void OptFixture.lower(&self, String c_source)
 
 	parser::Parser p;
 	p.init(&self.pp);
-	parser_frontend::FrontendHandler handler;
+	parser_declaration::DeclarationParser handler;
 	handler.bind(&p);
 	self.tree = p.parse()!!;
 	p.free();

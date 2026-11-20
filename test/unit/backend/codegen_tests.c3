@@ -48,7 +48,7 @@ fn void CodeGenFixture.init(&self)
 	self.tokens[10] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = (uint)source_text.index_of("va_copy")!!, .line = 1 } };
 	self.tree.init(&self.comp, self.tokens[..]);
-	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 }
 
 fn void CodeGenFixture.free(&self)
@@ -589,6 +589,49 @@ fn void gen_ir_lowers_scalar_float_arithmetic_and_comparisons() @test
 		count_dump_occurrences(dump, "fcmp_ogt ") == 1 && count_dump_occurrences(dump, "fcmp_oge ") == 1,
 		"all float comparisons should select their ordered/unordered scalar compare tags:\n%s", dump);
 	alloc::free(&f.ta, dump.ptr);
+	graph.free();
+	f.free();
+}
+
+fn void gen_ir_scales_pointer_increments_by_element_size() @test
+{
+	CodeGenFixture f;
+	f.init();
+	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::QualType pointer_type = f.comp.type_store.put(type_store::type_pointer(type_store::LONG));
+	NodeIndex p = f.scalar_local(pointer_type, 3);
+	NodeIndex p_lvalue = f.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
+		.decl_ref = { .name_tok = 3, .qt = pointer_type, .decl = p } });
+	NodeIndex[5] statements;
+	uint statement_count = 0;
+	statements[statement_count++] = p;
+	tree::NodeKind[4] increment_kinds = { tree::NodeKind.PRE_INC_EXPR, tree::NodeKind.PRE_DEC_EXPR,
+		tree::NodeKind.POST_INC_EXPR, tree::NodeKind.POST_DEC_EXPR };
+	foreach (kind : increment_kinds)
+	{
+		statements[statement_count++] = f.tree.add_node({ .kind = kind,
+			.unary = { .qt = pointer_type, .operand = p_lvalue } });
+	}
+	NodeIndex body = f.tree.add_node({ .kind = tree::NodeKind.COMPOUND_STMT,
+		.compound_stmt = { .body = statements[..] } });
+	f.function_with_return_type(body, type_store::VOID);
+
+	ir::Ir graph = codegen::gen_ir(&f.tree, &f.pp)!!;
+	ir::Decl* decl = &graph.decls[0];
+	uint scaled_updates = 0;
+	uint negated_steps = 0;
+	uint pointer_subs = 0;
+	foreach (inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.NEGATE) negated_steps++;
+		if (inst.tag == ir::InstTag.SUB && inst.ty == value_interner::REF_PTR) pointer_subs++;
+		if (inst.tag != ir::InstTag.ADD || inst.ty != value_interner::REF_PTR) continue;
+		ir::Inst offset = decl.instructions[(usz)inst.data.bin.rhs];
+		if (offset.tag == ir::InstTag.MUL &&
+			f.constant_is(decl.instructions, offset.data.bin.rhs, 8, value_interner::REF_I64)) scaled_updates++;
+	}
+	assert(scaled_updates == 4, "pointer ++/-- should step by sizeof(long), got %d scaled updates", scaled_updates);
+	assert(negated_steps == 2 && pointer_subs == 0, "pointer -- should add a negated scaled step");
 	graph.free();
 	f.free();
 }

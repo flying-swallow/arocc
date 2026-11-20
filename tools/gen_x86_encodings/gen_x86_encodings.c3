@@ -3,9 +3,9 @@
 //
 //   bazel run //tools/gen_x86_encodings -- ZIG_X86_64_DIR OUT_C3 [ZIG_COMMIT]
 //
-// Relative paths are taken from the workspace root. Only the general-purpose
-// instructions the IR lowering uses are kept (MNEMONICS below), and only rows
-// usable on x86_64 (feature `none` or `64bit`). Enum member order follows
+// Relative paths are taken from the workspace root. Only the baseline
+// instructions used by IR lowering, approved parity conditions, and selected
+// legacy SSE/SSE2 and x87 rows are kept. Enum member order follows
 // Encoding.zig; table row order follows encodings.zon, which `find` relies on
 // for its "first shortest match" choice.
 module gen_x86_encodings;
@@ -19,11 +19,58 @@ const String[*] MNEMONICS = {
 	"ja", "jae", "jb", "jbe", "je", "jne", "jg", "jge", "jl", "jle",
 };
 
+const String[*] SSE_MNEMONICS = {
+	"addss", "andps", "comiss", "cvtsi2ss", "cvttss2si", "divss", "movaps", "movss",
+	"mulss", "subss", "ucomiss", "xorps",
+};
+
+const String[*] SSE2_MNEMONICS = {
+	"addsd", "andpd", "comisd", "cvtsd2ss", "cvtsi2sd", "cvtss2sd", "cvttsd2si", "divsd",
+	"movd", "movq", "movsd", "mulsd", "pxor", "subsd", "ucomisd", "xorpd",
+};
+
+const String[*] PARITY_MNEMONICS = { "jnp", "jp", "setnp", "setp" };
+
+const String[*] X87_MNEMONICS = {
+	"fadd", "faddp", "fchs", "fcomip", "fdiv", "fdivp", "fdivr", "fdivrp",
+	"fild", "fist", "fistp", "fisttp", "fld", "fldcw", "fmul", "fmulp",
+	"fnclex", "fninit", "fnstcw", "fnstsw", "fst", "fstcw", "fstp", "fsub", "fsubp",
+	"fsubr", "fsubrp", "fucomip", "fxch",
+};
+
 faultdef BAD_INPUT;
 
 fn bool in_list(String[] list, String s)
 {
 	foreach (x : list) if (x == s) return true;
+	return false;
+}
+
+fn bool is_approved_mnemonic(String mnemonic)
+{
+	return in_list(&MNEMONICS, mnemonic) || in_list(&PARITY_MNEMONICS, mnemonic) ||
+		in_list(&SSE_MNEMONICS, mnemonic) || in_list(&SSE2_MNEMONICS, mnemonic) ||
+		in_list(&X87_MNEMONICS, mnemonic);
+}
+
+fn bool include_unfeatured_mnemonic(String mnemonic)
+{
+	// MOVSD also names the legacy string-move instruction, whose rows have no SSE feature.
+	return in_list(&MNEMONICS, mnemonic) || in_list(&PARITY_MNEMONICS, mnemonic) || mnemonic == "movsd";
+}
+
+<* Baseline x86_64 rows, plus approved legacy SSE/SSE2 rows. *>
+fn bool include_feature(String mnemonic, String feature)
+{
+	if (feature == "none" || feature == "64bit")
+	{
+		return include_unfeatured_mnemonic(mnemonic);
+	}
+	if (feature == "sse") return in_list(&SSE_MNEMONICS, mnemonic);
+	if (feature == "sse2") return in_list(&SSE2_MNEMONICS, mnemonic);
+	if (feature == "x87") return in_list(&X87_MNEMONICS, mnemonic);
+	if (feature == "cmov x87") return mnemonic == "fcomip" || mnemonic == "fucomip";
+	if (feature == "sse3 x87") return mnemonic == "fisttp";
 	return false;
 }
 
@@ -287,6 +334,27 @@ fn String[] split_items(Allocator a, String s, bool as_ident) @local
 	return out.array_view();
 }
 
+<* Keep only valid x86_64 rows. SSE opcodes use the 0F map, optionally preceded by a mandatory prefix. *>
+fn bool include_row(Row row)
+{
+	String mnemonic = ident(row.mnemonic);
+	String feature = ident(row.feature);
+	String mode = ident(row.mode);
+	if (!is_approved_mnemonic(mnemonic) || mode.starts_with("vex_")) return false;
+	if (!include_feature(mnemonic, feature)) return false;
+	if (feature == "none" || feature == "64bit") return true;
+	if (in_list(&X87_MNEMONICS, mnemonic)) return mode == "none" || mode == "wait";
+	if (mode != "none" && mode != "long") return false;
+	String[] opcode = split_items(tmem, row.opc, false);
+	if (opcode.len < 2 || opcode.len > 3) return false;
+	sz map_index = 0;
+	if (opcode[0] == "0x66" || opcode[0] == "0xf2" || opcode[0] == "0xf3") map_index = 1;
+	if (opcode.len != map_index + 2 || opcode[map_index] != "0x0f") return false;
+	// 0F 38, 0F 3A and 0F 0F select other opcode maps, not legacy SSE/SSE2's 0F map.
+	String opcode_byte = opcode[map_index + 1];
+	return opcode_byte != "0x38" && opcode_byte != "0x3a" && opcode_byte != "0x0f";
+}
+
 fn bool is_ascii(String s) @local
 {
 	foreach (c : s) if (c >= 0x80) return false;
@@ -308,9 +376,41 @@ fn String? generate(Allocator a, String enc_src, String zon, String commit, Stri
 		foreach (t : zig_enum(tmem, enc_src, "Mnemonic")!)
 		{
 			String m = ident(t);
-			if (in_list(&MNEMONICS, m)) mnemonics.push(m);
+			if (is_approved_mnemonic(m)) mnemonics.push(m);
 		}
 		foreach (m : MNEMONICS)
+		{
+			if (!in_list(mnemonics.array_view(), m))
+			{
+				io::eprintfn("AssertionError: mnemonic %s missing from Encoding.zig", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : PARITY_MNEMONICS)
+		{
+			if (!in_list(mnemonics.array_view(), m))
+			{
+				io::eprintfn("AssertionError: mnemonic %s missing from Encoding.zig", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : SSE_MNEMONICS)
+		{
+			if (!in_list(mnemonics.array_view(), m))
+			{
+				io::eprintfn("AssertionError: mnemonic %s missing from Encoding.zig", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : SSE2_MNEMONICS)
+		{
+			if (!in_list(mnemonics.array_view(), m))
+			{
+				io::eprintfn("AssertionError: mnemonic %s missing from Encoding.zig", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : X87_MNEMONICS)
 		{
 			if (!in_list(mnemonics.array_view(), m))
 			{
@@ -332,10 +432,8 @@ fn String? generate(Allocator a, String enc_src, String zon, String commit, Stri
 		rows.init(tmem);
 		foreach (r : find_rows(tmem, zon))
 		{
+			if (!include_row(r)) continue;
 			String mn = ident(r.mnemonic);
-			if (!in_list(&MNEMONICS, mn)) continue;
-			String feature = ident(r.feature);
-			if (feature != "none" && feature != "64bit") continue;
 			String[] row_ops = split_items(tmem, r.ops, true);
 			String[] opc = split_items(tmem, r.opc, false);
 			if (row_ops.len > 4 || opc.len < 1 || opc.len > 3)
@@ -363,6 +461,46 @@ fn String? generate(Allocator a, String enc_src, String zon, String commit, Stri
 				return BAD_INPUT~;
 			}
 		}
+		foreach (m : PARITY_MNEMONICS)
+		{
+			bool has_row = false;
+			foreach (r : rows) if (r.mnemonic == m) has_row = true;
+			if (!has_row)
+			{
+				io::eprintfn("AssertionError: no x86_64 rows for %s", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : SSE_MNEMONICS)
+		{
+			bool has_row = false;
+			foreach (r : rows) if (r.mnemonic == m) has_row = true;
+			if (!has_row)
+			{
+				io::eprintfn("AssertionError: no legacy SSE rows for %s", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : SSE2_MNEMONICS)
+		{
+			bool has_row = false;
+			foreach (r : rows) if (r.mnemonic == m) has_row = true;
+			if (!has_row)
+			{
+				io::eprintfn("AssertionError: no legacy SSE2 rows for %s", m);
+				return BAD_INPUT~;
+			}
+		}
+		foreach (m : X87_MNEMONICS)
+		{
+			bool has_row = false;
+			foreach (r : rows) if (r.mnemonic == m) has_row = true;
+			if (!has_row)
+			{
+				io::eprintfn("AssertionError: no x87 rows for %s", m);
+				return BAD_INPUT~;
+			}
+		}
 
 		DString o;
 		o.init(a);
@@ -371,7 +509,7 @@ fn String? generate(Allocator a, String enc_src, String zon, String commit, Stri
 		o.append("// Do not edit by hand; regenerate instead.\n");
 		o.append("module aro::backend::x86_64;\n");
 		o.append("\n");
-		o.append("<* Zig `Encoding.Mnemonic`, restricted to the general-purpose instructions the IR lowering uses. *>\n");
+		o.append("<* Zig `Encoding.Mnemonic`, restricted to the instructions supported by this backend. *>\n");
 		o.append("enum Mnemonic : char (String name)\n");
 		o.append("{\n");
 		foreach (mn : mnemonics) o.appendf("\t%s { \"%s\" },\n", mn.to_upper_tcopy(), mn);
@@ -389,7 +527,7 @@ fn String? generate(Allocator a, String enc_src, String zon, String commit, Stri
 		o.appendf("\t%s,\n", upper_join(modes.array_view(), "", ", "));
 		o.append("}\n");
 		o.append("\n");
-		o.append("<* Zig `encodings.zon` rows for the mnemonics above (x86_64 only), in table order. *>\n");
+		o.append("<* Zig `encodings.zon` rows for the mnemonics above (x86_64, approved legacy SSE/SSE2, and selected x87), in table order. *>\n");
 		o.append("const Entry[*] ENCODINGS = {\n");
 		foreach (r : rows)
 		{

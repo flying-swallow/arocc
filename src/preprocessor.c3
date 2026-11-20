@@ -36,8 +36,8 @@
 //       argument collection, object/function macro expansion, __VA_ARGS__ /
 //       __VA_OPT__ / GNU comma deletion, the exhaustive rescan loop with
 //       hideset recursion blocking, expand_macro (top level) and
-//       add_tokens_from_expand_buf. Builtin macros are dispatched to the
-//       BuiltinProvider.
+//       add_tokens_from_expand_buf. Builtin macros expand through
+//       expand_builtin_obj / expand_builtin_func.
 //   macro_paste.c3 (13.4 `stringify-paste`)
 //       # stringify / destringify, ## paste_tokens with invalid-paste
 //       diagnostics, make_generated_token(_extra) (all writes of generated
@@ -54,9 +54,9 @@
 // via add_tokens_from_expand_buf -> add_token. The eof token is returned and
 // the caller (preprocess_sources / the probe) appends it.
 //
-// Providers. Builtin macros use the plan-14 `BUILTINS` provider by default;
-// callers may still inject a provider explicitly. FileProvider (plan 15)
-// remains independently injected for include/embed lookup and mtimes. Its
+// Providers. Builtin macros are expanded directly by Preprocessor methods
+// (pp_builtin_macros.c3, pp_feature_queries.c3). FileProvider (plan 15)
+// is injected for include/embed lookup and mtimes. Its
 // default returns aro::UNSUPPORTED; nothing silently succeeds. Macro-expanded
 // #include/#embed filenames and all standard #embed parameters use these hooks.
 // Dependency recording requires a Compilation dependency sink.
@@ -75,7 +75,7 @@
 //    sink records the base source, resolved include paths, successful
 //    `__has_include` results, and the filename spelling used by #embed.
 //  - `?SourceEpoch` options are `has_source_epoch` + `source_epoch`; without
-//    one, init asks the BuiltinProvider.
+//    one, init calls source_epoch_from_environment.
 module aro::preprocessor;
 import aro::source, aro::tokenizer, aro::tokens, aro::hideset, aro::compilation, aro::diagnostics;
 import aro::lang_opts, aro::string_interner, aro::text_literal, aro::dep_file, aro::pragma;
@@ -441,45 +441,6 @@ fn bool MacroTable.ordered_remove(&self, String name)
 // Providers
 
 <*
- Plan 14: Zig `comp.environment.sourceEpoch(io)` including the
- Diagnostic.INVALID_SOURCE_EPOCH fallback to DEFAULT_SOURCE_EPOCH. Called by init
- when InitOptions has no source epoch.
-*>
-alias SourceEpochFn = fn SourceEpoch? (void* ctx, Preprocessor* pp);
-
-<*
- Plan 14: Zig expandObjMacro's `.macro_builtin_obj` arm. Append the expansion
- of builtin object macro `kind` to `buf` (normally one generated token made
- with make_generated_token from `tok`, the tokFromRaw of the body token;
- location info comes from pp.expansion_source_loc). The caller already
- reserved one slot.
-*>
-alias ExpandBuiltinObjFn = fn void? (void* ctx, Preprocessor* pp, BuiltinObject kind, TokenWithExpansionLocs tok, ExpandBuf* buf);
-
-<*
- Plan 14 (and 15 for _Pragma / __pragma): Zig expandFuncMacro's
- `.macro_param_builtin_func` arm for `kind`. `macro_tok` is the macro name
- token, `raw` the body token (MACRO_PARAM_BUILTIN_FUNC), `expanded_args` the
- (possibly unexpanded, see should_expand_args) arguments. Append results to `buf`.
-*>
-alias ExpandBuiltinFuncFn = fn void? (void* ctx, Preprocessor* pp, BuiltinFunc kind, TokenWithExpansionLocs macro_tok, RawToken raw, MacroArguments* expanded_args, EvalContext eval_ctx, ExpandBuf* buf);
-
-<* Builtin macro services (plan 14). *>
-struct BuiltinProvider
-{
-	void* ctx;
-	SourceEpochFn source_epoch;
-	ExpandBuiltinObjFn expand_obj;
-	ExpandBuiltinFuncFn expand_func;
-}
-
-fn SourceEpoch? unsupported_source_epoch(void* ctx, Preprocessor* pp) => aro::UNSUPPORTED~;
-fn void? unsupported_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, TokenWithExpansionLocs tok, ExpandBuf* buf) => aro::UNSUPPORTED~;
-fn void? unsupported_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, TokenWithExpansionLocs macro_tok, RawToken raw, MacroArguments* expanded_args, EvalContext eval_ctx, ExpandBuf* buf) => aro::UNSUPPORTED~;
-
-const BuiltinProvider UNSUPPORTED_BUILTINS = { null, &unsupported_source_epoch, &unsupported_expand_obj, &unsupported_expand_func };
-
-<*
  Plan 15: Zig `Compilation.findInclude(filename, include_tok, include_type,
  which)`; FILE_NOT_FOUND where Zig returns null (the caller then reports
  fatal_not_found). Records the dependency (Zig dep_file) itself.
@@ -625,18 +586,17 @@ struct Preprocessor
 	<* Optional caller-owned dependency sink. *>
 	dep_file::DepFile* dependencies;
 
-	BuiltinProvider builtins;
 	FileProvider files;
 }
 
 <*
  Zig `Preprocessor.init`. Takes the source epoch from `options` or asks
- `builtins.source_epoch`; registers the builtin macros when
+ `source_epoch_from_environment`; registers the builtin macros when
  options.add_builtin_macros. Zig's `comp.pragmaEvent(.before_preprocess)`
  is called for registered handlers. On failure everything is released.
  @return? compilation::FATAL_ERROR, aro::UNSUPPORTED
 *>
-fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, BuiltinProvider builtins = BUILTINS, FileProvider files = UNSUPPORTED_FILES)
+fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, FileProvider files = UNSUPPORTED_FILES)
 {
 	Allocator gpa = comp.gpa;
 	*self = {
@@ -648,7 +608,6 @@ fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, Builti
 		.base_file = options.base_file,
 		.path_replacements = options.path_replacements,
 		.dependencies = options.dependencies,
-		.builtins = builtins,
 		.files = files,
 	};
 	self.arena.init(gpa, 4096);
@@ -666,7 +625,7 @@ fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, Builti
 
 	if (!options.has_source_epoch)
 	{
-		SourceEpoch? epoch = self.builtins.source_epoch(self.builtins.ctx, self);
+		SourceEpoch? epoch = self.source_epoch_from_environment();
 		if (catch epoch_fault = epoch)
 		{
 			self.free();
@@ -735,7 +694,7 @@ fn void Preprocessor.add_builtin_macro(&self, String name, MacroBuiltin kind)
 	};
 }
 
-<* Zig `addBuiltinMacros`: registers the builtin macro names (their expansion is plan 14's BuiltinProvider). *>
+<* Zig `addBuiltinMacros`: registers the builtin macro names (their expansion is expand_builtin_obj / expand_builtin_func). *>
 fn void Preprocessor.add_builtin_macros(&self)
 {
 	self.add_builtin_macro("__has_attribute", builtin_func(HAS_ATTRIBUTE));

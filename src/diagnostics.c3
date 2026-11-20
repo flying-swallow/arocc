@@ -1068,7 +1068,7 @@ enum Diagnostic : ushort (String fmt, MessageKind kind, DiagMeta meta, Diagnosti
 	CHAR_LIT_TOO_WIDE { "character constant too long for its type", WARNING, {}, TEXT_LITERAL },
 	U8_CHAR_LIT { "UTF-8 character literal is a C23 extension", WARNING, { .has_opt = true, .opt = Option.C23_EXTENSIONS, .extension = true }, TEXT_LITERAL },
 
-	// ---- Number literals (NumberLiteralParser.err) ----
+	// ---- Number literals (LiteralSite.err) ----
 	// Zig `number_literal.Parser.Diagnostic` (exact Zig text). `fmt` is C3 printf syntax; `{c}` arguments are `text_literal::Ascii` values.
 	INVALID_BINARY_DIGIT { "invalid digit '%s' in binary constant", ERROR, {}, NUMBER_LITERAL },
 	INVALID_OCTAL_DIGIT { "invalid digit '%s' in octal constant", ERROR, {}, NUMBER_LITERAL },

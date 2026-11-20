@@ -90,10 +90,8 @@ fn void normalize_attribute_names() @test
 	check(preprocessor::HAS_BUILTIN_SPECIAL_CASES.len, 6);
 }
 
-fn void provider_and_features() @test
+fn void target_feature_names() @test
 {
-	BuiltinProvider p = preprocessor::BUILTINS;
-	test::eq(p.ctx == null, true);
 	// New feature entries parse by their Zig names in their family.
 	test::eq(target::parse_feature_name(X86_64, "avx512vbmi")!!, Feature.X86_AVX512VBMI);
 	test::eq(target::parse_feature_name(AARCH64, "sme2")!!, Feature.AARCH64_SME2);

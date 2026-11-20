@@ -82,7 +82,7 @@ fn void preprocess_parse_and_inspect(compilation::Compilation* comp, String path
 	preprocessor::InitOptions options = preprocessor::TESTING;
 	options.base_file = src.id;
 	preprocessor::Preprocessor pp;
-	pp.init(comp, options, preprocessor::BUILTINS, comp.file_provider())!!;
+	pp.init(comp, options, comp.file_provider())!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
 
 	IntegerDeclarations declarations;

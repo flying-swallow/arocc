@@ -52,7 +52,7 @@ interface IParserHandler
 	fn type_store::QualType? handle_typed_type_name(Parser* p) @optional;
 	<* A non-match is successful and must not diagnose or consume input. *>
 	fn TypeNameProbe? handle_typed_type_name_probe(Parser* p) @optional;
-	fn void? handle_body(Parser* p) @optional;
+	fn type_store::NodeIndex? handle_body(Parser* p) @optional;
 	fn void? handle_implicit_typedefs(Parser* p) @optional;
 	<* Called once after the translation unit's top-level parse loop reaches EOF. *>
 	fn void? handle_translation_unit_end(Parser* p) @optional;
@@ -60,11 +60,6 @@ interface IParserHandler
 	fn bool? is_recoverable_parse_fault(Parser* p, fault parse_fault) @optional;
 	<* Required before SymbolStack can combine a tentative declaration with a definition. *>
 	fn void handle_tentative_decl_definition(Parser* p, type_store::NodeIndex declaration, type_store::NodeIndex definition) @optional;
-	<* Specialized primary-expression grammar, such as the builtin parser. *>
-	fn parser_result::Result? handle_builtin_primary_expression(Parser* p, bool eval) @optional;
-	<* Specialized call parsing for builtin calls. *>
-	fn parser_result::Result? handle_builtin_call(Parser* p, type_store::NodeIndex callee,
-		tokens::TokenIndex l_paren, type_store::NodeIndex[] args, bool eval) @optional;
 	<* Compound statement inside a GNU statement expression. *>
 	fn type_store::NodeIndex? handle_statement_expression_body(Parser* p, bool eval) @optional;
 }
@@ -279,14 +274,12 @@ fn symbol_stack::Symbol? Parser.find_symbol(&self, string_interner::StringId nam
 
 fn bool? Parser.find_typedef(&self, string_interner::StringId name, tokens::TokenIndex name_tok, bool no_type_yet, symbol_stack::Symbol* out)
 {
-	symbol_stack::SymbolContext ctx = self.symbol_context();
-	return self.symbols.find_typedef(&ctx, name, name_tok, no_type_yet, out);
+	return self.symbols.find_typedef(self, name, name_tok, no_type_yet, out);
 }
 
 fn bool? Parser.find_tag(&self, string_interner::StringId name, tokenizer::TokenId kind, tokens::TokenIndex name_tok, tokenizer::TokenId next_tok_id, symbol_stack::Symbol* out)
 {
-	symbol_stack::SymbolContext ctx = self.symbol_context();
-	return self.symbols.find_tag(&ctx, name, kind, name_tok, next_tok_id, out);
+	return self.symbols.find_tag(self, name, kind, name_tok, next_tok_id, out);
 }
 
 <* Apply the active constant declaration policy to a declaration reference.
@@ -783,19 +776,24 @@ fn TypeNameProbe? Parser.probe_typed_type_name(&self)
 	return probe;
 }
 
-<* Dispatch the mutually recursive statement/body grammar, or report its absence. *>
-fn void? Parser.parse_body(&self)
+<* Dispatch the mutually recursive statement/body grammar and return the body
+ node, or report its absence and fail with PARSING_FAILED. *>
+fn type_store::NodeIndex? Parser.parse_body(&self)
 {
 	if (self.handler && &self.handler.handle_body)
 	{
-		fault f = @catch(self.handler.handle_body(self));
-		if (f != HOOK_ABSENT)
+		type_store::NodeIndex? body = self.handler.handle_body(self);
+		if (catch f = body)
 		{
-			if (f) return f~;
-			return;
+			if (f != HOOK_ABSENT) return f~;
+		}
+		else
+		{
+			return body;
 		}
 	}
-	return self.grammar_unavailable();
+	self.grammar_unavailable()!;
+	return PARSING_FAILED~;
 }
 
 fn void? Parser.grammar_unavailable(&self)

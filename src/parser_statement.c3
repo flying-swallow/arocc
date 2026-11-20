@@ -5,7 +5,7 @@ module aro::parser_statement;
 import aro::attribute, aro::attribute_wip, aro::compilation, aro::parser, aro::parser_attribute, aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
 import aro::type_store, aro::lang_opts, aro::bigint, aro::attribute_map;
 import aro::parser_declaration;
-import aro::parser_builtin, aro::parser_declarator, aro::text_literal;
+import aro::text_literal;
 import std::collections::list, std::collections::map;
 import std::core::dstring;
 import std::core::mem;
@@ -190,27 +190,6 @@ fn parser_result::Result? StatementParser.handle_address_of_label(&self, parser:
 	return { .node = node, .qt = type_store::VOID_POINTER, .val = value::NONE };
 }
 
-<* Adapter state for IParserHandler.handle_body. The parsed tree node remains
- caller-owned; `body` is cleared before each callback invocation. *>
-struct StatementBodyBinding
-{
-	StatementParser* statements;
-	type_store::NodeOptIndex body;
-}
-
-<* Parse a function body into `binding.body` (NODE_NULL on failure). *>
-fn void? StatementBodyBinding.parse(&binding, parser::Parser* p)
-{
-	binding.body = type_store::NODE_NULL;
-	type_store::NodeIndex? parsed = binding.statements.parse_body(p, true);
-	if (catch __fault = parsed)
-	{
-		if (__fault == PARSING_FAILED) return parser::PARSING_FAILED~;
-		return __fault~;
-	}
-	binding.body = parsed.pack();
-}
-
 <* Evaluate the borrowed token ranges for each attribute argument and append
  them to the temporary Wip state. The expression parser advances only inside
  the range selected by the attribute syntax reader; restore the statement
@@ -365,7 +344,7 @@ fn bool? parse_asm_statement_into(parser::Parser* p, type_store::NodeIndex* out)
 		if (__fault != parser::NOT_ASM) return __fault~;
 		return false;
 	}
-	*out = maybe_asm;
+	* out = maybe_asm;
 	return true;
 }
 
@@ -704,11 +683,15 @@ fn void? StatementParser.parse_case_label(&self, parser::Parser* p, CaseLabel* o
 			}
 			else
 			{
-				self.add_case_value({ .start = case_value, .end = case_end_value, .tok = case_expr_tok });
+				self.add_case_value(
+				{
+					.start = case_value, .end = case_end_value, .tok = case_expr_tok
+				}
+				);
 			}
 		}
 	}
-	*out = { .kw = kw, .is_default = is_default, .value_node = value_node, .end_node = end_node };
+	* out = { .kw = kw, .is_default = is_default, .value_node = value_node, .end_node = end_node };
 	return;
 }
 
@@ -1085,8 +1068,8 @@ fn NoreturnKind StatementParser.node_is_noreturn(&self, parser::Parser* p, type_
 fn bool recoverable_statement_item_fault(fault f)
 {
 	if (f == compilation::FATAL_ERROR || f == mem::OUT_OF_MEMORY || f == parser::HOOK_ABSENT) return false;
-	return f == parser::PARSING_FAILED || f == parser_builtin::PARSING_FAILED ||
-	f == parser_declaration::PARSING_FAILED || f == parser_declarator::PARSING_FAILED ||
+	return f == parser::PARSING_FAILED ||
+	f == parser_declaration::PARSING_FAILED ||
 	f == PARSING_FAILED || f == text_literal::PARSING_FAILED ||
 	f == parser::NO_EXPRESSION;
 }
@@ -1280,7 +1263,7 @@ fn bool? StatementParser.recover_body_item(&self, parser::Parser* p, fault item_
 fn void StatementParser.track_noreturn(&self, parser::Parser* p, type_store::NodeIndex stmt_index, bool* has_noreturn, tokens::TokenIndex* noreturn_tok, uint* noreturn_label_count) @noinline
 {
 	tree::Node stmt = stmt_index.get(&p.tree);
-	if (!*has_noreturn && self.node_is_noreturn(p, stmt_index) == NoreturnKind.YES)
+	if (!* has_noreturn && self.node_is_noreturn(p, stmt_index) == NoreturnKind.YES)
 	{
 		*has_noreturn = true;
 		*noreturn_tok = p.tok_i;
@@ -1297,7 +1280,7 @@ fn void StatementParser.track_noreturn(&self, parser::Parser* p, type_store::Nod
 }
 
 <* Closing brace, unreachable-code warning and the implicit return of a function body. *>
-fn void? StatementParser.finish_body(&self, parser::Parser* p, list::List{type_store::NodeIndex}* body, tokens::TokenIndex opener,
+fn void? StatementParser.finish_body(&self, parser::Parser* p, list::List{type_store::NodeIndex} * body, tokens::TokenIndex opener,
 	bool recovered_closing_brace, bool has_noreturn, tokens::TokenIndex noreturn_tok, uint noreturn_label_count, bool is_fn_body) @noinline
 {
 	tokens::TokenIndex r_brace = recovered_closing_brace ? p.tok_i - 1 : p.tok_i;

@@ -4,7 +4,7 @@ module aro::driver;
 import aro::driver_options;
 import aro::compilation, aro::target, aro::code_gen_options, aro::toolchain, aro::lang_opts, aro::system_defaults;
 import aro::toolchain::discovery;
-import aro::source, aro::preprocessor, aro::predefined_macros, aro::parser, aro::parser_frontend, aro::tree;
+import aro::source, aro::preprocessor, aro::predefined_macros, aro::parser, aro::parser_declaration, aro::tree;
 import aro::driver_exec, aro::driver_tempfiles;
 import aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::codegen;
 import aro::host_process;
@@ -2165,7 +2165,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 		.add_builtin_macros = true,
 		.dependencies = wants_dependencies ? &dep : null,
 	};
-	if (catch f = pp.init(comp, pp_opts, preprocessor::BUILTINS, comp.file_provider()))
+	if (catch f = pp.init(comp, pp_opts, comp.file_provider()))
 	{
 		(void)add_driver_error(comp.gpa, d, "unable to initialize preprocessor: %s", f);
 		return 1;
@@ -2247,7 +2247,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 
 	parser::Parser p;
 	p.init(&pp);
-	parser_frontend::FrontendHandler handler;
+	parser_declaration::DeclarationParser handler;
 	handler.bind(&p);
 	defer p.free();
 	tree::Tree? parsed = p.parse();

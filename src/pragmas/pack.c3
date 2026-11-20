@@ -5,7 +5,7 @@
 // must invoke the host parser's normal pp-number parser and return its value.
 module aro::pragmas::pack;
 import aro::tokenizer;
-import aro::pragma, aro::parser, aro::tokens, aro::compilation, aro::number_literal, aro::number_value, aro::diagnostics;
+import aro::pragma, aro::parser, aro::tokens, aro::compilation, aro::number_value, aro::diagnostics;
 import std::core::mem::alloc, std::core::string;
 import std::collections::list;
 
@@ -306,15 +306,9 @@ fn bool TreeParserAdapter.parse_integer(&self, uint index, ulong* out)
 	$endif
 	parser::Parser* p = self.p;
 	tokens::TreeToken tok = p.tree.tokens[(usz)index];
-	number_literal::NumberLiteralParser literal = {
-		.comp = p.comp,
-		.literal = p.tree.tok_slice((tokens::TokenIndex)index),
-		.loc = tok.loc,
-		.expansion_locs = p.pp.expansion_slice((tokens::TokenIndex)index),
-	};
-	number_literal::NumberLiteralResult? parsed = literal.parse();
-	if (catch f = parsed) return false;
-	number_value::PpNumberValue value = number_value::pp_int_value(parsed);
+	number_value::PpNumberValue? value = number_value::pp_parse(p.comp,
+		p.tree.tok_slice((tokens::TokenIndex)index), tok.loc, p.pp.expansion_slice((tokens::TokenIndex)index));
+	if (catch value) return false;
 	*out = value.rejected ? ulong::max : value.is_signed ? (ulong)value.signed : value.unsigned;
 	return true;
 }

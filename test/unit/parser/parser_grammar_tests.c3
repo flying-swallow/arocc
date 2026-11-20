@@ -30,7 +30,7 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("grammar.c",
 			"Seeded seed = 1; typedef int Word; Word source = 1; " +++
 			"struct Pair { int key; unsigned ready : 1; }; " +++
@@ -148,7 +148,7 @@ fn void malformed_function_recovers_to_following_declaration() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("recovery.c",
 			"int broken(void) { if (1) } int valid;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -190,7 +190,7 @@ fn void auto_type_expression_failures_recover_at_declaration_and_statement_bound
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto-type-recovery.c",
 			"int bad_cast = (__auto_type)5; int after_cast = 1; " +++
 			"void f(void) { __auto_type self = self; int after_self = 2; } int tail = 3;")!!;
@@ -241,7 +241,7 @@ fn void nonfixed_enum_overflow_diagnostics_keep_unbounded_messages_and_wrapped_v
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("enum-overflow.c",
 			"enum E { A = 2147483647, B, C = 4294967295UL, D, " +++
 			"F = 9223372036854775807LL, G, " +++
@@ -294,7 +294,7 @@ fn void function_void_parameter_lists_follow_c_conventions() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("void-parameters.c",
 			"int f(void); int qualified(const void); int bad(void, int value); " +++
 			"int bad_qualified(const void, int value); int later(int value, void);")!!;

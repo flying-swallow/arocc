@@ -4,13 +4,13 @@
 // How the plan 11 literal modules fit together
 // --------------------------------------------
 //   number_literal.c3  (11.1 `number-syntax`)
-//       Bytes of one pp-number token -> NumberLiteralResult { bytes, is_float,
+//       Bytes of one pp-number token -> NumberLiteral { bytes, is_float,
 //       prefix, suffix }. Validates digits, separators, exponent and suffix
 //       against LangOpts (C23 binary/_BitInt, C2y octal, MSVC fixed-size
 //       suffixes) and reports syntax diagnostics itself (DIAG_* below) at the
 //       token's Location + expansion locations.
 //   number_value.c3    (11.2 `number-values`)
-//       NumberLiteralResult -> NumberValue { qt, val, ... }: Parser.zig
+//       NumberLiteral -> NumberValue { qt, val, ... }: Parser.zig
 //       parseNumberToken/parseInt/fixedSizeInt/bitInt/parseFloat without the
 //       parser. Floats go through primitive_value::parse_f128 and PrimitiveValue.cast;
 //       integers through value (u64) / bigint (_BitInt). Parser-level
@@ -32,8 +32,8 @@
 // None of these needs a token list or AST: inputs are token bytes, TokenId,
 // Location and expansion locations plus the Compilation (langopts, target,
 // type_store, interner, diagnostics). The preprocessor (plan 13: `#if`
-// pp-numbers and char constants, unescapeUcn) uses NumberLiteralParser,
-// number_value::pp_int_value, TextLiteralParser and
+// pp-numbers and char constants, unescapeUcn) uses number_value::pp_parse,
+// TextLiteralParser and
 // text_literal_semantics::pp_char_value directly.
 //
 // Stage 0 (plan 11 contract): types, diagnostic templates and signatures.
@@ -432,8 +432,11 @@ fn bool Suffix.is_float_only(self)
 // ---------------------------------------------------------------------------
 // Parser
 
-<* Zig `number_literal.Parser.Result`. *>
-struct NumberLiteralResult
+<*
+ Zig `number_literal.Parser.Result`: one pp-number split into its parts.
+ Intermediate of number_value::parse / pp_parse; only they (and tests) use it.
+*>
+struct NumberLiteral
 {
 	<*
 	 Float: the literal without its suffix (prefix included, separators kept).
@@ -445,20 +448,18 @@ struct NumberLiteralResult
 	Suffix suffix;
 }
 
-<*
- Zig `number_literal.Parser`: splits one pp-number token. Diagnostics are
- reported at `loc` through `expansion_locs` (Zig `err`).
-*>
-struct NumberLiteralParser
+<* Where `split` reports diagnostics (Zig `number_literal.Parser`
+   minus the literal). Shared by the split helpers. *>
+struct LiteralSite @private
 {
 	Compilation* comp;
-	String literal;
 	Location loc;
 	Location[] expansion_locs;
 }
 
 <*
- Zig `Parser.parse`. allow = langopts.allow_fixed_sized_int_suffixes();
+ Zig `number_literal.Parser.parse`: split one pp-number token, reporting
+ diagnostics at `loc` through `expansion_locs`. allow = langopts.allow_fixed_sized_int_suffixes();
  prefix = prefix_from_string(buf, allow); then getIntegerPart, getFracPart,
  getExponent; is_float = frac or exponent present; the rest must be a suffix
  of that kind (else Diagnostic.INVALID_FLOAT_SUFFIX / Diagnostic.INVALID_INT_SUFFIX with
@@ -481,21 +482,22 @@ struct NumberLiteralParser
  Every error returns text_literal::PARSING_FAILED after reporting.
  @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
-fn NumberLiteralResult? NumberLiteralParser.parse(&self)
+fn NumberLiteral? split(Compilation* comp, String literal, Location loc, Location[] expansion_locs = {})
 {
-	String buf = self.literal;
-	bool allow_fixed_size_int_suffixes = self.comp.langopts.allow_fixed_sized_int_suffixes();
+	LiteralSite site = { .comp = comp, .loc = loc, .expansion_locs = expansion_locs };
+	String buf = literal;
+	bool allow_fixed_size_int_suffixes = site.comp.langopts.allow_fixed_sized_int_suffixes();
 	Prefix prefix = prefix_from_string(buf, allow_fixed_size_int_suffixes);
 	sz prefix_len = prefix.string_len(buf);
 	String after_prefix = buf[prefix_len..];
 
-	String int_part = self.get_integer_part(after_prefix, prefix)!;
+	String int_part = site.get_integer_part(after_prefix, prefix)!;
 	String after_int = after_prefix[int_part.len..];
 
-	String frac = self.get_frac_part(after_int, prefix)!;
+	String frac = site.get_frac_part(after_int, prefix)!;
 	String after_frac = after_int[frac.len..];
 
-	String exponent = self.get_exponent(after_frac, prefix)!;
+	String exponent = site.get_exponent(after_frac, prefix)!;
 	String suffix_str = after_frac[exponent.len..];
 
 	bool is_float = exponent.len > 0 || frac.len > 0;
@@ -504,17 +506,17 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 	{
 		if (is_float)
 		{
-			self.err(Diagnostic.INVALID_FLOAT_SUFFIX, suffix_str)!;
+			site.err(Diagnostic.INVALID_FLOAT_SUFFIX, suffix_str)!;
 		}
 		else
 		{
-			self.err(Diagnostic.INVALID_INT_SUFFIX, suffix_str)!;
+			site.err(Diagnostic.INVALID_INT_SUFFIX, suffix_str)!;
 		}
 		return text_literal::PARSING_FAILED~;
 	}
-	if (suffix.is_float80() && @catch(self.comp.float80_type()))
+	if (suffix.is_float80() && @catch(site.comp.float80_type()))
 	{
-		self.err(Diagnostic.INVALID_FLOAT_SUFFIX, suffix_str)!;
+		site.err(Diagnostic.INVALID_FLOAT_SUFFIX, suffix_str)!;
 		return text_literal::PARSING_FAILED~;
 	}
 
@@ -523,43 +525,43 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
 		assert(prefix == HEX || prefix == DECIMAL);
 		if (prefix == HEX && exponent.len == 0)
 		{
-			self.err(Diagnostic.HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT)!;
+			site.err(Diagnostic.HEX_FLOATING_CONSTANT_REQUIRES_EXPONENT)!;
 			return text_literal::PARSING_FAILED~;
 		}
 		return { .bytes = buf[:buf.len - suffix_str.len], .is_float = true, .prefix = prefix, .suffix = suffix };
 	}
 
-	bool c23 = self.comp.langopts.standard.at_least(C23);
+	bool c23 = site.comp.langopts.standard.at_least(C23);
 	// Zig: `if (prefix == .binary and !c23) err(if (c23) pre_c23_binary else c23_binary)`.
-	if (prefix == BINARY && !c23) self.err(Diagnostic.C23_BINARY)!;
+	if (prefix == BINARY && !c23) site.err(Diagnostic.C23_BINARY)!;
 	if (suffix.is_bit_int())
 	{
 		if (c23)
 		{
-			self.err(Diagnostic.PRE_C23_BITINT)!;
+			site.err(Diagnostic.PRE_C23_BITINT)!;
 		}
 		else
 		{
-			self.err(Diagnostic.BITINT_SUFFIX)!;
+			site.err(Diagnostic.BITINT_SUFFIX)!;
 		}
 	}
 	if (prefix == OCTAL)
 	{
-		bool c2y = self.comp.langopts.standard.at_least(C2Y);
+		bool c2y = site.comp.langopts.standard.at_least(C2Y);
 		if (prefix_len == 2 && buf[1] != '\'')
 		{
 			if (c2y)
 			{
-				self.err(Diagnostic.PRE_C2Y_OCTAL)!;
+				site.err(Diagnostic.PRE_C2Y_OCTAL)!;
 			}
 			else
 			{
-				self.err(Diagnostic.C2Y_OCTAL)!;
+				site.err(Diagnostic.C2Y_OCTAL)!;
 			}
 		}
 		else if (c2y)
 		{
-			self.err(Diagnostic.C2Y_DEPRECATED_OCTAL)!;
+			site.err(Diagnostic.C2Y_DEPRECATED_OCTAL)!;
 		}
 	}
 	return { .bytes = int_part, .is_float = false, .prefix = prefix, .suffix = suffix };
@@ -570,7 +572,7 @@ fn NumberLiteralResult? NumberLiteralParser.parse(&self)
  (skipped when the effective kind is OFF).
  @return? compilation::FATAL_ERROR
 *>
-macro void? NumberLiteralParser.err(&self, $diag, ...)
+macro void? LiteralSite.err(&self, $diag, ...)
 {
 	return text_literal::emit_literal_diagnostic(self.comp, $diag, self.loc, self.expansion_locs, ...$vaarg);
 }
@@ -580,7 +582,7 @@ macro void? NumberLiteralParser.err(&self, $diag, ...)
  @require buf.len > 0
  @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
-fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix)
+fn String? LiteralSite.get_integer_part(&self, String buf, Prefix prefix)
 {
 	if (buf[0] == '.') return "";
 
@@ -647,7 +649,7 @@ fn String? NumberLiteralParser.get_integer_part(&self, String buf, Prefix prefix
  Zig `Parser.getFracPart`.
  @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
-fn String? NumberLiteralParser.get_frac_part(&self, String buf, Prefix prefix)
+fn String? LiteralSite.get_frac_part(&self, String buf, Prefix prefix)
 {
 	if (buf.len == 0 || buf[0] != '.') return "";
 	if (prefix == BINARY || prefix == OCTAL)
@@ -668,7 +670,7 @@ fn String? NumberLiteralParser.get_frac_part(&self, String buf, Prefix prefix)
  Zig `Parser.getExponent`.
  @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
-fn String? NumberLiteralParser.get_exponent(&self, String buf, Prefix prefix)
+fn String? LiteralSite.get_exponent(&self, String buf, Prefix prefix)
 {
 	if (buf.len == 0) return "";
 

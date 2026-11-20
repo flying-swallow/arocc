@@ -5,6 +5,12 @@ module aro::parser;
 import aro::parser_result, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::diagnostics, aro::value;
 import std::collections::list;
 
+<* Zig `assembly(kind)`'s context: which construct the asm keyword introduces. *>
+enum AsmKind : char
+{
+	GLOBAL, DECL_LABEL, STMT
+}
+
 fn tree::AsmOperand? Parser.parse_asm_operand(&self, bool output)
 {
 	tokens::TokenIndex name = 0;
@@ -33,12 +39,6 @@ fn tree::AsmOperand? Parser.parse_asm_operand(&self, bool output)
 	}
 	if (catch self.expect_closing(tokenizer::TokenId.R_PAREN, lparen)) return PARSING_FAILED~;
 	return { .name = name, .constraint = constraint, .expr = result.node };
-}
-
-<* Zig `assembly(kind)`'s context: which construct the asm keyword introduces. *>
-enum AsmKind : char
-{
-	GLOBAL, DECL_LABEL, STMT
 }
 
 <*

@@ -32,7 +32,7 @@ macro @with_parser(; @body(Compilation* comp, Parser* p, Diagnostics* d))
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
 		comp.langopts.set_target_options(&comp.target);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
 		p.init(&pp, {});
 		@body(&comp, &p, &d);

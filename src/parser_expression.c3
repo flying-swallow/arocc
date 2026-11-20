@@ -312,7 +312,7 @@ fn parser_result::Result? Parser.unary_expr(&self, bool eval)
 		default:
 			break;
 	}
-	if (op.is_identifier() && self.handler && &self.handler.handle_builtin_primary_expression)
+	if (op.is_identifier())
 	{
 		parser_result::Result builtin;
 		if (self.parse_builtin_primary_into(eval, &builtin)!) return builtin;
@@ -346,10 +346,10 @@ fn parser_result::Result? Parser.parse_extension(&self, bool eval) @noinline
 	return self.unary_expr(eval);
 }
 
-<* Builtin primary hook: false means "not a builtin", so `unary_expr` falls through. *>
+<* Builtin primary: false means "not a builtin", so `unary_expr` falls through. *>
 fn bool? Parser.parse_builtin_primary_into(&self, bool eval, parser_result::Result* out) @noinline
 {
-	parser_result::Result? maybe_builtin = self.handler.handle_builtin_primary_expression(self, eval);
+	parser_result::Result? maybe_builtin = self.parse_builtin_primary(eval);
 	if (catch builtin_fault = maybe_builtin)
 	{
 		if (builtin_fault != NO_EXPRESSION) return builtin_fault~;

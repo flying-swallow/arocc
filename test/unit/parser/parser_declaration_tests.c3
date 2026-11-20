@@ -2,13 +2,10 @@
 module parser_declaration_tests;
 import aro::parser, aro::preprocessor, aro::tokens, aro::tokenizer, aro::tree;
 import aro::compilation, aro::diagnostics, aro::source, aro::type_store, aro::symbol_stack, aro::string_interner, aro::value;
-import aro::parser_declaration, aro::parser_declarator;
-import aro::parser_frontend;
+import aro::parser_declaration;
 import aro::lang_opts, aro::target;
 import aro::pragma;
 import aro::attribute;
-
-fn type_store::QualType? unused_type_name(void* context, parser::Parser* p) => type_store::INT;
 
 <* Full-frontend trees begin with the implicit typedef prelude, whose size depends on the target. *>
 fn sz first_user_root(tree::Tree* result)
@@ -31,7 +28,7 @@ struct RecoveryState (parser_declaration::IDeclarationTestProbe)
 
 struct FrontendFaultRecoveryState (parser_declaration::IDeclarationTestProbe)
 {
-	parser_frontend::FrontendHandler* frontend;
+	parser_declaration::DeclarationParser* frontend;
 	bool returned_declaration_module_fault;
 }
 
@@ -62,13 +59,13 @@ fn void? InferredArrayCapture.declaration(&capture, parser::Parser* p) @dynamic
 	capture.declarations.parse_declaration(p)!;
 	if (capture.declaration_count == 0)
 	{
-		symbol_stack::Symbol* symbol = p.symbols.get_ptr(p.comp.intern_string("items"), symbol_stack::ScopeKind.VARS);
+		symbol_stack::Symbol* symbol = p.symbols.get_var_ptr(p.comp.intern_string("items"));
 		capture.items_qt = symbol.qt;
 		capture.items_node = symbol.node;
 	}
 	else if (capture.declaration_count == 1)
 	{
-		symbol_stack::Symbol* symbol = p.symbols.get_ptr(p.comp.intern_string("text"), symbol_stack::ScopeKind.VARS);
+		symbol_stack::Symbol* symbol = p.symbols.get_var_ptr(p.comp.intern_string("text"));
 		capture.text_qt = symbol.qt;
 		capture.text_node = symbol.node;
 	}
@@ -121,11 +118,11 @@ fn void? RecoveryState.declaration(&state, parser::Parser* p) @dynamic
 }
 
 <* Adapt the real declaration parser's diagnosed syntax failure to its own
- module fault so FrontendHandler's classifier is exercised at translation-unit
+ module fault so DeclarationParser's classifier is exercised at translation-unit
  scope. *>
 fn void? FrontendFaultRecoveryState.declaration(&state, parser::Parser* p) @dynamic
 {
-	fault parse_fault = @catch(state.frontend.declarations.parse_declaration(p));
+	fault parse_fault = @catch(state.frontend.parse_declaration(p));
 	if (parse_fault && !state.returned_declaration_module_fault)
 	{
 		state.returned_declaration_module_fault = true;
@@ -152,7 +149,7 @@ fn void parser_record_spec_creates_and_reuses_forward_tag() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("record.c", "struct Node")!!;
 		pp.add_token({ .id = tokenizer::TokenId.KEYWORD_STRUCT, .loc = declaration_loc(src, 0) })!!;
 		pp.add_token({ .id = tokenizer::TokenId.IDENTIFIER, .loc = declaration_loc(src, 7) })!!;
@@ -180,89 +177,6 @@ fn void parser_record_spec_creates_and_reuses_forward_tag() @test
 	assert(ta.allocation_count() == 0);
 }
 
-fn void abstract_declarator_suffix_respects_parenthesized_pointer_precedence() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		diagnostics::Diagnostics d;
-		d.init_list(&ta);
-		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		source::Source src = comp.add_source_from_buffer("declarator.c", "(*)[] *[]")!!;
-		pp.add_token({ .id = tokenizer::TokenId.L_PAREN, .loc = declaration_loc(src, 0) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.ASTERISK, .loc = declaration_loc(src, 1) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.R_PAREN, .loc = declaration_loc(src, 2) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.L_BRACKET, .loc = declaration_loc(src, 3) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.R_BRACKET, .loc = declaration_loc(src, 4) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.ASTERISK, .loc = declaration_loc(src, 6) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.L_BRACKET, .loc = declaration_loc(src, 7) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.R_BRACKET, .loc = declaration_loc(src, 8) })!!;
-		pp.tokens.push({ .id = tokenizer::TokenId.EOF, .loc = declaration_loc(src, 9) });
-
-		parser::Parser p;
-		p.init(&pp);
-		p.bind_finalized_tokens();
-		UnusedTypeName unused;
-		parser_declarator::DeclaratorParser declarator = { .parser = &p, .probe = &unused };
-		type_store::QualType pointer_to_array = declarator.abstract_declarator(type_store::INT)!!;
-		type_store::Type pointer = pointer_to_array.get(&comp, type_store::TypeTag.POINTER)!!;
-		assert(pointer.pointer.child.is(&comp, type_store::TypeTag.ARRAY), "(*)[] must be pointer to array");
-
-		p.tok_i = 5;
-		type_store::QualType array_of_pointer = declarator.abstract_declarator(type_store::INT)!!;
-		type_store::Type array = array_of_pointer.get(&comp, type_store::TypeTag.ARRAY)!!;
-		assert(array.array.elem.is(&comp, type_store::TypeTag.POINTER), "*[] must be array of pointer");
-
-		p.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void declarator_around_invalid_base_is_invalid() @test
-{
-	// Zig Declarator.validate: `*` / `[]` around an invalid base (e.g. a rejected
-	// `_Atomic struct incomplete`) is invalid, not a pointer to invalid.
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		diagnostics::Diagnostics d;
-		d.init_list(&ta);
-		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		source::Source src = comp.add_source_from_buffer("declarator.c", "* []")!!;
-		pp.add_token({ .id = tokenizer::TokenId.ASTERISK, .loc = declaration_loc(src, 0) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.L_BRACKET, .loc = declaration_loc(src, 2) })!!;
-		pp.add_token({ .id = tokenizer::TokenId.R_BRACKET, .loc = declaration_loc(src, 3) })!!;
-		pp.tokens.push({ .id = tokenizer::TokenId.EOF, .loc = declaration_loc(src, 4) });
-
-		parser::Parser p;
-		p.init(&pp);
-		p.bind_finalized_tokens();
-		UnusedTypeName unused;
-		parser_declarator::DeclaratorParser declarator = { .parser = &p, .probe = &unused };
-		type_store::QualType pointer = declarator.abstract_declarator(type_store::INVALID)!!;
-		assert(pointer.is_invalid(), "pointer to an invalid type must be invalid");
-		type_store::QualType array = declarator.abstract_declarator(type_store::INVALID)!!;
-		assert(array.is_invalid(), "array of an invalid type must be invalid");
-
-		p.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
 fn void malformed_function_recovery_preserves_following_translation_unit_state() @test
 {
 	TrackingAllocator ta;
@@ -271,7 +185,7 @@ fn void malformed_function_recovery_preserves_following_translation_unit_state()
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("recovery.c", "broken() { } int good;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		RecoveryState state = { .saw_following_declaration = false };
@@ -296,16 +210,16 @@ fn void frontend_recovers_declaration_module_fault_and_keeps_following_node() @t
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("module_recovery.c", "int broken = ; int good = 2;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		FrontendFaultRecoveryState state = { .frontend = &frontend };
-		frontend.declarations.test_probe = &state;
+		frontend.test_probe = &state;
 		tree::Tree result = p.parse()!!;
 
 		assert(state.returned_declaration_module_fault,
@@ -340,7 +254,7 @@ fn void source_derived_default_declaration_callbacks_build_typed_translation_uni
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("declarations.c",
 			"typedef int Word; Word object = 7; int sum(Word parameter) { Word local = parameter; return local; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -409,7 +323,7 @@ fn void source_derived_declarations_complete_inferred_array_types() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("inferred_array_declarations.c",
 			"int items[] = {1, 2}; char text[] = \"abc\";")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -475,7 +389,7 @@ fn void source_derived_gnu_auto_type_deduces_and_updates_symbol_types() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("gnu_auto_type.c",
 			"__auto_type source = (long)1; __auto_type copy = source;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -524,7 +438,7 @@ fn void source_derived_c23_auto_deduces_initializer_type() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c23_auto.c", "auto inferred = 42;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -566,7 +480,7 @@ fn void source_derived_auto_specifier_in_cast_reports_expected_expression() @tes
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto_type_cast.c",
 			"int value = (__auto_type)5; int good = 7;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -606,7 +520,7 @@ fn void source_derived_c17_auto_is_a_storage_class() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C17;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c17_auto.c", "void foo(void) { auto int legacy = 1; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -650,7 +564,7 @@ fn void source_derived_auto_type_missing_initializer_recovers() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto_type_recovery.c",
 			"__auto_type missing; int good = 7;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -694,7 +608,7 @@ fn void source_derived_auto_type_rejected_pointer_keeps_invalid_type() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("invalid_auto_pointer.c",
 			"__auto_type *rejected = 1; int good = 3;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -742,7 +656,7 @@ fn void source_derived_gnu_auto_type_invalid_forms_are_diagnosed() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("invalid_auto_type.c",
 			"__auto_type first = 1, second = first; int good = 3;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -786,7 +700,7 @@ fn void source_derived_local_deduced_type_self_initialization_is_diagnosed() @te
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto_type_self_init.c",
 			"void foo(void) { int x; __auto_type x = x; __auto_type y = (y); auto z = z + 1; int good = 3; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -849,14 +763,14 @@ fn void source_derived_compound_literal_deduced_type_self_initialization_recover
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto_type_compound_self_init.c",
 			"void foo(void) { __auto_type y = (int []){1, y}; int good = 3; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
@@ -907,7 +821,7 @@ fn void source_derived_default_declaration_callbacks_recover_to_next_declaration
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("declaration_recovery.c",
 			"int broken = ; int good = 2;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -950,7 +864,7 @@ fn void source_derived_invalid_auto_type_prototype_recovers() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("invalid_auto_prototype_recovery.c",
 			"void invalid_func(__auto_type); int invalid_int = invalid_func; int good = 7;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1017,14 +931,14 @@ fn void source_derived_failed_file_scope_initializers_do_not_redefine() @test
 		comp.init(&ta, null, &d);
 		type_store::init_named_types(&comp);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("failed_offsetof_redefinition.c",
 			"struct Incomplete; struct Complete { int a; }; int b = __builtin_offsetof(struct Incomplete, x); int b = __builtin_offsetof(struct Complete, missing);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
@@ -1064,7 +978,7 @@ fn void source_derived_extern_initializer_emits_one_diagnostic() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("extern_initializer.c", "extern int x = 1;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -1103,7 +1017,7 @@ fn void source_derived_initializer_sees_its_own_declaration() @test
 		comp.init(&ta, null, &d);
 		type_store::init_named_types(&comp);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("self_initializer.c", "int x = sizeof(x);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -1141,7 +1055,7 @@ fn void source_derived_successful_file_scope_definition_still_redefines() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("successful_redefinition.c", "int y = 1; int y = 2;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -1177,7 +1091,7 @@ fn void source_derived_declaration_specifiers_and_named_parameter_declarators() 
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("declarator_forms.c",
 			"static const volatile int * restrict shared; int dispatch(register int (*matrix)[3], int (*callback)(const int *arg));")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1241,7 +1155,7 @@ fn void source_derived_knr_definition_rebuilds_normal_function_type() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C89;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("knr_definition.c",
 			"void blend(first, second) long first; unsigned short second; { }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1281,7 +1195,7 @@ fn void source_derived_knr_static_array_parameter_retains_bound() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C99;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("knr_static_array_parameter.c",
 			"void static_array_parameter(x) int x[static 5]; { }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1319,7 +1233,7 @@ fn void source_derived_knr_definition_diagnoses_undeclared_parameter() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C99;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("knr_undeclared_parameter.c",
 			"void partial(kept, omitted) long kept; { }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1350,7 +1264,7 @@ fn void source_derived_empty_old_style_definition_preserves_compatibility() @tes
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C17;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("empty_old_style_definition.c",
 			"void f(void); void f() { }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1391,7 +1305,7 @@ fn void source_derived_c23_unknown_parameter_keeps_its_identifier() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c23_kr_parameter.c", "void invalid(param) { }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser_declaration::DeclarationParser declarations = {};
@@ -1428,7 +1342,7 @@ fn void source_derived_c23_knr_declaration_list_recovers_to_next_function() @tes
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c23_kr_recovery.c",
 			"int foo(a, int b, char c, d)\nint a; short d;\n{\nreturn a;\n}\nint baz(void) { return 0; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1483,7 +1397,7 @@ fn void source_derived_knr_missing_list_parameter_remains_visible_in_body() @tes
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C99;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("knr_extra_parameter.c",
 			"void partial(kept) int kept; int extra; { (void)extra; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1521,7 +1435,7 @@ fn void source_derived_extended_type_specifiers_build_qualified_types() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("extended_types.c",
 			"bool flag; nullptr null_pointer; __fp16 fp16_value; __bf16 bf16_value; " +++
 			"_Decimal32 decimal32_value; _Decimal64 decimal64_value; " +++
@@ -1579,7 +1493,7 @@ fn void source_derived_msvc_fixed_width_integer_specifiers_build_types() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.set_emulated_compiler(lang_opts::Compiler.MSVC);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("msvc_fixed_types.c",
 			"__int8 signed_char_width; _int8 underscored_char_width; " +++
 			"__int16 short_width; _int16 underscored_short_width; " +++
@@ -1631,7 +1545,7 @@ fn void source_derived_tentative_incomplete_array_completes_at_translation_unit_
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("tentative_array.c", "int items[];")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -1672,7 +1586,7 @@ fn void source_derived_extern_only_incomplete_array_stays_incomplete() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("extern_incomplete_array.c", "extern int items[];")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -1711,7 +1625,7 @@ fn void source_derived_array_redeclarations_link_to_final_definition() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("array_redeclarations.c",
 			"extern int items[]; int items[]; int items[3] = {1, 2, 3};")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1762,7 +1676,7 @@ fn void source_derived_auto_function_return_diagnostic_keeps_context() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto_return_type.c",
 			"__auto_type foo(void); auto bar(void); int good = 1;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1800,7 +1714,7 @@ fn void source_derived_fixed_enum_definitions_keep_underlying_types() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_definitions.c",
 			"enum E: int { A = 1, B }; enum U: unsigned char { X = 3 };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1843,7 +1757,7 @@ fn void source_derived_fixed_enum_forward_declaration_matches_definition() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_forward.c",
 			"enum F: int; enum F: int { A };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1877,7 +1791,7 @@ fn void source_derived_nonfixed_enum_then_fixed_forward_declaration_is_diagnosed
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_redeclaration.c",
 			"enum G;\nenum G: int;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1908,7 +1822,7 @@ fn void source_derived_fixed_enum_then_nonfixed_forward_declaration_is_diagnosed
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_redeclaration.c",
 			"enum H: int;\nenum H;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1939,7 +1853,7 @@ fn void source_derived_fixed_enum_mismatched_underlying_type_is_diagnosed() @tes
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_redeclaration.c",
 			"enum K: char;\nenum K: int;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1970,7 +1884,7 @@ fn void source_derived_fixed_enum_nonintegral_underlying_type_uses_int_fallback(
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_invalid_type.c",
 			"typedef struct BackingStruct { int x; } BackingStruct;\n" +++
 			"enum Bad1: BackingStruct { B1 };")!!;
@@ -2022,7 +1936,7 @@ fn void source_derived_fixed_enum_unrepresentable_enumerators_are_diagnosed() @t
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_overflow.c",
 			"enum E3: unsigned char {\n A = 255,\n B,\n};\n" +++
 			"enum E4: char {\n A = 256,\n};")!!;
@@ -2054,7 +1968,7 @@ fn void source_derived_nonfixed_enum_tag_widens_for_large_value() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("wide_enum.c",
 			"enum W { A = 4294967296LL, B };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2100,7 +2014,7 @@ fn void source_derived_fixed_enum_malformed_underlying_type_recovers() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fixed_enum_recovery.c",
 			"enum R: * { A }; int after_recovery = 7;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2198,7 +2112,7 @@ fn void source_derived_bit_int_widths_build_signed_and_unsigned_types() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("bit_int_widths.c",
 			"_BitInt(2) default_min; signed _BitInt(8) explicit_signed; _BitInt(9) signed signed_after_width; " +++
 			"unsigned _BitInt(1) unsigned_min; _BitInt(16) unsigned unsigned_after_width; " +++
@@ -2244,7 +2158,7 @@ fn void source_derived_bit_int_qualifier_combinations_build_qualified_types() @t
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("bit_int_qualifiers.c",
 			"const _BitInt(8) const_signed; volatile unsigned _BitInt(9) volatile_unsigned; " +++
 			"const volatile _BitInt(10) cv_signed; unsigned _BitInt(11) const volatile cv_unsigned; " +++
@@ -2292,7 +2206,7 @@ fn void source_derived_typeof_type_name_operands_build_types() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("typeof_type_names.c",
 			"typeof(int) plain_int; typeof(const int) const_int; const typeof(int) const_outer; " +++
 			"typeof(unsigned _BitInt(8)) typed_width; typeof(long double) long_double_value; " +++
@@ -2339,7 +2253,7 @@ fn void source_derived_typeof_expression_operands_use_expression_type() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("typeof_expressions.c",
 			"const long source_long = 3; int base = 1; " +++
 			"typeof(base) copy_base; typeof(source_long) copy_long; typeof(1L) literal_long; " +++
@@ -2382,7 +2296,7 @@ fn void source_derived_typeof_unqual_drops_top_level_qualifiers() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("typeof_unqual_quals.c",
 			"const volatile int source_cv = 1; typeof_unqual(source_cv) plain_copy; " +++
 			"typeof_unqual(const volatile int) plain_type; const typeof_unqual(source_cv) const_copy; " +++
@@ -2425,7 +2339,7 @@ fn void source_derived_typeof_unqual_symbol_matches_declaration_type() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("typeof_unqual_symbol.c",
 			"const unsigned _BitInt(12) width_source = 1; typeof_unqual(width_source) width_copy = 2;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2475,7 +2389,7 @@ fn void source_derived_bit_int_width_range_errors_keep_following_declarations() 
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("bit_int_width_range.c",
 			"_BitInt(1) one_bit; int after_one = 1; " +++
 			"unsigned _BitInt(0) zero_unsigned; int after_zero = 2; " +++
@@ -2537,7 +2451,7 @@ fn void source_derived_bit_int_and_typeof_malformed_operands_recover() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("bit_int_typeof_recovery.c",
 			"int runtime_width = 8; _BitInt() empty_width; int after_empty = 1; " +++
 			"_BitInt(runtime_width) runtime_width_decl; int after_runtime = 2; " +++
@@ -2591,7 +2505,7 @@ fn void source_derived_static_assert_nodes_at_file_block_and_record_scope() @tes
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("file_scope_static_assert.c",
 			"_Static_assert(1 == 1, \"ok\"); _Static_assert(0, \"x\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2629,7 +2543,7 @@ fn void source_derived_static_assert_nodes_at_file_block_and_record_scope() @tes
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("block_scope_static_assert.c",
 			"int f(void) { _Static_assert(1, \"b\"); return 0; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2664,7 +2578,7 @@ fn void source_derived_static_assert_nodes_at_file_block_and_record_scope() @tes
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("record_scope_static_assert.c",
 			"struct S { int a; _Static_assert(1, \"m\"); };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2697,7 +2611,7 @@ fn void source_derived_static_assert_nodes_at_file_block_and_record_scope() @tes
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c23_static_assert.c", "static_assert(1, \"c23\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -2740,14 +2654,14 @@ fn void implicit_typedef_prelude_seeds_x86_64_linux_roots_and_symbols() @test
 		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("implicit_typedef_prelude.c",
 			"__int128_t big; int f(void);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
@@ -2820,13 +2734,13 @@ fn void parser_replays_pragma_inside_struct_and_enum_bodies() @test
 		PragmaBodyProbe probe = {};
 		bool added_probe = comp.pragmas.add("probe", &probe);
 		assert(added_probe);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("pragma_bodies.c",
 			"struct S { int a;\n#pragma probe\nint b; };\nenum E { A,\n#pragma probe\nB };\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p; p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
@@ -2866,7 +2780,7 @@ fn void source_derived_previously_declared_enum_unnamed_bitfield_has_width() @te
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("enum_unnamed_bitfield.c",
 			"enum E { A, B }; struct S { enum E : 3; };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -2933,7 +2847,7 @@ fn void source_derived_alignas_declaration_specifiers_reach_declarations_fields_
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("alignas_decl_spec.c",
 			"typedef int Int; " +++
 			"_Alignas(16) int expr_aligned; _Alignas(int) int type_aligned; " +++
@@ -2982,7 +2896,7 @@ fn void source_derived_alignas_typedef_uses_typedef_attribute_diagnostics() @tes
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("alignas_typedef.c", "_Alignas(16) typedef int AlignedInt;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -3031,7 +2945,7 @@ fn void source_derived_gnu_enum_tag_and_trailing_attrs_apply_before_layout() @te
 		comp.init(&ta, null, &d);
 		comp.langopts.set_emulated_compiler(lang_opts::Compiler.CLANG);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_enum_tag_gnu.c",
 			"enum __attribute__((vector_size(8))) HeaderVector { HV }; enum TailVector { TV } __attribute__((aligned(8))); enum __attribute__((aligned(8))) HeaderAligned { HA }; enum TailPacked { TP = 255 } __attribute__((packed)); struct TailPackedRecord { char c; int i; } __attribute__((packed)); struct TailAlignedRecord { char c; int i; } __attribute__((aligned(8))); ")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3106,7 +3020,7 @@ fn void source_derived_gnu_block_declaration_attrs_apply_once() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_block_decl.c",
 			"void f(void) { __attribute__((aligned(8), unused)) int x; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3156,7 +3070,7 @@ fn void source_derived_gnu_block_neon_vector_type_builds_local_vector() @test
 		comp.init(&ta, null, &d);
 		use_aarch64_target(&comp);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_block_neon.c",
 			"void f(void) { __attribute__((neon_vector_type(2))) int v; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3202,7 +3116,7 @@ fn void source_derived_gnu_file_typedef_neon_vector_type_builds_alias_vector() @
 		comp.init(&ta, null, &d);
 		use_aarch64_target(&comp);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_typedef_neon.c",
 			"typedef __attribute__((neon_vector_type(2))) int int32x2_t;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3245,7 +3159,7 @@ fn void source_derived_gnu_comma_declarators_scope_attributes() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_comma_declarators.c",
 			"__attribute__((unused)) int x, y __attribute__((aligned(4))), z;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3294,7 +3208,7 @@ fn void source_derived_declspec_declaration_attrs_when_enabled() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.declspec_attrs = true;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_declspec.c",
 			"__declspec(noreturn) void fail(void); __declspec(align(8)) int slot;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3336,7 +3250,7 @@ fn void source_derived_c23_standard_decl_and_param_attrs_attach() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_c23_decl.c",
 			"[[gnu::unused]] int c23_slot; void c23_param([[gnu::unused]] int p);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3382,7 +3296,7 @@ fn void source_derived_gnu_parameter_attr_attaches_to_its_parameter() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_gnu_param.c",
 			"int h(int __attribute__((unused)) p, int q);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3424,7 +3338,7 @@ fn void source_derived_gnu_tag_attrs_attach_to_record_declarations() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_tag_gnu.c",
 			"struct __attribute__((packed)) P { char c; int i; }; struct Q __attribute__((aligned(8))) { int x; };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3469,7 +3383,7 @@ fn void source_derived_tag_reference_attributes_preserve_prior_attributes() @tes
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_tag_reference.c",
 			"struct __attribute__((packed)) Existing { char c; int i; }; " +++
 			"struct Existing __attribute__((aligned(8))); ")!!;
@@ -3514,7 +3428,7 @@ fn void source_derived_c23_standard_tag_attr_attaches_to_record() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_tag_c23.c",
 			"struct [[gnu::packed]] C23Packed { char c; int i; };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3555,7 +3469,7 @@ fn void source_derived_field_attrs_attach_and_move_field_offsets() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_field.c",
 			"struct F { char c; int i __attribute__((aligned(8))); }; struct G { char c; [[gnu::aligned(8)]] int i; };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3601,7 +3515,7 @@ fn void source_derived_anonymous_aggregate_tag_attr_affects_outer_layout() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attr_anonymous.c",
 			"struct Outer { char a; struct __attribute__((aligned(8))) { int b; }; };")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3647,7 +3561,7 @@ fn void source_derived_type_position_calling_convention_reaches_function_declara
 		comp.target = target::from_triple("i386-linux-gnu")!!;
 		comp.langopts.set_target_options(&comp.target);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("callconv_parenthesized_declarator.c",
 			"__attribute__((stdcall)) int (*callback)(void);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3691,7 +3605,7 @@ fn void source_derived_type_position_calling_convention_rejects_final_non_functi
 		comp.target = target::from_triple("i386-linux-gnu")!!;
 		comp.langopts.set_target_options(&comp.target);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("callconv_non_function_final_type.c",
 			"__attribute__((stdcall)) int object;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3733,7 +3647,7 @@ fn void source_derived_type_position_calling_convention_preserves_existing_conve
 		comp.target = target::from_triple("i386-linux-gnu")!!;
 		comp.langopts.set_target_options(&comp.target);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("callconv_incompatible_existing_type.c",
 			"typedef __attribute__((fastcall)) int ExistingFn(void); " +++
 			"__attribute__((stdcall)) ExistingFn existing;")!!;
@@ -3784,7 +3698,7 @@ fn void source_derived_vectorcall_keyword_sets_completed_function_calling_conven
 		comp.target = target::from_triple("x86_64-windows-msvc")!!;
 		comp.langopts.set_target_options(&comp.target);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("vectorcall_keyword.c",
 			"void __attribute__((vectorcall)) gnu_vectorcall(void); " +++
 			"void __vectorcall keyword_vectorcall(void); " +++
@@ -3837,7 +3751,7 @@ fn void source_derived_function_return_type_diagnostics_point_at_suffix() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("function_return_types.c",
 			"int *return_func(void)(void);\n" +++
 			"int g(void)[3];\n" +++
@@ -3890,7 +3804,7 @@ fn void source_derived_function_definition_invalid_return_type_has_one_diagnosti
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("function_return_definition.c",
 			"int *return_func(void)(void) { return 0; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -3915,12 +3829,6 @@ fn void source_derived_function_definition_invalid_return_type_has_one_diagnosti
 	}
 	assert(ta.allocation_count() == 0);
 }
-
-<* Declarator grammar whose type-name production must not be reached. *>
-struct UnusedTypeName (parser_declarator::IDeclaratorTestProbe) { bool unused; }
-
-fn type_store::QualType? UnusedTypeName.declarator_type_name(&self, parser::Parser* p) @dynamic
-	=> unused_type_name(null, p);
 
 <* Parse `source` as a translation unit and report whether `expected` was diagnosed. *>
 fn bool declaration_diagnoses(String source, String expected,
@@ -3953,7 +3861,7 @@ fn bool parse_declarations(String source, String expected, lang_opts::Standard s
 		comp.langopts.standard = standard;
 		if (enable.len) d.set(enable, diagnostics::MessageKind.WARNING)!!;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("validate.c", source)!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
@@ -3986,6 +3894,21 @@ fn void declarator_validate_reports_zig_validate_extra_diagnostics() @test
 	assert(!declaration_diagnoses("int ok[2][3];", "array is too large"));
 }
 
+fn void parameter_name_follows_pointer_attributes_and_qualifiers() @test
+{
+	// GNU attributes and _Atomic after `*` must not hide the parameter name from
+	// the named/abstract lookahead (glibc `char *__attribute__((...)) p`).
+	assert(declaration_error_count("void f(char *__attribute__((unused)) p) { (void)p; }") == 0);
+	assert(declaration_error_count("void f(char *const __attribute__((unused)) *_Atomic p) { (void)p; }") == 0);
+	assert(declaration_error_count("void f(int (*__attribute__((unused)) fp)(int)) { (void)fp; }") == 0);
+	// Abstract forms: the attribute argument is not a declarator name.
+	assert(declaration_error_count("void f(char *__attribute__((unused)));") == 0);
+	assert(declaration_error_count("void f(int (*__attribute__((unused)))(int));") == 0);
+	// Named and unnamed parenthesized/pointer shapes share the optional-name mode.
+	assert(declaration_error_count("void f(int (*)(int), int (*fp)(int), char *(p), int (x)[3], int *[2], int (int));") == 0);
+	assert(declaration_error_count("int g(a) int a; { return a; }") == 0);
+}
+
 fn void c23_function_type_returns_unqualified_non_atomic_type() @test
 {
 	// C23 6.7.7.4p4 (Zig validateExtra setFuncReturnType): `const int f(void)` returns `int`.
@@ -3999,7 +3922,7 @@ fn void c23_function_type_returns_unqualified_non_atomic_type() @test
 		comp.init(&ta, null, &d);
 		comp.langopts.standard = lang_opts::Standard.C23;
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c23_return.c", "const int f(void);")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 

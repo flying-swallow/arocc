@@ -1,5 +1,5 @@
-// End-to-end tests of number_value::parse_number_token, which runs
-// number_literal's NumberLiteralParser (plan 11 agent 11.1) first. Tagged
+// End-to-end tests of number_value::parse(...), which runs
+// number_literal::split (plan 11 agent 11.1) first. Tagged
 // "manual" until 11.1's syntax parser is merged; the integrator should drop
 // the tag then. Expected values: see number_value_tests.c3 for the labels.
 module number_value_manual_tests;
@@ -40,7 +40,7 @@ fn NumberValue tok(Compilation* comp, String text)
 {
 	Source src = comp.add_source_from_buffer("lit.c", text)!!;
 	Location loc = { .id = src.id, .byte_offset = 0, .line = 1 };
-	return number_value::parse_number_token(comp, text, loc, {})!!;
+	return number_value::parse(comp, text, loc)!!;
 }
 
 fn void end_to_end() @test

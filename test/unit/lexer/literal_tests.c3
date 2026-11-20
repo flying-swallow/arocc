@@ -2,8 +2,8 @@
 //
 // Data-driven over test/unit/literals/*.txt (format, provenance and caveats
 // in that directory's README.md). Every vector runs through the parser-free
-// literal API only -- number_literal::NumberLiteralParser,
-// number_value::number_value / pp_int_value, text_literal::TextLiteralParser /
+// literal API only -- number_literal::split, number_value::from_split /
+// pp_parse, text_literal::TextLiteralParser /
 // TextLiteralKind, text_literal_semantics::char_literal / pp_char_value /
 // string_run / string_literal, Value.print -- with no token list and no AST
 // (the "no-AST decode path" of the plan).
@@ -507,14 +507,13 @@ struct Typed
 fn String op_number(Ctx* c, String lit, Typed* typed = null)
 {
 	Location loc = c.add_token(lit);
-	NumberLiteralParser p = { .comp = &c.comp, .literal = lit, .loc = loc };
-	NumberLiteralResult? parsed = p.parse();
+	NumberLiteral? parsed = number_literal::split(&c.comp, lit, loc);
 	if (catch f = parsed)
 	{
 		assert(f == text_literal::PARSING_FAILED);
 		return "fail";
 	}
-	NumberValue v = number_value::number_value(&c.comp, parsed);
+	NumberValue v = number_value::from_split(&c.comp, parsed);
 	v.diags.@each(; $diag) { c.add_returned(0, $diag); };
 	if (typed) *typed = { true, v.qt, v.val };
 	Compilation* comp = &c.comp;
@@ -525,10 +524,8 @@ fn String op_number(Ctx* c, String lit, Typed* typed = null)
 fn String op_pp_number(Ctx* c, String lit)
 {
 	Location loc = c.add_token(lit);
-	NumberLiteralParser p = { .comp = &c.comp, .literal = lit, .loc = loc };
-	NumberLiteralResult? parsed = p.parse();
-	if (catch f = parsed) return "fail";
-	PpNumberValue v = number_value::pp_int_value(parsed);
+	PpNumberValue? v = number_value::pp_parse(&c.comp, lit, loc);
+	if (catch v) return "fail";
 	v.diags.@each(; $diag) { c.add_returned(0, $diag); };
 	if (v.rejected) return "rejected";
 	if (v.is_signed) return string::tformat("signed %s", hex_signed(v.signed));

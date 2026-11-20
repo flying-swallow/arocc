@@ -1,15 +1,6 @@
-// SymbolStack glue: the context SymbolStack reports diagnostics through.
+// SymbolStack glue: parser hooks SymbolStack calls back into.
 module aro::parser;
 import aro::symbol_stack, aro::type_store;
-
-<* Build the SymbolStack context around this parser; SymbolStack reports through `Diagnostic.@emit(ctx.parser, ...)`. *>
-fn symbol_stack::SymbolContext Parser.symbol_context(&self)
-{
-	return {
-		.comp = self.comp,
-		.parser = self,
-	};
-}
 
 <* Zig `p.setTentativeDeclDefinition`. Explicitly guarded: symbol declaration operations must not
  silently discard tentative-definition links when the declaration grammar has not supplied one. *>

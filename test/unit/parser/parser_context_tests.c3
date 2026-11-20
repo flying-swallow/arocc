@@ -1,6 +1,6 @@
 // Focused tests for parser context ownership and token-buffer lifetime.
 module parser_context_tests;
-import aro::parser, aro::parser_builtin, aro::parser_declaration, aro::parser_frontend, aro::parser_result;
+import aro::parser, aro::parser_declaration, aro::parser_result;
 import aro::preprocessor, aro::tokens, aro::tokenizer, aro::tree;
 import aro::compilation, aro::diagnostics, aro::source;
 import aro::type_store, aro::symbol_stack, aro::string_interner, aro::value;
@@ -91,7 +91,7 @@ fn void parser_starts_at_index_zero_and_bounds_empty_and_eof_buffers() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 
 		Parser empty;
 		empty.init(&pp);
@@ -136,7 +136,7 @@ fn void parser_eat_and_expect_preserve_cursor_on_mismatch() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("tokens.c", "name")!!;
 		pp.add_token({ .id = IDENTIFIER, .loc = parser_loc(src, 0, 1) })!!;
 		pp.tokens.push({ .id = EOF, .loc = parser_loc(src, 4, 1) });
@@ -169,7 +169,7 @@ fn void missing_closing_delimiter_reports_opener_note() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("delim.c", "(name")!!;
 		pp.add_token({ .id = L_PAREN, .loc = parser_loc(src, 0, 1) })!!;
 		pp.add_token({ .id = IDENTIFIER, .loc = parser_loc(src, 1, 1) })!!;
@@ -202,7 +202,7 @@ fn void empty_translation_unit_owns_tree_only() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 
 		Parser p;
@@ -232,7 +232,7 @@ fn void declaration_callback_controls_cursor() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
 
 		CursorDeclarationHandler handler;
@@ -262,7 +262,7 @@ fn void legacy_and_typed_type_name_callbacks_are_distinct() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("type-name-callback.c", "name")!!;
 		pp.tokens.push({ .id = IDENTIFIER, .loc = parser_loc(src, 0, 1) });
 		LegacyTypeNameHandler legacy_callbacks;
@@ -320,7 +320,7 @@ fn void parser_can_be_abandoned_before_parse() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
 		p.init(&pp);
 		p.free();
@@ -349,7 +349,7 @@ fn void grammar_diagnostics_follow_macro_expansion_order() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("macro.c", "FIRST SECOND\nmacro body\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 
 		// Expansion locations are stored innermost first; the call site is last
 		// and therefore owns the primary diagnostic location.
@@ -444,7 +444,7 @@ fn void parser_symbol_lookup_shadowing_and_scope_reuse() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
 		p.init(&pp);
 		assert(p.symbols.active_len == 1);
@@ -496,7 +496,7 @@ fn void implicit_typedefs_run_inside_outer_scope_before_declarations() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 		ImplicitTypedefState state = { .name = comp.intern_string("Implicit") };
@@ -528,7 +528,7 @@ fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() 
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("symbol-macro.c", "Record\nMACRO\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs token = { .id = IDENTIFIER, .loc = parser_loc(src, 0, 1) };
 		token.add_expansion_location(comp.gpa, { parser_loc(src, 7, 2), parser_loc(src, 0, 1) });
 		pp.add_token(token)!!;
@@ -550,7 +550,7 @@ fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() 
 		assert(d.messages[2].location.line_no == 1 && d.messages[2].location.col == 1);
 		p.free();
 
-		// A writer failure during a SymbolContext diagnostic must propagate
+		// A writer failure during a SymbolStack diagnostic must propagate
 		// through find_typedef, and explicit free still releases the scope.
 		d.free();
 		RejectSymbolWriter reject = {};
@@ -581,7 +581,7 @@ fn void parser_failure_cleanup_allows_later_success() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 
@@ -625,7 +625,7 @@ fn void declaration_body_installs_only_supplied_function_context_and_restores_it
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("function-context.c", "{ 1; } { 2; }\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		FunctionContextBodyCheck check = {};
@@ -678,7 +678,7 @@ fn void va_pack_function_context_requires_named_variadic_inline_function() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
 		p.init(&pp);
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
@@ -739,7 +739,7 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("va-pack-context.c",
 			"__builtin_va_arg_pack() callee(__builtin_va_arg_pack(), 1) callee(1, __builtin_va_arg_pack()) callee(1 + __builtin_va_arg_pack())\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -758,9 +758,8 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 		p.set_function_context({ .active = true, .declaration = decl.pack(),
 			.variadic = true, .named_param_count = 1 });
 
-		parser_builtin::BuiltinParser builtin = { .parser = &p };
 		p.tok_i = 1;
-		parser_result::Result outside = builtin.va_arg_pack(0)!!;
+		parser_result::Result outside = p.builtin_va_arg_pack(0)!!;
 		assert(outside.qt.is_invalid());
 		test::eq(d.messages[0].text, "'__va_arg_pack' used outside a call");
 
@@ -774,7 +773,7 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 			.function = { .qt = callee_qt, .body = type_store::NODE_NULL, .definition = type_store::NODE_NULL } });
 		p.define_symbol({ .name = comp.intern_string("callee"), .kind = symbol_stack::SymbolKind.DECL,
 			.qt = callee_qt, .node = callee_decl });
-		parser_frontend::FrontendHandler handler;
+		parser_declaration::DeclarationParser handler;
 		handler.bind(&p);
 		parser::VaArgPackCallContext enclosing = { .active = true, .variadic = false, .typed = true };
 		p.va_arg_pack_call = enclosing;

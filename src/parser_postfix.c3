@@ -6,10 +6,10 @@ import aro::primitive_value;
 import aro::parser_result, aro::tree, aro::tokens, aro::tokenizer, aro::diagnostics;
 import aro::type_store, aro::value, aro::value_interner, aro::compilation, aro::lang_opts;
 import aro::string_interner, aro::bigint;
-import aro::builtins, aro::builtin_defs::common;
+import aro::builtins, aro::builtin_call, aro::builtin_defs::common;
 import std::collections::list;
 
-<* The optional builtin-call hook does not recognize this callee and wants ordinary call handling. *>
+<* `builtin_call::dispatch` does not recognize this callee and wants ordinary call handling. *>
 excuse NO_BUILTIN_CALL;
 
 <* Whether `callee` names a builtin whose variadic arguments must reach its custom check unpromoted
@@ -32,7 +32,6 @@ fn bool is_unpromoted_builtin_callee(parser::Parser* p, type_store::NodeIndex ca
 	return false;
 }
 
-
 <* Parsed statement-expression compound. `qt` is the type of the final
    expression statement, or void when the compound has no final expression. *>
 struct StatementExpressionBodyResult
@@ -41,14 +40,12 @@ struct StatementExpressionBodyResult
 	type_store::QualType qt;
 }
 
-
 struct AttributeDeclSpanCheckpoint
 {
 	uint node;
 	uint index;
 	uint len;
 }
-
 
 <* Compound literal initializer and node, after the `(type-name)` prefix has been
    parsed; the current token is the `{`. *>
@@ -82,7 +79,6 @@ fn parser_result::Result? Parser.parse_compound_literal(&self, tokens::TokenInde
 	}
 	return { .node = literal, .qt = qt, .val = value::NONE };
 }
-
 
 <* Undo state that a failed compound callback may have left behind. Parsed
    declarations are abandoned with the malformed expression, so their tree
@@ -145,9 +141,9 @@ fn parser_result::Result? Parser.parse_statement_expression(&self, tokens::Token
 	foreach (entry : p.tree.attr_map.decl_attrs.iter())
 	{
 		saved_decl_attrs.push(
-		{
-			.node = entry.key, .index = entry.value.index, .len = entry.value.len
-		}
+			{
+				.node = entry.key, .index = entry.value.index, .len = entry.value.len
+			}
 		);
 	}
 	bool completed = false;
@@ -744,193 +740,189 @@ fn parser_result::Result? Parser.parse_member_access(&self, parser_result::Resul
 fn parser_result::Result? Parser.parse_call(&self, parser_result::Result lhs, bool eval) @noinline
 {
 	parser::Parser* p = self;
-		tokens::TokenIndex l_paren = p.tok_i;
-		p.advance();
-		parser_result::Result func = lhs;
-		func.value_conversion(p);
-		type_store::QualType function_qt = func.qt;
-		if (try pointer = function_qt.get(p.comp, type_store::TypeTag.POINTER))
-		{
-			function_qt = pointer.pointer.child;
-		}
-		else if (try block = function_qt.get(p.comp, type_store::TypeTag.BLOCK))
-		{
-			function_qt = block.block.func;
-		}
+	tokens::TokenIndex l_paren = p.tok_i;
+	p.advance();
+	parser_result::Result func = lhs;
+	func.value_conversion(p);
+	type_store::QualType function_qt = func.qt;
+	if (try pointer = function_qt.get(p.comp, type_store::TypeTag.POINTER))
+	{
+		function_qt = pointer.pointer.child;
+	}
+	else if (try block = function_qt.get(p.comp, type_store::TypeTag.BLOCK))
+	{
+		function_qt = block.block.func;
+	}
 
-		type_store::Func call_fn;
-		uint typed_params_len = 0xFFFF_FFFF;
-		type_store::FuncKind func_kind = type_store::FuncKind.NORMAL;
-		bool preserve_builtin_args = is_unpromoted_builtin_callee(p, lhs.node);
-		if (!function_qt.is_invalid())
+	type_store::Func call_fn;
+	uint typed_params_len = 0xFFFF_FFFF;
+	type_store::FuncKind func_kind = type_store::FuncKind.NORMAL;
+	bool preserve_builtin_args = is_unpromoted_builtin_callee(p, lhs.node);
+	if (!function_qt.is_invalid())
+	{
+		if (!function_qt.is(p.comp, type_store::TypeTag.FUNC))
 		{
-			if (!function_qt.is(p.comp, type_store::TypeTag.FUNC))
+			Diagnostic.NOT_CALLABLE.@emit(p, l_paren, p.fmt_qt(lhs.qt))!;
+			return PARSING_FAILED~;
+		}
+		if (try resolved_fn = function_qt.get_func(p.comp))
+		{
+			call_fn = resolved_fn;
+		}
+		else
+		{
+			return PARSING_FAILED~;
+		}
+		typed_params_len = (uint)call_fn.params.len;
+		func_kind = call_fn.kind;
+	}
+
+	List{type_store::NodeIndex} args;
+	args.init(p.comp.gpa);
+	defer args.free();
+	tokens::TokenIndex first_after = l_paren;
+	if (!self.is_at(tokenizer::TokenId.R_PAREN))
+	{
+		uint arg_index = 0;
+		while (true)
+		{
+			tokens::TokenIndex param_tok = p.tok_i;
+			if (arg_index == typed_params_len) first_after = param_tok;
+			bool is_va_pack_start = starts_va_arg_pack_argument(p);
+			parser_result::Result? maybe_arg;
 			{
-				Diagnostic.NOT_CALLABLE.@emit(p, l_paren, p.fmt_qt(lhs.qt))!;
+				parser::VaArgPackCallContext old_pack_context = p.va_arg_pack_call;
+				p.va_arg_pack_call = is_va_pack_start ? (parser::VaArgPackCallContext){
+					.active = true,
+					.variadic = func_kind != type_store::FuncKind.NORMAL,
+					.typed = arg_index < typed_params_len,
+				}: {};
+				defer p.va_arg_pack_call = old_pack_context;
+				maybe_arg = self.parse_expr_prec(tokens::Precedence.ASSIGN, eval);
+			}
+			if (catch f = maybe_arg) return f~;
+			parser_result::Result arg = maybe_arg;
+			type_store::NodeIndex arg_root = arg.node;
+			tree::Node arg_node = arg_root.get(&p.tree);
+			while (arg_node.kind == tree::NodeKind.PAREN_EXPR)
+			{
+				arg_root = arg_node.unary.operand;
+				arg_node = arg_root.get(&p.tree);
+			}
+			bool is_va_arg_pack = arg_node.kind == tree::NodeKind.BUILTIN_VA_ARG_PACK;
+			tokens::TokenIndex pack_tok = is_va_arg_pack ? arg_node.va_arg_pack.builtin_tok : 0;
+			if (!is_va_arg_pack) arg.value_conversion(p);
+			if (!is_va_arg_pack && (arg.qt.is_invalid() ||
+				(arg.qt.has_incomplete_size(p.comp) && !arg.qt.is(p.comp, type_store::TypeTag.VOID))))
+			{
 				return PARSING_FAILED~;
 			}
-			if (try resolved_fn = function_qt.get_func(p.comp))
+
+			if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid() && arg_index < typed_params_len)
 			{
-				call_fn = resolved_fn;
+				// Re-read the function type after parsing the expression; type-store
+				// growth may move its parameter slice.
+				type_store::Func current_fn = function_qt.get_func(p.comp)!;
+				type_store::FuncParam param = current_fn.params[(usz)arg_index];
+				// An incomplete parameter type was diagnosed at the declaration.
+				if (param.qt.is_invalid() || param.qt.has_incomplete_size(p.comp))
+				{
+					arg.qt = type_store::INVALID;
+				}
+				else if (!arg.coerce_scalar(p, param.qt, param_tok, parser_result::CoercionContext.ARGUMENT)!)
+				{
+					Diagnostic.INCOMPATIBLE_ARG.@emit(p, param_tok,
+						p.fmt_qt(arg.qt), p.fmt_qt(param.qt))!;
+					if (param.name_tok != (type_store::TokenIndex)0) Diagnostic.PARAMETER_HERE.@emit(p, (tokens::TokenIndex)param.name_tok)!;
+				}
+			}
+			else if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid())
+			{
+				promote_call_argument(&arg, p, param_tok)!;
+			}
+
+			arg.save_value(p);
+			args.push(arg.node);
+			if (!self.is_at(tokenizer::TokenId.COMMA)) break;
+			if (is_va_arg_pack) Diagnostic.VA_PACK_NON_FINAL_ARG.@emit(p, pack_tok)!;
+			p.advance();
+			arg_index++;
+		}
+	}
+	tokens::TokenIndex r_paren = p.tok_i;
+	if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
+	parser_result::Result? maybe_builtin = builtin_call::dispatch(null, p,
+		lhs.node, l_paren, args.array_view(), eval);
+	if (catch builtin_fault = maybe_builtin)
+	{
+		if (builtin_fault != NO_BUILTIN_CALL) return builtin_fault~;
+	}
+	else
+	{
+		return maybe_builtin;
+	}
+
+	bool args_ok = true;
+	if (!function_qt.is_invalid())
+	{
+		if (func_kind == type_store::FuncKind.NORMAL && (usz)args.len() != (usz)typed_params_len)
+		{
+			tokens::TokenIndex tok = (usz)args.len() < (usz)typed_params_len ? r_paren : first_after;
+			Diagnostic.EXPECTED_ARGUMENTS.@emit(p, tok,
+				typed_params_len, (uint)args.len())!;
+			args_ok = false;
+		}
+		else if (func_kind == type_store::FuncKind.VARIADIC && (usz)args.len() < (usz)typed_params_len)
+		{
+			Diagnostic.EXPECTED_AT_LEAST_ARGUMENTS.@emit(p, r_paren,
+				typed_params_len, (uint)args.len())!;
+			args_ok = false;
+		}
+		else if (func_kind == type_store::FuncKind.OLD_STYLE && (usz)args.len() != (usz)typed_params_len)
+		{
+			if (typed_params_len == 0)
+			{
+				Diagnostic.PASSING_ARGS_TO_KR.@emit(p, first_after)!;
 			}
 			else
 			{
-				return PARSING_FAILED~;
-			}
-			typed_params_len = (uint)call_fn.params.len;
-			func_kind = call_fn.kind;
-		}
-
-		List{type_store::NodeIndex} args;
-		args.init(p.comp.gpa);
-		defer args.free();
-		tokens::TokenIndex first_after = l_paren;
-		if (!self.is_at(tokenizer::TokenId.R_PAREN))
-		{
-			uint arg_index = 0;
-			while (true)
-			{
-				tokens::TokenIndex param_tok = p.tok_i;
-				if (arg_index == typed_params_len) first_after = param_tok;
-				bool is_va_pack_start = starts_va_arg_pack_argument(p);
-				parser_result::Result? maybe_arg;
-				{
-					parser::VaArgPackCallContext old_pack_context = p.va_arg_pack_call;
-					p.va_arg_pack_call = is_va_pack_start ? (parser::VaArgPackCallContext){
-						.active = true,
-						.variadic = func_kind != type_store::FuncKind.NORMAL,
-						.typed = arg_index < typed_params_len,
-					}: {};
-					defer p.va_arg_pack_call = old_pack_context;
-					maybe_arg = self.parse_expr_prec(tokens::Precedence.ASSIGN, eval);
-				}
-				if (catch f = maybe_arg) return f~;
-				parser_result::Result arg = maybe_arg;
-				type_store::NodeIndex arg_root = arg.node;
-				tree::Node arg_node = arg_root.get(&p.tree);
-				while (arg_node.kind == tree::NodeKind.PAREN_EXPR)
-				{
-					arg_root = arg_node.unary.operand;
-					arg_node = arg_root.get(&p.tree);
-				}
-				bool is_va_arg_pack = arg_node.kind == tree::NodeKind.BUILTIN_VA_ARG_PACK;
-				tokens::TokenIndex pack_tok = is_va_arg_pack ? arg_node.va_arg_pack.builtin_tok : 0;
-				if (!is_va_arg_pack) arg.value_conversion(p);
-				if (!is_va_arg_pack && (arg.qt.is_invalid() ||
-					(arg.qt.has_incomplete_size(p.comp) && !arg.qt.is(p.comp, type_store::TypeTag.VOID))))
-				{
-					return PARSING_FAILED~;
-				}
-
-				if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid() && arg_index < typed_params_len)
-				{
-					// Re-read the function type after parsing the expression; type-store
-					// growth may move its parameter slice.
-					type_store::Func current_fn = function_qt.get_func(p.comp)!;
-					type_store::FuncParam param = current_fn.params[(usz)arg_index];
-					// An incomplete parameter type was diagnosed at the declaration.
-					if (param.qt.is_invalid() || param.qt.has_incomplete_size(p.comp))
-					{
-						arg.qt = type_store::INVALID;
-					}
-					else if (!arg.coerce_scalar(p, param.qt, param_tok, parser_result::CoercionContext.ARGUMENT)!)
-					{
-						Diagnostic.INCOMPATIBLE_ARG.@emit(p, param_tok,
-							p.fmt_qt(arg.qt), p.fmt_qt(param.qt))!;
-						if (param.name_tok != (type_store::TokenIndex)0) Diagnostic.PARAMETER_HERE.@emit(p, (tokens::TokenIndex)param.name_tok)!;
-					}
-				}
-				else if (!is_va_arg_pack && !preserve_builtin_args && !function_qt.is_invalid())
-				{
-					promote_call_argument(&arg, p, param_tok)!;
-				}
-
-				arg.save_value(p);
-				args.push(arg.node);
-				if (!self.is_at(tokenizer::TokenId.COMMA)) break;
-				if (is_va_arg_pack) Diagnostic.VA_PACK_NON_FINAL_ARG.@emit(p, pack_tok)!;
-				p.advance();
-				arg_index++;
-			}
-		}
-		tokens::TokenIndex r_paren = p.tok_i;
-		if (catch f = p.expect_closing(tokenizer::TokenId.R_PAREN, l_paren)) return f~;
-		if (self.handler && &self.handler.handle_builtin_call)
-		{
-			parser_result::Result? maybe_builtin = self.handler.handle_builtin_call(p,
-				lhs.node, l_paren, args.array_view(), eval);
-			if (catch builtin_fault = maybe_builtin)
-			{
-				if (builtin_fault != NO_BUILTIN_CALL) return builtin_fault~;
-			}
-			else
-			{
-				lhs = maybe_builtin;
-				return lhs;
-			}
-		}
-
-		bool args_ok = true;
-		if (!function_qt.is_invalid())
-		{
-			if (func_kind == type_store::FuncKind.NORMAL && (usz)args.len() != (usz)typed_params_len)
-			{
-				tokens::TokenIndex tok = (usz)args.len() < (usz)typed_params_len ? r_paren : first_after;
-				Diagnostic.EXPECTED_ARGUMENTS.@emit(p, tok,
+				Diagnostic.EXPECTED_ARGUMENTS_OLD.@emit(p, first_after,
 					typed_params_len, (uint)args.len())!;
-				args_ok = false;
-			}
-			else if (func_kind == type_store::FuncKind.VARIADIC && (usz)args.len() < (usz)typed_params_len)
-			{
-				Diagnostic.EXPECTED_AT_LEAST_ARGUMENTS.@emit(p, r_paren,
-					typed_params_len, (uint)args.len())!;
-				args_ok = false;
-			}
-			else if (func_kind == type_store::FuncKind.OLD_STYLE && (usz)args.len() != (usz)typed_params_len)
-			{
-				if (typed_params_len == 0)
-				{
-					Diagnostic.PASSING_ARGS_TO_KR.@emit(p, first_after)!;
-				}
-				else
-				{
-					Diagnostic.EXPECTED_ARGUMENTS_OLD.@emit(p, first_after,
-						typed_params_len, (uint)args.len())!;
-				}
 			}
 		}
+	}
 
-		func.save_value(p);
-		type_store::QualType return_qt = !function_qt.is_invalid() && args_ok ? call_fn.return_type : type_store::INVALID;
-		// Zig CallExpr.init/finish: a call whose callee is a builtin_ref (through
-		// parens) is always a builtin_call_expr, never a call_expr; codegen has
-		// no lvalue for a builtin_ref.
-		type_store::NodeIndex builtin_cur = lhs.node;
-		tree::Node builtin_node = builtin_cur.get(&p.tree);
-		while (builtin_node.kind == tree::NodeKind.PAREN_EXPR)
-		{
-			builtin_cur = builtin_node.unary.operand;
-			builtin_node = builtin_cur.get(&p.tree);
-		}
-		if (builtin_node.kind == tree::NodeKind.BUILTIN_REF)
-		{
-			type_store::NodeIndex builtin_call_node = p.tree.add_node(
-				{
-					.kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
-						.builtin_tok = builtin_node.builtin_ref.name_tok, .qt = return_qt, .args = args.array_view(),
-				}
-			}
-			);
-			lhs.init(builtin_call_node, return_qt);
-			return lhs;
-		}
-		type_store::NodeIndex node = p.tree.add_node(
+	func.save_value(p);
+	type_store::QualType return_qt = !function_qt.is_invalid() && args_ok ? call_fn.return_type : type_store::INVALID;
+	// Zig CallExpr.init/finish: a call whose callee is a builtin_ref (through
+	// parens) is always a builtin_call_expr, never a call_expr; codegen has
+	// no lvalue for a builtin_ref.
+	type_store::NodeIndex builtin_cur = lhs.node;
+	tree::Node builtin_node = builtin_cur.get(&p.tree);
+	while (builtin_node.kind == tree::NodeKind.PAREN_EXPR)
+	{
+		builtin_cur = builtin_node.unary.operand;
+		builtin_node = builtin_cur.get(&p.tree);
+	}
+	if (builtin_node.kind == tree::NodeKind.BUILTIN_REF)
+	{
+		type_store::NodeIndex builtin_call_node = p.tree.add_node(
 			{
-				.kind = tree::NodeKind.CALL_EXPR, .call = {
-					.l_paren_tok = l_paren, .qt = return_qt, .callee = func.node, .args = args.array_view(),
+				.kind = tree::NodeKind.BUILTIN_CALL_EXPR, .builtin_call = {
+					.builtin_tok = builtin_node.builtin_ref.name_tok, .qt = return_qt, .args = args.array_view(),
 			}
 		}
 		);
-		lhs.init(node, return_qt);
+		lhs.init(builtin_call_node, return_qt);
+		return lhs;
+	}
+	type_store::NodeIndex node = p.tree.add_node(
+		{
+			.kind = tree::NodeKind.CALL_EXPR, .call = {
+				.l_paren_tok = l_paren, .qt = return_qt, .callee = func.node, .args = args.array_view(),
+		}
+	}
+	);
+	lhs.init(node, return_qt);
 	return lhs;
 }

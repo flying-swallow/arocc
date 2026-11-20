@@ -1018,14 +1018,22 @@ fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tr
 	if (is_float) self.ensure_scalar_float_width(node.unary.qt)!;
 	ir::Ref addr = self.gen_lval(node.unary.operand)!;
 	ir::Ref val = self.add_un(ir::InstTag.LOAD, addr, node.unary.qt)!;
-	ir::Ref one = self.builder.add_constant(value::ONE.ref(), self.gen_type(node.unary.qt)!);
 	bool decrement = node.kind == tree::NodeKind.PRE_DEC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
+	bool is_post = node.kind == tree::NodeKind.POST_INC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
+	if (node.unary.qt.is_pointer(self.comp))
+	{
+		// Pointer step is one element, not one byte.
+		ir::Ref step = self.builder.add_constant(value::ONE.ref(), value_interner::REF_I64);
+		ir::Ref moved = self.gen_ptr_arithmetic(val, step, type_store::LONG, node.unary.qt, decrement)!;
+		self.builder.add_store(addr, moved);
+		return is_post ? val : moved;
+	}
+	ir::Ref one = self.builder.add_constant(value::ONE.ref(), self.gen_type(node.unary.qt)!);
 	ir::InstTag update = is_float ? (decrement ? ir::InstTag.FSUB : ir::InstTag.FADD) :
 		(decrement ? ir::InstTag.SUB : ir::InstTag.ADD);
 	ir::Ref updated = self.add_bin(update, val, one, node.unary.qt)!;
 	self.builder.add_store(addr, updated);
-	return (node.kind == tree::NodeKind.POST_INC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR) ? val : updated;
-	return ir::NONE;
+	return is_post ? val : updated;
 }
 
 <* `gen_expr` case CAST. *>

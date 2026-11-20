@@ -1,6 +1,6 @@
 // Tests for src/pp_builtin_macros.c3 (plan 14.4 `dynamic-macros`):
-// Compilation.source_epoch, builtin_source_epoch, write_date_time_stamp and
-// builtin_expand_obj (called directly; the object-macro expander is not used).
+// Compilation.source_epoch, source_epoch_from_environment, write_date_time_stamp and
+// expand_builtin_obj (called directly; the object-macro expander is not used).
 //
 // Provenance of expected values (the pinned Zig 0.18-dev aro was NOT run):
 //  [fixture X]  test/cases/X (manifest diagnostics or expanded/ golden).
@@ -33,7 +33,7 @@ macro @with_pp(; @body(Compilation* comp, Diagnostics* d, Preprocessor* pp))
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		@body(&comp, &d, &pp);
 		pp.free();
 		comp.free();
@@ -54,7 +54,7 @@ fn String expand(Preprocessor* pp, BuiltinObject kind, TokenWithExpansionLocs to
 	ExpandBuf buf;
 	buf.init(pp.comp.gpa);
 	sz start = pp.comp.generated_buf.len();
-	preprocessor::builtin_expand_obj(null, pp, kind, tok, &buf)!!;
+	pp.expand_builtin_obj(kind, tok, &buf)!!;
 	check(buf.len(), 1);
 	check(buf[0].id.ordinal, expect_id.ordinal);
 	check(buf[0].loc.byte_offset, start);
@@ -183,7 +183,7 @@ fn void init_reports_invalid_epoch() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.has_source_epoch = false;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS)!!;
+		pp.init(&comp, opts)!!;
 		check(d.messages.len(), 1);
 		test::eq(d.messages[0].text, "environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer less than or equal to 253402300799");
 		check(d.messages[0].effective_kind.ordinal, MessageKind.ERROR.ordinal);
@@ -194,7 +194,7 @@ fn void init_reports_invalid_epoch() @test
 
 		// [source] a valid environment value is taken without diagnostics.
 		comp.environment.source_date_epoch = "86400";
-		pp.init(&comp, opts, preprocessor::BUILTINS)!!;
+		pp.init(&comp, opts)!!;
 		check(d.messages.len(), 1);
 		assert(pp.source_epoch.provided);
 		check(pp.source_epoch.timestamp, 86400);
@@ -204,7 +204,7 @@ fn void init_reports_invalid_epoch() @test
 		long secs = 1234567890;
 		comp.environment = {};
 		comp.clock = compilation::fixed_clock(&secs);
-		pp.init(&comp, opts, preprocessor::BUILTINS)!!;
+		pp.init(&comp, opts)!!;
 		assert(!pp.source_epoch.provided);
 		check(pp.source_epoch.timestamp, 1234567890);
 		pp.free();
@@ -295,7 +295,7 @@ fn void expand_timestamp_system_epoch() @test
 		// Without a file provider the mtime is unsupported (plan 15).
 		ExpandBuf buf;
 		buf.init(comp.gpa);
-		assert(@catch(preprocessor::builtin_expand_obj(null, pp, TIMESTAMP, body_tok(src), &buf)) == aro::UNSUPPORTED);
+		assert(@catch(pp.expand_builtin_obj(TIMESTAMP, body_tok(src), &buf)) == aro::UNSUPPORTED);
 		check(buf.len(), 0);
 		buf.free();
 		pp.files.source_mtime = &fixed_mtime;
@@ -494,8 +494,8 @@ fn void generated_token_locations() @test
 		uint line0 = pp.generated_line;
 		ExpandBuf buf;
 		buf.init(comp.gpa);
-		preprocessor::builtin_expand_obj(null, pp, LINE, body_tok(src), &buf)!!;
-		preprocessor::builtin_expand_obj(null, pp, FILE, body_tok(src), &buf)!!;
+		pp.expand_builtin_obj(LINE, body_tok(src), &buf)!!;
+		pp.expand_builtin_obj(FILE, body_tok(src), &buf)!!;
 		check(buf.len(), 2);
 		SourceId gen = source::GENERATED_ID;
 		assert(buf[0].loc.id == gen);

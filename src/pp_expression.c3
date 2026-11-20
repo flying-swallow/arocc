@@ -6,9 +6,8 @@
 // (Zig `assert(comp.target.intMaxType().bitSizeof(comp) == intmax_width)`);
 // wider intmax targets are unsupported, as in Zig.
 //
-// Literal decoding uses plan 11's APIs: number_literal::NumberLiteralParser
-// (+ number_value::pp_int_value, whose `diags` the caller reports in order
-// with err) for PP_NUM and text_literal_semantics::pp_char_value for
+// Literal decoding uses plan 11's APIs: number_value::pp_parse (whose
+// returned `diags` the caller reports in order with err) for PP_NUM and text_literal_semantics::pp_char_value for
 // character constants.
 //
 // Deviation: the intmax assertion computes the width from the target
@@ -17,7 +16,7 @@
 // Overflow detection uses 128-bit arithmetic where Zig uses @*WithOverflow.
 module aro::preprocessor;
 import aro::tokens, aro::tokenizer, aro::compilation, aro::diagnostics;
-import aro::number_literal, aro::number_value, aro::text_literal_semantics, aro::text_literal;
+import aro::number_value, aro::text_literal_semantics, aro::text_literal;
 import aro::type_store, aro::lang_opts;
 
 <* Zig `intmax_width`. *>
@@ -428,7 +427,7 @@ fn PpValue? PpExprParser.binary_expr(&self, Precedence min_prec, bool eval)
  `defined` [ '(' ] ident [ ')' ]: eof -> Diagnostic.MACRO_NAME_MISSING, non-identifier
  -> Diagnostic.MACRO_NAME_MUST_BE_IDENTIFIER, missing ')' -> CLOSING_PAREN + note;
  value signed 0/1 from pp.defines.contains(expanded_slice). PP_NUM:
- NumberLiteralParser.parse (PARSING_FAILED -> null) then pp_int_value: report
+ number_value::pp_parse (PARSING_FAILED -> null): report
  its diags in order (FLOAT_LITERAL_IN_EXPR -> null). Char literals:
  pp_char_value. '+' is skipped; '-' negates (signed: 0 - v with overflow
  warning Diagnostic.PP_OVERFLOW when eval; unsigned: wrapping); '~' complements; '!'
@@ -492,19 +491,12 @@ fn PpValue? PpExprParser.primary_expr(&self, bool eval)
 			return pp_bool(pp.defines.contains(pp.expanded_slice(identifier)));
 		case PP_NUM:
 			TokenWithExpansionLocs num = self.next();
-			NumberLiteralParser nlp = {
-				.comp = pp.comp,
-				.literal = pp.expanded_slice(num),
-				.loc = num.loc,
-				.expansion_locs = num.expansion_slice(),
-			};
-			NumberLiteralResult? parsed = nlp.parse();
-			if (catch f = parsed)
+			PpNumberValue? v = number_value::pp_parse(pp.comp, pp.expanded_slice(num), num.loc, num.expansion_slice());
+			if (catch f = v)
 			{
 				if (f == text_literal::PARSING_FAILED) return EXPR_FAILED~;
 				return f~;
 			}
-			PpNumberValue v = number_value::pp_int_value(parsed);
 			v.diags.@each(; $diag) { pp.err(num, $diag)!; };
 			if (v.rejected) return EXPR_FAILED~;
 			return v.is_signed ? pp_signed(v.signed) : pp_unsigned(v.unsigned);

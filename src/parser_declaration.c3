@@ -2,7 +2,7 @@
 // specifiers and binds them to the reusable declarator, initializer and
 // statement productions.
 module aro::parser_declaration;
-import aro::parser, aro::parser_statement, aro::parser_result, aro::parser_declarator;
+import aro::parser, aro::parser_statement, aro::parser_result;
 import aro::tree, aro::type_store, aro::tokens, aro::tokenizer, aro::symbol_stack;
 import aro::string_interner, aro::value, aro::diagnostics, aro::bigint;
 import aro::lang_opts, aro::compilation, aro::value_interner;
@@ -71,37 +71,11 @@ struct DeclarationParser (parser::IParserHandler, parser::IExpressionGrammar)
 	<* Seed the implicit typedef prelude before the first declaration. *>
 	bool implicit_typedef_prelude;
 	parser_statement::StatementParser statements;
-	parser_statement::StatementBodyBinding body_binding;
 	type_store::QualType function_return_qt;
 	tokens::TokenIndex function_name_tok;
 	parser::FunctionContext function_context;
 	uint record_member_depth;
 	bool has_function_context;
-}
-
-<* Declarator productions for one declarator: the declaration grammar plus the attributes being collected. *>
-struct DeclaratorCallbackContext
-{
-	DeclarationParser* declaration_parser;
-	attribute_wip::Wip* wip;
-}
-
-fn void? emit_deduced_type_not_allowed(parser::Parser* p, bool auto_type, String context, tokens::TokenIndex tok)
-{
-	if (auto_type) return Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, tok, context);
-	return Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, tok, context);
-}
-
-fn void? emit_deduced_type_array(parser::Parser* p, bool auto_type, String name, tokens::TokenIndex tok)
-{
-	if (auto_type) return Diagnostic.AUTO_TYPE_ARRAY.@emit(p, tok, name);
-	return Diagnostic.C23_AUTO_ARRAY.@emit(p, tok, name);
-}
-
-fn void? emit_deduced_type_requires_initializer(parser::Parser* p, bool auto_type, String name, tokens::TokenIndex tok)
-{
-	if (!auto_type) return Diagnostic.C23_AUTO_REQUIRES_INITIALIZER.@emit(p, tok);
-	return Diagnostic.AUTO_TYPE_REQUIRES_INITIALIZER.@emit(p, tok, name);
 }
 
 <* Parse a declaration initializer with the value rule selected from its
@@ -208,7 +182,24 @@ fn type_store::QualType DeclarationParser.completed_array_initializer_type(&self
 	return completed.with_qualifiers(target);
 }
 
-fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
+<* Install the complete C grammar on an initialized `p`: declarations,
+   statements, the implicit typedef prelude and GNU statement expressions.
+   Call after `Parser.init` and before `Parser.parse`; `self` must outlive `p`. *>
+fn void DeclarationParser.bind(&self, parser::Parser* p)
+{
+	*self = { .implicit_typedef_prelude = true };
+	self.statements.expressions = self;
+	p.handler = self;
+}
+
+<* Compound statement inside a GNU statement expression. *>
+fn type_store::NodeIndex? DeclarationParser.handle_statement_expression_body(&self, parser::Parser* p, bool eval) @dynamic
+{
+	if (!self.statements.expressions) self.statements.expressions = self;
+	return self.statements.parse_body(p, false);
+}
+
+fn type_store::NodeIndex? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 {
 	uint old_loop_depth = self.statements.loop_depth;
 	uint old_switch_depth = self.statements.switch_depth;
@@ -237,8 +228,13 @@ fn void? DeclarationParser.handle_body(&self, parser::Parser* p) @dynamic
 		self.statements.expressions = old_expressions;
 		p.set_function_context(old_parser_function_context);
 	}
-	self.body_binding.statements = &self.statements;
-	return self.body_binding.parse(p);
+	type_store::NodeIndex? body = self.statements.parse_body(p, true);
+	if (catch f = body)
+	{
+		if (f == parser_statement::PARSING_FAILED) return parser::PARSING_FAILED~;
+		return f~;
+	}
+	return body;
 }
 
 <* Local declaration production for the statement grammar. *>
@@ -270,8 +266,7 @@ fn void? DeclarationParser.handle_translation_unit_end(&self, parser::Parser* p)
 	return;
 }
 
-<* Share the full parser-fault classification with Parser.parse when this
-   declaration parser is installed directly, without FrontendHandler. *>
+<* Share the full parser-fault classification with Parser.parse. *>
 fn bool? DeclarationParser.is_recoverable_parse_fault(&self, parser::Parser* p, fault parse_fault) @dynamic
 	=> parser_statement::recoverable_statement_item_fault(parse_fault);
 
@@ -292,10 +287,6 @@ fn type_store::QualType? DeclarationParser.handle_typed_type_name(&self, parser:
 	$endif
 	return self.parse_typed_type_name(p);
 }
-
-<* DeclaratorParser seam; forwards to handle_typed_type_name. *>
-fn type_store::QualType? DeclaratorCallbackContext.declarator_type_name(&self, parser::Parser* p)
-	=> self.declaration_parser.handle_typed_type_name(p);
 
 fn parser::TypeNameProbe? DeclarationParser.handle_typed_type_name_probe(&self, parser::Parser* p) @dynamic
 {
@@ -442,13 +433,13 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 	{
 		// Only an unnamed bit-field (`int : 3;`) has an abstract member declarator.
 		bool member_abstract = p.is_at(tokenizer::TokenId.COLON);
-		DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = field_wip };
 		// Snapshot before the declarator: attributes after `*` belong to this
 		// declarator only and are dropped by `restore(declarator_state)` below.
 		AttributeUseSnapshot attribute_use_state;
 		attribute_use_state.init(p, field_wip);
 		defer attribute_use_state.free();
-		parser_declarator::ParsedDeclarator field_decl = self.declarator_parser(p, &callback_context).parse_declarator(spec.qt, member_abstract)!;
+		parser::ParsedDeclarator field_decl = p.parse_declarator(self, field_wip, spec.qt,
+			member_abstract ? parser::DeclaratorKind.ABSTRACT : parser::DeclaratorKind.NORMAL)!;
 		self.append_attributes(p, field_wip)!;
 		type_store::QualType field_qt = field_wip.apply_type_attrs(p, field_decl.qt)!;
 		field_qt = field_wip.apply_pending_calling_conventions(p, field_qt)!;
@@ -685,8 +676,14 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		if (spec.qt.is_auto())
 		{
 			String context = seed.is_union ? "union member" : "struct member";
-			emit_deduced_type_not_allowed(p, spec.qt.is_auto_type(), context,
-				spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
+			if (spec.qt.is_auto_type())
+			{
+				Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, spec.auto_type_tok, context)!;
+			}
+			else
+			{
+				Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, spec.c23_auto_tok, context)!;
+			}
 			// Keep the placeholder out of record layout and bit-field checks.
 			spec.qt = type_store::INVALID;
 		}
@@ -1015,8 +1012,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 			.enum_field = { .name_tok = name_tok, .qt = enumerator.qt, .init = init } });
 		enum_wip.apply_decl_attrs(p, node, type_store::NODE_NULL)!;
 		p.tree.set_value(node, enumerator.val);
-		symbol_stack::SymbolContext sym_ctx = self.symbol_context(p);
-		p.symbols.define_enumeration(&sym_ctx, name, enumerator.qt, name_tok, enumerator.val, node)!;
+		p.symbols.define_enumeration(p, name, enumerator.qt, name_tok, enumerator.val, node)!;
 		enum_fields.push({ .qt = enumerator.qt, .name = name, .name_tok = (type_store::TokenIndex)name_tok });
 		field_nodes.push(node);
 		enum_wip.restore(member_state);
@@ -1045,7 +1041,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 		for (usz i = 0; i < fields.len; i++)
 		{
 			type_store::EnumField* field = &fields[i];
-			symbol_stack::Symbol* symbol = p.symbols.get_ptr(field.name, symbol_stack::ScopeKind.VARS);
+			symbol_stack::Symbol* symbol = p.symbols.get_var_ptr(field.name);
 			if (symbol.kind != symbol_stack::SymbolKind.ENUMERATION) continue;
 			type_store::QualType dest_qt = tag_qt;
 			if (keep_int && enum_value_fits_type(symbol.val, field.qt, type_store::INT, p.comp)) dest_qt = type_store::INT;
@@ -1412,13 +1408,17 @@ fn type_store::QualType? DeclarationParser.parse_typed_type_name(&self, parser::
 	if (catch spec) return PARSING_FAILED~;
 	if (spec.qt.is_auto())
 	{
-		emit_deduced_type_not_allowed(p, spec.qt.is_auto_type(), "type name",
-			spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
+		if (spec.qt.is_auto_type())
+		{
+			Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, spec.auto_type_tok, "type name")!;
+		}
+		else
+		{
+			Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, spec.c23_auto_tok, "type name")!;
+		}
 		spec.qt = type_store::INVALID;
 	}
-	DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = &wip };
-	parser_declarator::DeclaratorParser declarator = { .parser = p, .grammar = &callback_context };
-	type_store::QualType qt = declarator.abstract_declarator(spec.qt)!;
+	type_store::QualType qt = p.abstract_declarator(self, &wip, spec.qt)!;
 	self.append_attributes(p, &wip)!;
 	qt = wip.apply_type_attrs(p, qt)!;
 	return wip.apply_pending_calling_conventions(p, qt);
@@ -1478,8 +1478,7 @@ fn void? add_implicit_typedef(parser::Parser* p, String name, type_store::QualTy
 	} });
 	string_interner::StringId interned_name = p.comp.intern_string(name);
 	type_store::QualType typedef_qt = p.comp.type_store.put(type_store::type_typedef(qt, interned_name, node)).with_qualifiers(qt);
-	symbol_stack::SymbolContext sym_ctx = p.symbol_context();
-	type_store::NodeOptIndex previous = p.symbols.define_typedef(&sym_ctx, interned_name, typedef_qt, name_tok, node)!;
+	type_store::NodeOptIndex previous = p.symbols.define_typedef(p, interned_name, typedef_qt, name_tok, node)!;
 	assert(previous == type_store::NODE_NULL, "implicit typedef names should be unique in the outer scope");
 	p.tree.root_decls.push(node);
 }
@@ -1526,11 +1525,6 @@ fn parser_result::Result? DeclarationParser.integer_constant_expression(&self, p
 fn parser_result::Result? DeclarationParser.expression(&self, parser::Parser* p, bool eval) @dynamic
 	=> p.expr(eval);
 
-fn symbol_stack::SymbolContext DeclarationParser.symbol_context(&self, parser::Parser* p)
-{
-	return p.symbol_context();
-}
-
 <* Parse the adjacent GNU, C23, or declspec attributes into the current Wip,
  evaluating each borrowed argument range through Parser's composed expression
  entry point. *>
@@ -1544,13 +1538,7 @@ fn uint? DeclarationParser.append_attributes(&self, parser::Parser* p, attribute
 	return count;
 }
 
-fn parser_declarator::DeclaratorParser DeclarationParser.declarator_parser(&self, parser::Parser* p,
-	DeclaratorCallbackContext* callback_context)
-{
-	return { .parser = p, .grammar = callback_context };
-}
-
-<* Parse one parameter declaration in DeclaratorParser's temporary prototype
+<* Parse one parameter declaration in Parser.function_suffix's temporary prototype
    scope. Named parameters get their own typed AST nodes and ordinary symbols;
    unnamed parameters remain available as type-only FuncParam entries. *>
 fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, parser::Parser* p,
@@ -1620,15 +1608,18 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 	}
 	if (spec.qt.is_auto())
 	{
-		emit_deduced_type_not_allowed(p, spec.qt.is_auto_type(), "function prototype",
-			spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
+		if (spec.qt.is_auto_type())
+		{
+			Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, spec.auto_type_tok, "function prototype")!;
+		}
+		else
+		{
+			Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, spec.c23_auto_tok, "function prototype")!;
+		}
 		spec.qt = type_store::INVALID;
 	}
 
-	DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = wip };
-	parser_declarator::DeclaratorParser declarator = self.declarator_parser(p, &callback_context);
-	bool allow_abstract = !parameter_declarator_has_name(p);
-	parser_declarator::ParsedDeclarator parsed = declarator.parse_declarator(spec.qt, allow_abstract)!;
+	parser::ParsedDeclarator parsed = p.parse_declarator(self, wip, spec.qt, parser::DeclaratorKind.PARAM)!;
 	type_store::QualType qt = parsed.qt;
 	self.append_attributes(p, wip)!;
 	qt = wip.apply_type_attrs(p, qt)!;
@@ -1653,79 +1644,10 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 		} });
 		wip.apply_decl_attrs(p, node, type_store::NODE_NULL)!;
 		param_node = node.pack();
-		symbol_stack::SymbolContext sym_ctx = self.symbol_context(p);
-		p.symbols.define_param(&sym_ctx, name, qt, name_tok, node)!;
+		p.symbols.define_param(p, name, qt, name_tok, node)!;
 		p.add_maybe_unused(node)!;
 	}
 	return { .qt = qt, .name = name, .name_tok = (type_store::TokenIndex)name_tok, .node = param_node };
-}
-
-fn type_store::FuncParam? DeclaratorCallbackContext.declarator_parameter(&self, parser::Parser* p)
-	=> self.declaration_parser.parse_parameter_declaration(p, self.wip);
-
-<* Decide whether an optional parameter declarator carries an identifier.
-   The declarator parser owns the grammar itself; this small lookahead only
-   selects its named or abstract entry mode. *>
-fn bool parameter_declarator_group_has_name(parser::Parser* p, tokens::TokenIndex open)
-{
-	if ((usz)open + 1 >= (usz)p.tok_end) return false;
-	tokenizer::TokenId first = p.tree.tokens[(usz)open + 1].id;
-	if (first.is_identifier()) return true;
-	if (first != ASTERISK && first != L_PAREN) return false;
-	uint parens = 0;
-	uint brackets = 0;
-	for (usz i = (usz)open + 1; i < (usz)p.tok_end; i++)
-	{
-		tokenizer::TokenId id = p.tree.tokens[i].id;
-		switch (id)
-		{
-			case L_BRACKET: brackets++;
-			case R_BRACKET: if (brackets > 0) brackets--;
-			case L_PAREN: parens++;
-			case R_PAREN:
-				if (parens == 0) return false;
-				parens--;
-			case IDENTIFIER: case EXTENDED_IDENTIFIER:
-				if (brackets == 0) return true;
-			default: break;
-		}
-	}
-	return false;
-}
-
-fn bool parameter_declarator_has_name(parser::Parser* p)
-{
-	if (p.at_eof()) return false;
-	usz i = (usz)p.tok_i;
-	tokenizer::TokenId id = p.tree.tokens[i].id;
-	if (id.is_identifier()) return true;
-	if (id == L_PAREN) return parameter_declarator_group_has_name(p, p.tok_i);
-	if (id != ASTERISK) return false;
-	while (i < (usz)p.tok_end)
-	{
-		id = p.tree.tokens[i].id;
-		if (id == ASTERISK)
-		{
-			i++;
-			while (i < (usz)p.tok_end && ((p.tree.tokens[i].id.canonical() == KEYWORD_CONST) ||
-				(p.tree.tokens[i].id.canonical() == KEYWORD_VOLATILE) || (p.tree.tokens[i].id.canonical() == KEYWORD_RESTRICT))) i++;
-			continue;
-		}
-		if (id.is_identifier()) return true;
-		if (id == L_PAREN) return parameter_declarator_group_has_name(p, (tokens::TokenIndex)i);
-		return false;
-	}
-	return false;
-}
-
-<* Parse a named declarator with this declaration grammar's parameter rule
-   installed for any nested function suffixes. *>
-fn parser_declarator::ParsedDeclarator? DeclarationParser.parse_named_declarator(&self,
-	parser::Parser* p, type_store::QualType base, attribute_wip::Wip* wip)
-{
-	DeclaratorCallbackContext callback_context = { .declaration_parser = (DeclarationParser*)self, .wip = wip };
-	parser_declarator::DeclaratorParser declarator = self.declarator_parser(p, &callback_context);
-	return declarator.parse_declarator(base);
 }
 
 fn tree::VariableStorageClass variable_storage_class(StorageClass storage)
@@ -1751,18 +1673,17 @@ fn void? DeclarationParser.bind_declaration_symbol(&self, parser::Parser* p,
 	type_store::NodeIndex node, bool is_typedef, bool is_definition, bool constexpr_decl,
 	type_store::NodeOptIndex* previous)
 {
-	symbol_stack::SymbolContext sym_ctx = self.symbol_context(p);
 	if (is_typedef)
 	{
-		*previous = p.symbols.define_typedef(&sym_ctx, name, qt, name_tok, node)!;
+		*previous = p.symbols.define_typedef(p, name, qt, name_tok, node)!;
 		return;
 	}
 	if (is_definition)
 	{
-		*previous = p.symbols.define_symbol(&sym_ctx, name, qt, name_tok, node, value::NONE, constexpr_decl)!;
+		*previous = p.symbols.define_symbol(p, name, qt, name_tok, node, value::NONE, constexpr_decl)!;
 		return;
 	}
-	*previous = p.symbols.declare_symbol(&sym_ctx, name, qt, name_tok, node)!;
+	*previous = p.symbols.declare_symbol(p, name, qt, name_tok, node)!;
 }
 
 <* Set a declaration's actual definition and propagate the link through
@@ -1873,7 +1794,7 @@ fn void DeclarationParser.finalize_tentative_arrays(&self, parser::Parser* p)
 		{
 			if (symbol.node == root_decl)
 			{
-				symbol_stack::Symbol* symbol_ptr = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
+				symbol_stack::Symbol* symbol_ptr = p.symbols.get_var_ptr(name);
 				symbol_ptr.qt = completed_qt;
 			}
 		}
@@ -1908,7 +1829,6 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 	// int parameters first so earlier parameters can appear in VLA bounds.
 	p.push_scope();
 	defer p.pop_scope();
-	symbol_stack::SymbolContext sym_ctx = self.symbol_context(p);
 	KAndRParameter[] param_entries = params.array_view();
 	for (usz i = 0; i < param_entries.len; i++)
 	{
@@ -1920,7 +1840,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 			if (param_entries[previous].param.name == param.name) { duplicate_name = true; break; }
 		}
 		if (duplicate_name) continue;
-		p.symbols.define_param(&sym_ctx, param.name, param.qt,
+		p.symbols.define_param(p, param.name, param.qt,
 			(tokens::TokenIndex)param.name_tok, param.node.unwrap())!;
 	}
 
@@ -1947,7 +1867,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
-			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
+			parser::ParsedDeclarator parsed = p.parse_declarator(self, &wip, spec.qt)!;
 			self.append_attributes(p, &wip)!;
 			type_store::QualType parsed_qt = wip.apply_type_attrs(p, parsed.qt)!;
 			parsed_qt = wip.apply_pending_calling_conventions(p, parsed_qt)!;
@@ -1980,7 +1900,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 						tree::ParamStorageClass.REGISTER : tree::ParamStorageClass.AUTO,
 				} });
 				wip.apply_decl_attrs(p, node, type_store::NODE_NULL)!;
-				p.symbols.define_param(&sym_ctx, name, qt, name_tok, node)!;
+				p.symbols.define_param(p, name, qt, name_tok, node)!;
 				bool already_recorded = false;
 				foreach (extra : *extra_params)
 				{
@@ -1997,7 +1917,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 				type_store::FuncParam previous = param_entries[match].param;
 				if (!previous.node.is_null())
 				{
-					p.symbols.define_param(&sym_ctx, name, qt, name_tok, previous.node.unwrap())!;
+					p.symbols.define_param(p, name, qt, name_tok, previous.node.unwrap())!;
 				}
 			}
 			else
@@ -2015,7 +1935,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 					}
 					p.tree.set_node(node, (sz)param.node.unwrap());
 					wip.apply_decl_attrs(p, param.node.unwrap(), param.node)!;
-					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
+					symbol_stack::Symbol* symbol = p.symbols.get_var_ptr(name);
 					symbol.qt = qt;
 				}
 			}
@@ -2447,7 +2367,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
-			parser_declarator::ParsedDeclarator parsed = self.parse_named_declarator(p, spec.qt, &wip)!;
+			parser::ParsedDeclarator parsed = p.parse_declarator(self, &wip, spec.qt)!;
 			// Zig `initDeclarator`: attributes, optional asm label, attributes.
 			self.append_attributes(p, &wip)!;
 			parser::AsmLabel? asm_label = p.parse_asm_label();
@@ -2479,22 +2399,35 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			if (has_auto_type)
 			{
 				// Zig switches on declarator_type: validate may already have made qt invalid.
-				parser_declarator::DeclaratorType declarator_type = parsed.declarator_type;
-				if (declarator_type == parser_declarator::DeclaratorType.FUNC || declarator_type == parser_declarator::DeclaratorType.BLOCK)
+				parser::DeclaratorType declarator_type = parsed.declarator_type;
+				if (declarator_type == parser::DeclaratorType.FUNC || declarator_type == parser::DeclaratorType.BLOCK)
 				{
-					String context = declarator_type == parser_declarator::DeclaratorType.BLOCK ? "block return type" : "function return type";
-					emit_deduced_type_not_allowed(p, spec.qt.is_auto_type(), context,
-						spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
+					String context = declarator_type == parser::DeclaratorType.BLOCK ? "block return type" : "function return type";
+					if (spec.qt.is_auto_type())
+					{
+						Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, spec.auto_type_tok, context)!;
+					}
+					else
+					{
+						Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, spec.c23_auto_tok, context)!;
+					}
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
-				else if (declarator_type == parser_declarator::DeclaratorType.ARRAY)
+				else if (declarator_type == parser::DeclaratorType.ARRAY)
 				{
-					emit_deduced_type_array(p, spec.qt.is_auto_type(), p.tree.tok_slice(name_tok), name_tok)!;
+					if (spec.qt.is_auto_type())
+					{
+						Diagnostic.AUTO_TYPE_ARRAY.@emit(p, name_tok, p.tree.tok_slice(name_tok))!;
+					}
+					else
+					{
+						Diagnostic.C23_AUTO_ARRAY.@emit(p, name_tok, p.tree.tok_slice(name_tok))!;
+					}
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
-				else if (declarator_type == parser_declarator::DeclaratorType.POINTER)
+				else if (declarator_type == parser::DeclaratorType.POINTER)
 				{
 					Diagnostic.AUTO_TYPE_REQUIRES_PLAIN_DECLARATOR.@emit(p, name_tok)!;
 					qt = type_store::INVALID;
@@ -2502,15 +2435,28 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				}
 				else if (spec.storage_class == StorageClass.TYPEDEF)
 				{
-					emit_deduced_type_not_allowed(p, spec.qt.is_auto_type(), "typedef",
-						spec.qt.is_auto_type() ? spec.auto_type_tok : spec.c23_auto_tok)!;
+					if (spec.qt.is_auto_type())
+					{
+						Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, spec.auto_type_tok, "typedef")!;
+					}
+					else
+					{
+						Diagnostic.C23_AUTO_NOT_ALLOWED.@emit(p, spec.c23_auto_tok, "typedef")!;
+					}
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
 				else if (!has_initializer)
 				{
-					emit_deduced_type_requires_initializer(p, spec.qt.is_auto_type(),
-						p.tree.tok_slice(name_tok), name_tok)!;
+					if (spec.qt.is_auto_type())
+					{
+						Diagnostic.AUTO_TYPE_REQUIRES_INITIALIZER.@emit(p, name_tok,
+							p.tree.tok_slice(name_tok))!;
+					}
+					else
+				{
+						Diagnostic.C23_AUTO_REQUIRES_INITIALIZER.@emit(p, name_tok)!;
+					}
 					qt = type_store::INVALID;
 					deduced_type = false;
 				}
@@ -2640,16 +2586,15 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				}
 				p.local_unused_err_count = p.diagnostics.errors;
 				retain_parameter_warnings = true;
-				fault body_fault = @catch(p.parse_body());
-				if (body_fault)
+				type_store::NodeIndex? body = p.parse_body();
+				if (catch body_fault = body)
 				{
 					p.diagnose_unused_locals()!;
 					return body_fault~;
 				}
 				p.diagnose_unused_locals()!;
-				if (self.body_binding.body.is_null()) return PARSING_FAILED~;
 				tree::Node completed = function_node.get(&p.tree);
-				completed.function.body = self.body_binding.body;
+				completed.function.body = body.pack();
 				p.tree.set_node(completed, (sz)function_node);
 				declarations.push(function_node);
 				if (!local) p.tree.root_decls.push(function_node);
@@ -2760,7 +2705,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 					self.bind_declaration_symbol(p, name, completed_qt, name_tok, node, false,
 						local ? spec.storage_class != StorageClass.EXTERN : has_initializer,
 						spec.constexpr_decl, &previous)!;
-					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
+					symbol_stack::Symbol* symbol = p.symbols.get_var_ptr(name);
 					if (symbol.node == node)
 					{
 						symbol.qt = completed_qt;
@@ -2779,7 +2724,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				}
 				if (!has_initializer && !has_auto_type && !local && spec.storage_class != StorageClass.EXTERN)
 				{
-					symbol_stack::Symbol* symbol = p.symbols.get_ptr(name, symbol_stack::ScopeKind.VARS);
+					symbol_stack::Symbol* symbol = p.symbols.get_var_ptr(name);
 					if (symbol.node == node && symbol.kind == symbol_stack::SymbolKind.DECL)
 					{
 						self.set_tentative_definition(p, node, node);

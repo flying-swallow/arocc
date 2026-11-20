@@ -1,7 +1,7 @@
 // Tests for aro::number_value (plan 11 agent 11.2). Inputs are constructed
-// NumberLiteralResult / Prefix / Suffix values, so these tests do not need
+// NumberLiteral / Prefix / Suffix values, so these tests do not need
 // number_literal's syntax parser (11.1); the end-to-end path through
-// NumberLiteralParser is in number_value_manual_tests.c3.
+// number_value::parse is in number_value_manual_tests.c3.
 //
 // Expected values are labelled with their origin:
 //   [fixture X]  test/cases/X (types via _Static_assert/typeof, diagnostics
@@ -46,12 +46,12 @@ macro @with_comp(String triple, Compiler emu = NO; @body(Compilation* comp))
 
 fn NumberValue int_lit(Compilation* comp, Prefix prefix, String bytes, Suffix suffix)
 {
-	return number_value::number_value(comp, { .bytes = bytes, .is_float = false, .prefix = prefix, .suffix = suffix });
+	return number_value::parse_int(comp, prefix, bytes, suffix);
 }
 
 fn NumberValue float_lit(Compilation* comp, String bytes, Suffix suffix)
 {
-	return number_value::number_value(comp, { .bytes = bytes, .is_float = true, .prefix = DECIMAL, .suffix = suffix });
+	return number_value::parse_float(comp, bytes, suffix);
 }
 
 fn void expect_diags(NumberValue v, Diagnostic[] want)
@@ -561,7 +561,7 @@ fn void float_suffix_type_table() @test
 
 fn PpNumberValue pp(Prefix prefix, String bytes, Suffix suffix, bool is_float = false)
 {
-	return number_value::pp_int_value({ .bytes = bytes, .is_float = is_float, .prefix = prefix, .suffix = suffix });
+	return number_value::pp_from_split({ .bytes = bytes, .is_float = is_float, .prefix = prefix, .suffix = suffix });
 }
 
 fn void pp_values() @test

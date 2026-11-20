@@ -1,11 +1,11 @@
-// Source-derived direct tests for parser_builtin and builtin_eval. These use
-// the modules' callback / dispatcher APIs and do not claim full C grammar or
-// downstream semantic coverage.
+// Source-derived direct tests for the specialized builtin parsers
+// (src/parser_builtin.c3) and builtin_eval. Operands go through the Parser's
+// real expression grammar; type names come from small test handlers.
 module builtin_expression_tests;
 import aro::primitive_value;
 import aro::builtin_eval, aro::builtin_defs::common, aro::builtins;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_builtin, aro::parser_result;
-import aro::parser_frontend;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
+import aro::parser_declaration;
 import aro::target, aro::lang_opts;
 import aro::attribute, aro::attribute_map;
 import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
@@ -18,37 +18,6 @@ const Host HOST = { X86_64, LINUX, GNU };
 macro check(left, right)
 {
 	test::eq((long)left, (long)right);
-}
-
-struct CallbackContext
-{
-	uint expression_calls;
-	bool[3] expression_eval;
-	uint constant_calls;
-}
-
-alias TestAssignment = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias TestIntegerConstant = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode mode, bool eval);
-
-<* IExpressionGrammar over the tests' callback functions; a null callback is HOOK_ABSENT. *>
-struct CallbackExpressions (parser::IExpressionGrammar)
-{
-	void* context;
-	TestAssignment assign;
-	TestIntegerConstant int_const;
-}
-
-fn parser_result::Result? CallbackExpressions.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
-{
-	if (!self.assign) return parser::HOOK_ABSENT~;
-	return self.assign(self.context, p, eval);
-}
-
-fn parser_result::Result? CallbackExpressions.integer_constant_expression(&self, parser::Parser* p,
-	parser::ConstDeclFoldingMode mode, bool eval) @dynamic
-{
-	if (!self.int_const) return parser::HOOK_ABSENT~;
-	return self.int_const(self.context, p, mode, eval);
 }
 
 struct OffsetTypeContext (parser::IParserHandler) { type_store::QualType qt; }
@@ -70,89 +39,32 @@ fn type_store::QualType? VectorTypeHandler.handle_typed_type_name(&self, parser:
 
 fn type_store::QualType? parse_offset_record_type(void* context, parser::Parser* p)
 {
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.IDENTIFIER) return parser_builtin::PARSING_FAILED~;
+	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.IDENTIFIER) return parser::PARSING_FAILED~;
 	p.advance();
 	return ((OffsetTypeContext*)context).qt;
 }
 
-fn parser_result::Result? parse_choose_operand(void* context, parser::Parser* p, bool eval)
-{
-	CallbackContext* ctx = (CallbackContext*)context;
-	if (p.at_eof()) return parser_builtin::PARSING_FAILED~;
-	if (p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.PP_NUM && p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.MINUS) return parser_builtin::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	bool negative = false;
-	if (p.tree.tokens[(usz)tok].id == tokenizer::TokenId.MINUS) { negative = true; p.advance(); tok = p.tok_i; }
-	if (p.at_eof() || p.tree.tokens[(usz)tok].id != tokenizer::TokenId.PP_NUM) return parser_builtin::PARSING_FAILED~;
-	String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-	long n = spelling == "0" ? 0 : spelling == "1" ? 1 : spelling == "2" ? 2 : 3;
-	if (negative) n = -n;
-	assert(ctx.expression_calls < ctx.expression_eval.len);
-	ctx.expression_eval[ctx.expression_calls++] = eval;
-	NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	return { .node = node, .qt = type_store::INT,
-		.val = eval ? value::int_i64(n, p.comp) : value::NONE };
-}
-
-fn parser_result::Result? parse_vector_operand(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.PP_NUM) return parser_builtin::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	type_store::QualType vec = p.comp.type_store.put(type_store::type_vector(type_store::INT, 4));
-	return { .node = node, .qt = vec, .val = value::NONE };
-}
-
-fn parser_result::Result? parse_choose_constant(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode mode, bool eval)
-{
-	CallbackContext* ctx = (CallbackContext*)context;
-	ctx.constant_calls++;
-	return parse_choose_operand(context, p, eval);
-}
-
-fn parser_result::Result? parse_offset_integer_constant(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode mode, bool eval)
-{
-	CallbackContext* ctx = (CallbackContext*)context;
-	ctx.constant_calls++;
-	return p.integer_const_expr(eval, mode);
-}
-
-fn parser_result::Result? parse_offset_assignment_expression(void* context, parser::Parser* p, bool eval)
-	=> p.assign_expr(eval);
-
-fn parser_result::Result? parse_nonconstant_offset_index(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode mode, bool eval)
-{
-	(void)context; (void)mode; (void)eval;
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.IDENTIFIER) return parser_builtin::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	return { .node = node, .qt = type_store::INT, .val = value::NONE };
-}
-
-fn parser_result::Result? parse_nonconstant_offset_expression(void* context, parser::Parser* p, bool eval)
-	=> parse_nonconstant_offset_index(context, p, parser::ConstDeclFoldingMode.GNU_FOLDING_EXTENSION, eval);
-
 fn type_store::QualType? parse_int_type(void* context, parser::Parser* p)
 {
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return parser_builtin::PARSING_FAILED~;
+	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return parser::PARSING_FAILED~;
 	p.advance();
 	return type_store::INT;
 }
 
 fn type_store::QualType? parse_vector_type(void* context, parser::Parser* p)
 {
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return parser_builtin::PARSING_FAILED~;
+	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return parser::PARSING_FAILED~;
 	p.advance();
 	return p.comp.type_store.put(type_store::type_vector(type_store::INT, 4));
+}
+
+<* Declare `v` as a 4 x int vector variable for the vector builtin operands. *>
+fn void define_vector_operand(parser::Parser* p)
+{
+	type_store::QualType vec = p.comp.type_store.put(type_store::type_vector(type_store::INT, 4));
+	type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = vec } });
+	p.define_symbol({ .name = p.comp.intern_string("v"), .kind = symbol_stack::SymbolKind.DEF,
+		.qt = vec, .node = decl, .val = value::NONE });
 }
 
 fn void choose_expression_suppresses_unselected_evaluation() @test
@@ -165,27 +77,22 @@ fn void choose_expression_suppresses_unselected_evaluation() @test
 		d.init_list(&ta);
 		Compilation comp;
 		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("choose-expr.c", "(1, 2, 0)\n")!!;
+		Source src = comp.add_source_from_buffer("choose-expr.c", "(1, 2, 1 / 0)\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_choose_operand, .int_const = &parse_choose_constant };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.choose_expr()!!;
+		parser::Parser p;
+		p.init(&pp);
+		p.bind_finalized_tokens();
+		parser_result::Result result = p.builtin_choose_expr()!!;
 		assert(p.at_eof());
 		assert(result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_CHOOSE_EXPR);
 		assert(result.val.to_i64(&comp)!! == 2);
-		assert(context.constant_calls == 1 && context.expression_calls == 3);
-		assert(context.expression_eval[0] && context.expression_eval[1] && !context.expression_eval[2]);
+		// The unselected `1 / 0` is parsed without evaluation, so no division-by-zero diagnostic.
+		assert(d.messages.len() == 0);
 		assert(result.qt.eql(type_store::INT, &comp));
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -205,7 +112,7 @@ fn void types_compatible_expression_returns_constant_boolean() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("types-compatible.c", "(int, int)\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		Tree tree;
@@ -214,8 +121,7 @@ fn void types_compatible_expression_returns_constant_boolean() @test
 		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d, .handler = &int_types };
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		parser_builtin::BuiltinParser builtin = { .parser = &p };
-		parser_result::Result result = builtin.types_compatible(0)!!;
+		parser_result::Result result = p.builtin_types_compatible(0)!!;
 		assert(p.at_eof());
 		assert(result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_TYPES_COMPATIBLE_P);
 		assert(result.qt.eql(type_store::INT, &comp));
@@ -502,11 +408,11 @@ fn void check_builtin_constant_p_string_subscript(String text, long expected, bo
 		comp.langopts.standard = lang_opts::Standard.C17;
 		type_store::init_named_types(&comp);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("constant-p-subscript.c", text)!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p;
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		p.init(&pp, &frontend);
 		frontend.bind(&p);
 		p.bind_finalized_tokens();
@@ -572,11 +478,11 @@ fn void check_constant_expression_no_diagnostics(String text, long expected)
 		comp.langopts.standard = lang_opts::Standard.C17;
 		type_store::init_named_types(&comp);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("constant-expression.c", text)!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p;
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		p.init(&pp, &frontend);
 		frontend.bind(&p);
 		p.bind_finalized_tokens();
@@ -602,14 +508,12 @@ fn void shufflevector_diagnoses_index_below_negative_one_and_keeps_ast() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		Source src = comp.add_source_from_buffer("shuffle.c", "(1, 2, -2)\n")!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
+		Source src = comp.add_source_from_buffer("shuffle.c", "(v, v, -2)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_vector_operand, .int_const = &parse_choose_constant };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.shufflevector(0)!!;
+		define_vector_operand(&p);
+		parser_result::Result result = p.builtin_shufflevector(0)!!;
 		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "index for __builtin_shufflevector must be positive or -1");
@@ -624,14 +528,12 @@ fn void shufflevector_builds_result_type_and_index_nodes() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		Source src = comp.add_source_from_buffer("shuffle-valid.c", "(1, 2, 1, -1)\n")!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
+		Source src = comp.add_source_from_buffer("shuffle-valid.c", "(v, v, 1, -1)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_vector_operand, .int_const = &parse_choose_constant };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.shufflevector(0)!!;
+		define_vector_operand(&p);
+		parser_result::Result result = p.builtin_shufflevector(0)!!;
 		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
 		tree::Node node = p.tree.decode_expr_stmt(result.node);
 		assert(node.shufflevector.indexes.len == 2);
@@ -648,16 +550,14 @@ fn void convertvector_builds_destination_typed_node() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
-		Source src = comp.add_source_from_buffer("convertvector.c", "(1, int)\n")!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
+		Source src = comp.add_source_from_buffer("convertvector.c", "(v, int)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		VectorTypeHandler vector_types;
 		parser::Parser p; p.init(&pp, &vector_types);
 		p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_vector_operand };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.convertvector(0)!!;
+		define_vector_operand(&p);
+		parser_result::Result result = p.builtin_convertvector(0)!!;
 		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_CONVERTVECTOR);
 		tree::Node node = p.tree.decode_expr_stmt(result.node);
 		assert(node.convertvector.dest_qt.eql(result.qt, &comp));
@@ -672,16 +572,13 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("builtin-errors.c", "(1, int)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		IntTypeHandler int_types;
 		parser::Parser p; p.init(&pp, &int_types);
 		p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_choose_operand };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		assert(@catch(builtin.va_arg(0)) == parser_builtin::PARSING_FAILED);
+		assert(@catch(p.builtin_va_arg(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
 		// Parser/Diagnostic.zig::incompatible_va_arg uses {qt}; Parser.zig::formatQualType quotes it.
 		test::eq(d.messages[0].text, "first argument to va_arg, is of type 'int' and not 'va_list'");
@@ -691,18 +588,17 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 	{
 		TrackingAllocator ta2; ta2.init(mem); defer ta2.free();
 		Diagnostics d; d.init_list(&ta2); Compilation comp; comp.init(&ta2, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-error.c", "(int, field) (int, field)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		IntTypeHandler int_types;
 		parser::Parser p; p.init(&pp, &int_types);
 		p.bind_finalized_tokens();
-		parser_builtin::BuiltinParser builtin = { .parser = &p };
-		assert(@catch(builtin.offsetof(0)) == parser_builtin::PARSING_FAILED);
+		assert(@catch(p.builtin_offsetof(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "offsetof requires struct or union type, 'int' invalid");
 		while (!p.is_at(tokenizer::TokenId.L_PAREN)) p.advance();
-		assert(@catch(builtin.offsetof(0, true)) == parser_builtin::PARSING_FAILED);
+		assert(@catch(p.builtin_offsetof(0, true)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[1].text, "offsetof requires struct or union type, 'int' invalid");
 		p.free(); pp.free(); comp.free(); d.free();
@@ -716,7 +612,7 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-array.c", "(Root, items[1 + 1].value)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
@@ -731,10 +627,7 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 		OffsetTypeContext types = { .qt = root };
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .int_const = &parse_offset_integer_constant };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.offsetof(0, true)!!;
+		parser_result::Result result = p.builtin_offsetof(0, true)!!;
 		assert(p.at_eof() && result.val.to_i64(&comp)!! == 64);
 		tree::Node call = result.node.get(&p.tree);
 		tree::Node member = call.builtin_call.args[0].get(&p.tree);
@@ -748,7 +641,6 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 		tree::Node first_member = array_decay.cast.operand.get(&p.tree);
 		tree::Node base = first_member.member_access.base.get(&p.tree);
 		assert(p.tree.tokens[(usz)base.default_init.last_tok].id == tokenizer::TokenId.L_BRACKET);
-		assert(context.constant_calls == 1);
 		p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);
@@ -761,7 +653,7 @@ fn void offsetof_resolves_promoted_anonymous_record_fields() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-anonymous.c", "(Root, value)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		type_store::RecordField[1] inner_fields = {
@@ -781,9 +673,7 @@ fn void offsetof_resolves_promoted_anonymous_record_fields() @test
 		OffsetTypeContext types = { .qt = root };
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
-		CallbackExpressions exprs = { .int_const = &parse_offset_integer_constant };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.offsetof(0, true)!!;
+		parser_result::Result result = p.builtin_offsetof(0, true)!!;
 		assert(result.val.to_i64(&comp)!! == 24);
 		tree::Node access = result.node.get(&p.tree).builtin_call.args[0].get(&p.tree);
 		assert(access.kind == tree::NodeKind.MEMBER_ACCESS_EXPR);
@@ -805,7 +695,7 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-byte-bit.c",
 			"(Root, items[2]) (Root, items[3]) (Root, items[-1]) (Root, items[2])\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -819,21 +709,18 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 		OffsetTypeContext types = { .qt = root };
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .int_const = &parse_offset_integer_constant };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result byte_offset = builtin.offsetof(0)!!;
+		parser_result::Result byte_offset = p.builtin_offsetof(0)!!;
 		assert(byte_offset.val.to_i64(&comp)!! == 9);
 		tree::Node call = byte_offset.node.get(&p.tree);
 		tree::Node access = call.builtin_call.args[0].get(&p.tree);
 		assert(access.kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
 		assert(access.array_access.qt.eql(type_store::INT, &comp));
 
-		parser_result::Result past_end = builtin.offsetof(0)!!;
+		parser_result::Result past_end = p.builtin_offsetof(0)!!;
 		assert(past_end.val.to_i64(&comp)!! == 13);
-		parser_result::Result before_start = builtin.offsetof(0)!!;
+		parser_result::Result before_start = p.builtin_offsetof(0)!!;
 		assert(before_start.val.to_i64(&comp)!! == -3);
-		parser_result::Result bit_offset = builtin.offsetof(0, true)!!;
+		parser_result::Result bit_offset = p.builtin_offsetof(0, true)!!;
 		assert(bit_offset.val.to_i64(&comp)!! == 72);
 		assert(p.at_eof());
 		assert(d.messages.len() == 2);
@@ -854,7 +741,7 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-nonconstant.c",
 			"(Root, [0]) (Root, items[index]) (Root, items[1])\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -868,22 +755,22 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 		OffsetTypeContext types = { .qt = root };
 		parser::Parser p; p.init(&pp, &types);
 		p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_nonconstant_offset_expression };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		assert(@catch(builtin.offsetof(0)) == parser_builtin::PARSING_FAILED);
+		type_store::NodeIndex index_decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+			.variable = { .qt = type_store::INT } });
+		p.define_symbol({ .name = comp.intern_string("index"), .kind = symbol_stack::SymbolKind.DEF,
+			.qt = type_store::INT, .node = index_decl, .val = value::NONE });
+		assert(@catch(p.builtin_offsetof(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "expected identifier");
 		assert(p.is_at(tokenizer::TokenId.L_PAREN));
-		parser_result::Result runtime = builtin.offsetof(0)!!;
+		parser_result::Result runtime = p.builtin_offsetof(0)!!;
 		assert(runtime.val.is_none());
 		tree::Node runtime_access = runtime.node.get(&p.tree).builtin_call.args[0].get(&p.tree);
 		assert(runtime_access.kind == tree::NodeKind.ARRAY_ACCESS_EXPR);
 		assert(runtime_access.array_access.qt.eql(type_store::INT, &comp));
 		assert(d.messages.len() == 1);
 		assert(p.is_at(tokenizer::TokenId.L_PAREN));
-		exprs.assign = &parse_offset_assignment_expression;
-		parser_result::Result recovered = builtin.offsetof(0)!!;
+		parser_result::Result recovered = p.builtin_offsetof(0)!!;
 		assert(recovered.val.to_i64(&comp)!! == 4);
 		assert(p.at_eof());
 		p.free(); pp.free(); comp.free(); d.free();
@@ -891,43 +778,38 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 	assert(ta.allocation_count() == 0);
 }
 
-fn void bit_cast_accepts_equal_sized_callback_operand_and_type() @test
+fn void bit_cast_accepts_equal_sized_operand_and_type() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("bit-cast.c", "(int, 1)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		IntTypeHandler int_types;
 		parser::Parser p; p.init(&pp, &int_types);
 		p.bind_finalized_tokens();
-		CallbackContext context = {};
-		CallbackExpressions exprs = { .context = &context, .assign = &parse_choose_operand };
-		parser_builtin::BuiltinParser builtin = { .parser = &p, .expressions = &exprs };
-		parser_result::Result result = builtin.bit_cast(0)!!;
+		parser_result::Result result = p.builtin_bit_cast(0)!!;
 		assert(p.at_eof());
 		assert(result.node.kind(&p.tree) == tree::NodeKind.CAST);
 		assert(result.qt.eql(type_store::INT, &comp));
-		assert(context.expression_calls == 1 && context.expression_eval[0]);
 		p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);
 }
 
 // Source-derived direct coverage for Parser.check_va_pack_function and
-// BuiltinParser.va_arg_pack / va_arg_pack_len. Each invocation starts at the
+// Parser.builtin_va_arg_pack / builtin_va_arg_pack_len. Each invocation starts at the
 // `(` token after the source builtin identifier, as primary dispatch does.
 fn void va_arg_pack_obeys_call_and_function_contexts() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
-		Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("va-pack.c", "__builtin_va_arg_pack() __builtin_va_arg_pack_len()\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
-		parser_builtin::BuiltinParser builtin = { .parser = &p };
 		// Give the function check a real declaration key and source-built
 		// ALWAYS_INLINE metadata, as the declaration parser does.
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.FUNCTION,
@@ -946,26 +828,26 @@ fn void va_arg_pack_obeys_call_and_function_contexts() @test
 		// INVALID result type. The message text and branch order mirror the
 		// implementation; the call-state diagnostic outranks type acceptance.
 		p.tok_i = 1;
-		parser_result::Result outside = builtin.va_arg_pack(0)!!;
+		parser_result::Result outside = p.builtin_va_arg_pack(0)!!;
 		assert(outside.node.kind(&p.tree) == tree::NodeKind.BUILTIN_VA_ARG_PACK);
 		assert(outside.qt.is_invalid());
 		assert(d.messages.len() == 1 && d.messages[0].text == "'__va_arg_pack' used outside a call");
 
 		p.va_arg_pack_call = { .active = true, .variadic = true, .typed = false };
 		p.tok_i = 1;
-		parser_result::Result accepted = builtin.va_arg_pack(0)!!;
+		parser_result::Result accepted = p.builtin_va_arg_pack(0)!!;
 		assert(accepted.qt.eql(type_store::VOID, &comp));
 		assert(d.messages.len() == 1);
 
 		p.va_arg_pack_call = { .active = true, .variadic = true, .typed = true };
 		p.tok_i = 1;
-		parser_result::Result typed = builtin.va_arg_pack(0)!!;
+		parser_result::Result typed = p.builtin_va_arg_pack(0)!!;
 		assert(typed.qt.is_invalid());
 		assert(d.messages.len() == 2 && d.messages[1].text == "'__va_arg_pack' passed as non-variadic argument");
 
 		p.va_arg_pack_call = { .active = true, .variadic = false, .typed = false };
 		p.tok_i = 1;
-		parser_result::Result nonvariadic = builtin.va_arg_pack(0)!!;
+		parser_result::Result nonvariadic = p.builtin_va_arg_pack(0)!!;
 		assert(nonvariadic.qt.is_invalid());
 		assert(d.messages.len() == 3 && d.messages[2].text == "'__va_arg_pack' passed to non-variadic function");
 
@@ -975,13 +857,13 @@ fn void va_arg_pack_obeys_call_and_function_contexts() @test
 		p.set_function_context({ .active = true, .declaration = decl.pack(),
 			.variadic = true, .named_param_count = 1 });
 		p.tok_i = 4;
-		parser_result::Result no_inline = builtin.va_arg_pack_len(3)!!;
+		parser_result::Result no_inline = p.builtin_va_arg_pack_len(3)!!;
 		assert(no_inline.qt.eql(type_store::INT, &comp));
 		assert(d.messages.len() == 4 && d.messages[3].text == "'__builtin_va_arg_pack_len' used in a function that is not always inlined");
 
 		p.set_function_context({});
 		p.tok_i = 4;
-		parser_result::Result outside_function = builtin.va_arg_pack_len(3)!!;
+		parser_result::Result outside_function = p.builtin_va_arg_pack_len(3)!!;
 		assert(outside_function.qt.eql(type_store::INT, &comp));
 		assert(d.messages.len() == 5 && d.messages[4].text == "'__builtin_va_arg_pack_len' cannot be used outside a function");
 		p.free(); pp.free(); comp.free(); d.free();

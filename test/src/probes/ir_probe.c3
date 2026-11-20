@@ -27,7 +27,7 @@ fn void AstFixture.init(&self)
 	self.tokens[0] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = 0, .line = 1 } };
 	self.tree.init(&self.comp, self.tokens[..]);
-	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 }
 
 fn void AstFixture.free(&self)

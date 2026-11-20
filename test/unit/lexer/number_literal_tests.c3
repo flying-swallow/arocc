@@ -49,17 +49,16 @@ macro @with_ctx(String triple; @body(Ctx* c))
 	check(ta.allocation_count(), 0);
 }
 
-fn NumberLiteralResult? Ctx.parse(&self, String lit)
+fn NumberLiteral? Ctx.parse(&self, String lit)
 {
-	NumberLiteralParser p = { .comp = self.comp, .literal = lit, .loc = self.loc };
-	return p.parse();
+	return number_literal::split(self.comp, lit, self.loc);
 }
 
 <* Parses without any diagnostic. *>
 fn void Ctx.ok(&self, String lit, Prefix prefix, Suffix suffix, String bytes, bool is_float)
 {
 	sz before = self.d.messages.len();
-	NumberLiteralResult r = self.parse(lit)!!;
+	NumberLiteral r = self.parse(lit)!!;
 	check(self.d.messages.len(), before);
 	assert(r.prefix == prefix, "%s: prefix %s", lit, r.prefix);
 	assert(r.suffix == suffix, "%s: suffix %s", lit, r.suffix);
@@ -78,10 +77,10 @@ fn void Ctx.fails(&self, String lit, String msg)
 }
 
 <* Succeeds with exactly one diagnostic `msg` of effective kind `kind`. *>
-fn NumberLiteralResult Ctx.diag(&self, String lit, String msg, MessageKind kind)
+fn NumberLiteral Ctx.diag(&self, String lit, String msg, MessageKind kind)
 {
 	sz before = self.d.messages.len();
-	NumberLiteralResult r = self.parse(lit)!!;
+	NumberLiteral r = self.parse(lit)!!;
 	check(self.d.messages.len(), before + 1);
 	test::eq(self.d.messages[before].text, msg);
 	assert(self.d.messages[before].effective_kind == kind, "%s: kind %s", lit, self.d.messages[before].effective_kind);
@@ -298,7 +297,7 @@ fn void binary_and_bitint_gates() @test
 		c.d.set("pedantic", WARNING)!!;
 		c.diag("0b11", "binary integer literals are a C23 extension", WARNING);
 		// [fixture] _BitInt.c (-std=c17 -Wpedantic)
-		NumberLiteralResult r = c.diag("2wb", "'_BitInt' suffix for literals is a C23 extension", WARNING);
+		NumberLiteral r = c.diag("2wb", "'_BitInt' suffix for literals is a C23 extension", WARNING);
 		assert(r.suffix == WB);
 		r = c.diag("3Uwb", "'_BitInt' suffix for literals is a C23 extension", WARNING);
 		assert(r.suffix == UWB);
@@ -326,7 +325,7 @@ fn void octal_gates() @test
 		// [fixture] c2y octal.c (-std=c2y -Wpre-c2y-compat)
 		c.comp.langopts.standard = C2Y;
 		c.d.set("pre-c2y-compat", WARNING)!!;
-		NumberLiteralResult r = c.diag("0o77", "octal integer literals are incompatible with C standards before C2y", WARNING);
+		NumberLiteral r = c.diag("0o77", "octal integer literals are incompatible with C standards before C2y", WARNING);
 		assert(r.prefix == OCTAL);
 		test::eq(r.bytes, "77");
 		r = c.diag("0'77", "octal literals without a '0o' prefix are deprecated", WARNING);

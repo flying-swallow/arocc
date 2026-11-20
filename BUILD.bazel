@@ -80,7 +80,6 @@ c3_library(
         "src/pp_print.c3",
         "src/parser.c3",
         "src/parser_declaration.c3",
-        "src/parser_frontend.c3",
         "src/parser_attribute.c3",
         "src/parser_declarator.c3",
         "src/parser_symbols.c3",

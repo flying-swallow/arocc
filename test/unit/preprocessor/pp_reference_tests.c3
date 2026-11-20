@@ -143,7 +143,7 @@ fn int guard_case(TokenId tag, String kind, String text, int expected)
 		comp.add_source_from_buffer("bar.h", "int bar = 5;\n")!!;
 		Source src = comp.add_source_from_buffer("test.h", text)!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, preprocessor::TESTING, comp.file_provider())!!;
 		TokenWithExpansionLocs? r = pp.preprocess(src);
 		fault f = @catch(r);
 		int actual = (int)pp.include_guards.len();

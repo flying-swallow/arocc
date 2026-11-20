@@ -3,10 +3,9 @@
 // source-epoch fallback) and Compilation.zig (Environment.sourceEpoch).
 // OWNER: plan 14.4 `dynamic-macros`.
 //
-// Provider wiring: BUILTINS below is the plan-14 BuiltinProvider. Its
-// expand_func hook (builtin_expand_func) lives in pp_feature_queries.c3
-// (14.5). The stage-2 integrator makes BUILTINS the default of
-// Preprocessor.init (preprocessor.c3); until then callers pass it explicitly.
+// Builtin macro expansion is direct: macro_expand.c3 calls
+// Preprocessor.expand_builtin_obj (here) and Preprocessor.expand_builtin_func
+// (pp_feature_queries.c3); Preprocessor.init calls source_epoch_from_environment.
 //
 // Determinism: nothing here reads the host clock or environment directly.
 // The epoch comes from comp.environment.source_date_epoch (SOURCE_DATE_EPOCH,
@@ -25,8 +24,6 @@ import std::io, std::collections::list;
 <* Zig `error.InvalidEpoch` from Environment.sourceEpoch. *>
 excuse INVALID_EPOCH;
 
-<* The plan-14 builtin macro provider (source epoch, builtin object and function macros). *>
-const BuiltinProvider BUILTINS = { null, &builtin_source_epoch, &builtin_expand_obj, &builtin_expand_func };
 
 <*
  Zig `Environment.sourceEpoch(io)`. With environment.has_source_date_epoch:
@@ -100,16 +97,15 @@ fn ulong? parse_epoch_u64(String text)
 	return acc;
 }
 
-
 <*
- BuiltinProvider.source_epoch: Zig Preprocessor.init's
+ Zig Preprocessor.init's
  `options.source_epoch orelse (comp.environment.sourceEpoch(io) catch ...)`.
  On INVALID_EPOCH add Diagnostic.INVALID_SOURCE_EPOCH's text/kind/opt with no
  location directly to comp.diagnostics (FATAL_ERROR propagates) and return
  DEFAULT_SOURCE_EPOCH (`provided` 0).
  @return? compilation::FATAL_ERROR
 *>
-fn SourceEpoch? builtin_source_epoch(void* ctx, Preprocessor* pp)
+fn SourceEpoch? Preprocessor.source_epoch_from_environment(&pp)
 {
 	Compilation* comp = pp.comp;
 	SourceEpoch? epoch = comp.source_epoch();
@@ -121,7 +117,6 @@ fn SourceEpoch? builtin_source_epoch(void* ctx, Preprocessor* pp)
 	}
 	return epoch;
 }
-
 
 <* Zig `DateTimeStampKind`. *>
 enum DateTimeStampKind : char
@@ -250,7 +245,7 @@ fn void Preprocessor.gen_escaped(&self, String bytes)
 *>
 fn void Preprocessor.gen_text(&self, String text)
 {
-	List{char}* gen = &self.comp.generated_buf;
+	List{char} * gen = &self.comp.generated_buf;
 	gen.push_all((char[])text);
 	gen.push(0);
 	gen.size -= 1;
@@ -270,9 +265,8 @@ fn String path_basename(String path)
 	return path[start..end - 1];
 }
 
-
 <*
- BuiltinProvider.expand_obj: Zig expandObjMacro's `.macro_builtin_obj` arm.
+ Zig expandObjMacro's `.macro_builtin_obj` arm.
  Each kind appends exactly one token to `buf` made with
  pp.make_generated_token(start, id, tok) after writing its text at
  start = comp.generated_buf.len():
@@ -302,7 +296,7 @@ fn String path_basename(String path)
  Diagnostics "at expansion_source_loc" use pp.err_loc.
  @return? compilation::FATAL_ERROR, aro::UNSUPPORTED
 *>
-fn void? builtin_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, TokenWithExpansionLocs tok, ExpandBuf* buf)
+fn void? Preprocessor.expand_builtin_obj(&pp, BuiltinObject kind, TokenWithExpansionLocs tok, ExpandBuf* buf)
 {
 	Compilation* comp = pp.comp;
 	switch (kind)
@@ -374,7 +368,7 @@ fn void? builtin_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, Tok
 			}
 			uint val = pp.counter;
 			if (val > 0x7FFF_FFFF) pp.err(tok, Diagnostic.COUNTER_OVERFLOW)!;
-			pp.counter += 1; // wraps (Zig +%=)
+			pp.counter += 1;  // wraps (Zig +%=)
 			sz start = comp.generated_buf.len();
 			pp.gen_text(string::tformat("%d\n", val));
 			buf.push(pp.make_generated_token(start, PP_NUM, tok));
@@ -398,4 +392,3 @@ fn void? builtin_expand_obj(void* ctx, Preprocessor* pp, BuiltinObject kind, Tok
 			buf.push(pp.make_generated_token(start, PP_NUM, tok));
 	}
 }
-

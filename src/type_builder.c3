@@ -149,10 +149,10 @@ struct Builder
 	bool has_complex_tok;
 	bool has_bit_int_tok;
 	bool has_atomic_type_tok;
-	BuilderNullability nullability;
 	bool is_typedef;
 	bool is_typeof;
 	bool error_on_invalid;
+	BuilderNullability nullability;
 	BuilderSpecifier type;
 }
 

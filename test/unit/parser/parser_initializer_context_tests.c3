@@ -22,7 +22,7 @@ fn parser_result::Result? parse_context_test_ice(void* context, parser::Parser* 
 
 fn void init_context_parser(Compilation* comp, Preprocessor* pp, Source src, Parser* p)
 {
-	pp.init(comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	pp.init(comp, preprocessor::TESTING)!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
 	p.init(pp, {});
 	p.bind_finalized_tokens();
@@ -148,7 +148,7 @@ fn parser_result::Result? parse_context_error_test_expr(void* context, parser::P
 
 fn void init_context_error_parser(Compilation* comp, Preprocessor* pp, Source src, Parser* p)
 {
-	pp.init(comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	pp.init(comp, preprocessor::TESTING)!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
 	p.init(pp, {});
 	p.bind_finalized_tokens();

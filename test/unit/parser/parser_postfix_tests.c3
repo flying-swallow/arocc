@@ -31,7 +31,7 @@ fn void PostfixFixture.init(&self, String input, String path = "postfix.c", bool
 	self.diagnostics.init_list(&self.allocator);
 	self.comp.init(&self.allocator, null, &self.diagnostics);
 	if (bounds_safety) self.comp.langopts.bounds_safety = lang_opts::BoundsSafety.CLANG;
-	self.pp.init(&self.comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 	source::Source src = self.comp.add_source_from_buffer(path, input)!!;
 	TokenWithExpansionLocs eof = self.pp.preprocess(src)!!;
 	self.pp.add_token(eof)!!;

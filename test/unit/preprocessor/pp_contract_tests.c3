@@ -179,15 +179,10 @@ fn void init_free_and_builtins() @test
 		pp.init(comp, opts)!!;
 		check(pp.defines.len(), 12 + 2 + 6);
 		pp.free();
-
-		// The no-source-epoch path propagates an explicitly unsupported provider.
-		opts.has_source_epoch = false;
-		fault f = @catch(pp.init(comp, opts, preprocessor::UNSUPPORTED_BUILTINS));
-		assert(f == aro::UNSUPPORTED);
 	};
 }
 
-fn void default_line_and_unsupported_provider_contracts() @test
+fn void default_line_and_unsupported_file_provider_contracts() @test
 {
 	@with_comp(; Compilation* comp, Diagnostics* d)
 	{
@@ -198,18 +193,15 @@ fn void default_line_and_unsupported_provider_contracts() @test
 		assert(@catch(fp.find_include(fp.ctx, &pp, "a.h", {}, QUOTES, FIRST)) == aro::UNSUPPORTED);
 		assert(@catch(fp.has_include(fp.ctx, &pp, "a.h", source::UNUSED_ID, QUOTES, FIRST)) == aro::UNSUPPORTED);
 		assert(@catch(fp.find_embed(fp.ctx, &pp, "a.h", source::UNUSED_ID, QUOTES, preprocessor::EMBED_UNLIMITED)) == aro::UNSUPPORTED);
-		BuiltinProvider bp = pp.builtins;
 		Source src = comp.add_source_from_buffer("line.c", "__LINE__\n")!!;
 		pp.expansion_source_loc = { .id = src.id, .byte_offset = 0, .line = 1 };
 		ExpandBuf buf;
 		buf.init(comp.gpa);
 		sz line_start = comp.generated_buf.len();
-		bp.expand_obj(bp.ctx, &pp, LINE, { .id = MACRO_BUILTIN_OBJ, .loc = { .id = src.id, .byte_offset = 0, .line = 1 } }, &buf)!!;
+		pp.expand_builtin_obj(LINE, { .id = MACRO_BUILTIN_OBJ, .loc = { .id = src.id, .byte_offset = 0, .line = 1 } }, &buf)!!;
 		check(buf.len(), 1);
 		check(buf[0].id.ordinal, TokenId.PP_NUM.ordinal);
 		test::eq((String)comp.generated_buf.array_view()[line_start..], "1\n");
-		BuiltinProvider unsupported = preprocessor::UNSUPPORTED_BUILTINS;
-		assert(@catch(unsupported.expand_func(unsupported.ctx, &pp, HAS_FEATURE, {}, {}, null, EXPR, &buf)) == aro::UNSUPPORTED);
 		preprocessor::free_expand_buf(comp.gpa, &buf);
 		pp.free();
 	};

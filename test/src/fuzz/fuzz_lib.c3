@@ -1,5 +1,5 @@
 module aro::fuzz_lib;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_frontend, aro::preprocessor;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::preprocessor;
 import aro::predefined_macros, aro::pragmas::gcc, aro::pragmas::message, aro::pragmas::once;
 import aro::pragma, aro::source, aro::target, aro::toolchain, aro::tree;
 import aro::tokens;
@@ -251,7 +251,7 @@ fn bool compile_one(String input)
 	// and builtin/compound-literal expressions use the same path as the driver.
 	parser::Parser c_parser;
 	c_parser.init(&pp);
-	parser_frontend::FrontendHandler handler;
+	parser_declaration::DeclarationParser handler;
 	handler.bind(&c_parser);
 	defer c_parser.free();
 	Tree? tree_opt = c_parser.parse();

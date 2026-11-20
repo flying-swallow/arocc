@@ -63,7 +63,7 @@ fn void initializer_grammar_keeps_high_designators_sparse() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("initializer.c", "{ [999999] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -97,7 +97,7 @@ fn void initializer_grammar_parses_nested_designator_paths() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("nested-initializer.c", "{ .items[1].value = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -142,7 +142,7 @@ fn void initializer_grammar_elides_braces_across_nested_arrays() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("elided-array-initializer.c", "{ 1, 2, 3, 4 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -188,7 +188,7 @@ fn void initializer_grammar_elided_scalar_override_diagnostic_order() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("elided-override-initializer.c", "{ 1, .pair.first = 3 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -239,7 +239,7 @@ fn void initializer_grammar_range_and_duplicate_override_semantics() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-initializer.c", "{ [1 ... 3] = 7, [1 ... 3] = 999999 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -282,7 +282,7 @@ fn void initializer_grammar_range_override_preserves_warning_locations() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-override-initializer.c", "{ [2] = 1, [1 ... 3] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -360,7 +360,7 @@ fn void inferred_array_length_and_sparse_fillers() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		parser::Parser p;
 		p.init(&pp, {});
 		p.tok_i = 9;
@@ -434,7 +434,7 @@ fn void union_active_member_and_compound_literal_fields() @test
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		parser::Parser p;
 		p.init(&pp, {});
 
@@ -486,7 +486,7 @@ fn void brace_elision_fills_nested_array_fields_in_order() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("brace-elision.c", "{ 1, 3, 7, 999999 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -540,7 +540,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.INCOMPLETE));
 		Source inferred_src = comp.add_source_from_buffer("inferred-string-initializer.c", "\"abc\"")!!;
 		Preprocessor inferred_pp;
-		inferred_pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		inferred_pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs inferred_eof = inferred_pp.preprocess(inferred_src)!!;
 		inferred_pp.add_token(inferred_eof)!!;
 		parser::Parser inferred_parser;
@@ -560,7 +560,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		type_store::QualType exact = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 3));
 		Source exact_src = comp.add_source_from_buffer("exact-string-initializer.c", "\"abc\"")!!;
 		Preprocessor exact_pp;
-		exact_pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		exact_pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs exact_eof = exact_pp.preprocess(exact_src)!!;
 		exact_pp.add_token(exact_eof)!!;
 		parser::Parser exact_parser;
@@ -576,7 +576,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		type_store::QualType too_short = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 2));
 		Source short_src = comp.add_source_from_buffer("short-string-initializer.c", "\"abc\"")!!;
 		Preprocessor short_pp;
-		short_pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		short_pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs short_eof = short_pp.preprocess(short_src)!!;
 		short_pp.add_token(short_eof)!!;
 		parser::Parser short_parser;
@@ -615,7 +615,7 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		type_store::QualType target = comp.type_store.put(type_store::type_array(u16, type_store::ArrayLenKind.FIXED, 2));
 		Source compatible_src = comp.add_source_from_buffer("utf16-string-initializer.c", "u\"ab\"")!!;
 		Preprocessor compatible_pp;
-		compatible_pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		compatible_pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs compatible_eof = compatible_pp.preprocess(compatible_src)!!;
 		compatible_pp.add_token(compatible_eof)!!;
 		parser::Parser compatible_parser;
@@ -635,7 +635,7 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		type_store::QualType char_array = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 2));
 		Source incompatible_src = comp.add_source_from_buffer("incompatible-string-initializer.c", "u\"ab\"")!!;
 		Preprocessor incompatible_pp;
-		incompatible_pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		incompatible_pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs incompatible_eof = incompatible_pp.preprocess(incompatible_src)!!;
 		incompatible_pp.add_token(incompatible_eof)!!;
 		parser::Parser incompatible_parser;
@@ -668,7 +668,7 @@ fn void brace_elision_accepts_string_array_subobject() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("elided-string-initializer.c", "{ \"abc\", 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -715,7 +715,7 @@ fn void brace_elision_does_not_replace_array_elements_with_later_string() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("elided-string-after-element.c", "{ 1, \"abc\" }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -762,7 +762,7 @@ fn void brace_elision_does_not_replace_initialized_char_array_with_string() @tes
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("elided-char-array-override.c", "{ 1, \"bc\" }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -805,7 +805,7 @@ fn void brace_elision_replaces_equal_nested_array_subobject_in_order() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("nested-array-override.c", "{ 1, \"abc\" }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -859,7 +859,7 @@ fn void range_designator_with_field_suffix_repeats_per_element() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-field-suffix-initializer.c", "{ [1 ... 3].value = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -907,7 +907,7 @@ fn void range_designator_with_subscript_suffix_repeats_per_row() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-subscript-suffix-initializer.c", "{ [0 ... 1][1] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -951,7 +951,7 @@ fn void nested_range_designators_fill_fixed_matrix() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("nested-range-initializer.c", "{ [0 ... 1][0 ... 1] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -997,7 +997,7 @@ fn void range_repeats_nested_brace_value_as_struct_ast() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-nested-brace-initializer.c", "{ [0 ... 1] = { .value = 7 } }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1046,7 +1046,7 @@ fn void duplicate_scalar_override_reports_token_locations() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("duplicate-override-locations.c", "{ [1] = 7, [1] = 999999 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1098,7 +1098,7 @@ fn void range_duplicate_override_reports_original_token_locations() @test
 		Source src = comp.add_source_from_buffer("range-duplicate-override-locations.c",
 			"{ [1 ... 2].value = 7, [1 ... 2].value = 999999 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1156,7 +1156,7 @@ fn void reversed_range_designator_is_an_error() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("reversed-range-initializer.c", "{ [3 ... 1] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1191,7 +1191,7 @@ fn void single_element_range_designator_is_valid() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("single-range-initializer.c", "{ [2 ... 2] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1228,7 +1228,7 @@ fn void range_end_out_of_bounds_is_an_error() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-end-oob-initializer.c", "{ [1 ... 4] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1263,7 +1263,7 @@ fn void range_start_out_of_bounds_is_an_error() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("range-start-oob-initializer.c", "{ [3 ... 3] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1297,7 +1297,7 @@ fn void inferred_array_length_from_range_end() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("inferred-range-initializer.c", "{ [2 ... 4] = 7 }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -1340,7 +1340,7 @@ fn void inferred_outer_length_from_nested_range_end() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("inferred-nested-range-initializer.c", "{ [1 ... 2] = { 5, 6 } }")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;

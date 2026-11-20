@@ -6,8 +6,12 @@
 // Implemented by plan 11 agent 11.2 `number-values`; the Suffix predicates
 // (is_imaginary, is_signed_integer, ...) are number_literal's Suffix methods.
 //
-// Inputs: the NumberLiteralResult from number_literal (or its parts) and the
-// Compilation (langopts.emulate, target.has_int128, type_store, interner).
+// Entry points: `parse` for C expressions and `pp_parse` for `#if`. Each takes
+// the pp-number token text and its Location (+ expansion locations), splits it
+// with number_literal::split (which reports the syntax diagnostics) and
+// converts the split in one call; callers never see the intermediate
+// NumberLiteral. Inputs: the Compilation (langopts.emulate, target.has_int128,
+// type_store, interner).
 // Outputs: NumberValue { qt, val, ... } with interned values (aro::value for
 // integers, value::intern_big for _BitInt, value::intern for
 // floats and complexes).
@@ -17,7 +21,7 @@
 // the token. So they are *returned* as NumberDiags flags, which
 // NumberDiags.@each walks in Zig emission order; the caller (C parser, pragma handler, preprocessor) reports them (the
 // enum carries its fmt/kind/meta, so it can be passed to any emit macro). The syntax diagnostics of number_literal are
-// emitted by NumberLiteralParser itself, before any of these.
+// emitted by number_literal::split itself, before any of these.
 //
 // Deviations from Zig:
 // - AST nodes are not created. Zig builds `int_literal` / `float_literal`
@@ -109,26 +113,32 @@ struct DigitsValue
 // Entry points
 
 <*
- Zig `Parser.parseNumberToken` after the syntax step: is_float ->
- parse_float(bytes, suffix), else parse_int(prefix, bytes, suffix).
+ Zig `Parser.parseNumberToken`: number_literal::split (syntax diagnostics
+ reported at `loc` / `expansion_locs`), then from_split. The returned `diags`
+ still have to be reported by the caller.
+ @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
-fn NumberValue number_value(Compilation* comp, NumberLiteralResult parsed)
+fn NumberValue? parse(Compilation* comp, String text, Location loc, Location[] expansion_locs = {})
 {
-	if (parsed.is_float) return parse_float(comp, parsed.bytes, parsed.suffix);
-	return parse_int(comp, parsed.prefix, parsed.bytes, parsed.suffix);
+	return from_split(comp, number_literal::split(comp, text, loc, expansion_locs)!);
 }
 
 <*
- Zig `Parser.parseNumberToken` whole: NumberLiteralParser{comp, literal, loc,
- expansion_locs}.parse() (its diagnostics are reported there), then
- number_value. The returned `diags` still have to be reported by the caller.
+ Zig Preprocessor/Parser.zig primaryExpr `.pp_num`: number_literal::split
+ (syntax diagnostics reported), then pp_from_split. The returned `diags`
+ still have to be reported by the caller; check `rejected` after that.
  @return? text_literal::PARSING_FAILED, compilation::FATAL_ERROR
 *>
-fn NumberValue? parse_number_token(Compilation* comp, String literal, Location loc, Location[] expansion_locs)
+fn PpNumberValue? pp_parse(Compilation* comp, String text, Location loc, Location[] expansion_locs = {})
 {
-	NumberLiteralParser p = { .comp = comp, .literal = literal, .loc = loc, .expansion_locs = expansion_locs };
-	NumberLiteralResult parsed = p.parse()!;
-	return number_value(comp, parsed);
+	return pp_from_split(number_literal::split(comp, text, loc, expansion_locs)!);
+}
+
+<* parse after the syntax step: is_float -> parse_float(bytes, suffix), else parse_int(prefix, bytes, suffix). *>
+fn NumberValue from_split(Compilation* comp, NumberLiteral lit)
+{
+	if (lit.is_float) return parse_float(comp, lit.bytes, lit.suffix);
+	return parse_int(comp, lit.prefix, lit.bytes, lit.suffix);
 }
 
 <*
@@ -306,9 +316,11 @@ fn NumberValue bit_int(Compilation* comp, char base, String bytes, Suffix suffix
 fn NumberValue parse_float(Compilation* comp, String bytes, Suffix suffix)
 {
 	QualType qt = float_suffix_type(comp, suffix);
-	String digits = strip_separators(comp, bytes);
-	F128Bits? parsed = primitive_value::parse_f128(digits);
-	free_stripped(comp, bytes, digits);
+	F128Bits? parsed;
+	@pool()
+	{
+		parsed = primitive_value::parse_f128(bytes.treplace("'", ""));
+	};
 	NumberValue res;
 	F128Bits bits;
 	if (try parsed)
@@ -475,14 +487,13 @@ fn DigitsValue accumulate_u64(String bytes, char base)
 }
 
 <*
- Zig Preprocessor/Parser.zig primaryExpr `.pp_num` after a successful
- NumberLiteralParser.parse. Float or imaginary: FLOAT_LITERAL_IN_EXPR and
+ pp_parse after the syntax step. Float or imaginary: FLOAT_LITERAL_IN_EXPR and
  `rejected` (the caller reports it and returns null, Zig). Otherwise accumulate_u64(bytes, prefix.base); overflow -> flag
  INT_LITERAL_TOO_BIG; val > i64 max -> (signed suffix and base 10 -> flag
  IMPLICITLY_UNSIGNED_LITERAL) and unsigned val; else signed if the suffix is
  a signed integer suffix, unsigned otherwise.
 *>
-fn PpNumberValue pp_int_value(NumberLiteralResult parsed)
+fn PpNumberValue pp_from_split(NumberLiteral parsed)
 {
 	PpNumberValue res;
 	if (parsed.is_float || parsed.suffix.is_imaginary())
@@ -511,32 +522,4 @@ fn PpNumberValue pp_int_value(NumberLiteralResult parsed)
 		res.unsigned = digits.val;
 	}
 	return res;
-}
-
-// ---------------------------------------------------------------------------
-// Separators
-
-<* `bytes` without '\'' digit separators: `bytes` itself if it has none, else a comp.gpa copy (release with free_stripped). *>
-fn String strip_separators(Compilation* comp, String bytes)
-{
-	sz n = 0;
-	foreach (c : bytes)
-	{
-		if (c != '\'') n++;
-	}
-	if (n == bytes.len) return bytes;
-	if (n == 0) return "";
-	char[] out = alloc::new_array(comp.gpa, char, (usz)n);
-	sz j = 0;
-	foreach (c : bytes)
-	{
-		if (c != '\'') out[j++] = c;
-	}
-	return (String)out;
-}
-
-<* Release a strip_separators result. *>
-fn void free_stripped(Compilation* comp, String bytes, String stripped)
-{
-	if (stripped.len > 0 && stripped.ptr != bytes.ptr) alloc::free(comp.gpa, stripped.ptr);
 }

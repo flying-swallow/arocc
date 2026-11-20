@@ -1,6 +1,6 @@
 // Tests for src/pp_feature_queries.c3 (plan 14.5 `queries`): has_feature /
 // has_extension, the Compilation.is_target_* queries, paste_strings_unsafe,
-// reconstruct_include_string, handle_builtin_macro and builtin_expand_func.
+// reconstruct_include_string, handle_builtin_macro and expand_builtin_func.
 // Builtin macro arguments are fed directly (lexed from a fixture-shaped line;
 // whitespace becomes MACRO_WS as in macro argument collection), not through
 // the macro expander. The file services are a fake FileProvider.
@@ -175,7 +175,7 @@ fn String? expand_line(Preprocessor* pp, BuiltinFunc kind, String name, String l
 	out.init(comp.gpa);
 	defer preprocessor::free_expand_buf(comp.gpa, &out);
 	RawToken raw = { .id = MACRO_PARAM_BUILTIN_FUNC, .source = source::GENERATED_ID };
-	preprocessor::builtin_expand_func(null, pp, kind, macro_tok, raw, &args, ctx, &out)!;
+	pp.expand_builtin_func(kind, macro_tok, raw, &args, ctx, &out)!;
 
 	// Generated tokens: the generated_buf text through its '\n' (checks the
 	// exact text written). Others: the token spelling.
@@ -386,7 +386,7 @@ fn void target_variant() @test
 }
 
 // ---------------------------------------------------------------------------
-// Identifier queries through builtin_expand_func
+// Identifier queries through expand_builtin_func
 
 fn void identifier_queries() @test
 {

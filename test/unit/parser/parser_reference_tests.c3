@@ -1,5 +1,5 @@
 module parser_reference_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_frontend;
+import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration;
 import aro::predefined_macros, aro::preprocessor, aro::source, aro::tokens, aro::tree, aro::type_store;
 
 // Verbatim port of src/aro/Parser.zig:11591 test "Node locations"
@@ -20,7 +20,7 @@ fn void parser_zig_node_locations() @test
 			predefined_macros::SystemDefinesMode.NO_SYSTEM_DEFINES)!!;
 
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.add_builtin_macros();
 		pp.preprocess(builtin_macros)!!;
 		tokens::TokenWithExpansionLocs eof = pp.preprocess(file)!!;
@@ -28,7 +28,7 @@ fn void parser_zig_node_locations() @test
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_frontend::FrontendHandler handler;
+		parser_declaration::DeclarationParser handler;
 		handler.bind(&p);
 		tree::Tree parsed = p.parse()!!;
 		assert(parsed.root_decls.len() >= 3);

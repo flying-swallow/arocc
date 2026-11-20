@@ -5,7 +5,7 @@
 // arm.
 // OWNER: plan 14.5 `queries`.
 //
-// Query dispatch contract (builtin_expand_func):
+// Query dispatch contract (Preprocessor.expand_builtin_func):
 //  - Identifier queries (__has_attribute, __has_declspec_attribute,
 //    __has_feature, __has_extension, __has_builtin, __is_target_*),
 //    __has_warning, __is_identifier and __has_include(_next) go through
@@ -688,7 +688,7 @@ fn String? Preprocessor.has_embed_result(&self, TokenWithExpansionLocs macro_tok
 }
 
 <*
- BuiltinProvider.expand_func: Zig expandFuncMacro's
+ Zig expandFuncMacro's
  `.macro_param_builtin_func` arm for `kind`, appending to `buf`; generated
  tokens use pp.make_generated_token(start, id, tokens::from_raw(raw)).
  - query kinds (see handle_builtin_macro): empty expanded_args[0] ->
@@ -718,7 +718,7 @@ fn String? Preprocessor.has_embed_result(&self, TokenWithExpansionLocs macro_tok
    the registered handler immediately.
  @return? compilation::FATAL_ERROR, STOP_PREPROCESSING, aro::UNSUPPORTED
 *>
-fn void? builtin_expand_func(void* ctx, Preprocessor* pp, BuiltinFunc kind, TokenWithExpansionLocs macro_tok, RawToken raw, MacroArguments* expanded_args, EvalContext eval_ctx, ExpandBuf* buf)
+fn void? Preprocessor.expand_builtin_func(&pp, BuiltinFunc kind, TokenWithExpansionLocs macro_tok, RawToken raw, MacroArguments* expanded_args, EvalContext eval_ctx, ExpandBuf* buf)
 {
 	TokenWithExpansionLocs[] arg = (*expanded_args)[0];
 	switch (kind)

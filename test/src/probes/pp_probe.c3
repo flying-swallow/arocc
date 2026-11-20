@@ -462,7 +462,7 @@ fn int run(String[] args, Compilation* comp, Diagnostics* d)
 		.add_builtin_macros = true,
 		.dependencies = o.dependencies ? &dep : null,
 	};
-	if (catch f = pp.init(comp, init_opts, preprocessor::BUILTINS, comp.file_provider()))
+	if (catch f = pp.init(comp, init_opts, comp.file_provider()))
 	{
 		probe_error("preprocessor init failed: %s", f);
 		return 2;

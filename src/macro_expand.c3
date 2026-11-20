@@ -8,8 +8,8 @@
 // deinit_macro_arguments, get_paste_args).
 //
 // Ported: Macro.eql, defineMacro, define, defineFn, expandObjMacro (builtin
-// object macros go to BuiltinProvider.expand_obj), expandFuncMacro (builtin
-// function macros go to BuiltinProvider.expand_func), expandVaOpt,
+// object macros go to Preprocessor.expand_builtin_obj), expandFuncMacro (builtin
+// function macros go to Preprocessor.expand_builtin_func), expandVaOpt,
 // nextBufToken, collectMacroFuncArguments, removeExpandedTokens,
 // TokenIterator, expandMacroExhaustive, expandMacro, addTokensFromExpandBuf.
 //
@@ -531,7 +531,7 @@ fn void? Preprocessor.define_fn(&self, Tokenizer* tokenizer, RawToken define_tok
  -> one generated PLACEMARKER. '##' pastes the next non-whitespace (and,
  without preserve_comments_in_macros, non-comment) token onto the buffer
  with paste_tokens; WHITESPACE is kept only with preserve_whitespace;
- MACRO_BUILTIN_OBJ goes to builtins.expand_obj; everything else is
+ MACRO_BUILTIN_OBJ goes to expand_builtin_obj; everything else is
  tokens::from_raw. The caller owns the result.
  @return? compilation::FATAL_ERROR, aro::UNSUPPORTED
 *>
@@ -581,7 +581,7 @@ fn ExpandBuf? Preprocessor.expand_obj_macro(&self, Macro* simple_macro)
 				if (self.preserve_whitespace) buf.push(tok);
 			case MACRO_BUILTIN_OBJ:
 				buf.reserve(1);
-				self.builtins.expand_obj(self.builtins.ctx, self, simple_macro.builtin_kind.obj, tok, &buf)!;
+				self.expand_builtin_obj(simple_macro.builtin_kind.obj, tok, &buf)!;
 			default:
 				buf.push(tok);
 		}
@@ -601,7 +601,7 @@ fn ExpandBuf? Preprocessor.expand_obj_macro(&self, Macro* simple_macro)
  with the body token's location); KEYWORD_VA_OPT -> expand_va_opt;
  STRINGIFY_* -> stringify into char_buf, copy to generated_buf, one
  make_generated_token STRING_LITERAL; MACRO_PARAM_BUILTIN_FUNC ->
- builtins.expand_func; ', ## __VA_ARGS__' implements GNU comma deletion with
+ expand_builtin_func; ', ## __VA_ARGS__' implements GNU comma deletion with
  Diagnostic.COMMA_DELETION_VA_ARGS exactly as Zig (incl. the GNU-standard
  ambiguity rule). Then remove_placemarkers and, for each result token, add
  macro_tok.loc and macro_tok's expansion locations, and for tokens with
@@ -716,7 +716,7 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 				self.comp.generated_buf.size -= 1;
 				buf.push(self.make_generated_token(start, STRING_LITERAL, tokens::from_raw(raw)));
 			case MACRO_PARAM_BUILTIN_FUNC:
-				self.builtins.expand_func(self.builtins.ctx, self, func_macro.builtin_kind.func, macro_tok, raw, expanded_args, eval_ctx, &buf)!;
+				self.expand_builtin_func(func_macro.builtin_kind.func, macro_tok, raw, expanded_args, eval_ctx, &buf)!;
 			case COMMA:
 				if (tok_i + 2 < body_len && func_macro.tokens[tok_i + 1].id == HASH_HASH)
 				{

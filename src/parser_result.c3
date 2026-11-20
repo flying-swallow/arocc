@@ -7,7 +7,7 @@ import aro::parser, aro::tree, aro::type_store, aro::value, aro::value_interner,
 import aro::compilation;
 import aro::lang_opts;
 import aro::attribute, aro::builtins;
-import std::core::dstring;
+import std::core::dstring, std::io;
 
 struct Result
 {
@@ -22,26 +22,26 @@ enum CoercionContext : char
 	EXPRESSION, INITIALIZATION, ASSIGNMENT, RETURN, ARGUMENT
 }
 
-<* Append an attribute message using Zig's stringEscape formatting. *>
-fn void append_escaped(DString* buf, String text)
+<* Write an attribute message using Zig's stringEscape formatting. *>
+fn void? append_escaped(OutStream out, String text)
 {
 	foreach (c : text)
 	{
 		switch (c)
 		{
-			case '\n': buf.append_string("\\n");
-			case '\r': buf.append_string("\\r");
-			case '\t': buf.append_string("\\t");
-			case '\\': buf.append_string("\\\\");
-			case '"': buf.append_string("\\\"");
+			case '\n': out.write("\\n")!;
+			case '\r': out.write("\\r")!;
+			case '\t': out.write("\\t")!;
+			case '\\': out.write("\\\\")!;
+			case '"': out.write("\\\"")!;
 			default:
 				if (c >= ' ' && c <= '~')
 				{
-					buf.append_char(c);
+					out.write_byte(c)!;
 				}
 				else
 				{
-					buf.appendf("\\x%02x", c);
+					io::fprintf(out, "\\x%02x", c)!;
 				}
 		}
 	}
@@ -100,9 +100,9 @@ fn void? diagnose_unused_value(parser::Parser* p, type_store::NodeIndex node, ui
 					bool has_msg = attr.args.warn_unused_result.has_msg;
 					DString escaped;
 					escaped.init(tmem);
-					if (has_msg) append_escaped(&escaped, attr.args.warn_unused_result.msg);
+					if (has_msg) append_escaped(&escaped, attr.args.warn_unused_result.msg)!;
 					return Diagnostic.WARN_UNUSED_RESULT.@emit(p, cur.call.callee.tok(&p.tree), p.tree.tok_slice(info.tok), spelling,
-						has_msg ? ": " : "", escaped.str_view());
+					has_msg ? ": " : "", escaped.str_view());
 				}
 			case tree::NodeKind.BUILTIN_CALL_EXPR:
 				{
@@ -659,16 +659,16 @@ fn bool is_integer_constant_expr(parser::Parser* p, type_store::NodeIndex index,
 			{
 				if (try cond = p.tree.value_of(n.conditional.cond))
 				{
-					return is_integer_constant_expr(p, cond.to_bool(p.comp) ? n.conditional.then_expr : n.conditional.else_expr);
+					return is_integer_constant_expr(p, cond.to_bool(p.comp) ? n.conditional.then_expr: n.conditional.else_expr);
 				}
 			}
 			return is_integer_constant_expr(p, n.conditional.then_expr) &&
-				is_integer_constant_expr(p, n.conditional.else_expr);
+			is_integer_constant_expr(p, n.conditional.else_expr);
 		case CAST:
 			if (n.cast.kind == tree::CastKind.LVAL_TO_RVAL || !n.cast.qt.is_int(p.comp)) return false;
 			// An explicit cast to an integer type may take a floating constant
 			// directly; implicit conversions under it keep that permission.
-			return is_integer_constant_expr(p, n.cast.operand, n.cast.implicit ? float_ok : true);
+			return is_integer_constant_expr(p, n.cast.operand, n.cast.implicit ? float_ok: true);
 		default:
 			return false;
 	}

@@ -22,15 +22,15 @@ struct AttributeArgTokens
 struct ParsedAttribute
 {
 	attribute::AttributeSyntax syntax;
-	bool has_name;
 	attribute::Namespaced name;
 	String spelling;
-	bool has_vendor;
 	String vendor;
 	tokens::TokenIndex tok;
-	bool has_arg_list;
 	uint args_offset;
 	uint args_len;
+	bool has_arg_list;
+	bool has_name;
+	bool has_vendor;
 }
 
 <* Reusable result storage. The caller initializes it with the compilation allocator. *>

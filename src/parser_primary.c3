@@ -3,7 +3,7 @@ module aro::parser;
 import aro::primitive_value;
 import aro::parser_result, aro::tree;
 import aro::tokens, aro::tokenizer, aro::type_store, aro::value, aro::value_interner;
-import aro::number_value, aro::text_literal, aro::text_literal_semantics;
+import aro::number_literal, aro::number_value, aro::text_literal, aro::text_literal_semantics;
 import aro::symbol_stack, aro::string_interner;
 import aro::diagnostics;
 import aro::builtins, aro::builtin_properties, aro::lang_opts;
@@ -138,8 +138,7 @@ fn parser_result::Result? Parser.parse_unresolved_identifier(&self,
 			}
 		);
 		p.tree.root_decls.push(function_node);
-		symbol_stack::SymbolContext sym_ctx = p.symbol_context();
-		p.symbols.declare_symbol(&sym_ctx, name_id, function_qt, tok, function_node)!;
+		p.symbols.declare_symbol(p, name_id, function_qt, tok, function_node)!;
 		p.advance();
 		type_store::NodeIndex ref_node = p.tree.add_node(
 			{
@@ -244,8 +243,7 @@ fn parser_result::Result? Parser.parse_number(&self, tokens::TokenIndex tok)
 {
 	parser::Parser* p = self;
 	tokens::TreeToken token = p.tree.tokens[(usz)tok];
-	number_value::NumberValue number = number_value::parse_number_token(p.comp,
-		p.tree.tok_slice(tok), token.loc, p.pp.expansion_slice(tok))!;
+	number_value::NumberValue number = number_value::parse(p.comp, p.tree.tok_slice(tok), token.loc, p.pp.expansion_slice(tok))!;
 	p.advance();
 	emit_number_diags(p, number.diags, tok)!;
 	tree::NodeKind literal_kind = number.literal_qt.is_int(p.comp) ? tree::NodeKind.INT_LITERAL : tree::NodeKind.FLOAT_LITERAL;

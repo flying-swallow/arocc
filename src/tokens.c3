@@ -80,10 +80,7 @@ fn Precedence Precedence.next(self, Precedence min)
 fn bool Precedence.lt(self, Precedence b) => (ichar)self < (ichar)b;
 
 <* Zig `Tree.Token.precedence[id]`: INVALID for non-operators. *>
-fn Precedence precedence(TokenId id)
-{
-	return id.props.binary_prec == ANY ? INVALID : id.props.binary_prec;
-}
+fn Precedence precedence(TokenId id) => id.props.binary_prec == ANY ? INVALID : id.props.binary_prec;
 
 // ---------------------------------------------------------------------------
 // Zig `Tree.TokenWithExpansionLocs`

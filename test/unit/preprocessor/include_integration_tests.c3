@@ -60,7 +60,7 @@ fn String preprocess_text(Compilation* comp, Source src, DepFile* deps)
 	opts.base_file = src.id;
 	opts.add_builtin_macros = true; // __has_include / __has_embed are builtin macros
 	Preprocessor pp;
-	pp.init(comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+	pp.init(comp, opts, comp.file_provider())!!;
 	pp.preserve_whitespace = true; // -E style output
 	pp.add_token(pp.preprocess(src)!!)!!; // Zig callers append the returned eof
 	DString output;
@@ -91,7 +91,7 @@ fn void include_callback_skip_and_fatal_contract() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.dependencies = &deps;
 		opts.base_file = main.id;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		pp.preserve_whitespace = true;
 		CallbackState state = { .result = pragma::IncludePragmaResult.SKIP_INCLUDE };
 		bool added = comp.pragmas.add("include", &state);
@@ -123,7 +123,7 @@ fn void include_callback_skip_and_fatal_contract() @test
 		Preprocessor pp;
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		CallbackState state = { .result = pragma::IncludePragmaResult.FATAL };
 		bool added = comp.pragmas.add("include", &state);
 		assert(added);
@@ -273,7 +273,7 @@ fn void missing_queries_and_zero_or_empty_embeds() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = missing_embed.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		check(@catch(pp.preprocess(missing_embed)), compilation::FATAL_ERROR);
 		pp.free();
 		comp.free();
@@ -654,7 +654,7 @@ fn void include_next_and_missing_include() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = missing.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		check(@catch(pp.preprocess(missing)), compilation::FATAL_ERROR);
 		pp.free();
 		comp.free();
@@ -742,7 +742,7 @@ fn void include_quoted_header_reports_extra_tokens() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		pp.preprocess(main)!!;
 		check(d.messages.len(), 1);
 		test::eq(d.messages[0].text, "extra tokens at end of macro directive");
@@ -778,7 +778,7 @@ fn void include_poisoned_header_identifier_is_diagnosed() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		pp.preprocess(main)!!;
 		check(d.messages.len(), 2);
 		test::eq(d.messages[0].text, "attempt to use a poisoned identifier");
@@ -811,7 +811,7 @@ fn void include_angle_header_without_closing_bracket_reports_pair() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		pp.preprocess(main)!!;
 		check(d.messages.len(), 2);
 		test::eq(d.messages[0].text, "expected closing '>'");
@@ -845,7 +845,7 @@ fn void include_resume_uses_next_token_end_and_line() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		pp.preserve_whitespace = true;
 		pp.linemarkers = NUMERIC_DIRECTIVES;
 		pp.preprocess(main)!!;
@@ -900,7 +900,7 @@ fn void include_without_final_newline_adds_nl_before_resume() @test
 		InitOptions opts = preprocessor::TESTING;
 		opts.base_file = main.id;
 		Preprocessor pp;
-		pp.init(&comp, opts, preprocessor::BUILTINS, comp.file_provider())!!;
+		pp.init(&comp, opts, comp.file_provider())!!;
 		pp.preserve_whitespace = true;
 		pp.linemarkers = NUMERIC_DIRECTIVES;
 		pp.preprocess(main)!!;

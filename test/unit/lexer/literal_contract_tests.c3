@@ -1,7 +1,7 @@
 // Tests for the plan 11 stage-0 contract code that is implemented (not
 // stubbed): text_literal's shared diagnostic plumbing (Ascii,
 // emit_literal_diagnostic), Compilation.wchar_max, text_parser defaults,
-// Compilation.float80_type / NumberLiteralParser.err and the diagnostic
+// Compilation.float80_type / LiteralSite.err and the diagnostic
 // id -> template tables. Expected values are source-derived from
 // Tokenizer/text_literal.zig (Ascii.format), Compilation.zig (wcharMax,
 // float80Type) and the Diagnostic constants; no Zig executable was run.
@@ -86,10 +86,9 @@ fn void emit_and_parser_defaults() @test
 	{
 		Source src = comp.add_source_from_buffer("lit.c", "int x = 0b2;\n")!!;
 		Location loc = { .id = src.id, .byte_offset = 8, .line = 1 };
-		NumberLiteralParser p = { .comp = comp, .literal = "0b2", .loc = loc };
-		p.err(Diagnostic.INVALID_BINARY_DIGIT, text_literal::ascii('2'))!!;
+		text_literal::emit_literal_diagnostic(comp, Diagnostic.INVALID_BINARY_DIGIT, loc, {}, text_literal::ascii('2'))!!;
 		// OFF by default: dropped.
-		p.err(Diagnostic.C23_BINARY)!!;
+		text_literal::emit_literal_diagnostic(comp, Diagnostic.C23_BINARY, loc, {})!!;
 		check(d.messages.len(), 1);
 		test::eq(d.messages[0].text, "invalid digit '2' in binary constant");
 		assert(d.messages[0].effective_kind == ERROR);

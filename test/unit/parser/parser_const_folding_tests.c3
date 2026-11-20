@@ -24,7 +24,7 @@ fn void constant_expression_stores_folded_value_and_restores_mode() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("const-fold.c", "2 + 2\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -57,7 +57,7 @@ fn void unavailable_value_is_not_stored() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("const-fold-unavailable.c", "answer\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		StringId answer = comp.intern_string("answer");
@@ -95,7 +95,7 @@ fn void integer_const_expression_rejects_noninteger_and_propagates_malformed_inp
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("bad-integer-const.c", "1 +\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -127,7 +127,7 @@ fn void integer_const_expression_rejects_noninteger_result() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("float-integer-const.c", "x\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		StringId x = comp.intern_string("x");
@@ -162,7 +162,7 @@ fn void const_expression_restores_mode_after_parse_failure() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("const-fold-fault.c", "1 +\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
@@ -194,7 +194,7 @@ fn void referenced_const_declaration_uses_extension_folding_mode() @test
 		comp.init(&ta, null, &d);
 		Source src = comp.add_source_from_buffer("const-fold-extension.c", "answer\n")!!;
 		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		StringId answer = comp.intern_string("answer");
@@ -212,7 +212,7 @@ fn void referenced_const_declaration_uses_extension_folding_mode() @test
 		assert(d.messages.len() == 1,
 			"GNU folding mode should diagnose a referenced const declaration");
 		p.const_decl_folding = parser::ConstDeclFoldingMode.GNU_VLA_FOLDING_EXTENSION;
-		p.referenced_integer_constant(p.symbols.lookup(answer, symbol_stack::ScopeKind.VARS)!!.val,
+		p.referenced_integer_constant(p.symbols.lookup_var(answer)!!.val,
 			true, false, p.tok_i);
 		assert(d.messages.len() == 2,
 			"GNU VLA folding mode should use the VLA-specific diagnostic");

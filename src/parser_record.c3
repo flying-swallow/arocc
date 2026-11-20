@@ -224,8 +224,7 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 	symbol_stack::Symbol previous_symbol;
 	if (is_definition && name_tok != 0)
 	{
-		symbol_stack::SymbolContext sym_ctx = self.symbol_context();
-		bool had_previous = self.symbols.define_tag(&sym_ctx, name, keyword, name_tok, &previous_symbol)!;
+		bool had_previous = self.symbols.define_tag(self, name, keyword, name_tok, &previous_symbol)!;
 		if (had_previous)
 		{
 			type_store::Type previous_type = previous_symbol.qt.get_type(self.comp);

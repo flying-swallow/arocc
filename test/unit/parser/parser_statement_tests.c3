@@ -3,9 +3,9 @@
 // Declaration-form for initializers remains callback supplied by the owner.
 module parser_statement_tests;
 import aro::attribute, aro::attribute_map, aro::compilation, aro::diagnostics, aro::parser;
-import aro::parser_declaration, aro::parser_frontend, aro::parser_result, aro::parser_statement, aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
+import aro::parser_declaration, aro::parser_result, aro::parser_statement, aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
 import aro::type_store, aro::value;
-import aro::parser_builtin, aro::parser_declarator, aro::text_literal;
+import aro::text_literal;
 import aro::pragma, aro::symbol_stack;
 import std::core::mem::allocators, std::core::mem;
 
@@ -128,7 +128,7 @@ fn void statement_compounds_unwind_scopes_and_parse_control_flow() @test
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement.c", "{ ; { return; } if (1) while (1) break; else continue; do ; while (1); for (;;1) return 1; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p;
@@ -154,7 +154,7 @@ fn void compound_scope_unwinds_on_parse_error() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement.c", "{ if (1) }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -177,7 +177,7 @@ fn void compound_body_recovers_after_failed_statement() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ 1; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -208,7 +208,7 @@ fn void compound_body_keeps_next_statement_after_advanced_failure() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ int broken; return 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -234,7 +234,7 @@ fn void compound_body_recovers_two_failed_statements_in_one_body() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ bad; 1; bad; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -271,7 +271,7 @@ fn void compound_body_keeps_statement_after_declaration_consumed_its_semicolon()
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ int broken; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -293,9 +293,7 @@ fn void compound_item_recovery_fault_predicate_covers_all_parse_failures() @test
 {
 	assert(parser_statement::recoverable_statement_item_fault(parser::PARSING_FAILED));
 	assert(parser_statement::recoverable_statement_item_fault(parser::PARSING_FAILED));
-	assert(parser_statement::recoverable_statement_item_fault(parser_builtin::PARSING_FAILED));
 	assert(parser_statement::recoverable_statement_item_fault(parser_declaration::PARSING_FAILED));
-	assert(parser_statement::recoverable_statement_item_fault(parser_declarator::PARSING_FAILED));
 	assert(parser_statement::recoverable_statement_item_fault(parser_statement::PARSING_FAILED));
 	assert(parser_statement::recoverable_statement_item_fault(text_literal::PARSING_FAILED));
 	assert(parser_statement::recoverable_statement_item_fault(parser::NO_EXPRESSION));
@@ -312,7 +310,7 @@ fn void compound_body_recovery_tracks_delimiter_kinds_independently() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ broken [ 0 } ; return 1; ] ; return 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -339,7 +337,7 @@ fn void compound_body_recovery_consumes_unmatched_closing_brace() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ broken } 2;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -362,7 +360,7 @@ fn void gnu_asm_basic_statement_and_qualifiers_parse() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("asm.c", "__asm__ volatile inline (\"nop\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -384,7 +382,7 @@ fn void gnu_asm_requires_string_and_trailing_semicolon() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("asm.c", "asm(1)")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -403,7 +401,7 @@ fn void asm_statement_falls_through_for_non_asm_statements() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("asm.c", "; {} asm(\"nop\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -427,7 +425,7 @@ fn void return_statements_preserve_value_and_void_operand_shapes() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "{ return 1; return; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -473,7 +471,7 @@ fn void function_return_context_types_and_validates_returns() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "foo { return 1; return; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -505,7 +503,7 @@ fn void pointer_to_integer_return_uses_conversion_diagnostic() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "foo { return 1; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -531,7 +529,7 @@ fn void void_function_returning_value_is_diagnosed() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "foo { return 1; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -557,7 +555,7 @@ fn void switch_duplicate_cases_defaults_and_out_of_switch_diagnostics() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch.c", "{ switch (1) { case 1: ; case 1: ; default: ; default: ; } case 1: ; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -583,7 +581,7 @@ fn void switch_case_ranges_keep_typed_bounds_and_detect_interior_duplicates() @t
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-range.c", "{ switch (0) { case 2 ... 5: ; case 4: ; case 8: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -625,7 +623,7 @@ fn void switch_overlapping_case_ranges_are_duplicate_cases() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-overlap.c", "{ switch (0) { case 2 ... 5: ; case 4 ... 8: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -657,7 +655,7 @@ fn void switch_unavailable_case_values_are_diagnosed_in_source_order() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-unavailable.c", "{ switch (0) { case 1 ... a: ; case b: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -685,7 +683,7 @@ fn void descending_switch_case_range_reports_empty_range() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-empty-range.c", "{ switch (0) { case 5 ... 3: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -708,7 +706,7 @@ fn void switch_case_bound_requires_a_real_integer_type() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-type.c", "{ switch (0) { case q: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -735,7 +733,7 @@ fn void computed_goto_requires_address_of_label_expression() @test
 		// Ignore the independent discarded-value warning; this test checks function-level goto validation.
 		d.set("unused-value", OFF)!!;
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("goto.c", "{ goto *1; } { goto *1; &&target; target: ; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -759,7 +757,7 @@ fn void malformed_function_body_clears_label_and_scope_state() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("recovery.c", "{ kept: ; if (1) } { goto kept; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -796,12 +794,12 @@ fn void source_derived_recovered_function_does_not_leak_labels() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("label-recovery.c",
 			"void f(void){ kept: ; if (1) } void g(void){ goto kept; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree parsed = p.parse()!!;
 		uint function_count = 0;
@@ -828,7 +826,7 @@ fn void statement_attributes_attach_and_validate_argument_counts() @test
 		// Zig gates the C23 attribute diagnostic on this warning option.
 		d.set("c23-extensions", WARNING)!!;
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-attrs.c", "__attribute__((unused)) first: ; [[gnu::unused]] second: ; __attribute__((unused(1))) third: ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -863,7 +861,7 @@ fn void fallthrough_statement_attribute_is_accepted_before_case_inside_switch() 
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-fallthrough.c",
 			"switch (1) { case 0: __attribute__((fallthrough)); case 1: break; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -895,7 +893,7 @@ fn void fallthrough_statement_attribute_outside_switch_is_diagnosed() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-fallthrough.c", "__attribute__((fallthrough));")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -924,7 +922,7 @@ fn void block_scope_declaration_with_noreturn_attribute_is_not_statement_attribu
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("block-decl-noreturn.c",
 			"void f(void) { __attribute__((noreturn)) int x; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -969,7 +967,7 @@ fn void fallthrough_statement_attribute_still_routes_to_statement_with_declarati
 		compilation::Compilation comp;
 		comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("block-fallthrough.c",
 			"void f(void) { __attribute__((fallthrough)); }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1006,7 +1004,7 @@ fn void label_interposed_gnu_attributes_attach_to_labeled_node() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("label-attrs.c", "__attribute__((unused)) target: __attribute__((unused)) ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -1035,7 +1033,7 @@ fn void malformed_statement_attributes_and_scopes_are_restored() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-attrs-recovery.c", "{ __attribute__((unused)) for (;;) } ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -1063,7 +1061,7 @@ fn void gnu_statement_expression_wraps_compound_and_uses_final_expression_type()
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		d.set("gnu-statement-expression", diagnostics::MessageKind.WARNING)!!;
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr.c", "({ 1; })")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -1099,7 +1097,7 @@ fn void gnu_statement_expression_file_scope_diagnostics_are_ordered() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		d.set("gnu-statement-expression", diagnostics::MessageKind.WARNING)!!;
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr-file-scope.c", "({ 1; })")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -1126,7 +1124,7 @@ fn void gnu_statement_expression_without_final_expression_has_void_type() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr-void.c", "({ ; })")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
@@ -1153,7 +1151,7 @@ fn void malformed_gnu_statement_expression_restores_attribute_and_scope_state() 
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		compilation::Compilation comp; comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr-recovery.c",
 			"({ __attribute__((unused)) ; for (;;)")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -1209,13 +1207,13 @@ fn void parser_replays_pragma_inside_compound_statement() @test
 		PragmaCompoundProbe probe = {};
 		bool added_probe = comp.pragmas.add("probe", &probe);
 		assert(added_probe);
-		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING, preprocessor::BUILTINS)!!;
+		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("pragma_compound.c",
 			"void f(void)\n{\nint x;\n#pragma probe\nx = 1;\n#pragma probe\n}\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p; p.init(&pp);
-		parser_frontend::FrontendHandler frontend;
+		parser_declaration::DeclarationParser frontend;
 		frontend.bind(&p);
 		tree::Tree parsed = p.parse()!!;
 

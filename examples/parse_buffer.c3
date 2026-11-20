@@ -5,7 +5,7 @@ import aro::source, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
 import std::core::mem::allocators;
 
 // A tiny caller-supplied grammar: only `int identifier;` is recognized.
-// For the complete C grammar use parser_frontend::FrontendHandler instead.
+// For the complete C grammar bind a parser_declaration::DeclarationParser instead.
 struct IntDeclarations (parser::IParserHandler)
 {
 	int unused;
