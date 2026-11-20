@@ -2442,6 +2442,8 @@ fn void? CodeGen.gen_var(&self, tree::NodeVariable decl, type_store::NodeIndex d
 		{
 			return self.fail("TODO CodeGen.genVar incomplete object type\n");
 		}
+		// GNU: a static initializer for a flexible array member extends the object.
+		if (has_initializer) size = max(size, self.flexible_init_size(decl.qt, decl.initializer.unwrap()));
 		alignment = (uint)decl.qt.alignof(self.comp);
 		if (decl.qt.is(self.comp, type_store::TypeTag.ARRAY) && size >= 16 && alignment < 16) alignment = 16;
 	}
@@ -2649,8 +2651,32 @@ fn value::Value? CodeGen.const_init_value(&self, type_store::NodeIndex node_inde
 	}
 }
 
+<* Bytes needed by a record initializer that fills its trailing flexible array
+   member (the item's completed array type, from its field offset); 0 if none. *>
+fn ulong CodeGen.flexible_init_size(&self, type_store::QualType qt, type_store::NodeIndex initializer)
+{
+	tree::Node init_node = initializer.get(self.tree);
+	switch (init_node.kind)
+	{
+		case PAREN_EXPR: return self.flexible_init_size(qt, init_node.unary.operand);
+		case COMPOUND_LITERAL_EXPR: return self.flexible_init_size(qt, init_node.compound_literal.initializer);
+		case STRUCT_INIT_EXPR: break;
+		default: return 0;
+	}
+	type_store::Record? record = qt.get_record(self.comp);
+	if (catch record) return 0;
+	usz count = record.fields.len;
+	if (!count || init_node.container_init.items.len < count) return 0;
+	type_store::RecordField last = record.fields[count - 1];
+	if (!last.qt.is(self.comp, type_store::TypeTag.ARRAY) || !last.qt.has_incomplete_size(self.comp)) return 0;
+	type_store::NodeIndex item = init_node.container_init.items[count - 1];
+	if (item.get(self.tree).kind == tree::NodeKind.DEFAULT_INIT_EXPR) return 0;
+	ulong item_size = item.qt(self.tree).sizeof_or_null(self.comp) ?? 0;
+	return last.layout.offset_bits / 8 + item_size;
+}
+
 <* Serialize a constant initializer for a global object of type `qt` into
-   `data` (already zeroed, `qt`'s size), appending address relocations. *>
+   `data` (already zeroed, at least `qt`'s size), appending address relocations. *>
 fn void? CodeGen.write_global_initializer(&self, type_store::QualType qt, type_store::NodeIndex initializer,
 	char[] data, List{ir::DataReloc}* relocs)
 {
@@ -2732,7 +2758,14 @@ fn void? CodeGen.write_field_initializer(&self, type_store::RecordField field, t
 	if (item_node.kind == tree::NodeKind.DEFAULT_INIT_EXPR) return;
 	if (field.bit_width == type_store::BIT_WIDTH_NULL)
 	{
-		return self.write_initializer_at(field.qt, item, data, offset + field.layout.offset_bits / 8, relocs);
+		// A flexible array member takes its length from the initializer's completed type.
+		type_store::QualType field_qt = field.qt;
+		if (field_qt.is(self.comp, type_store::TypeTag.ARRAY) && field_qt.has_incomplete_size(self.comp))
+		{
+			type_store::QualType item_qt = item.qt(self.tree);
+			if (item_qt.is(self.comp, type_store::TypeTag.ARRAY) && !item_qt.has_incomplete_size(self.comp)) field_qt = item_qt;
+		}
+		return self.write_initializer_at(field_qt, item, data, offset + field.layout.offset_bits / 8, relocs);
 	}
 	if (field.bit_width == 0) return;
 	value::Value? val = self.const_init_value(item);

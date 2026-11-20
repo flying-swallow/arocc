@@ -616,10 +616,11 @@ fn void sizes_and_incomplete_types() @test
 		check(b65.bit_sizeof(comp), 65);
 
 		check(type_store::BOOL.bit_sizeof(comp), 1);
-		// Source-derived: sizeof is Float.bits / 8 and cTypeBitSize(.longdouble) is 80 on
-		// x86_64 (target_data.c3), so this is 10, not the padded cTypeByteSize of 16.
-		// No fixture pins sizeof(long double) on x86_64; see the plan 08 report.
-		check(type_store::LONG_DOUBLE.sizeof(comp), 10);
+		// sizeof is the cTypeByteSize: 80-bit x87 long double padded to its alignment
+		// (gcc/clang: 16 on x86_64; gcc.target/x86_64/abi test_basic_sizes). Bit size stays 80.
+		check(type_store::LONG_DOUBLE.sizeof(comp), 16);
+		check(type_store::LONG_DOUBLE.bit_sizeof(comp), 80);
+		check(ts.put(type_store::type_complex(type_store::LONG_DOUBLE)).sizeof(comp), 32);
 		check(type_store::LONG_DOUBLE.alignof(comp), 16);
 		check(type_store::INT128.alignof(comp), 16);
 		check(type_store::FLOAT16.alignof(comp), 2);
@@ -629,7 +630,12 @@ fn void sizes_and_incomplete_types() @test
 		check(ts.put(type_store::type_complex(type_store::DOUBLE)).alignof(comp), 8);
 		check(ts.put(type_store::type_atomic(type_store::INT)).sizeof(comp), 4);
 		check(ts.put(type_store::type_vector(type_store::INT, 4)).sizeof(comp), 16);
-		check(ts.put(type_store::type_vector(type_store::INT, 4)).alignof(comp), 4);
+		// gcc/clang: vectors align to their size rounded to a power of two (__m64 8, __m128 16).
+		check(ts.put(type_store::type_vector(type_store::INT, 4)).alignof(comp), 16);
+		check(ts.put(type_store::type_vector(type_store::INT, 2)).alignof(comp), 8);
+		check(ts.put(type_store::type_vector(type_store::CHAR, 2)).alignof(comp), 2);
+		check(ts.put(type_store::type_vector(type_store::CHAR, 3)).alignof(comp), 4);
+		check(ts.put(type_store::type_vector(type_store::CHAR, 3)).sizeof(comp), 4);
 		QualType f = fn0(comp, type_store::VOID);
 		check(f.sizeof(comp), 1);
 		check(f.alignof(comp), 16); // Target.defaultFunctionAlignment on x86_64

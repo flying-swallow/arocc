@@ -675,17 +675,24 @@ fn bool? shallow_compare(Value lhs, CompareOperator op, Value rhs)
 	return NOT_COMPARABLE~;
 }
 
-<* Value.compare (float/complex branches: compare_float in value_float.c3). *>
+<*
+ Value.compare (float/complex branches: compare_float in value_float.c3).
+ Floats skip the shallow ref compare: ref identity is not numeric equality
+ (NaN != NaN with the same ref; +0.0 == -0.0 with different refs).
+*>
 fn bool compare(Value lhs, CompareOperator op, Value rhs, Compilation* comp)
 {
-	if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
-
+	if (lhs.is_none() || rhs.is_none())
+	{
+		if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
+	}
 	PrimitiveValue lhs_key = comp.interner.get(lhs.ref());
 	PrimitiveValue rhs_key = comp.interner.get(rhs.ref());
 	if (lhs_key.tag.kind == NumberKind.FLOAT || rhs_key.tag.kind == NumberKind.FLOAT || lhs_key.tag.kind == NumberKind.COMPLEX || rhs_key.tag.kind == NumberKind.COMPLEX)
 	{
 		return compare_float(lhs, op, rhs, comp);
 	}
+	if (try shallow = shallow_compare(lhs, op, rhs)) return shallow;
 
 	BigIntConst lhs_bigint = lhs_key.to_big_int();
 	BigIntConst rhs_bigint = rhs_key.to_big_int();

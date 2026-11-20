@@ -115,14 +115,16 @@ fn ulong? QualType.sizeof_or_null(self, Compilation* comp)
 			case POINTER: return (ulong)comp.target.ptr_bit_width() / 8;
 			case STORAGE_FLOAT: return (ulong)ty.storage_float.bits / 8;
 			case INT: return (ulong)ty.int_ty.bits(comp) / 8;
-			case FLOAT: return (ulong)ty.float_ty.bits(comp) / 8;
+			// cTypeByteSize: an 80-bit x87 long double is padded to its alignment (16 on x86_64).
+			case FLOAT: return align_forward(((ulong)ty.float_ty.bits(comp) + 7) / 8, b.qt.alignof(comp));
 			case COMPLEX: return ty.complex.sizeof_or_null(comp)! * 2;
 			case BIT_INT:
 				return align_forward(((ulong)ty.bit_int.bits + 7) / 8, b.qt.alignof(comp));
 			case ATOMIC: return ty.atomic.sizeof_or_null(comp);
 			case VECTOR:
 				ulong elem_size = ty.vector.elem.sizeof_or_null(comp)!;
-				return elem_size * ty.vector.len;
+				// clang: a non-power-of-two vector (ext_vector_type(3)) is padded to its alignment.
+				return align_forward(elem_size * ty.vector.len, b.qt.alignof(comp));
 			case ARRAY:
 				bool msvc = comp.langopts.emulate == MSVC;
 				ulong len;
@@ -300,7 +302,16 @@ fn uint QualType.alignof(self, Compilation* comp)
 				return (uint)(self.bit_sizeof(comp) / 8);
 			case FUNC: return t.default_function_alignment();
 			case ARRAY: return ty.array.elem.alignof(comp);
-			case VECTOR: ty = ty.vector.elem.base(comp).ty;
+			case VECTOR:
+				// gcc/clang: a vector aligns to its byte size rounded up to a power of two
+				// (gcc caps x86 vectors at 16 without AVX); never below the element alignment.
+				uint elem_align = ty.vector.elem.alignof(comp);
+				ulong size = ty.vector.elem.sizeof_or_null(comp) ?? 0;
+				size *= ty.vector.len;
+				ulong align = 1;
+				while (align < size) align <<= 1;
+				if (comp.langopts.emulate == GCC && (t.cpu.arch == X86 || t.cpu.arch == X86_64) && align > 16) align = 16;
+				return max((uint)align, elem_align);
 			case STRUCT:
 			case UNION:
 				if (!ty.record.has_layout) return 0;

@@ -463,7 +463,7 @@ fn void common_defines_x86_64_linux() @test
 		test::eq(lines_with_prefix(s, "#define __SIZEOF_"),
 			"#define __SIZEOF_FLOAT__ 4\n"
 			"#define __SIZEOF_DOUBLE__ 8\n"
-			"#define __SIZEOF_LONG_DOUBLE__ 10\n" // [source] cTypeBitSize(.longdouble)=80, /8; see header of write_common_defines
+			"#define __SIZEOF_LONG_DOUBLE__ 16\n" // [source] cTypeByteSize: 80-bit x87 padded to align 16 (gcc/clang agree)
 			"#define __SIZEOF_SHORT__ 2\n"
 			"#define __SIZEOF_INT__ 4\n"
 			"#define __SIZEOF_LONG__ 8\n"
@@ -578,7 +578,7 @@ fn void common_defines_other_targets() @test
 		expect_line(s, "#define __INT64_TYPE__ long long");
 		expect_line(s, "#define __INT64_MAX__ 9223372036854775807LL");
 		expect_line(s, "#define __SIZE_TYPE__ unsigned int");
-		expect_line(s, "#define __SIZEOF_LONG_DOUBLE__ 10");
+		expect_line(s, "#define __SIZEOF_LONG_DOUBLE__ 12");
 	};
 	@with_comp("x86_64-macos-none"; compilation::Compilation* comp, DString* w)
 	{

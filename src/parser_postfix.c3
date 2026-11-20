@@ -52,27 +52,26 @@ struct AttributeDeclSpanCheckpoint
 fn parser_result::Result? Parser.parse_compound_literal(&self, tokens::TokenIndex l_paren, type_store::QualType qt,
 	tree::CompoundLiteralStorageClass storage = tree::CompoundLiteralStorageClass.AUTO, bool thread_local = false, bool eval = true)
 {
-	parser::Parser* p = self;
-	parser::InitContext context = p.init_context;
-	if (storage == tree::CompoundLiteralStorageClass.STATIC || thread_local || !p.function_context.active)
+	parser::InitContext context = self.init_context;
+	if (storage == tree::CompoundLiteralStorageClass.STATIC || thread_local || !self.function_context.active)
 	{
 		context = parser::InitContext.STATIC;
 	}
-	parser_result::Result initializer = p.parse_initializer_with_context(qt, context, eval)!;
-	type_store::NodeIndex literal = p.compound_literal_node(l_paren, qt, initializer.node, storage, thread_local);
+	parser_result::Result initializer = self.parse_initializer_with_context(qt, context, eval)!;
+	type_store::NodeIndex literal = self.compound_literal_node(l_paren, qt, initializer.node, storage, thread_local);
 	// A scalar compound literal has its initializer's constant value: the braced
 	// scalar keeps the value on its converted node. Array, record, complex and
 	// vector literals never carry a scalar value.
-	bool scalar = !qt.is(p.comp, type_store::TypeTag.ARRAY) && !qt.is(p.comp, type_store::TypeTag.VECTOR) &&
-	!qt.is(p.comp, type_store::TypeTag.COMPLEX) && !@ok(qt.get_record(p.comp));
+	bool scalar = !qt.is(self.comp, type_store::TypeTag.ARRAY) && !qt.is(self.comp, type_store::TypeTag.VECTOR) &&
+	!qt.is(self.comp, type_store::TypeTag.COMPLEX) && !@ok(qt.get_record(self.comp));
 	if (scalar)
 	{
-		if (try saved = p.tree.value_of(initializer.node))
+		if (try saved = self.tree.value_of(initializer.node))
 		{
 			// Same as the string-subscript rule: the literal node keeps the value and
 			// the result carries it. save_value clears the result value, so restore it.
 			parser_result::Result literal_result = { .node = literal, .qt = qt, .val = saved };
-			literal_result.save_value(p);
+			literal_result.save_value(self);
 			literal_result.val = saved;
 			return literal_result;
 		}

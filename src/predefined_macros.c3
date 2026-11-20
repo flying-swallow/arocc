@@ -332,9 +332,9 @@ fn void? write_compiler_defines(Compilation* comp, OutStream w)
  __DECIMAL_DIG__ __LDBL_DECIMAL_DIG__; __pic__/__PIC__ (and __pie__/__PIE__
  if is_pie) with pic_level.value unless NONE; __BLOCKS__ if langopts.blocks.
 
- Note: __SIZEOF_LONG_DOUBLE__ is sizeof(long double) = cTypeBitSize / 8, as
- in Zig (TypeStore Float.bits uses cTypeBitSize, not cTypeByteSize), so it is
- 10 on x86/x86_64 targets whose long double is the 80-bit x87 type.
+ Note: __SIZEOF_LONG_DOUBLE__ is sizeof(long double), the cTypeByteSize: the
+ 80-bit x87 type is padded to its alignment (16 on x86_64, 12 on i386), as
+ gcc/clang report.
 *>
 fn void? write_common_defines(Compilation* comp, OutStream w)
 {

@@ -160,20 +160,28 @@ fn void value_compare_dispatches() @test
 		assert(!value::compare(one_half, LTE, value::ONE, comp));
 		// mixed widths compare at f128: 0.1f != 0.1
 		assert(value::compare(f32v(comp, 0x3DCC_CCCD), NEQ, f64v(comp, 0x3FB9_9999_9999_999A), comp));
-		// NaN: unordered, NEQ true, even with itself (distinct refs)
+		// NaN: unordered, NEQ true, even with itself (same ref; gcc fp-cmp-6)
 		Value nan = f64v(comp, 0x7FF8_0000_0000_0000);
-		assert(value::compare(nan, NEQ, nan, comp) == false); // same ref: shallow compare says equal
+		assert(value::compare(nan, NEQ, nan, comp));
+		assert(!value::compare(nan, EQ, nan, comp));
+		assert(!value::compare(nan, LTE, nan, comp));
+		assert(!value::compare(nan, GTE, nan, comp));
 		Value nan2 = f64v(comp, 0x7FF8_0000_0000_0000);
 		assert(!value::compare(nan, EQ, nan2, comp));
 		assert(value::compare(nan, NEQ, nan2, comp));
 		assert(!value::compare(nan, LT, value::ONE, comp));
-		// -0.0 == +0.0 numerically (different refs; EQ is shallow, so use LTE/GTE)
+		// -0.0 == +0.0 numerically despite different refs
 		Value neg_zero = f64v(comp, 0x8000_0000_0000_0000);
+		assert(value::compare(neg_zero, EQ, value::ZERO, comp));
+		assert(!value::compare(neg_zero, NEQ, value::ZERO, comp));
 		assert(value::compare(neg_zero, LTE, value::ZERO, comp));
 		assert(value::compare(neg_zero, GTE, value::ZERO, comp));
-		// complex: only NEQ
+		// complex: EQ / NEQ only
 		assert(value::compare(c64v(comp, D_ONE, D_TWO), NEQ, c64v(comp, D_ONE, D_THREE), comp));
+		assert(!value::compare(c64v(comp, D_ONE, D_TWO), EQ, c64v(comp, D_ONE, D_THREE), comp));
+		assert(value::compare(c64v(comp, D_ONE, D_TWO), EQ, c64v(comp, D_ONE, D_TWO), comp));
 		assert(!value::compare(c64v(comp, D_TWO, 0), NEQ, f64v(comp, D_TWO), comp));
+		assert(value::compare(c64v(comp, D_TWO, 0), EQ, f64v(comp, D_TWO), comp));
 		// int compare untouched
 		assert(value::compare(value::int_u64(3, comp), GT, value::int_i64(-3, comp), comp));
 	};

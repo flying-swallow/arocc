@@ -532,7 +532,8 @@ fn parser_result::Result? Parser.parse_sizeof_alignof(&self, tokenizer::TokenId 
 	}
 	ulong size = size_opt;
 	bool is_sizeof = op == tokenizer::TokenId.KEYWORD_SIZEOF;
-	if (op == tokenizer::TokenId.KEYWORD_ALIGNOF1 || op == tokenizer::TokenId.KEYWORD_ALIGNOF2)
+	// Only the standard spellings warn: __alignof/__alignof__ are themselves GNU and accept expressions.
+	if (has_expression_operand && (op == tokenizer::TokenId.KEYWORD_ALIGNOF || op == tokenizer::TokenId.KEYWORD_C23_ALIGNOF))
 	{
 		String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)op_tok]);
 		Diagnostic.GNU_ALIGNOF_EXPR.@emit(p, op_tok, spelling)!;

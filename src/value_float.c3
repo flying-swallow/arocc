@@ -295,10 +295,11 @@ fn bool compare_float(Value lhs, CompareOperator op, Value rhs, Compilation* com
 		return lhs.to_float(F128, comp).compare(op, rhs.to_float(F128, comp));
 	}
 	assert(lhs_tag.kind == NumberKind.COMPLEX || rhs_tag.kind == NumberKind.COMPLEX, "value::compare_float needs a float or complex operand");
-	assert(op == NEQ, "complex values only compare with !=");
+	assert(op == EQ || op == NEQ, "complex values only compare with == or !=");
 	bool real_equal = lhs.to_float(F128, comp).compare(EQ, rhs.to_float(F128, comp));
 	bool imag_equal = lhs.imag(F128, comp).compare(EQ, rhs.imag(F128, comp));
-	return !real_equal || !imag_equal;
+	bool equal = real_equal && imag_equal;
+	return op == EQ ? equal : !equal;
 }
 
 // ---------------------------------------------------------------------------
