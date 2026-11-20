@@ -443,6 +443,18 @@ fn void? Result.float_to_int_warning(&self, parser::Parser* p, tokens::TokenInde
 	}
 }
 
+<* Value.float_to_int leaves an out-of-range result untruncated (Zig parity,
+pinned by the float_to_int vectors). The folded constant must fit its type, so
+saturate it to dest's min/max as GCC's fold does (PR 9325,
+gcc.c-torture/execute/20031003-1.c). Negative-to-unsigned is already zero. *>
+fn void saturate_float_to_int(value::Value* v, type_store::QualType dest, value::FloatToIntChangeKind change_kind, Compilation* comp)
+{
+	if (change_kind != value::FloatToIntChangeKind.OUT_OF_RANGE || v.is_zero(comp)) return;
+	if (!dest.scalar_kind(comp).is_real) return;
+	bool negative = value::compare(*v, LT, value::ZERO, comp);
+	*v = negative ? value::min_int(dest, comp) : value::max_int(dest, comp);
+}
+
 fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest, tokens::TokenIndex tok = 0, bool implicit = true)
 {
 	if (self.qt.is_invalid() || self.qt.eql(dest, p.comp)) return;
@@ -466,6 +478,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		{
 			type_store::QualType real_dest = dest.to_real(p.comp);
 			value::FloatToIntChangeKind change_kind = self.val.float_to_int(real_dest, p.comp);
+			saturate_float_to_int(&self.val, real_dest, change_kind, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = real_dest;
 			self.implicit_cast(p, tree::CastKind.FLOAT_TO_INT);
@@ -477,6 +490,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			self.qt = self.qt.to_real(p.comp);
 			self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
 			value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
+			saturate_float_to_int(&self.val, dest, change_kind, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = dest;
 			self.implicit_cast(p, tree::CastKind.FLOAT_TO_INT);
@@ -484,6 +498,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		else
 		{
 			value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
+			saturate_float_to_int(&self.val, dest, change_kind, p.comp);
 			if (implicit) self.float_to_int_warning(p, tok, original, dest, old_val, change_kind)!;
 			self.qt = dest;
 			self.implicit_cast(p, src.is_real ? tree::CastKind.FLOAT_TO_INT : tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT);

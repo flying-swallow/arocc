@@ -118,7 +118,11 @@ fn void TodoReport.record(&self, String kind, String definition)
 	{
 		if (hit.kind == kind && hit.definition == definition) return;
 	}
-	self.hits.push({ .kind = kind.copy(self.allocator), .definition = definition.copy(self.allocator) });
+	self.hits.push(
+	{
+		.kind = kind.copy(self.allocator), .definition = definition.copy(self.allocator)
+	}
+	);
 
 	bool first_definition_hit = true;
 	foreach (existing : self.skipped_definitions)
@@ -140,9 +144,10 @@ fn void TodoReport.record(&self, String kind, String definition)
 		}
 	}
 	self.entries.push(
-	{
-		.kind = kind.copy(self.allocator), .count = 1, .first_fn = definition.copy(self.allocator),
-	});
+		{
+			.kind = kind.copy(self.allocator), .count = 1, .first_fn = definition.copy(self.allocator),
+	}
+	);
 }
 
 <* CodeGen's public fault is compilation::FATAL_ERROR; allocations panic on OOM. *>
@@ -234,7 +239,7 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 {
 	compilation::Compilation* comp = tree.comp;
 	CodeGen c = { .tree = tree, .comp = comp, .pp = pp, .tu_id = tu_id,
-		.keep_going = keep_going, .todo_report = todo_report };
+	.keep_going = keep_going, .todo_report = todo_report };
 	if (keep_going) assert(todo_report != null, "keep-going CodeGen requires a TODO report");
 	c.builder.init(comp.gpa, &comp.interner);
 	c.symbols.init(comp.gpa);
@@ -545,7 +550,7 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 				{
 					.tag = ARRAY_TY,
 					.array_ty = { .len = base.qt.sizeof(self.comp), .child = value_interner::REF_I8 }
-				}
+			}
 			);
 			self.record_cache.set(cache_key, union_type);
 			return union_type;
@@ -734,7 +739,7 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 				// aligned. Keep this argument aligned after any preceding spills.
 				stack_offset = (stack_offset + 15) / 16 * 16;
 				arg = self.builder.add_arg_at(self.gen_type(param.qt)!,
-					ir::ArgLocationKind.STACK, stack_offset, 16);
+				ir::ArgLocationKind.STACK, stack_offset, 16);
 				stack_offset += 16;
 			}
 			else if (param.qt.is(self.comp, type_store::TypeTag.FLOAT))
@@ -795,7 +800,7 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		}
 		else
 		{
-			self.builder.add_return(self.aggregate_return_class == AggClass.MEMORY ? self.sret_pointer : ir::NONE);
+			self.builder.add_return(self.aggregate_return_class == AggClass.MEMORY ? self.sret_pointer: ir::NONE);
 		}
 	}
 	else if (self.ret_nodes.len() == 0)
