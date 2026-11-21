@@ -413,6 +413,7 @@ const uint BIT_WIDTH_NULL = 0xFFFF_FFFF;
 <* Type.Record.Field. Use `record_field` for Zig's defaults. *>
 struct RecordField
 {
+	bool reverse_storage;
 	QualType qt;
 	StringId name;
 	<* zero for anonymous fields *>

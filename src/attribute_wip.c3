@@ -568,6 +568,16 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 			case GNU:
 				switch (attr.name.gnu)
 				{
+					case SCALAR_STORAGE_ORDER:
+						if (self.check_target(p, attr, decl, qt, { TargetKind.TAG })!) continue;
+						if (self.arg_count(p, attr, 1)!) continue;
+						uint order;
+						String[2] orders = { "little-endian", "big-endian" };
+						if (!self.arg_enum(p, attr, 0, orders[..], &order)!) continue;
+						value.tag = attribute::AttributeTag.SCALAR_STORAGE_ORDER;
+						value.scalar_storage_order = attribute::ScalarStorageOrder::from_ordinal(order);
+						apply = true;
+
 					case PACKED:
 						if (self.check_target(p, attr, decl, qt, { TargetKind.TAG, TargetKind.FIELD })!) continue;
 						value.tag = attribute::AttributeTag.PACKED; apply = !self.arg_count(p, attr, 0)!;

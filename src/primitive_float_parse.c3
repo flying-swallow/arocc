@@ -5,108 +5,10 @@
 // PrimitiveValue.cast to the literal's width (number_value.c3).
 // Uses f128_mul / f128_div (primitive_float_soft_wide.c3) for the fast path.
 module aro::primitive_value;
+import aro::string_util;
 
 <* Zig error.InvalidCharacter from std.fmt.parseFloat. *>
 excuse INVALID_CHARACTER;
-
-<* parse_float/FloatStream.zig *>
-struct FloatStream
-{
-	String slice;
-	sz offset;
-	sz underscore_count;
-}
-
-fn sz FloatStream.offset_true(&self) => self.offset - self.underscore_count;
-
-fn void FloatStream.reset(&self)
-{
-	self.offset = 0;
-	self.underscore_count = 0;
-}
-
-fn bool FloatStream.has_len(&self, sz n) => self.offset + n <= self.slice.len;
-
-fn bool FloatStream.first(&self, char* c)
-{
-	if (!self.has_len(1)) return false;
-	*c = self.slice[self.offset];
-	return true;
-}
-
-fn bool FloatStream.first_is(&self, String cs)
-{
-	char c;
-	if (!self.first(&c)) return false;
-	foreach (x : cs)
-	{
-		if (c == x) return true;
-	}
-	return false;
-}
-
-fn bool FloatStream.first_is_lower(&self, char lower)
-{
-	char c;
-	if (!self.first(&c)) return false;
-	return (c | 0x20) == lower;
-}
-
-fn bool FloatStream.first_is_digit(&self, int base)
-{
-	char c;
-	if (!self.first(&c)) return false;
-	return is_float_digit(c, base);
-}
-
-fn void FloatStream.advance(&self, sz n) => self.offset += n;
-
-fn void FloatStream.skip_chars(&self, String cs)
-{
-	while (self.first_is(cs)) self.advance(1);
-}
-
-<* FloatStream.scanDigit: skips (and counts) '_' before a digit. *>
-fn bool FloatStream.scan_digit(&self, int base, char* digit)
-{
-	while (true)
-	{
-		char c;
-		if (!self.first(&c)) return false;
-		if (c >= '0' && c <= '9')
-		{
-			self.advance(1);
-			*digit = c - '0';
-			return true;
-		}
-		if (base == 16 && c >= 'a' && c <= 'f')
-		{
-			self.advance(1);
-			*digit = c - 'a' + 10;
-			return true;
-		}
-		if (base == 16 && c >= 'A' && c <= 'F')
-		{
-			self.advance(1);
-			*digit = c - 'A' + 10;
-			return true;
-		}
-		if (c == '_')
-		{
-			self.advance(1);
-			self.underscore_count++;
-			continue;
-		}
-		return false;
-	}
-}
-
-<* parse_float/common.zig isDigit *>
-fn bool is_float_digit(char c, int base)
-{
-	if (base == 10) return c >= '0' && c <= '9';
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
 
 <* parse_float/common.zig Number(f128) *>
 struct ParsedNumber
@@ -121,10 +23,10 @@ struct ParsedNumber
 }
 
 <* parse.zig tryParseDigits (the 8-digit fast path is the same arithmetic mod 2^128). *>
-fn void try_parse_digits(FloatStream* stream, uint128* x, int base)
+fn void try_parse_digits(String s, sz* offset, sz* underscore_count, uint128* x, int base)
 {
 	char digit;
-	while (stream.scan_digit(base, &digit)) * x = *x * (uint128)base + (uint128)digit;
+	while (((digit = string_util::scan_digit(s, offset, underscore_count, base)) != 255)) * x = *x * (uint128)base + (uint128)digit;
 }
 
 <* parse.zig min_n_digit_int: 10^(n-1). *>
@@ -136,32 +38,32 @@ fn uint128 min_n_digit_int(sz digit_count)
 }
 
 <* parse.zig tryParseNDigits (base 16 also stops at 10^(n-1), as in Zig). *>
-fn void try_parse_n_digits(FloatStream* stream, uint128* x, int base, sz n)
+fn void try_parse_n_digits(String s, sz* offset, sz* underscore_count, uint128* x, int base, sz n)
 {
 	uint128 limit = min_n_digit_int(n);
 	char digit;
 	while (*x < limit)
 	{
-		if (!stream.scan_digit(base, &digit)) break;
+		if (!((digit = string_util::scan_digit(s, offset, underscore_count, base)) != 255)) break;
 		*x = *x * (uint128)base + (uint128)digit;
 	}
 }
 
 <* parse.zig parseScientific: false is Zig `null`. *>
-fn bool parse_scientific(FloatStream* stream, long* out)
+fn bool parse_scientific(String s, sz* offset, sz* underscore_count, long* out)
 {
 	long exponent = 0;
 	bool negative = false;
 	char c;
-	if (stream.first(&c))
+	if (string_util::first(s, *offset, &c))
 	{
 		negative = c == '-';
-		if (c == '-' || c == '+') stream.advance(1);
+		if (c == '-' || c == '+') (*offset += 1);
 	}
-	if (stream.first_is_digit(10))
+	if (string_util::first_is_digit(s, *offset, 10))
 	{
 		char digit;
-		while (stream.scan_digit(10, &digit))
+		while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255))
 		{
 			// no overflows here, saturate well before overflow
 			if (exponent < 0x1000_0000) exponent = 10 * exponent + digit;
@@ -182,7 +84,7 @@ fn bool valid_underscores(String s, int base)
 			// underscore at start of end
 			if (i == 0 || i + 1 == s.len) return false;
 			// consecutive underscores
-			if (!is_float_digit(s[i - 1], base) || !is_float_digit(s[i + 1], base)) return false;
+			if (!string_util::is_digit(s[i - 1], base) || !string_util::is_digit(s[i + 1], base)) return false;
 			// next is guaranteed a digit, skip an extra
 			i++;
 		}
@@ -191,22 +93,22 @@ fn bool valid_underscores(String s, int base)
 }
 
 <* parse.zig parsePartialNumberBase for f128 (u128 mantissa). false is Zig `null`. *>
-fn bool parse_partial_number_base(FloatStream* stream, bool negative, sz* n, int base, sz max_mantissa_digits, char exp_char_lower, ParsedNumber* out)
+fn bool parse_partial_number_base(String s, sz* offset, sz* underscore_count, bool negative, sz* n, int base, sz max_mantissa_digits, char exp_char_lower, ParsedNumber* out)
 {
 	// parse initial digits before dot
 	uint128 mantissa = 0;
-	try_parse_digits(stream, &mantissa, base);
-	sz int_end = stream.offset_true();
-	sz n_digits = stream.offset_true();
+	try_parse_digits(s, offset, underscore_count, &mantissa, base);
+	sz int_end = (*offset - *underscore_count);
+	sz n_digits = (*offset - *underscore_count);
 
 	// handle dot with the following digits
 	long exponent = 0;
-	if (stream.first_is("."))
+	if (string_util::first_is(s, *offset, "."))
 	{
-		stream.advance(1);
-		sz marker = stream.offset_true();
-		try_parse_digits(stream, &mantissa, base);
-		sz n_after_dot = stream.offset_true() - marker;
+		(*offset += 1);
+		sz marker = (*offset - *underscore_count);
+		try_parse_digits(s, offset, underscore_count, &mantissa, base);
+		sz n_after_dot = (*offset - *underscore_count) - marker;
 		exponent = -(long)n_after_dot;
 		n_digits += n_after_dot;
 	}
@@ -218,16 +120,16 @@ fn bool parse_partial_number_base(FloatStream* stream, bool negative, sz* n, int
 
 	// handle scientific format
 	long exp_number = 0;
-	if (stream.first_is_lower(exp_char_lower))
+	if (string_util::first_is_lower(s, *offset, exp_char_lower))
 	{
-		stream.advance(1);
-		if (!parse_scientific(stream, &exp_number)) return false;
+		(*offset += 1);
+		if (!parse_scientific(s, offset, underscore_count, &exp_number)) return false;
 		exponent += exp_number;
 	}
 
-	* n += stream.offset;  // length must be complete parsed length
+	* n += *offset;  // length must be complete parsed length
 
-	if (stream.underscore_count > 0 && !valid_underscores(stream.slice, base)) return false;
+	if (*underscore_count > 0 && !valid_underscores(s, base)) return false;
 
 	// common case with not many digits
 	if (n_digits <= max_mantissa_digits)
@@ -238,41 +140,41 @@ fn bool parse_partial_number_base(FloatStream* stream, bool negative, sz* n, int
 
 	n_digits -= max_mantissa_digits;
 	bool many_digits = false;
-	stream.reset();  // re-parse from beginning
-	while (stream.first_is("0._"))
+	*offset = 0; *underscore_count = 0;  // re-parse from beginning
+	while (string_util::first_is(s, *offset, "0._"))
 	{
 		// '0' = '.' + 2
-		char next = stream.slice[stream.offset];
+		char next = s[*offset];
 		if (next != '_')
 		{
 			n_digits -= next > '/' ? (sz)(next - '/') : 0;  // next -| ('0' - 1)
 		}
 		else
 		{
-			stream.underscore_count++;
+			(*underscore_count)++;
 		}
-		stream.advance(1);
+		(*offset += 1);
 	}
 	if (n_digits > 0)
 	{
 		// at this point we have more than max_mantissa_digits significant digits, let's try again
 		many_digits = true;
 		mantissa = 0;
-		stream.reset();
-		try_parse_n_digits(stream, &mantissa, base, max_mantissa_digits);
+		*offset = 0; *underscore_count = 0;
+		try_parse_n_digits(s, offset, underscore_count, &mantissa, base, max_mantissa_digits);
 
 		if (mantissa >= min_n_digit_int(max_mantissa_digits))
 		{
 			// big int
-			exponent = (long)int_end - (long)stream.offset_true();
+			exponent = (long)int_end - (long)(*offset - *underscore_count);
 		}
 		else
 		{
 			// the next byte must be present and be '.'
-			stream.advance(1);
-			sz marker = stream.offset_true();
-			try_parse_n_digits(stream, &mantissa, base, max_mantissa_digits);
-			exponent = (long)marker - (long)stream.offset_true();
+			(*offset += 1);
+			sz marker = (*offset - *underscore_count);
+			try_parse_n_digits(s, offset, underscore_count, &mantissa, base, max_mantissa_digits);
+			exponent = (long)marker - (long)(*offset - *underscore_count);
 		}
 		if (base == 16) exponent *= 4;
 		// add back the explicit part
@@ -290,12 +192,12 @@ fn bool parse_partial_number(String s, bool negative, sz* n, ParsedNumber* out)
 	*n = 0;
 	if (s.len >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
 	{
-		FloatStream stream = { .slice = s[2..], .offset = 0, .underscore_count = 0 };
+		sz pos = 0; sz underscores = 0;
 		*n += 2;
-		return parse_partial_number_base(&stream, negative, n, 16, 32, 'p', out);
+		return parse_partial_number_base(s[2..], &pos, &underscores, negative, n, 16, 32, 'p', out);
 	}
-	FloatStream stream = { .slice = s, .offset = 0, .underscore_count = 0 };
-	return parse_partial_number_base(&stream, negative, n, 10, 38, 'e', out);
+	sz pos = 0; sz underscores = 0;
+	return parse_partial_number_base(s, &pos, &underscores, negative, n, 10, 38, 'e', out);
 }
 
 <* parse.zig parseNumber: the whole input must be consumed. *>
@@ -306,32 +208,19 @@ fn bool parse_number(String s, bool negative, ParsedNumber* out)
 	return false;
 }
 
-fn bool starts_with_ignore_case(String s, String prefix)
-{
-	if (s.len < prefix.len) return false;
-	for (sz i = 0; i < prefix.len; i++)
-	{
-		char a = s[i];
-		char b = prefix[i];
-		if (a >= 'A' && a <= 'Z') a += 32;
-		if (b >= 'A' && b <= 'Z') b += 32;
-		if (a != b) return false;
-	}
-	return true;
-}
 
 <* parse.zig parseInfOrNan: "inf"/"infinity" (signed), "nan" (always std.math.nan, positive). *>
 fn bool parse_inf_or_nan(String s, bool negative, F128Bits* out)
 {
 	sz consumed;
 	PrimitiveValue value;
-	if (starts_with_ignore_case(s, "inf"))
+	if (string_util::starts_with_ignore_case(s, "inf"))
 	{
 		consumed = 3;
-		if (starts_with_ignore_case(s[3..], "inity")) consumed = 8;
+		if (string_util::starts_with_ignore_case(s[3..], "inity")) consumed = 8;
 		value = inf(F128, negative);
 	}
-	else if (starts_with_ignore_case(s, "nan"))
+	else if (string_util::starts_with_ignore_case(s, "nan"))
 	{
 		consumed = 3;
 		value = std_nan(F128);
@@ -684,26 +573,28 @@ fn void Decimal.right_shift(&self, usz shift)
 fn void Decimal.parse(&self, String s)
 {
 	*self = {};
-	FloatStream stream = { .slice = s, .offset = 0, .underscore_count = 0 };
+	sz pos = 0; sz underscores = 0;
+	sz* offset = &pos;
+	sz* underscore_count = &underscores;
 	char digit;
 
-	stream.skip_chars("0_");
-	while (stream.scan_digit(10, &digit)) self.try_add_digit(digit);
+	string_util::skip_chars(s, offset, "0_");
+	while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255)) self.try_add_digit(digit);
 
-	if (stream.first_is("."))
+	if (string_util::first_is(s, *offset, "."))
 	{
-		stream.advance(1);
-		sz marker = stream.offset_true();
+		(*offset += 1);
+		sz marker = (*offset - *underscore_count);
 		// Skip leading zeroes
-		if (self.num_digits == 0) stream.skip_chars("0");
-		while (stream.scan_digit(10, &digit)) self.try_add_digit(digit);
-		self.decimal_point = (int)marker - (int)stream.offset_true();
+		if (self.num_digits == 0) string_util::skip_chars(s, offset, "0");
+		while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255)) self.try_add_digit(digit);
+		self.decimal_point = (int)marker - (int)(*offset - *underscore_count);
 	}
 	if (self.num_digits != 0)
 	{
 		// Ignore trailing zeros if any
 		sz n_trailing_zeros = 0;
-		sz i = stream.offset_true() - 1;
+		sz i = (*offset - *underscore_count) - 1;
 		while (true)
 		{
 			if (s[i] == '0')
@@ -726,21 +617,21 @@ fn void Decimal.parse(&self, String s)
 			self.num_digits = DECIMAL_MAX_DIGITS;
 		}
 	}
-	if (stream.first_is_lower('e'))
+	if (string_util::first_is_lower(s, *offset, 'e'))
 	{
-		stream.advance(1);
+		(*offset += 1);
 		bool neg_exp = false;
-		if (stream.first_is("-"))
+		if (string_util::first_is(s, *offset, "-"))
 		{
 			neg_exp = true;
-			stream.advance(1);
+			(*offset += 1);
 		}
-		else if (stream.first_is("+"))
+		else if (string_util::first_is(s, *offset, "+"))
 		{
-			stream.advance(1);
+			(*offset += 1);
 		}
 		int exp_num = 0;
-		while (stream.scan_digit(10, &digit))
+		while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255))
 		{
 			if (exp_num < 0x10000) exp_num = 10 * exp_num + digit;
 		}

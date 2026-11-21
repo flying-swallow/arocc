@@ -576,9 +576,24 @@ fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Par
 	list::List{type_store::RecordField}* fields, list::List{type_store::NodeIndex}* field_nodes) @noinline
 {
 	if (catch p.expect(tokenizer::TokenId.R_BRACE)) return PARSING_FAILED~;
+	attribute::Attribute? header_storage = p.tree.attr_map.get_attribute(seed.decl_node.pack(), attribute::AttributeTag.SCALAR_STORAGE_ORDER);
 	self.apply_tag_body_end_attributes(p, seed)!;
 
 	type_store::RecordField[] record_fields = fields.array_view();
+	if (try storage = p.tree.attr_map.get_attribute(seed.decl_node.pack(), attribute::AttributeTag.SCALAR_STORAGE_ORDER) ?? header_storage)
+	{
+		bool reverse = (storage.args.scalar_storage_order == attribute::ScalarStorageOrder.BIG_ENDIAN) != p.comp.target.cpu.arch.big;
+		foreach (&field : record_fields)
+		{
+			field.reverse_storage = reverse;
+			if (reverse && field.bit_width == type_store::BIT_WIDTH_NULL)
+			{
+				diagnostics::Diagnostic.UNIMPLEMENTED.report(p, "TODO: implement 'scalar_storage_order' for non-bitfield members", storage.tok)!;
+				break;
+			}
+		}
+	}
+
 	pack::PackValue current_pack = seed.pack_value;
 	if (p.comp.langopts.emulate == lang_opts::Compiler.GCC || p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
 	{

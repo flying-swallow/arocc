@@ -31,6 +31,7 @@
 // - An unknown escape of a non-ASCII byte formats as '\xNN' where Zig's
 //   Ascii.init (@intCast to u7) would trap.
 module aro::text_literal;
+import aro::string_util;
 import aro::compilation, aro::diagnostics, aro::source, aro::lang_opts, aro::type_store, aro::tokenizer;
 import std::io, std::collections::list;
 
@@ -614,18 +615,7 @@ fn uint TextLiteralParser.prefix_len(&self)
 // parseNumberEscape)
 
 <* Zig `std.fmt.charToDigit(c, base)` for bases 8 and 16; -1 when `c` is not a digit. *>
-fn int escape_digit(char c, uint base) @private
-{
-	int d;
-	switch (c)
-	{
-		case '0'..'9': d = c - '0';
-		case 'a'..'f': d = c - 'a' + 10;
-		case 'A'..'F': d = c - 'A' + 10;
-		default: return -1;
-	}
-	return d < (int)base ? d : -1;
-}
+fn int escape_digit(char c, uint base) @private => string_util::digit_value(c, (int)base);
 
 <*
  Zig `Parser.parseUnicodeEscape`: `p.literal[p.i..]` starts with "\\u" or "\\U".

@@ -36,6 +36,8 @@ typedef AttrRef = uint;
 <* Zig `Map.Repr.Tag` (enum(u8)), in Zig order. *>
 enum AttrReprTag : char
 {
+	SCALAR_STORAGE_BIG,
+	SCALAR_STORAGE_LITTLE,
 	PACKED,
 	HOT,
 	COLD,
@@ -136,6 +138,7 @@ fn AttrRef AttributeMap.put(&self, Attribute attribute)
 	AttrRepr repr = { .tag = PACKED, .data = attribute.tok, .syntax = attribute.syntax, .name = attribute.name };
 	switch (args.tag)
 	{
+		case SCALAR_STORAGE_ORDER: repr.tag = args.scalar_storage_order == attribute::ScalarStorageOrder.BIG_ENDIAN ? SCALAR_STORAGE_BIG : SCALAR_STORAGE_LITTLE;
 		case PACKED: repr.tag = PACKED;
 		case HOT: repr.tag = HOT;
 		case COLD: repr.tag = COLD;
@@ -231,6 +234,8 @@ fn Attribute AttributeMap.get(&self, AttrRef ref)
 	uint next;
 	switch (r.tag)
 	{
+		case SCALAR_STORAGE_BIG: result.args.tag = SCALAR_STORAGE_ORDER; result.args.scalar_storage_order = attribute::ScalarStorageOrder.BIG_ENDIAN;
+		case SCALAR_STORAGE_LITTLE: result.args.tag = SCALAR_STORAGE_ORDER; result.args.scalar_storage_order = attribute::ScalarStorageOrder.LITTLE_ENDIAN;
 		case PACKED: result.args.tag = PACKED;
 		case HOT: result.args.tag = HOT;
 		case COLD: result.args.tag = COLD;

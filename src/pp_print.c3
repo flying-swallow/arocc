@@ -52,12 +52,6 @@ enum MacroParts : char
 	NAME_AND_BODY,
 }
 
-<* Zig `w.flush()`: flush when the stream supports it. *>
-fn void? flush_stream(OutStream w) @local
-{
-	if (&w.flush) w.flush()!;
-}
-
 <*
  Zig `fmtEscapes` / `FmtEscapes.format`: write `bytes` as C string contents:
  \n \r \t \\ \" escaped, printable ASCII (' ', '!', '#'..'&', '('..'[',
@@ -172,7 +166,7 @@ fn void? Preprocessor.pretty_print_macros_only(&self, OutStream w)
 		self.pretty_print_macro(w, m.loc, NAME_AND_BODY)!;
 		w.write_byte('\n')!;
 	}
-	flush_stream(w)!;
+	if (&w.flush) w.flush()!;
 }
 
 <*
@@ -202,7 +196,7 @@ fn void? Preprocessor.pretty_print_tokens(&self, OutStream w, DumpMode macro_dum
 		{
 			case EOF:
 				if (!last_nl) w.write_byte('\n')!;
-				flush_stream(w)!;
+				if (&w.flush) w.flush()!;
 				return;
 			case NL:
 				uint newlines = 0;
@@ -216,7 +210,7 @@ fn void? Preprocessor.pretty_print_tokens(&self, OutStream w, DumpMode macro_dum
 					else if (id == EOF)
 					{
 						if (!last_nl) w.write_byte('\n')!;
-						flush_stream(w)!;
+						if (&w.flush) w.flush()!;
 						return;
 					}
 					else if (id != WHITESPACE)

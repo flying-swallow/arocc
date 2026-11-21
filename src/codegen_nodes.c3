@@ -31,6 +31,7 @@ struct MemberBase
 
 struct BitfieldLval
 {
+	bool reverse_storage;
 	ir::Ref unit_ptr;
 	value_interner::InternerRef unit_ty;
 	uint unit_bits;
@@ -143,7 +144,8 @@ fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::Re
 				.unit_ptr = self.ptr_at(record_ptr, unit_start_bits / 8),
 				.unit_ty = unit_ty,
 				.unit_bits = unit_bits,
-				.shift = (uint)(offset_bits - unit_start_bits),
+				.reverse_storage = field.reverse_storage,
+				.shift = field.reverse_storage ? unit_bits - (uint)(offset_bits - unit_start_bits) - field.bit_width : (uint)(offset_bits - unit_start_bits),
 				.width = field.bit_width,
 				.field_qt = field.qt,
 			};
@@ -168,7 +170,8 @@ fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::Re
 			.unit_ptr = self.ptr_at(record_ptr, start_byte),
 			.unit_ty = self.bitfield_window_type(byte_count),
 			.unit_bits = window_bits,
-			.shift = shift,
+			.reverse_storage = field.reverse_storage,
+			.shift = field.reverse_storage ? window_bits - shift - field.bit_width : shift,
 			.width = field.bit_width,
 			.field_qt = field.qt,
 		};
@@ -238,10 +241,28 @@ fn ir::Ref? CodeGen.bitfield_read_result(&self, ir::Ref bits, BitfieldLval lval)
 	return bits;
 }
 
+fn ir::Ref CodeGen.reverse_bitfield_unit(&self, ir::Ref operand, BitfieldLval lval)
+{
+	if (!lval.reverse_storage || lval.unit_bits == 8) return operand;
+	ir::Ref result = ir::NONE;
+	for (uint i = 0; i < lval.unit_bits / 8; i++)
+	{
+		ir::Ref byte = self.builder.add_inst(ir::InstTag.BIT_LSHR,
+			{ .bin = { .lhs = operand, .rhs = self.unit_constant((ulong)i * 8, lval.unit_ty) } }, lval.unit_ty);
+		byte = self.builder.add_inst(ir::InstTag.BIT_AND,
+			{ .bin = { .lhs = byte, .rhs = self.unit_constant(255, lval.unit_ty) } }, lval.unit_ty);
+		byte = self.builder.add_inst(ir::InstTag.BIT_SHL,
+			{ .bin = { .lhs = byte, .rhs = self.unit_constant((ulong)(lval.unit_bits - 8 - i * 8), lval.unit_ty) } }, lval.unit_ty);
+		result = result == ir::NONE ? byte : self.builder.add_inst(ir::InstTag.BIT_OR,
+			{ .bin = { .lhs = result, .rhs = byte } }, lval.unit_ty);
+	}
+	return result;
+}
+
 <* Load and extract a bitfield using its typed storage unit. *>
 fn ir::Ref? CodeGen.load_bitfield(&self, BitfieldLval lval)
 {
-	ir::Ref unit = self.builder.add_inst(ir::InstTag.LOAD, { .ref = lval.unit_ptr }, lval.unit_ty);
+	ir::Ref unit = self.reverse_bitfield_unit(self.builder.add_inst(ir::InstTag.LOAD, { .ref = lval.unit_ptr }, lval.unit_ty), lval);
 	if (lval.field_qt.is(self.comp, type_store::TypeTag.BOOL))
 	{
 		if (lval.shift != 0)
@@ -310,7 +331,7 @@ fn ir::Ref? CodeGen.store_bitfield(&self, BitfieldLval lval, ir::Ref value)
 	ulong shifted_mask = field_mask << lval.shift;
 	ir::Ref field_mask_ref = self.unit_constant(shifted_mask, lval.unit_ty);
 	ir::Ref outside_mask = self.builder.add_inst(ir::InstTag.BIT_NOT, { .ref = field_mask_ref }, lval.unit_ty);
-	ir::Ref old_unit = self.builder.add_inst(ir::InstTag.LOAD, { .ref = lval.unit_ptr }, lval.unit_ty);
+	ir::Ref old_unit = self.reverse_bitfield_unit(self.builder.add_inst(ir::InstTag.LOAD, { .ref = lval.unit_ptr }, lval.unit_ty), lval);
 	ir::Ref outside = self.builder.add_inst(ir::InstTag.BIT_AND,
 		{ .bin = { .lhs = old_unit, .rhs = outside_mask } }, lval.unit_ty);
 	if (lval.shift != 0)
@@ -321,7 +342,7 @@ fn ir::Ref? CodeGen.store_bitfield(&self, BitfieldLval lval, ir::Ref value)
 	}
 	ir::Ref merged = self.builder.add_inst(ir::InstTag.BIT_OR,
 		{ .bin = { .lhs = outside, .rhs = field_value } }, lval.unit_ty);
-	self.builder.add_store(lval.unit_ptr, merged);
+	self.builder.add_store(lval.unit_ptr, self.reverse_bitfield_unit(merged, lval));
 	return self.bitfield_store_result(normalized_value, lval);
 }
 
@@ -2772,6 +2793,11 @@ fn void? CodeGen.write_field_initializer(&self, type_store::RecordField field, t
 	for (uint b = 0; b < field.bit_width; b++)
 	{
 		ulong pos = start_bit + b;
+		if (field.reverse_storage)
+		{
+			pos = start_bit + field.bit_width - 1 - b;
+			pos = (pos / 8) * 8 + 7 - pos % 8;
+		}
 		usz byte = (usz)(pos / 8);
 		if (byte >= data.len) break;
 		char mask = (char)(1 << (pos % 8));

@@ -1,6 +1,7 @@
 // Reusable command-line driver for the Aro CLI, including frontend and backend
 // orchestration.
 module aro::driver;
+import aro::string_util;
 import aro::driver_options;
 import aro::compilation, aro::target, aro::code_gen_options, aro::toolchain, aro::lang_opts, aro::system_defaults;
 import aro::toolchain::discovery;
@@ -1138,12 +1139,6 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 }
 
 <* Calculate target defaults and apply the last explicit -fpic family option. *>
-fn bool string_ieq(String a, String b)
-{
-	if (a.len != b.len) return false;
-	foreach (i, c : a) if (c.to_lower() != b[i].to_lower()) return false;
-	return true;
-}
 
 fn void? unsupported_target_option(DriverOptions* opts, Target t, Diagnostics* sink, String option)
 {
@@ -1155,7 +1150,7 @@ fn void? unsupported_target_option(DriverOptions* opts, Target t, Diagnostics* s
 fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null)
 {
 	String linker = opts.use_linker.get() ?? system_defaults::LINKER;
-	bool bfd = string_ieq(linker, "bfd");
+	bool bfd = string_util::string_ieq(linker, "bfd");
 	bool pie_default = t.is_pie_default() == YES ||
 	(t.is_pie_default() == DEPENDS_ON_LINKER && bfd && t.cpu.arch == X86_64);
 	bool pic_default = t.is_pic_default() == YES ||
@@ -1210,7 +1205,7 @@ fn PicPolicy? pic_policy(DriverOptions* opts, Target t, Diagnostics* sink = null
 	}
 
 	String pic_arg = opts.pic_arg;
-	bool positive_pic_option = string_ieq(pic_arg, "-fpic") || string_ieq(pic_arg, "-fpie");
+	bool positive_pic_option = string_util::string_ieq(pic_arg, "-fpic") || string_util::string_ieq(pic_arg, "-fpie");
 	if (t.os.tag == WINDOWS && !t.is_mingw() && positive_pic_option)
 	{
 		if (sink != null) unsupported_target_option(opts, t, sink, pic_arg)!;

@@ -59,70 +59,70 @@ excuse OVERFLOW;
  before the ABI override; big: big endian; max_align: the cap applied by
  cTypeAlignment (see target_data.c3 for provenance).
 *>
-enum Arch : char (String name, String llvm, ushort ptr_bits, bool big, ushort max_align)
+enum Arch : char(String name, String llvm, ushort ptr_bits, bool big, ushort max_align)
 {
-	AARCH64       { "aarch64", "aarch64", 64, false, 16 },
-	AARCH64_BE    { "aarch64_be", "aarch64_be", 64, true, 16 },
-	ALPHA         { "alpha", "alpha", 64, false, 16 },
-	AMDGCN        { "amdgcn", "amdgcn", 64, false, 8 },
-	ARC           { "arc", "arc", 32, false, 4 },
-	ARCEB         { "arceb", "arceb", 32, true, 4 },
-	ARM           { "arm", "arm", 32, false, 8 },
-	ARMEB         { "armeb", "armeb", 32, true, 8 },
-	AVR           { "avr", "avr", 16, false, 1 },
-	BPFEB         { "bpfeb", "bpfeb", 64, true, 8 },
-	BPFEL         { "bpfel", "bpfel", 64, false, 8 },
-	CSKY          { "csky", "csky", 32, false, 4 },
-	EZ80          { "ez80", "ez80", 24, false, 1 },
-	HEXAGON       { "hexagon", "hexagon", 32, false, 8 },
-	HPPA          { "hppa", "hppa", 32, true, 8 },
-	HPPA64        { "hppa64", "hppa64", 64, true, 16 },
-	KVX           { "kvx", "kvx", 64, false, 16 },
-	LANAI         { "lanai", "lanai", 32, true, 8 },
-	LOONGARCH32   { "loongarch32", "loongarch32", 32, false, 16 },
-	LOONGARCH64   { "loongarch64", "loongarch64", 64, false, 16 },
-	M68K          { "m68k", "m68k", 32, true, 2 },
-	M88K          { "m88k", "m88k", 32, true, 8 },
-	MICROBLAZE    { "microblaze", "microblaze", 32, true, 4 },
-	MICROBLAZEEL  { "microblazeel", "microblazeel", 32, false, 4 },
-	MIPS          { "mips", "mips", 32, true, 8 },
-	MIPSEL        { "mipsel", "mipsel", 32, false, 8 },
-	MIPS64        { "mips64", "mips64", 64, true, 16 },
-	MIPS64EL      { "mips64el", "mips64el", 64, false, 16 },
-	MSP430        { "msp430", "msp430", 16, false, 2 },
-	NVPTX         { "nvptx", "nvptx", 32, false, 8 },
-	NVPTX64       { "nvptx64", "nvptx64", 64, false, 8 },
-	OR1K          { "or1k", "or1k", 32, true, 4 },
-	POWERPC       { "powerpc", "powerpc", 32, true, 16 },
-	POWERPCLE     { "powerpcle", "powerpcle", 32, false, 16 },
-	POWERPC64     { "powerpc64", "powerpc64", 64, true, 16 },
-	POWERPC64LE   { "powerpc64le", "powerpc64le", 64, false, 16 },
-	PROPELLER     { "propeller", "propeller", 32, false, 4 },
-	RISCV32       { "riscv32", "riscv32", 32, false, 16 },
-	RISCV32BE     { "riscv32be", "riscv32be", 32, true, 16 },
-	RISCV64       { "riscv64", "riscv64", 64, false, 16 },
-	RISCV64BE     { "riscv64be", "riscv64be", 64, true, 16 },
-	S390X         { "s390x", "s390x", 64, true, 8 },
-	SH            { "sh", "sh", 32, false, 4 },
-	SHEB          { "sheb", "sheb", 32, true, 4 },
-	SPARC         { "sparc", "sparc", 32, true, 8 },
-	SPARC64       { "sparc64", "sparc64", 64, true, 16 },
-	SPIRV32       { "spirv32", "spirv32", 32, false, 8 },
-	SPIRV64       { "spirv64", "spirv64", 64, false, 16 },
-	SPORK8        { "spork8", "spork8", 16, false, 1 },
-	THUMB         { "thumb", "thumb", 32, false, 8 },
-	THUMBEB       { "thumbeb", "thumbeb", 32, true, 8 },
-	VE            { "ve", "ve", 64, false, 16 },
-	WASM32        { "wasm32", "wasm32", 32, false, 16 },
-	WASM64        { "wasm64", "wasm64", 64, false, 16 },
-	X86           { "x86", "i386", 32, false, 4 },
-	X86C16        { "x86c16", "i386", 32, false, 4 },
-	X86_16        { "x86_16", "i86", 16, false, 2 },
-	X86_64        { "x86_64", "x86_64", 64, false, 16 },
-	XCORE         { "xcore", "xcore", 32, false, 4 },
-	XTENSA        { "xtensa", "xtensa", 32, false, 8 },
-	XTENSAEB      { "xtensaeb", "xtensaeb", 32, true, 8 },
-	Z80           { "z80", "z80", 16, false, 1 },
+	AARCH64 { "aarch64", "aarch64", 64, false, 16 },
+	AARCH64_BE { "aarch64_be", "aarch64_be", 64, true, 16 },
+	ALPHA { "alpha", "alpha", 64, false, 16 },
+	AMDGCN { "amdgcn", "amdgcn", 64, false, 8 },
+	ARC { "arc", "arc", 32, false, 4 },
+	ARCEB { "arceb", "arceb", 32, true, 4 },
+	ARM { "arm", "arm", 32, false, 8 },
+	ARMEB { "armeb", "armeb", 32, true, 8 },
+	AVR { "avr", "avr", 16, false, 1 },
+	BPFEB { "bpfeb", "bpfeb", 64, true, 8 },
+	BPFEL { "bpfel", "bpfel", 64, false, 8 },
+	CSKY { "csky", "csky", 32, false, 4 },
+	EZ80 { "ez80", "ez80", 24, false, 1 },
+	HEXAGON { "hexagon", "hexagon", 32, false, 8 },
+	HPPA { "hppa", "hppa", 32, true, 8 },
+	HPPA64 { "hppa64", "hppa64", 64, true, 16 },
+	KVX { "kvx", "kvx", 64, false, 16 },
+	LANAI { "lanai", "lanai", 32, true, 8 },
+	LOONGARCH32 { "loongarch32", "loongarch32", 32, false, 16 },
+	LOONGARCH64 { "loongarch64", "loongarch64", 64, false, 16 },
+	M68K { "m68k", "m68k", 32, true, 2 },
+	M88K { "m88k", "m88k", 32, true, 8 },
+	MICROBLAZE { "microblaze", "microblaze", 32, true, 4 },
+	MICROBLAZEEL { "microblazeel", "microblazeel", 32, false, 4 },
+	MIPS { "mips", "mips", 32, true, 8 },
+	MIPSEL { "mipsel", "mipsel", 32, false, 8 },
+	MIPS64 { "mips64", "mips64", 64, true, 16 },
+	MIPS64EL { "mips64el", "mips64el", 64, false, 16 },
+	MSP430 { "msp430", "msp430", 16, false, 2 },
+	NVPTX { "nvptx", "nvptx", 32, false, 8 },
+	NVPTX64 { "nvptx64", "nvptx64", 64, false, 8 },
+	OR1K { "or1k", "or1k", 32, true, 4 },
+	POWERPC { "powerpc", "powerpc", 32, true, 16 },
+	POWERPCLE { "powerpcle", "powerpcle", 32, false, 16 },
+	POWERPC64 { "powerpc64", "powerpc64", 64, true, 16 },
+	POWERPC64LE { "powerpc64le", "powerpc64le", 64, false, 16 },
+	PROPELLER { "propeller", "propeller", 32, false, 4 },
+	RISCV32 { "riscv32", "riscv32", 32, false, 16 },
+	RISCV32BE { "riscv32be", "riscv32be", 32, true, 16 },
+	RISCV64 { "riscv64", "riscv64", 64, false, 16 },
+	RISCV64BE { "riscv64be", "riscv64be", 64, true, 16 },
+	S390X { "s390x", "s390x", 64, true, 8 },
+	SH { "sh", "sh", 32, false, 4 },
+	SHEB { "sheb", "sheb", 32, true, 4 },
+	SPARC { "sparc", "sparc", 32, true, 8 },
+	SPARC64 { "sparc64", "sparc64", 64, true, 16 },
+	SPIRV32 { "spirv32", "spirv32", 32, false, 8 },
+	SPIRV64 { "spirv64", "spirv64", 64, false, 16 },
+	SPORK8 { "spork8", "spork8", 16, false, 1 },
+	THUMB { "thumb", "thumb", 32, false, 8 },
+	THUMBEB { "thumbeb", "thumbeb", 32, true, 8 },
+	VE { "ve", "ve", 64, false, 16 },
+	WASM32 { "wasm32", "wasm32", 32, false, 16 },
+	WASM64 { "wasm64", "wasm64", 64, false, 16 },
+	X86 { "x86", "i386", 32, false, 4 },
+	X86C16 { "x86c16", "i386", 32, false, 4 },
+	X86_16 { "x86_16", "i86", 16, false, 2 },
+	X86_64 { "x86_64", "x86_64", 64, false, 16 },
+	XCORE { "xcore", "xcore", 32, false, 4 },
+	XTENSA { "xtensa", "xtensa", 32, false, 8 },
+	XTENSAEB { "xtensaeb", "xtensaeb", 32, true, 8 },
+	Z80 { "z80", "z80", 16, false, 1 },
 }
 
 enum Endian : char
@@ -161,52 +161,52 @@ enum VersionRangeTag : char
  std.Target.Os.Tag. llvm: OS component of toLLVMTriple. range: versionRangeTag
  (provenance in target_data.c3).
 *>
-enum OsTag : char (String name, String llvm, VersionRangeTag range)
+enum OsTag : char(String name, String llvm, VersionRangeTag range)
 {
 	FREESTANDING { "freestanding", "unknown", NONE },
-	OTHER        { "other", "unknown", NONE },
-	THREEDS      { "3ds", "unknown", SEMVER },
-	AMDHSA       { "amdhsa", "amdhsa", SEMVER },
-	ASHETOS      { "ashetos", "unknown", NONE },
-	CUDA         { "cuda", "cuda", SEMVER },
-	DRAGONFLY    { "dragonfly", "dragonfly", SEMVER },
-	DRIVERKIT    { "driverkit", "driverkit", SEMVER },
-	EMSCRIPTEN   { "emscripten", "emscripten", NONE },
-	FREEBSD      { "freebsd", "freebsd", SEMVER },
-	FUCHSIA      { "fuchsia", "fuchsia", SEMVER },
-	GBA          { "gba", "unknown", NONE },
-	HAIKU        { "haiku", "haiku", NONE },
-	HURD         { "hurd", "hurd", HURD },
-	ILLUMOS      { "illumos", "illumos", NONE },
-	IOS          { "ios", "ios", SEMVER },
-	LINUX        { "linux", "linux", LINUX },
-	MACCATALYST  { "maccatalyst", "ios", SEMVER },
-	MACOS        { "macos", "macosx", SEMVER },
-	MANAGARM     { "managarm", "managarm", SEMVER },
-	NETBSD       { "netbsd", "netbsd", SEMVER },
-	NVCL         { "nvcl", "nvcl", SEMVER },
-	OPENBSD      { "openbsd", "openbsd", SEMVER },
-	OPENCL       { "opencl", "unknown", SEMVER },
-	OPENGL       { "opengl", "unknown", SEMVER },
-	PLAN9        { "plan9", "unknown", NONE },
-	PS3          { "ps3", "lv2", NONE },
-	PS4          { "ps4", "ps4", NONE },
-	PS5          { "ps5", "ps5", NONE },
-	PSP          { "psp", "unknown", NONE },
-	PSX          { "psx", "unknown", NONE },
-	RTEMS        { "rtems", "rtems", SEMVER },
-	SERENITY     { "serenity", "serenity", NONE },
-	SWITCH       { "switch", "unknown", SEMVER },
-	TIOS         { "tios", "unknown", NONE },
-	TVOS         { "tvos", "tvos", SEMVER },
-	UEFI         { "uefi", "windows", NONE },
-	VISIONOS     { "visionos", "xros", SEMVER },
-	VITA         { "vita", "unknown", SEMVER },
-	VULKAN       { "vulkan", "vulkan", SEMVER },
-	WASI         { "wasi", "wasi", SEMVER },
-	WATCHOS      { "watchos", "watchos", SEMVER },
-	WIIU         { "wiiu", "unknown", SEMVER },
-	WINDOWS      { "windows", "windows", WINDOWS },
+	OTHER { "other", "unknown", NONE },
+	THREEDS { "3ds", "unknown", SEMVER },
+	AMDHSA { "amdhsa", "amdhsa", SEMVER },
+	ASHETOS { "ashetos", "unknown", NONE },
+	CUDA { "cuda", "cuda", SEMVER },
+	DRAGONFLY { "dragonfly", "dragonfly", SEMVER },
+	DRIVERKIT { "driverkit", "driverkit", SEMVER },
+	EMSCRIPTEN { "emscripten", "emscripten", NONE },
+	FREEBSD { "freebsd", "freebsd", SEMVER },
+	FUCHSIA { "fuchsia", "fuchsia", SEMVER },
+	GBA { "gba", "unknown", NONE },
+	HAIKU { "haiku", "haiku", NONE },
+	HURD { "hurd", "hurd", HURD },
+	ILLUMOS { "illumos", "illumos", NONE },
+	IOS { "ios", "ios", SEMVER },
+	LINUX { "linux", "linux", LINUX },
+	MACCATALYST { "maccatalyst", "ios", SEMVER },
+	MACOS { "macos", "macosx", SEMVER },
+	MANAGARM { "managarm", "managarm", SEMVER },
+	NETBSD { "netbsd", "netbsd", SEMVER },
+	NVCL { "nvcl", "nvcl", SEMVER },
+	OPENBSD { "openbsd", "openbsd", SEMVER },
+	OPENCL { "opencl", "unknown", SEMVER },
+	OPENGL { "opengl", "unknown", SEMVER },
+	PLAN9 { "plan9", "unknown", NONE },
+	PS3 { "ps3", "lv2", NONE },
+	PS4 { "ps4", "ps4", NONE },
+	PS5 { "ps5", "ps5", NONE },
+	PSP { "psp", "unknown", NONE },
+	PSX { "psx", "unknown", NONE },
+	RTEMS { "rtems", "rtems", SEMVER },
+	SERENITY { "serenity", "serenity", NONE },
+	SWITCH { "switch", "unknown", SEMVER },
+	TIOS { "tios", "unknown", NONE },
+	TVOS { "tvos", "tvos", SEMVER },
+	UEFI { "uefi", "windows", NONE },
+	VISIONOS { "visionos", "xros", SEMVER },
+	VITA { "vita", "unknown", SEMVER },
+	VULKAN { "vulkan", "vulkan", SEMVER },
+	WASI { "wasi", "wasi", SEMVER },
+	WATCHOS { "watchos", "watchos", SEMVER },
+	WIIU { "wiiu", "unknown", SEMVER },
+	WINDOWS { "windows", "windows", WINDOWS },
 }
 
 fn bool OsTag.is_darwin(self)
@@ -241,37 +241,37 @@ fn bool OsTag.is_bsd(self)
 fn VersionRangeTag OsTag.version_range_tag(self) => self.range;
 
 <* std.Target.Abi. llvm: environment component of toLLVMTriple (`none` is special-cased). *>
-enum Abi : char (String name, String llvm)
+enum Abi : char(String name, String llvm)
 {
-	NONE        { "none", "unknown" },
-	ABIN32      { "abin32", "unknown" },
-	ANDROID     { "android", "android" },
+	NONE { "none", "unknown" },
+	ABIN32 { "abin32", "unknown" },
+	ANDROID { "android", "android" },
 	ANDROIDEABI { "androideabi", "androideabi" },
-	CALL0       { "call0", "call0" },
-	EABI        { "eabi", "eabi" },
-	EABIHF      { "eabihf", "eabihf" },
-	GNU         { "gnu", "gnu" },
-	GNUABI64    { "gnuabi64", "gnuabi64" },
-	GNUABIN32   { "gnuabin32", "gnuabin32" },
-	GNUEABI     { "gnueabi", "gnueabi" },
-	GNUEABIHF   { "gnueabihf", "gnueabihf" },
-	GNUF32      { "gnuf32", "gnuf32" },
-	GNUSF       { "gnusf", "gnusf" },
-	GNUX32      { "gnux32", "gnux32" },
-	ILP32       { "ilp32", "unknown" },
-	MSVC        { "msvc", "msvc" },
-	MUSL        { "musl", "musl" },
-	MUSLABI64   { "muslabi64", "muslabi64" },
-	MUSLABIN32  { "muslabin32", "muslabin32" },
-	MUSLEABI    { "musleabi", "musleabi" },
-	MUSLEABIHF  { "musleabihf", "musleabihf" },
-	MUSLF32     { "muslf32", "muslf32" },
-	MUSLSF      { "muslsf", "muslsf" },
-	MUSLX32     { "muslx32", "muslx32" },
-	OHOS        { "ohos", "ohos" },
-	OHOSEABI    { "ohoseabi", "ohoseabi" },
-	SIMULATOR   { "simulator", "simulator" },
-	X32         { "x32", "unknown" },
+	CALL0 { "call0", "call0" },
+	EABI { "eabi", "eabi" },
+	EABIHF { "eabihf", "eabihf" },
+	GNU { "gnu", "gnu" },
+	GNUABI64 { "gnuabi64", "gnuabi64" },
+	GNUABIN32 { "gnuabin32", "gnuabin32" },
+	GNUEABI { "gnueabi", "gnueabi" },
+	GNUEABIHF { "gnueabihf", "gnueabihf" },
+	GNUF32 { "gnuf32", "gnuf32" },
+	GNUSF { "gnusf", "gnusf" },
+	GNUX32 { "gnux32", "gnux32" },
+	ILP32 { "ilp32", "unknown" },
+	MSVC { "msvc", "msvc" },
+	MUSL { "musl", "musl" },
+	MUSLABI64 { "muslabi64", "muslabi64" },
+	MUSLABIN32 { "muslabin32", "muslabin32" },
+	MUSLEABI { "musleabi", "musleabi" },
+	MUSLEABIHF { "musleabihf", "musleabihf" },
+	MUSLF32 { "muslf32", "muslf32" },
+	MUSLSF { "muslsf", "muslsf" },
+	MUSLX32 { "muslx32", "muslx32" },
+	OHOS { "ohos", "ohos" },
+	OHOSEABI { "ohoseabi", "ohoseabi" },
+	SIMULATOR { "simulator", "simulator" },
+	X32 { "x32", "unknown" },
 }
 
 fn bool Abi.is_gnu(self)
@@ -334,40 +334,40 @@ fn FloatAbi Abi.float_abi(self)
 }
 
 <* std.Target.ObjectFormat. *>
-enum ObjectFormat : char (String name)
+enum ObjectFormat : char(String name)
 {
-	C      { "c" },
-	COFF   { "coff" },
-	ELF    { "elf" },
-	GOFF   { "goff" },
-	HEX    { "hex" },
-	MACHO  { "macho" },
-	PLAN9  { "plan9" },
-	RAW    { "raw" },
-	SPIRV  { "spirv" },
-	WASM   { "wasm" },
-	XCOFF  { "xcoff" },
+	C { "c" },
+	COFF { "coff" },
+	ELF { "elf" },
+	GOFF { "goff" },
+	HEX { "hex" },
+	MACHO { "macho" },
+	PLAN9 { "plan9" },
+	RAW { "raw" },
+	SPIRV { "spirv" },
+	WASM { "wasm" },
+	XCOFF { "xcoff" },
 }
 
 <* Target.Vendor. *>
-enum Vendor : char (String name)
+enum Vendor : char(String name)
 {
-	APPLE                    { "apple" },
-	PC                       { "pc" },
-	SCEI                     { "scei" },
-	SIE                      { "sie" },
-	FREESCALE                { "freescale" },
-	IBM                      { "ibm" },
+	APPLE { "apple" },
+	PC { "pc" },
+	SCEI { "scei" },
+	SIE { "sie" },
+	FREESCALE { "freescale" },
+	IBM { "ibm" },
 	IMAGINATION_TECHNOLOGIES { "imagination_technologies" },
-	MIPS                     { "mips" },
-	NVIDIA                   { "nvidia" },
-	CSR                      { "csr" },
-	AMD                      { "amd" },
-	MESA                     { "mesa" },
-	SUSE                     { "suse" },
-	OPEN_EMBEDDED            { "open_embedded" },
-	INTEL                    { "intel" },
-	UNKNOWN                  { "unknown" },
+	MIPS { "mips" },
+	NVIDIA { "nvidia" },
+	CSR { "csr" },
+	AMD { "amd" },
+	MESA { "mesa" },
+	SUSE { "suse" },
+	OPEN_EMBEDDED { "open_embedded" },
+	INTEL { "intel" },
+	UNKNOWN { "unknown" },
 }
 
 <* Target.Vendor.vendor_strings (note "sie" maps to SCEI, as in Zig). *>
@@ -555,7 +555,7 @@ fn bool Os.is_at_least(&self, OsTag tag, SemVer ver, bool* has_result)
 				return false;
 			}
 			return false;
-		default: return false; // WINDOWS ranges are compared as WindowsVersion; NONE has no range
+		default: return false;  // WINDOWS ranges are compared as WindowsVersion; NONE has no range
 	}
 }
 
@@ -703,9 +703,9 @@ fn bool Query.is_native_abi(&self) => !self.has_os_tag && !self.has_abi;
 fn bool Query.is_native(&self)
 {
 	return !self.has_arch && (self.cpu_model_kind == DETERMINED_BY_ARCH_OS || self.cpu_model_kind == NATIVE)
-		&& self.cpu_features_add.is_empty() && self.cpu_features_sub.is_empty()
-		&& !self.has_os_tag && !self.has_os_version_min && !self.has_os_version_max
-		&& !self.has_abi && !self.has_glibc_version && !self.has_android_api_level && !self.has_ofmt;
+	&& self.cpu_features_add.is_empty() && self.cpu_features_sub.is_empty()
+	&& !self.has_os_tag && !self.has_os_version_min && !self.has_os_version_max
+	&& !self.has_abi && !self.has_glibc_version && !self.has_android_api_level && !self.has_ofmt;
 }
 
 <*
@@ -720,11 +720,23 @@ fn Target? resolve_query(Query* q, Host h)
 	Os os = default_os(os_tag, arch);
 	if (q.has_os_version_min)
 	{
-		if (q.os_version_min.is_windows) { os.win_min = q.os_version_min.windows; } else { os.min = q.os_version_min.semver; }
+		if (q.os_version_min.is_windows)
+		{
+			os.win_min = q.os_version_min.windows;
+		} else
+		{
+			os.min = q.os_version_min.semver;
+		}
 	}
 	if (q.has_os_version_max)
 	{
-		if (q.os_version_max.is_windows) { os.win_max = q.os_version_max.windows; } else { os.max = q.os_version_max.semver; }
+		if (q.os_version_max.is_windows)
+		{
+			os.win_max = q.os_version_max.windows;
+		} else
+		{
+			os.max = q.os_version_max.semver;
+		}
 	}
 	if (q.has_glibc_version) os.glibc = q.glibc_version;
 	if (q.has_android_api_level) os.android = q.android_api_level;
@@ -906,7 +918,7 @@ fn String? SplitIter.next(&self)
 	while (i < self.s.len && self.s[i] != '-') i++;
 	if (i == self.s.len) self.done = true;
 	self.pos = i + 1;
-	return self.s[start:i - start];
+	return self.s[start : i - start];
 }
 
 <* The -mcpu=<model>(+feat|-feat)* handling of Driver.parseTarget. *>
@@ -944,14 +956,20 @@ fn void? apply_cpu_features(Query* query, Arch arch, String cpu_features, bool h
 		index++;
 		usz start = index;
 		while (index < cpu_features.len && cpu_features[index] != '+' && cpu_features[index] != '-') index++;
-		String feature_name = cpu_features[start:index - start];
+		String feature_name = cpu_features[start : index - start];
 		Feature? f = parse_feature_name(arch, feature_name);
 		if (catch f)
 		{
 			err.text = feature_name;
 			return UNKNOWN_CPU_FEATURE~;
 		}
-		if (op == '+') { query.cpu_features_add.set(f); } else { query.cpu_features_sub.set(f); }
+		if (op == '+')
+		{
+			query.cpu_features_add.set(f);
+		} else
+		{
+			query.cpu_features_sub.set(f);
+		}
 	}
 }
 
@@ -1009,55 +1027,166 @@ fn ArchSubArch? arch_alias(String lower) @local
 		case "i686":
 		case "i786":
 		case "i886":
-		case "i986": return { X86, false, ARM_V4T };
+		case "i986": return
+		{
+			X86, false, ARM_V4T
+		};
 		case "amd64":
-		case "x86_64h": return { X86_64, false, ARM_V4T };
-		case "powerpcspe": return { POWERPC, true, POWERPC_SPE };
+		case "x86_64h": return
+		{
+			X86_64, false, ARM_V4T
+		};
+		case "powerpcspe": return
+		{
+			POWERPC, true, POWERPC_SPE
+		};
 		case "ppc":
-		case "ppc32": return { POWERPC, false, ARM_V4T };
+		case "ppc32": return
+		{
+			POWERPC, false, ARM_V4T
+		};
 		case "ppcle":
-		case "ppc32le": return { POWERPCLE, false, ARM_V4T };
+		case "ppc32le": return
+		{
+			POWERPCLE, false, ARM_V4T
+		};
 		case "ppu":
-		case "ppc64": return { POWERPC64, false, ARM_V4T };
-		case "ppc64le": return { POWERPC64LE, false, ARM_V4T };
-		case "xscale": return { ARM, false, ARM_V4T };
-		case "xscaleeb": return { ARMEB, false, ARM_V4T };
-		case "arm64": return { AARCH64, false, ARM_V4T };
-		case "arm64e": return { AARCH64, true, AARCH64_ARM64E };
-		case "arm64ec": return { AARCH64, true, AARCH64_ARM64EC };
+		case "ppc64": return
+		{
+			POWERPC64, false, ARM_V4T
+		};
+		case "ppc64le": return
+		{
+			POWERPC64LE, false, ARM_V4T
+		};
+		case "xscale": return
+		{
+			ARM, false, ARM_V4T
+		};
+		case "xscaleeb": return
+		{
+			ARMEB, false, ARM_V4T
+		};
+		case "arm64": return
+		{
+			AARCH64, false, ARM_V4T
+		};
+		case "arm64e": return
+		{
+			AARCH64, true, AARCH64_ARM64E
+		};
+		case "arm64ec": return
+		{
+			AARCH64, true, AARCH64_ARM64EC
+		};
 		case "mipseb":
-		case "mipsallegrex": return { MIPS, false, ARM_V4T };
+		case "mipsallegrex": return
+		{
+			MIPS, false, ARM_V4T
+		};
 		case "mipsisa32r6":
-		case "mipsr6": return { MIPS, true, MIPS_R6 };
-		case "mipsallegrexel": return { MIPSEL, false, ARM_V4T };
+		case "mipsr6": return
+		{
+			MIPS, true, MIPS_R6
+		};
+		case "mipsallegrexel": return
+		{
+			MIPSEL, false, ARM_V4T
+		};
 		case "mipsisa32r6el":
-		case "mipsr6el": return { MIPSEL, true, MIPS_R6 };
+		case "mipsr6el": return
+		{
+			MIPSEL, true, MIPS_R6
+		};
 		case "mips64eb":
-		case "mipsn32": return { MIPS64, false, ARM_V4T };
+		case "mipsn32": return
+		{
+			MIPS64, false, ARM_V4T
+		};
 		case "mipsisa64r6":
 		case "mips64r6":
-		case "mipsn32r6": return { MIPS64, true, MIPS_R6 };
-		case "mipsn32el": return { MIPS64EL, false, ARM_V4T };
+		case "mipsn32r6": return
+		{
+			MIPS64, true, MIPS_R6
+		};
+		case "mipsn32el": return
+		{
+			MIPS64EL, false, ARM_V4T
+		};
 		case "mipsisa64r6el":
 		case "mips64r6el":
-		case "mipsn32r6el": return { MIPS64EL, true, MIPS_R6 };
-		case "systemz": return { S390X, false, ARM_V4T };
-		case "sparcv9": return { SPARC64, false, ARM_V4T };
-		case "spirv32": return { SPIRV32, false, ARM_V4T };
-		case "spirv32v1.0": return { SPIRV32, true, SPIRV_V10 };
-		case "spirv32v1.1": return { SPIRV32, true, SPIRV_V11 };
-		case "spirv32v1.2": return { SPIRV32, true, SPIRV_V12 };
-		case "spirv32v1.3": return { SPIRV32, true, SPIRV_V13 };
-		case "spirv32v1.4": return { SPIRV32, true, SPIRV_V14 };
-		case "spirv32v1.5": return { SPIRV32, true, SPIRV_V15 };
-		case "spirv32v1.6": return { SPIRV32, true, SPIRV_V16 };
-		case "spirv64v1.0": return { SPIRV64, true, SPIRV_V10 };
-		case "spirv64v1.1": return { SPIRV64, true, SPIRV_V11 };
-		case "spirv64v1.2": return { SPIRV64, true, SPIRV_V12 };
-		case "spirv64v1.3": return { SPIRV64, true, SPIRV_V13 };
-		case "spirv64v1.4": return { SPIRV64, true, SPIRV_V14 };
-		case "spirv64v1.5": return { SPIRV64, true, SPIRV_V15 };
-		case "spirv64v1.6": return { SPIRV64, true, SPIRV_V16 };
+		case "mipsn32r6el": return
+		{
+			MIPS64EL, true, MIPS_R6
+		};
+		case "systemz": return
+		{
+			S390X, false, ARM_V4T
+		};
+		case "sparcv9": return
+		{
+			SPARC64, false, ARM_V4T
+		};
+		case "spirv32": return
+		{
+			SPIRV32, false, ARM_V4T
+		};
+		case "spirv32v1.0": return
+		{
+			SPIRV32, true, SPIRV_V10
+		};
+		case "spirv32v1.1": return
+		{
+			SPIRV32, true, SPIRV_V11
+		};
+		case "spirv32v1.2": return
+		{
+			SPIRV32, true, SPIRV_V12
+		};
+		case "spirv32v1.3": return
+		{
+			SPIRV32, true, SPIRV_V13
+		};
+		case "spirv32v1.4": return
+		{
+			SPIRV32, true, SPIRV_V14
+		};
+		case "spirv32v1.5": return
+		{
+			SPIRV32, true, SPIRV_V15
+		};
+		case "spirv32v1.6": return
+		{
+			SPIRV32, true, SPIRV_V16
+		};
+		case "spirv64v1.0": return
+		{
+			SPIRV64, true, SPIRV_V10
+		};
+		case "spirv64v1.1": return
+		{
+			SPIRV64, true, SPIRV_V11
+		};
+		case "spirv64v1.2": return
+		{
+			SPIRV64, true, SPIRV_V12
+		};
+		case "spirv64v1.3": return
+		{
+			SPIRV64, true, SPIRV_V13
+		};
+		case "spirv64v1.4": return
+		{
+			SPIRV64, true, SPIRV_V14
+		};
+		case "spirv64v1.5": return
+		{
+			SPIRV64, true, SPIRV_V15
+		};
+		case "spirv64v1.6": return
+		{
+			SPIRV64, true, SPIRV_V16
+		};
 		default: return UNKNOWN_ARCH~;
 	}
 }
@@ -1287,7 +1416,7 @@ fn SemVer? parse_version(String ver)
 		if (i == ver.len || ver[i] == '.')
 		{
 			if (n == 3) return INVALID_VERSION~;
-			comps[n++] = ver[start:i - start];
+			comps[n++] = ver[start : i - start];
 			start = i + 1;
 		}
 	}
@@ -1351,7 +1480,7 @@ fn void? parse_abi(Query* result, String text, String* version_string = null)
 	}
 	result.has_abi = true;
 	result.abi = abi;
-	if (version_string) *version_string = version_text;
+	if (version_string) * version_string = version_text;
 
 	if (version_text.len != 0)
 	{
@@ -1451,7 +1580,7 @@ fn void? parse_os(Query* result, String text, Host h = { X86_64, LINUX, GNU }, S
 
 	result.has_os_tag = true;
 	result.os_tag = tag;
-	if (version_string) *version_string = version_text;
+	if (version_string) * version_string = version_text;
 
 	if (version_text.len > 0)
 	{
@@ -1461,7 +1590,7 @@ fn void? parse_os(Query* result, String text, Host h = { X86_64, LINUX, GNU }, S
 		usz sep = version_text.len;
 		for (usz i = 0; i + 3 <= version_text.len; i++)
 		{
-			if (version_text[i:3] == "...")
+			if (version_text[i : 3] == "...")
 			{
 				sep = i;
 				break;
@@ -1516,22 +1645,22 @@ fn CIntKind Target.int_max_type(&self)
 		case X86_64:
 			switch (self.os.tag)
 			{
-				case WINDOWS:
-				case OPENBSD:
-				case UEFI: break;
-				default:
-					switch (self.abi)
-					{
-						case GNUX32:
-						case MUSLX32:
-						case X32:
-						case GNUABIN32:
-						case MUSLABIN32:
-						case ABIN32:
-						case ILP32: break;
-						default: return LONG;
-					}
+			case WINDOWS:
+			case OPENBSD:
+			case UEFI: break;
+			default:
+				switch (self.abi)
+				{
+				case GNUX32:
+				case MUSLX32:
+				case X32:
+				case GNUABIN32:
+				case MUSLABIN32:
+				case ABIN32:
+				case ILP32: break;
+				default: return LONG;
 			}
+		}
 		default: break;
 	}
 	return LONG_LONG;
@@ -1638,17 +1767,17 @@ fn CIntKind Target.wchar_type(&self)
 		default:
 			switch (self.cpu.arch)
 			{
-				case AARCH64:
-				case AARCH64_BE:
-				case ARM:
-				case ARMEB:
-				case THUMB:
-				case THUMBEB:
-				case VE:
-				case MSP430: return UINT;
-				case XCORE: return UCHAR;
-				default: return INT;
-			}
+			case AARCH64:
+			case AARCH64_BE:
+			case ARM:
+			case ARMEB:
+			case THUMB:
+			case THUMBEB:
+			case VE:
+			case MSP430: return UINT;
+			case XCORE: return UCHAR;
+			default: return INT;
+		}
 	}
 }
 
@@ -1708,7 +1837,11 @@ fn char Target.min_function_alignment(&self)
 		case RISCV32BE:
 		case RISCV64:
 		case RISCV64BE:
-			return self.cpu.has_any({ RISCV_C, RISCV_ZCA }) ? 2 : 4;
+			return self.cpu.has_any(
+			{
+				RISCV_C, RISCV_ZCA
+			}
+			) ? 2 : 4;
 		case THUMB:
 		case THUMBEB:
 		case CSKY:
@@ -1862,7 +1995,7 @@ fn Compiler Target.system_compiler(&self)
 	// Android is linux but not gcc, so these checks go first
 	// the rest for documentation as fn returns .clang
 	if (self.os.tag.is_darwin() || self.abi.is_android() || self.os.tag.is_bsd() || self.os.tag == FUCHSIA
-		|| self.os.tag == ILLUMOS || self.os.tag == HAIKU || self.cpu.arch == HEXAGON)
+	|| self.os.tag == ILLUMOS || self.os.tag == HAIKU || self.cpu.arch == HEXAGON)
 	{
 		return CLANG;
 	}
@@ -1976,7 +2109,11 @@ fn FPEvalMethod Target.default_fp_eval_method(&self)
 		case X86_64:
 			if (self.ptr_bit_width() == 32 && self.os.tag == NETBSD)
 			{
-				if (self.os.min.order({ 6, 99, 26 }) <= 0)
+				if (self.os.min.order(
+				{
+					6, 99, 26
+				}
+				) <= 0)
 				{
 					// NETBSD <= 6.99.26 on 32-bit x86 defaults to double
 					return DOUBLE;
@@ -2060,7 +2197,7 @@ fn Target? Target.get_32bit_arch_variant(&self)
 		case WASM64: copy.cpu.arch = WASM32;
 		case X86_16: copy.cpu.arch = X86;
 		case X86_64: copy.cpu.arch = X86;
-		default: break; // Already 32 bit
+		default: break;  // Already 32 bit
 	}
 	return copy;
 }
@@ -2110,7 +2247,7 @@ fn Target? Target.get_64bit_arch_variant(&self)
 		case X86:
 		case X86C16:
 		case X86_16: copy.cpu.arch = X86_64;
-		default: break; // Already 64 bit
+		default: break;  // Already 64 bit
 	}
 	return copy;
 }
@@ -2145,7 +2282,7 @@ fn String Target.to_llvm_triple(&self, char[] buf)
 fn usz append(char[] buf, usz n, String s) @local
 {
 	assert(n + s.len <= buf.len);
-	buf[n:s.len] = s[..];
+	buf[n : s.len] = s[..];
 	return n + s.len;
 }
 
@@ -2195,7 +2332,7 @@ fn DefaultPIStatus Target.is_pie_default(&self)
 		case LINUX:
 			if (self.abi == OHOS) return YES;
 			if (self.cpu.arch == VE) return NO;
-			return YES; // os.tag == .linux
+			return YES;  // os.tag == .linux
 		case WINDOWS:
 			if (self.is_mingw()) return NO;
 			if (self.abi == MSVC || self.abi == NONE) return DEPENDS_ON_LINKER;
@@ -2294,23 +2431,23 @@ fn DefaultPIStatus Target.is_pic_default_forced(&self)
 		default:
 			switch (self.cpu.arch)
 			{
-				case HEXAGON:
-				case LANAI:
-				case AVR:
-				case RISCV32:
-				case RISCV64:
-				case CSKY:
-				case XCORE:
-				case WASM32:
-				case WASM64:
-				case VE:
-				case SPIRV32:
-				case SPIRV64: return NO;
-				case MSP430: return YES;
-				default:
-					if (self.ofmt == MACHO) return (self.cpu.arch == AARCH64 || self.cpu.arch == X86_64) ? YES : NO;
-					return NO;
-			}
+			case HEXAGON:
+			case LANAI:
+			case AVR:
+			case RISCV32:
+			case RISCV64:
+			case CSKY:
+			case XCORE:
+			case WASM32:
+			case WASM64:
+			case VE:
+			case SPIRV32:
+			case SPIRV64: return NO;
+			case MSP430: return YES;
+			default:
+				if (self.ofmt == MACHO) return (self.cpu.arch == AARCH64 || self.cpu.arch == X86_64) ? YES : NO;
+				return NO;
+		}
 	}
 }
 
@@ -2419,19 +2556,19 @@ fn ArmFloatAbi Target.arm_float_abi(&self)
 			switch (abi)
 			{
 				// clang checks `Triple.isOHOSFamily()` ahead of the environment switch.
-				case OHOS:
-				case OHOSEABI: return SOFT;
-				case EABIHF:
-				case GNUEABIHF:
-				case MUSLEABIHF: return HARD;
-				// EABI is always AAPCS, and if it was not marked 'hard', it's softfp.
-				case EABI:
-				case GNUEABI:
-				case MUSLEABI:
-				case ANDROID:
-				case ANDROIDEABI: return SOFT_FP;
-				default: return SOFT;
-			}
+			case OHOS:
+			case OHOSEABI: return SOFT;
+			case EABIHF:
+			case GNUEABIHF:
+			case MUSLEABIHF: return HARD;
+			// EABI is always AAPCS, and if it was not marked 'hard', it's softfp.
+			case EABI:
+			case GNUEABI:
+			case MUSLEABI:
+			case ANDROID:
+			case ANDROIDEABI: return SOFT_FP;
+			default: return SOFT;
+		}
 	}
 }
 

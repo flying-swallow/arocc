@@ -12,6 +12,7 @@
 // - `validPreprocessorExprStart` drops Zig's `.one` / `.zero`, which are not
 //   members of Token.Id (Zig never analyzed that function body).
 module aro::tokenizer;
+import aro::string_util;
 import aro::source, aro::lang_opts, aro::tree, aro::tokens;
 
 excuse NO_LEXEME;
@@ -25,18 +26,7 @@ enum UCNKind : char (uint consumed)
 	HEX8 { 9 },       // `\Uxxxxxxxx`
 }
 
-fn bool is_hex(char c) @private
-{
-	switch (c)
-	{
-		case '0'..'9':
-		case 'a'..'f':
-		case 'A'..'F':
-			return true;
-		default:
-			return false;
-	}
-}
+
 
 <*
  In the classification phase we do not care if the escape represents a valid
@@ -50,11 +40,11 @@ fn UCNKind ucn_classify(String buf)
 	{
 		case 'u':
 			if (buf.len < 6) return INCOMPLETE;
-			foreach (c : buf[2..5]) if (!is_hex(c)) return INCOMPLETE;
+			foreach (c : buf[2..5]) if (!string_util::is_digit(c, 16)) return INCOMPLETE;
 			return HEX4;
 		case 'U':
 			if (buf.len < 10) return INCOMPLETE;
-			foreach (c : buf[2..9]) if (!is_hex(c)) return INCOMPLETE;
+			foreach (c : buf[2..9]) if (!string_util::is_digit(c, 16)) return INCOMPLETE;
 			return HEX8;
 		default:
 			return NONE;

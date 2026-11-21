@@ -55,6 +55,7 @@
 //       * `to_string` in base 8/32 extracts digits across limb boundaries (Zig's
 //         per-limb power-of-two loop drops bits when 64 is not a multiple of log2(base)).
 module aro::bigint;
+import aro::string_util;
 import aro::lang_opts;
 
 <* std.math.big.Limb (usize on 64-bit hosts). Plain alias so slices of ulong interoperate. *>
@@ -607,16 +608,9 @@ fn void BigIntMutable.fix_zero_sign(&self) @inline
 
 fn int? digit_value(char ch, char base) @inline
 {
-	int d;
-	switch
-	{
-		case ch >= '0' && ch <= '9': d = ch - '0';
-		case ch >= 'a' && ch <= 'z': d = ch - 'a' + 10;
-		case ch >= 'A' && ch <= 'Z': d = ch - 'A' + 10;
-		default: return INVALID_CHARACTER~;
-	}
-	if (d >= base) return INVALID_CHARACTER~;
-	return d;
+ int d = string_util::digit_value(ch, base);
+ if (d < 0) return INVALID_CHARACTER~;
+ return d;
 }
 
 <* self[:len] = self[:len] * mul + add; grows len by one limb on carry out. *>
