@@ -574,7 +574,7 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 		case BIT_INT:
 			return self.builder.interner.put(
 				{
-					.tag = INT_TY, .ty_bits = base.ty.bit_int.bits
+					.tag = INT_TY, .ty_bits = base.ty.bit_int.bitfield_origin && base.ty.bit_int.bits < 64 ? (ushort)(base.ty.bit_int.bits <= 32 ? 32 : 64) : base.ty.bit_int.bits
 				}
 			);
 		case FLOAT:

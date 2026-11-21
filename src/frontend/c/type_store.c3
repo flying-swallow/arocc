@@ -268,6 +268,7 @@ enum StorageFloat : char(ushort bits, uint alignment, String name)
 <* Type.BitInt. `bits` must be >= 1 if unsigned and >= 2 if signed. *>
 struct BitInt
 {
+	bool bitfield_origin;
 	ushort bits;
 	Signedness signedness;
 }
@@ -880,7 +881,7 @@ fn void TypeStore.set(&self, Type ty, uint index)
 		case BIT_INT:
 			repr.tag = BIT_INT;
 			repr.data[0] = ty.bit_int.bits;
-			repr.data[1] = ty.bit_int.signedness.ordinal;
+			repr.data[1] = ty.bit_int.signedness.ordinal | (ty.bit_int.bitfield_origin ? 2 : 0);
 		case ATOMIC:
 			repr.tag = ATOMIC;
 			assert(!ty.atomic.is_const && !ty.atomic.is_volatile);
@@ -1158,7 +1159,10 @@ fn Type QualType.get_type(self, Compilation* comp)
 	{
 		case COMPLEX: return type_complex(qt_from(d0));
 		case ATOMIC: return type_atomic(qt_from(d0));
-		case BIT_INT: return type_bit_int((ushort)d0, Signedness::from_ordinal(d1));
+		case BIT_INT:
+			Type result = type_bit_int((ushort)d0, Signedness::from_ordinal(d1 & 1));
+			result.bit_int.bitfield_origin = (d1 & 2) != 0;
+			return result;
 		case BLOCK: return type_block(qt_from(d0), Nullability::from_ordinal(d1));
 		case FUNC_ZERO: return type_func(qt_from(d0), NORMAL, {});
 		case FUNC_VARIADIC_ZERO: return type_func(qt_from(d0), VARIADIC, {});

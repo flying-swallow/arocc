@@ -659,6 +659,7 @@ fn uint? Tree.bitfield_width(&self, NodeIndex node, bool inspect_lval)
 	{
 		case MEMBER_ACCESS_EXPR:
 		case MEMBER_ACCESS_PTR_EXPR: return n.member_access.is_bit_field_width(self);
+		case PAREN_EXPR: return self.bitfield_width(n.unary.operand, inspect_lval);
 		case CAST:
 			if (!inspect_lval || n.cast.kind != LVAL_TO_RVAL) return NOT_BITFIELD~;
 			return self.bitfield_width(n.cast.operand, false);

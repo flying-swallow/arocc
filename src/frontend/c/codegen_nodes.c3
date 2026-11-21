@@ -353,6 +353,28 @@ fn void? CodeGen.gen_stmt(&self, type_store::NodeIndex node)
 
 fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 {
+	ir::Ref result = self.gen_expr_inner(node_index)!;
+	type_store::QualType qt = node_index.qt(self.tree);
+	if (try ty = qt.get(self.comp, type_store::TypeTag.BIT_INT))
+	{
+		if (ty.bit_int.bitfield_origin && ty.bit_int.bits < 64)
+		{
+			value_interner::InternerRef ir_ty = self.gen_type(qt)!;
+			if (ty.bit_int.signedness == SIGNED)
+			{
+				ir::Ref shift = self.builder.add_constant(value::int_u64(64 - (ulong)ty.bit_int.bits, self.comp).ref(), ir_ty);
+				result = self.add_bin(ir::InstTag.BIT_SHL, result, shift, qt)!;
+				return self.add_bin(ir::InstTag.BIT_ASHR, result, shift, qt);
+			}
+			ir::Ref mask = self.builder.add_constant(value::int_u64(((ulong)1 << ty.bit_int.bits) - 1, self.comp).ref(), ir_ty);
+			return self.add_bin(ir::InstTag.BIT_AND, result, mask, qt);
+		}
+	}
+	return result;
+}
+
+fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
+{
 	tree::Node node = node_index.get(self.tree);
 	// A record lvalue already has the representation used for every record
 	// expression: its address. Never load an IR RECORD_TY from object memory.

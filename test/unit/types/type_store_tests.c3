@@ -408,11 +408,20 @@ fn void promotions_and_ranks() @test
 		assert(at.promote_int(comp) == type_store::INT);
 		assert(tdef(comp, "S", type_store::SHORT).promote_int(comp) == type_store::INT);
 
+		// Internal bitfield precision must not alias user-written _BitInt.
+		Type precise = type_store::type_bit_int(40, UNSIGNED);
+		precise.bit_int.bitfield_origin = true;
+		QualType field40 = comp.type_store.put(precise);
+		QualType bit40 = comp.type_store.put(type_store::type_bit_int(40, UNSIGNED));
+		assert(!field40.eql(bit40, comp));
+		assert(field40.get_type(comp).bit_int.bitfield_origin);
+		assert(field40.eql(comp.type_store.put(precise), comp));
+
 		// Bitfields.
 		assert(type_store::LONG.promote_bitfield(comp, 3)!! == type_store::INT);
 		assert(type_store::UINT.promote_bitfield(comp, 32)!! == type_store::UINT);
 		assert(type_store::INT.promote_bitfield(comp, 32)!! == type_store::INT);
-		assert(type_store::LONG.promote_bitfield(comp, 64)!! == type_store::INT);
+		assert(!@ok(type_store::LONG.promote_bitfield(comp, 64)));
 		assert(!@ok(type_store::UCHAR.promote_bitfield(comp, 9)));
 
 		// Ranks (source-derived: kind offset + 8 * bits).

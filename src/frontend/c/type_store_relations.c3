@@ -148,10 +148,10 @@ fn QualType QualType.promote_int(self, Compilation* comp)
 *>
 fn QualType? QualType.promote_bitfield(self, Compilation* comp, uint width)
 {
-	ulong type_size_bits = self.bit_sizeof(comp);
-	// Note: GCC and clang will promote `long: 3` to int even though the C standard does not allow this
-	if (width < type_size_bits) return INT;
-	if (width == type_size_bits) return self.signedness(comp) == UNSIGNED ? UINT : INT;
+	ulong int_bits = INT.bit_sizeof(comp);
+	if (width > self.bit_sizeof(comp)) return NO_PROMOTION~;
+	if (width < int_bits || (width == int_bits && self.signedness(comp) == SIGNED)) return INT;
+	if (width == int_bits) return UINT;
 	return NO_PROMOTION~;
 }
 
@@ -253,7 +253,7 @@ fn bool QualType.eql(self, QualType b_qt, Compilation* comp)
 		// Complex child type cannot be qualified.
 		case COMPLEX: return a_type.complex.eql(b_type.complex, comp);
 		case BIT_INT:
-			return a_type.bit_int.bits == b_type.bit_int.bits && a_type.bit_int.signedness == b_type.bit_int.signedness;
+			return a_type.bit_int.bitfield_origin == b_type.bit_int.bitfield_origin && a_type.bit_int.bits == b_type.bit_int.bits && a_type.bit_int.signedness == b_type.bit_int.signedness;
 			// Atomic child type cannot be qualified.
 		case ATOMIC: return a_type.atomic.eql(b_type.atomic, comp);
 		case FUNC:
@@ -372,7 +372,8 @@ fn QualType QualType.make_int_unsigned(self, Compilation* comp)
 		case INT:
 			return int_qt(ty.int_ty.unsigned_of);
 		case BIT_INT:
-			return comp.type_store.put(type_bit_int(ty.bit_int.bits, UNSIGNED));
+			ty.bit_int.signedness = UNSIGNED;
+			return comp.type_store.put(ty);
 		default: unreachable("not a real integer type");
 	}
 }

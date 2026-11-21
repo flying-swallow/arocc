@@ -405,6 +405,19 @@ fn void? Result.usual_unary_conversion(&self, parser::Parser* p, tokens::TokenIn
 	if (self.qt.is_int(p.comp))
 	{
 		type_store::QualType promoted = self.qt.promote_int(p.comp);
+		if (!self.qt.is(p.comp, type_store::TypeTag.BIT_INT))
+		{
+			if (try width = p.tree.bitfield_width(self.node, true))
+			{
+				if (try field_promotion = self.qt.promote_bitfield(p.comp, width)) { promoted = field_promotion; }
+				else if (p.comp.langopts.emulate == lang_opts::Compiler.GCC && width < self.qt.bit_sizeof(p.comp) && !self.qt.is(p.comp, type_store::TypeTag.BIT_INT))
+				{
+					type_store::Type precise = type_store::type_bit_int((ushort)width, self.qt.signedness(p.comp));
+					precise.bit_int.bitfield_origin = true;
+					promoted = p.comp.type_store.put(precise);
+				}
+			}
+		}
 		if (!promoted.eql(self.qt, p.comp)) self.cast_to_int(p, promoted, tok)!;
 	}
 }

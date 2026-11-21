@@ -1903,6 +1903,7 @@ fn String[] compile_cmd(Allocator a, Options* args, Case* c, String[] flags, Str
 	cmd.push(args.resource_dir);
 	cmd.push("-fno-color-diagnostics");
 	cmd.push_all(flags);
+	cmd.push("--emulate=gcc");
 	if (c.suite == "abi")
 	{
 		cmd.push("-isystem");
@@ -2218,7 +2219,7 @@ fn bool selftest()
 		if (!@expect(af.len == 3 && af[0] == "-W" && af[2] == "-Wno-abi" && !dropped.len, "abi flags")) return false;
 		Options ao = { .aro = "aro", .abi_include = "/inc", .abi_support = "/o/asm-support.o" };
 		String acmd = string::tjoin(compile_cmd(tmem, &ao, &ac, af, "run", "/w"), " ");
-		if (!@expect(acmd.contains("-isystem /inc") && acmd.contains("/s/test_x.c /o/asm-support.o -lm"), "abi cmd")) return false;
+		if (!@expect(acmd.contains("--emulate=gcc") && acmd.contains("-isystem /inc") && acmd.contains("/s/test_x.c /o/asm-support.o -lm"), "abi cmd")) return false;
 	};
 	io::printn("selftest ok");
 	return true;
