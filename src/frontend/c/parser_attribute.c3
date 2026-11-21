@@ -16,21 +16,17 @@ struct AttributeArgTokens
 
 <*
  One syntactically parsed attribute. `name` is meaningful when `has_name` is
- true. `spelling`/`vendor` and argument ranges borrow the Parser's Tree token
- storage, so the Parser/Preprocessor must outlive this record.
+ true. Argument ranges index the Parser's Tree token storage, so the Parser
+ must outlive this record.
 *>
 struct ParsedAttribute
 {
 	attribute::AttributeSyntax syntax;
 	attribute::Namespaced name;
-	String spelling;
-	String vendor;
 	tokens::TokenIndex tok;
 	uint args_offset;
 	uint args_len;
-	bool has_arg_list;
 	bool has_name;
-	bool has_vendor;
 }
 
 <* Reusable result storage. The caller initializes it with the compilation allocator. *>
@@ -71,9 +67,7 @@ fn void AttributeBuffer.add_keyword(&self, tokenizer::TokenId id, tokens::TokenI
 			.syntax = attribute::AttributeSyntax.KEYWORD,
 			.has_name = true,
 			.name = attribute::namespaced_from_keyword(id),
-		.spelling = id.symbol(),
 		.tok = tok,
-		.has_arg_list = args_len > 0,
 		.args_offset = args_offset,
 		.args_len = args_len,
 	}
@@ -128,9 +122,6 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 
 	ParsedAttribute parsed = {
 		.syntax = syntax,
-		.spelling = name_text,
-		.has_vendor = has_vendor,
-		.vendor = vendor,
 		.tok = first_tok,
 	};
 	if (try found = attribute::namespaced_from_string(syntax, has_vendor, vendor, name_text))
@@ -154,7 +145,6 @@ fn void? parser::Parser.parse_attribute(&self, attribute::AttributeSyntax syntax
 	if (@ok(self.eat(tokenizer::TokenId.L_PAREN)))
 	{
 		tokens::TokenIndex arg_opener = self.tok_i - 1;
-		parsed.has_arg_list = true;
 		parsed.args_offset = (uint)out.arguments.len();
 		if (!self.is_at(tokenizer::TokenId.R_PAREN))
 		{

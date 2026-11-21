@@ -1,0 +1,31 @@
+// #opt: -target x86_64-windows-msvc
+void __attribute__((vectorcall)) gnu_vectorcall(void);
+void __vectorcall keyword_vectorcall(void);
+__vectorcall void (*callback)(void);
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '*char'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+function: 'fn () cc(vectorcall) void'
+ name: gnu_vectorcall
+
+function: 'fn () cc(vectorcall) void'
+ name: keyword_vectorcall
+
+variable: '*fn () cc(vectorcall) void'
+ name: callback
+ definition: 0x7
+

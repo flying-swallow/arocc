@@ -24,7 +24,7 @@ fn void init_context_parser(Compilation* comp, Preprocessor* pp, Source src, Par
 {
 	pp.init(comp, preprocessor::TESTING)!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
-	p.init(pp, {});
+	p.init(pp);
 	p.bind_finalized_tokens();
 	p.set_initializer_test_probe(&grammar_parse_context_test_expr);
 	type_store::NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
@@ -62,8 +62,7 @@ fn void constexpr_initializer_requires_known_value() @test
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
 		init_context_parser(&comp, &pp, src, &p);
-		parser_declaration::DeclarationParser declaration = {};
-		declaration.parse_variable_initializer(&p, type_store::INT, true, false)!!;
+		p.declarations.parse_variable_initializer(&p, type_store::INT, true, false)!!;
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "constexpr variable must be initialized by a constant expression");
 		assert(p.init_context == parser::InitContext.RUNTIME);
@@ -82,8 +81,7 @@ fn void constexpr_initializer_accepts_known_value() @test
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
 		init_context_parser(&comp, &pp, src, &p);
-		parser_declaration::DeclarationParser declaration = {};
-		parser_result::Result parsed = declaration.parse_variable_initializer(&p, type_store::INT, true, false)!!;
+		parser_result::Result parsed = p.declarations.parse_variable_initializer(&p, type_store::INT, true, false)!!;
 		assert(!parsed.val.is_none(), "constexpr initialization keeps the scalar value available to the declaration owner");
 		assert(d.messages.len() == 0);
 		p.free(); pp.free(); comp.free(); d.free();
@@ -102,8 +100,7 @@ fn void static_aggregate_initializer_checks_saved_child_values() @test
 		parser::Parser p;
 		init_context_parser(&comp, &pp, src, &p);
 		type_store::QualType array_ty = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
-		parser_declaration::DeclarationParser declaration = {};
-		parser_result::Result parsed = declaration.parse_variable_initializer(&p, array_ty, false, true)!!;
+		parser_result::Result parsed = p.declarations.parse_variable_initializer(&p, array_ty, false, true)!!;
 		tree::Node array = parsed.node.get(&p.tree);
 		assert(array.kind == tree::NodeKind.ARRAY_INIT_EXPR);
 		assert(array.container_init.items.len == 3);
@@ -124,8 +121,7 @@ fn void static_initializer_rejects_unavailable_value() @test
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
 		init_context_parser(&comp, &pp, src, &p);
-		parser_declaration::DeclarationParser declaration = {};
-		declaration.parse_variable_initializer(&p, type_store::INT, false, true)!!;
+		p.declarations.parse_variable_initializer(&p, type_store::INT, false, true)!!;
 		assert(d.messages.len() == 1);
 		test::eq(d.messages[0].text, "initializer element is not a compile-time constant");
 		p.free(); pp.free(); comp.free(); d.free();
@@ -150,7 +146,7 @@ fn void init_context_error_parser(Compilation* comp, Preprocessor* pp, Source sr
 {
 	pp.init(comp, preprocessor::TESTING)!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
-	p.init(pp, {});
+	p.init(pp);
 	p.bind_finalized_tokens();
 	p.set_initializer_test_probe(&grammar_parse_context_error_test_expr);
 }

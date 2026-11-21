@@ -28,8 +28,6 @@ fn void parser_zig_node_locations() @test
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_declaration::DeclarationParser handler;
-		handler.bind(&p);
 		tree::Tree parsed = p.parse()!!;
 		assert(parsed.root_decls.len() >= 3);
 

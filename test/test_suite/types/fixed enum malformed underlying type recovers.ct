@@ -1,0 +1,31 @@
+// #opt: -target x86_64-linux
+enum R: * { A }; int after_recovery = 7; // #error@9: expected a type // #error@11: expected identifier or '('
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+enum_forward_decl: 'enum R: int'
+
+empty_decl
+
+variable: 'int'
+ name: after_recovery
+ init:
+  int_literal: 'int' (value: 7)
+

@@ -66,14 +66,13 @@ fn void compilation_defaults_and_clock() @test
 	{
 		Compilation comp;
 		comp.init(&ta);
-		test::eq(comp.environment.has_source_date_epoch, false);
+		test::eq(comp.environment.source_date_epoch.has_value, false);
 		test::eq(comp.cmodel, CodeModel.DEFAULT);
 		test::eq(comp.code_gen_options.optimization_level, OptimizationLevel.O0);
 		// The default clock is the host clock: some time after 2020-01-01.
-		test::eq(comp.now_seconds()!! > 1577836800, true);
-		long fixed = 1700000000;
-		comp.clock = compilation::fixed_clock(&fixed);
-		check(comp.now_seconds()!!, 1700000000);
+		test::eq(comp.now_seconds() > 1577836800, true);
+		comp.set_fixed_clock(1700000000);
+		check(comp.now_seconds(), 1700000000);
 		comp.free();
 	}
 	check(ta.allocation_count(), 0);

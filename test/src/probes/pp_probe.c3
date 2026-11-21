@@ -555,11 +555,9 @@ fn int main(String[] args)
 	comp.pragmas.add("message", message::handler());
 	if (try epoch = env::get_var(mem, "SOURCE_DATE_EPOCH"))
 	{
-		comp.environment.has_source_date_epoch = true;
-		comp.environment.source_date_epoch = epoch;
+		comp.environment.source_date_epoch.set(epoch);
 	}
-	long fixed_seconds = 0;
-	comp.clock = compilation::fixed_clock(&fixed_seconds);
+	comp.set_fixed_clock(0);
 	int status = run(args, &comp, &d);
 	(void)io::stderr().flush();
 	comp.free();

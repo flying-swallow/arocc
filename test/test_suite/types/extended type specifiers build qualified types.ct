@@ -1,0 +1,61 @@
+// #opt: -std=c23 -target x86_64-linux
+bool flag; nullptr null_pointer; __fp16 fp16_value; __bf16 bf16_value; _Decimal32 decimal32_value; _Decimal64 decimal64_value; _Decimal128 decimal128_value; _Decimal64x decimal64x_value; _Complex _Float32 complex_float32_value;
+
+// #expect: stdout
+implicit typedef: 'unsigned char'
+ name: char8_t
+
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+variable: 'bool'
+ name: flag
+ definition: 0x7
+
+variable: 'nullptr_t'
+ name: null_pointer
+ definition: 0x8
+
+variable: '__fp16'
+ name: fp16_value
+ definition: 0x9
+
+variable: '__bf16'
+ name: bf16_value
+ definition: 0xA
+
+variable: '_Decimal32'
+ name: decimal32_value
+ definition: 0xB
+
+variable: '_Decimal64'
+ name: decimal64_value
+ definition: 0xC
+
+variable: '_Decimal128'
+ name: decimal128_value
+ definition: 0xD
+
+variable: '_Decimal64x'
+ name: decimal64x_value
+ definition: 0xE
+
+variable: '_Complex _Float32'
+ name: complex_float32_value
+ definition: 0xF
+

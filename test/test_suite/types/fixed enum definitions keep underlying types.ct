@@ -1,0 +1,40 @@
+// #opt: -target x86_64-linux
+enum E: int { A = 1, B }; enum U: unsigned char { X = 3 };
+/* Redeclaring with the same fixed type is only accepted when the tag is fixed. */
+enum E: int; enum U: unsigned char;
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+enum_decl: 'enum E: int'
+  enum_field: 'int' (value: 1)
+   name: A
+   init:
+    int_literal: 'int' (value: 1)
+
+  enum_field: 'int' (value: 2)
+   name: B
+
+enum_decl: 'enum U: unsigned char'
+  enum_field: 'unsigned char' (value: 3)
+   name: X
+   init:
+    implicit cast: (int_cast) 'unsigned char'
+      int_literal: 'int' (value: 3)
+

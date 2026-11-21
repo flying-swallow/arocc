@@ -112,7 +112,7 @@ fn void packed_attribute_is_committed_to_constructed_tag_node() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .name_or_kind_tok = 0, .container_qt = type_store::VOID } });
@@ -147,7 +147,7 @@ fn void packed_is_left_for_declaration_attribute_pass() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
@@ -178,7 +178,7 @@ fn void block_nullability_survives_type_store_round_trip_and_affects_equality() 
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.OLD_STYLE, {}));
@@ -213,7 +213,7 @@ fn void recognized_type_only_attribute_emits_unimplemented_warning() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
@@ -240,7 +240,7 @@ fn void gnu_warning_and_error_keep_string_payloads_on_functions() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.FUNCTION, .function = { .qt = type_store::VOID } });
 		type_store::NodeIndex string_node = p.tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR, .char_literal = { .qt = type_store::CHAR } });
@@ -271,7 +271,7 @@ fn void weak_and_selectany_reject_internal_linkage() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE, .variable = { .qt = type_store::INT, .storage_class = tree::VariableStorageClass.STATIC } });
 		parser_result::Result[] no_args = {};
@@ -295,7 +295,7 @@ fn void gnu_string_attribute_argument_and_hot_cold_diagnostics() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.FUNCTION, .function = { .qt = type_store::VOID } });
 		type_store::NodeIndex int_node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL, .literal = { .qt = type_store::INT } });
@@ -326,7 +326,7 @@ fn void nonnull_checks_parameter_bounds_and_pointer_types() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("nonnull attribute errors.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::FuncParam[1] one_pointer = { type_store::func_param(type_store::INT_POINTER) };
 		type_store::QualType one_pointer_fn = comp.type_store.put(type_store::type_func(type_store::VOID, type_store::FuncKind.NORMAL, one_pointer[..]));
@@ -363,7 +363,7 @@ fn void transparent_union_checks_tag_kind_fields_and_sizes() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("transparent_union.c", "struct S { int x; }; union Empty { }; union Mismatch { int a; double b; };")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {}); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		type_store::NodeIndex not_union = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .name_or_kind_tok = find_token(&p, "S"), .container_qt = type_store::INT } });
@@ -411,7 +411,7 @@ fn void visibility_accepts_default_and_hidden_and_rejects_unknown_value() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("visibility.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex default_decl = variable_decl(&p, type_store::INT);
 		parser_result::Result[1] default_arg = { string_attribute_arg(&p, &comp, "default") };
@@ -447,7 +447,7 @@ fn void cleanup_checks_function_reference_and_parameter_compatibility() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attribute errors.c", "int not_a_function; int target; void cleanup_fn(int *, int *); void cleanup_fn(double *);")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {}); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		p.set_function_context({ .active = true });
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex plain_value = variable_decl(&p, type_store::INT, find_token(&p, "not_a_function"));
@@ -493,7 +493,7 @@ fn void section_conflict_in_same_pass_reports_warning_and_conflicting_attribute_
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("section.c", "first second")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {}); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::VOID, type_store::FuncKind.NORMAL, {}));
 		type_store::NodeIndex decl = function_decl(&p, function);
@@ -528,7 +528,7 @@ fn void section_same_name_repeat_is_accepted_silently() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("section.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex decl = variable_decl(&p, type_store::INT);
 		parser_result::Result[1] first_arg = { string_attribute_arg(&p, &comp, "a") };
@@ -553,7 +553,7 @@ fn void gnu_inline_requires_an_inline_function() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("gnu_inline.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::VOID, type_store::FuncKind.NORMAL, {}));
 		type_store::NodeIndex decl = function_decl(&p, function);
@@ -575,7 +575,7 @@ fn void standard_noreturn_spelling_emits_deprecation_warning() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("standard attributes.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::VOID, type_store::FuncKind.NORMAL, {}));
 		type_store::NodeIndex decl = function_decl(&p, function);
@@ -597,7 +597,7 @@ fn void deprecated_and_nodiscard_keep_string_payloads() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("attributes.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType int_function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.NORMAL, {}));
 		type_store::NodeIndex deprecated_decl = function_decl(&p, int_function);
@@ -634,7 +634,7 @@ fn void nodiscard_warns_on_void_function() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("standard attributes.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType void_function = comp.type_store.put(type_store::type_func(type_store::VOID, type_store::FuncKind.NORMAL, {}));
 		type_store::NodeIndex decl = function_decl(&p, void_function);
@@ -656,7 +656,7 @@ fn void unsequenced_accepts_pointer_to_function_variable() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("c23 attributes.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function_type = comp.type_store.put(type_store::type_func(type_store::DOUBLE, type_store::FuncKind.NORMAL, {}));
 		type_store::QualType pointer_to_function = comp.type_store.put(type_store::type_pointer(function_type));
@@ -680,7 +680,7 @@ fn void standard_deprecated_limits_arguments_while_gnu_keeps_both_strings() @tes
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("deprecated arguments.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType int_function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.NORMAL, {}));
 		parser_result::Result[2] args = { string_attribute_arg(&p, &comp, "a"), string_attribute_arg(&p, &comp, "b") };
@@ -714,7 +714,7 @@ fn void nodiscard_rejects_nonfunction_and_accepts_function() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("nodiscard target.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		type_store::NodeIndex variable = variable_decl(&p, type_store::INT);
@@ -745,7 +745,7 @@ fn void maybe_unused_accepts_struct_tag() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("maybe_unused tag.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex decl = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .container_qt = type_store::VOID } });
 		parser_result::Result[] no_args = {};
@@ -767,7 +767,7 @@ fn void gnu_selectany_function_reports_linkage_error_not_target_error() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("selectany function.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function_type = comp.type_store.put(type_store::type_func(type_store::VOID, type_store::FuncKind.NORMAL, {}));
 		type_store::NodeIndex decl = function_decl(&p, function_type);
@@ -790,7 +790,7 @@ fn void clang_unavailable_keeps_optional_message_and_accepts_no_argument() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("unavailable.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex with_message = variable_decl(&p, type_store::INT);
 		parser_result::Result[1] message_arg = { string_attribute_arg(&p, &comp, "not available") };
@@ -825,7 +825,7 @@ fn void noreturn_rejects_variable_target() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("noreturn target.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex decl = variable_decl(&p, type_store::INT);
 		parser_result::Result[] no_args = {};
@@ -848,7 +848,7 @@ fn void neon_vector_type_accepts_aarch64_double_only() @test
 		set_target(&comp, "aarch64-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("neon_vector_type.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[1] two = { int_attribute_arg(&p, &comp, 2) };
 		wip.add({ .ns = attribute::AttrNamespace.CLANG, .clang = attribute::AttrClang.NEON_VECTOR_TYPE }, attribute::AttributeSyntax.GNU, 0, two[..]);
@@ -876,7 +876,7 @@ fn void neon_vector_type_reports_invalid_vector_size() @test
 		set_target(&comp, "aarch64-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("neon_vector_size.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[1] size = { int_attribute_arg(&p, &comp, 128) };
 		wip.add({ .ns = attribute::AttrNamespace.CLANG, .clang = attribute::AttrClang.NEON_VECTOR_TYPE }, attribute::AttributeSyntax.GNU, 0, size[..]);
@@ -896,7 +896,7 @@ fn void neon_polyvector_type_accepts_unsigned_long_and_rejects_long() @test
 		set_target(&comp, "aarch64-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("neon_polyvector_type.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[1] two = { int_attribute_arg(&p, &comp, 2) };
 		wip.add({ .ns = attribute::AttrNamespace.CLANG, .clang = attribute::AttrClang.NEON_POLYVECTOR_TYPE }, attribute::AttributeSyntax.GNU, 0, two[..]);
@@ -923,7 +923,7 @@ fn void stdcall_is_not_supported_on_x86_64() @test
 		set_target(&comp, "x86_64-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stdcall_x86_64.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.OLD_STYLE, {}));
 		parser_result::Result[] no_args = {};
@@ -944,7 +944,7 @@ fn void stdcall_sets_calling_convention_on_i386_function_type() @test
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stdcall_i386.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.OLD_STYLE, {}));
 		parser_result::Result[] no_args = {};
@@ -968,7 +968,7 @@ fn void pcs_sets_aapcs_vfp_and_reports_unknown_enum_value() @test
 		set_target(&comp, "arm-linux-gnueabi");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("pcs.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.OLD_STYLE, {}));
 		parser_result::Result[1] aapcs_vfp = { string_attribute_arg(&p, &comp, "aapcs-vfp") };
@@ -997,7 +997,7 @@ fn void stdcall_on_pointer_reports_non_function_type() @test
 		set_target(&comp, "x86_64-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stdcall_pointer.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1018,7 +1018,7 @@ fn void stdcall_on_pointer_type_path_delays_without_diagnostic() @test
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stdcall_pointer_type_path.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1047,7 +1047,7 @@ fn void fallthrough_outside_switch_reports_diagnostic() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fallthrough_outside_switch.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex stmt = p.tree.add_node({ .kind = tree::NodeKind.NULL_STMT });
 		parser_result::Result[] no_args = {};
@@ -1067,7 +1067,7 @@ fn void fallthrough_not_before_switch_label_reports_diagnostic() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("fallthrough_not_before_case.c", "next_statement;")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {}); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		p.tok_i = find_token(&p, "next_statement");
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::NodeIndex stmt = p.tree.add_node({ .kind = tree::NodeKind.NULL_STMT });
@@ -1088,7 +1088,7 @@ fn void cold_and_hot_label_attributes_conflict() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("label_attributes.c", "label: ;")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {}); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		tokens::TokenIndex label_tok = find_token(&p, "label");
 		type_store::NodeIndex body = p.tree.add_node({ .kind = tree::NodeKind.NULL_STMT });
@@ -1115,7 +1115,7 @@ fn void vector_size_on_bool_reports_invalid_element_type() @test
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("vector_size_bool.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[1] size = { int_attribute_arg(&p, &comp, 8) };
 		wip.add({ .ns = attribute::AttrNamespace.GNU, .gnu = attribute::AttrGnu.VECTOR_SIZE }, attribute::AttributeSyntax.GNU, 0, size[..]);
@@ -1136,7 +1136,7 @@ fn void vector_size_on_incomplete_enum_reports_invalid_element_type_without_pani
 		compilation::Compilation comp; comp.init(&ta, null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("vector_size_incomplete_enum.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		type_store::QualType incomplete_enum = comp.type_store.put({ .tag = type_store::TypeTag.ENUM, .enum_ty = { .incomplete = true, .name = comp.intern_string("E") } });
 		parser_result::Result[1] size = { int_attribute_arg(&p, &comp, 8) };
@@ -1161,7 +1161,7 @@ fn void decl_calling_convention_on_non_function_reports_non_func_diagnostic() @t
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("decl_callconv_non_func.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1185,7 +1185,7 @@ fn void type_position_calling_convention_on_declarator_combine_waits_for_final_t
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("pending_callconv_declarator.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1216,7 +1216,7 @@ fn void declaration_path_calling_convention_marker_is_pending_and_retries_on_fun
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("decl_callconv_declarator_marker.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1256,7 +1256,7 @@ fn void declaration_path_calling_convention_marker_is_dropped_by_state_restore()
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("decl_callconv_state_restore.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1283,7 +1283,7 @@ fn void declaration_path_calling_convention_marker_is_restored_after_consumption
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("decl_callconv_state_restore_consumed.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		parser_result::Result[] no_args = {};
 		wip.add({ .ns = attribute::AttrNamespace.KEYWORD, .keyword = attribute::AttrKeyword.__STDCALL }, attribute::AttributeSyntax.KEYWORD, 0, no_args);
@@ -1313,7 +1313,7 @@ fn void incompatible_existing_calling_convention_keeps_type_and_reports_warning(
 		set_target(&comp, "i386-linux-gnu");
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("callconv_incompatible.c", "")!!; pp.preprocess_extra(src)!!;
-		parser::Parser p; p.init(&pp, {});
+		parser::Parser p; p.init(&pp);
 		attribute_wip::Wip wip; wip.init(comp.gpa);
 		// The function type already carries fastcall; a stdcall attribute must not overwrite it.
 		type_store::QualType function = comp.type_store.put(type_store::type_func(type_store::INT, type_store::FuncKind.OLD_STYLE, {}, type_store::CallingConvention.FASTCALL));
@@ -1365,7 +1365,7 @@ fn void inherited_function_alignment_does_not_reach_variable_type() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		type_store::NodeIndex prev = function_decl(&p, type_store::INT);
@@ -1398,7 +1398,7 @@ fn void inherited_alignment_records_typedef_request() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		type_store::NodeIndex prev = function_decl(&p, type_store::INT);
@@ -1432,7 +1432,7 @@ fn void inherited_alignment_max_merges_typedef_request() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		type_store::QualType td_qt = new_typedef_qt(&comp, new_typedef_node(&p));
@@ -1470,7 +1470,7 @@ fn void inherited_null_alignment_records_target_default_on_typedef() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		type_store::NodeIndex prev = function_decl(&p, type_store::INT);
@@ -1504,7 +1504,7 @@ fn void aligned_on_variable_does_not_set_type_request() @test
 		source::Source src = comp.add_source_from_buffer("attribute-wip.c", "")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		attribute_wip::Wip wip;
 		wip.init(comp.gpa);
 		attribute_wip::State initial = wip.state(false);

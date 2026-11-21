@@ -209,8 +209,7 @@ fn int run_backend_driver(String[] args, diagnostics::Diagnostics* d, BackendChi
 	comp.environment.process = { .ctx = (void*)child, .run = &backend_fake_child };
 	comp.environment.has_path = true;
 	comp.environment.path = path_value;
-	comp.environment.has_source_date_epoch = true;
-	comp.environment.source_date_epoch = "0";
+	comp.environment.source_date_epoch.set("0");
 	int status = driver::run(&comp, d, args, "");
 	comp.free();
 	return status;
@@ -224,8 +223,7 @@ fn int run_backend_driver_host(String[] args, diagnostics::Diagnostics* d, Strin
 	comp.environment.process = {};
 	comp.environment.has_path = true;
 	comp.environment.path = path_value;
-	comp.environment.has_source_date_epoch = true;
-	comp.environment.source_date_epoch = "0";
+	comp.environment.source_date_epoch.set("0");
 	int status = driver::run(&comp, d, args, "");
 	comp.free();
 	return status;
@@ -537,7 +535,7 @@ fn void missing_linker_host_spawn_reports_exact_fatal_text() @test
 	String expected = "unable to spawn linker: file not found";
 	assert(status == 1, "missing host linker should exit with status 1, got %d; diagnostics: %s", status, backend_diag_text(&d));
 	assert(backend_diag_count(&d, diagnostics::MessageKind.FATAL_ERROR, expected) == 1 &&
-		d.messages.len() == (ir_opt::AVAILABLE ? 1 : 2),
+		d.messages.len() == 1,
 		"real host linker spawn did not produce exactly the expected FATAL text; diagnostics: %s", backend_diag_text(&d));
 	assert(!file::exists(output), "failed host linker spawn created its output file");
 	d.free();
@@ -561,7 +559,7 @@ fn void expect_windows_linker_spawn_fatal(String dir, String linker, String expe
 		"-nostdinc", "-nobuiltininc", "-nostdlib", "-r", "-o", output, prototype, input }, &d, empty_path);
 	assert(status == 1, "host linker spawn should exit with status 1, got %d; diagnostics: %s", status, backend_diag_text(&d));
 	assert(backend_diag_count(&d, diagnostics::MessageKind.FATAL_ERROR, expected) == 1 &&
-		d.messages.len() == (ir_opt::AVAILABLE ? 1 : 2),
+		d.messages.len() == 1,
 		"real host linker spawn did not produce exactly the expected FATAL text; diagnostics: %s", backend_diag_text(&d));
 	assert(!file::exists(output), "failed host linker spawn created its output file");
 	d.free();
@@ -849,7 +847,6 @@ fn void unavailable_optimizer_warns_once_for_multiple_inputs() @test
 	int status = run_backend_driver({ "aro", "--target=x86_64-linux-gnu", "-O2", "-O3",
 		"-nostdinc", "-nobuiltininc", "-fsyntax-only", first, second }, &d, &child, dir);
 	assert(status == 0 && d.errors == 0);
-	assert(backend_diag_count(&d, diagnostics::MessageKind.WARNING, "IR optimization is unavailable") ==
-		(ir_opt::AVAILABLE ? 0 : 1));
+	assert(backend_diag_count(&d, diagnostics::MessageKind.WARNING, "IR optimization is unavailable") == 0);
 	assert(child.calls == 0);
 }

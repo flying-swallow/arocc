@@ -283,12 +283,13 @@ struct DfsFrame
 	uint block; sz next_succ;
 }
 
-fn void cfg_append_edge(Cfg* cfg, uint from, uint to)
+<* `edge_from[to] == from` marks an edge already added. build_cfg adds every edge
+   of one source block before moving on, so one mark per target dedupes in O(1)
+   (a switch with thousands of labels would otherwise rescan its successor list). *>
+fn void cfg_append_edge(Cfg* cfg, uint[] edge_from, uint from, uint to)
 {
-	foreach (existing : cfg.blocks[(sz)from].succs)
-	{
-		if (existing == to) return;
-	}
+	if (edge_from[(sz)to] == from) return;
+	edge_from[(sz)to] = from;
 	cfg.blocks[(sz)from].succs.push(to);
 	cfg.blocks[(sz)to].preds.push(from);
 }
@@ -363,12 +364,15 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 	}
 	// Resolve control-flow edges only after all label refs are indexed. The first
 	// terminator ends execution; later instructions in the same range are dead.
+	uint[] edge_from = alloc::new_array(allocator, uint, (sz)block_count);
+	defer if (block_count) alloc::free(allocator, edge_from.ptr);
+	for (usz i = 0; i < block_count; i++) edge_from[i] = NONE_BLOCK;
 	foreach (i, &block : cfg.blocks)
 	{
 		sz terminator_pos = block_terminator_position(decl, block);
 		if (terminator_pos == block.end)
 		{
-			if (i + 1 < cfg.blocks.len) cfg_append_edge(&cfg, (uint)i, (uint)(i + 1));
+			if (i + 1 < cfg.blocks.len) cfg_append_edge(&cfg, edge_from, (uint)i, (uint)(i + 1));
 			continue;
 		}
 		ir::Ref terminator_ref = decl.body[terminator_pos];
@@ -379,31 +383,31 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 			case ir::InstTag.JMP:
 				if ((usz)inst.data.ref < inst_count && cfg.block_of_ref[(sz)inst.data.ref] != NONE_BLOCK)
 				{
-					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)inst.data.ref]);
+					cfg_append_edge(&cfg, edge_from, (uint)i, cfg.block_of_ref[(sz)inst.data.ref]);
 				}
 			case ir::InstTag.BRANCH:
 				ir::Ref then_ref = inst.data.branch.then_label;
 				ir::Ref else_ref = inst.data.branch.else_label;
 				if ((usz)then_ref < inst_count && cfg.block_of_ref[(sz)then_ref] != NONE_BLOCK)
 				{
-					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)then_ref]);
+					cfg_append_edge(&cfg, edge_from, (uint)i, cfg.block_of_ref[(sz)then_ref]);
 				}
 				if ((usz)else_ref < inst_count && cfg.block_of_ref[(sz)else_ref] != NONE_BLOCK)
 				{
-					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)else_ref]);
+					cfg_append_edge(&cfg, edge_from, (uint)i, cfg.block_of_ref[(sz)else_ref]);
 				}
 			case ir::InstTag.SWITCH:
 				foreach (label : inst.data.switch_data.labels)
 				{
 					if ((usz)label < inst_count && cfg.block_of_ref[(sz)label] != NONE_BLOCK)
 					{
-						cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)label]);
+						cfg_append_edge(&cfg, edge_from, (uint)i, cfg.block_of_ref[(sz)label]);
 					}
 				}
 				ir::Ref default_ref = inst.data.switch_data.default_label;
 				if ((usz)default_ref < inst_count && cfg.block_of_ref[(sz)default_ref] != NONE_BLOCK)
 				{
-					cfg_append_edge(&cfg, (uint)i, cfg.block_of_ref[(sz)default_ref]);
+					cfg_append_edge(&cfg, edge_from, (uint)i, cfg.block_of_ref[(sz)default_ref]);
 				}
 			default: break;
 		}

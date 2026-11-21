@@ -83,12 +83,10 @@ fn int run_driver(String[] args, diagnostics::Diagnostics* d, FakeFiles* files =
 	if (child != null) comp.environment.process = { .ctx = (void*)child, .run = &fake_child };
 	if (runfiles_dir.len)
 	{
-		comp.environment.has_runfiles_dir = true;
-		comp.environment.runfiles_dir = runfiles_dir;
+		comp.environment.runfiles_dir.set(runfiles_dir);
 	}
 	// Pin date/time macros so tests are independent of the machine clock.
-	comp.environment.has_source_date_epoch = true;
-	comp.environment.source_date_epoch = "0";
+	comp.environment.source_date_epoch.set("0");
 	int result = driver::run(&comp, d, args, executable_dir);
 	comp.free();
 	return result;
@@ -258,8 +256,7 @@ fn void stdin_dash_reads_the_injected_file_stream() @test
 	d.init_list(mem);
 	compilation::Compilation comp;
 	comp.init(mem, null, &d);
-	comp.environment.has_source_date_epoch = true;
-	comp.environment.source_date_epoch = "0";
+	comp.environment.source_date_epoch.set("0");
 	int status = driver::run_with_stdin(&comp, &d,
 		{ "aro", "-E", "-P", "-nostdinc", "-nobuiltininc", "-o", output, "-" }, "", &stdin_stream);
 	assert(status == 0, "driver could not preprocess stdin: %d", status);

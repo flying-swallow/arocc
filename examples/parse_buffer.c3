@@ -1,36 +1,8 @@
 module parse_buffer_example;
 
-import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::preprocessor;
-import aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::preprocessor;
+import aro::source, aro::frontend::c::tree, aro::frontend::c::type_store;
 import std::core::mem::allocators;
-
-// A tiny caller-supplied grammar: only `int identifier;` is recognized.
-// For the complete C grammar bind a parser_declaration::DeclarationParser instead.
-struct IntDeclarations (parser::IParserHandler)
-{
-	int unused;
-}
-
-fn void? IntDeclarations.handle_declaration(&self, parser::Parser* p) @dynamic
-{
-	if (p.at_eof() || p.tree.tok_slice(p.current()) != "int") return parser::PARSING_FAILED~;
-	p.advance();
-	if (!p.is_at(tokenizer::TokenId.IDENTIFIER)) return p.expected_token_diag(tokenizer::TokenId.IDENTIFIER);
-	tokens::TokenIndex name_tok = p.current();
-	p.advance();
-	p.expect(tokenizer::TokenId.SEMICOLON)!;
-
-	type_store::NodeIndex declaration = p.tree.add_node({
-		.kind = tree::NodeKind.VARIABLE,
-		.variable = {
-			.name_tok = name_tok,
-			.qt = type_store::INT,
-			.initializer = type_store::NODE_NULL,
-			.definition = type_store::NODE_NULL,
-		},
-	});
-	p.tree.root_decls.push(declaration);
-}
 
 fn void? parse_buffer(Allocator gpa, char[] bytes)
 {
@@ -48,9 +20,8 @@ fn void? parse_buffer(Allocator gpa, char[] bytes)
 	defer pp.free();
 	pp.add_token(pp.preprocess(src)!)!;
 
-	IntDeclarations grammar;
 	parser::Parser parser;
-	parser.init(&pp, &grammar);
+	parser.init(&pp);
 	defer parser.free();
 	tree::Tree syntax_tree = parser.parse()!;
 	defer syntax_tree.free();

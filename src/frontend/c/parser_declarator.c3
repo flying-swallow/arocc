@@ -7,6 +7,7 @@ import aro::bigint, aro::frontend::c::diagnostics, aro::frontend::c::parser_resu
 import aro::frontend::c::compilation, aro::frontend::c::tree, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::lang_opts, aro::frontend::c::parser_declaration;
 import aro::frontend::c::parser_attribute, aro::frontend::c::parser_statement, aro::frontend::c::attribute_wip;
 import std::collections::list;
+import std::collections::maybe;
 
 <* Zig Declarator.Kind (minus .record): whether the declarator takes and requires a name. *>
 enum DeclaratorKind : char
@@ -34,10 +35,8 @@ struct ParsedDeclarator
 {
 	type_store::QualType qt;
 	DeclaratorType declarator_type;
-	bool has_name;
-	tokens::TokenIndex name_tok;
-	bool has_old_style_ident;
-	tokens::TokenIndex old_style_ident_tok;
+	Maybe{tokens::TokenIndex} name_tok;
+	Maybe{tokens::TokenIndex} old_style_ident_tok;
 }
 
 struct DeclaratorShape
@@ -47,10 +46,8 @@ struct DeclaratorShape
 	<* Zig combine_tok / suffix_start / expected_ident: first token of the outermost
 	   suffix chain, where Declarator.validate reports. *>
 	tokens::TokenIndex suffix_tok;
-	bool has_name;
-	tokens::TokenIndex name_tok;
-	bool has_old_style_ident;
-	tokens::TokenIndex old_style_ident_tok;
+	Maybe{tokens::TokenIndex} name_tok;
+	Maybe{tokens::TokenIndex} old_style_ident_tok;
 }
 
 <* `(` opens a parenthesized declarator rather than a function suffix. *>
@@ -308,10 +305,9 @@ fn type_store::QualType? Parser.function_suffix(&self, parser_declaration::Decla
 				return PARSING_FAILED~;
 			}
 			identifier_list = true;
-			if (!shape.has_old_style_ident)
+			if (!shape.old_style_ident_tok.has_value)
 			{
-				shape.has_old_style_ident = true;
-				shape.old_style_ident_tok = p.tok_i;
+				shape.old_style_ident_tok.set(p.tok_i);
 			}
 			type_store::FuncParam ident = self.parse_identifier_list_param()!;
 			params.push(ident);
@@ -329,10 +325,9 @@ fn type_store::QualType? Parser.function_suffix(&self, parser_declaration::Decla
 			// The declaration parser uses this to recover at a following
 			// declaration list instead of treating it as a malformed prototype.
 			if (p.comp.langopts.standard.at_least(C23) && self.at_non_typedef_identifier() &&
-				!shape.has_old_style_ident)
+				!shape.old_style_ident_tok.has_value)
 			{
-				shape.has_old_style_ident = true;
-				shape.old_style_ident_tok = p.tok_i;
+				shape.old_style_ident_tok.set(p.tok_i);
 			}
 			typed_param = true;
 			type_store::FuncParam param = decls.parse_parameter_declaration(p, wip)!;
@@ -457,8 +452,7 @@ fn DeclaratorShape? Parser.parse_declarator_shape(&self, parser_declaration::Dec
 		if (groups.len() == 0) shape.after_pointers_tok = p.tok_i;
 		if (kind != ABSTRACT && !p.at_eof() && p.tree.tokens[(usz)p.tok_i].id.is_identifier())
 		{
-			shape.has_name = true;
-			shape.name_tok = p.tok_i;
+			shape.name_tok.set(p.tok_i);
 			p.advance();
 			break;
 		}
@@ -680,7 +674,7 @@ fn ParsedDeclarator? Parser.parse_declarator(&self, parser_declaration::Declarat
 {
 	type_store::QualType marker = type_store::DECLARATOR_COMBINE;
 	DeclaratorShape shape = self.parse_declarator_shape(decls, wip, marker, kind)!;
-	if (kind == NORMAL && !shape.has_name)
+	if (kind == NORMAL && !shape.name_tok.has_value)
 	{
 		Diagnostic.EXPECTED_IDENT_OR_L_PAREN.@emit(self, shape.after_pointers_tok)!;
 		return PARSING_FAILED~;
@@ -691,9 +685,7 @@ fn ParsedDeclarator? Parser.parse_declarator(&self, parser_declaration::Declarat
 	return {
 		.qt = qt,
 		.declarator_type = declarator_type,
-		.has_name = shape.has_name,
 		.name_tok = shape.name_tok,
-		.has_old_style_ident = shape.has_old_style_ident,
 		.old_style_ident_tok = shape.old_style_ident_tok,
 	};
 }

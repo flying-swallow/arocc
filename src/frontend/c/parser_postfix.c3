@@ -3,7 +3,7 @@
 // statement expressions, whose compound body comes from the parser handler.
 module aro::frontend::c::parser;
 import aro::primitive_value;
-import aro::frontend::c::parser_result, aro::frontend::c::tree, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::diagnostics;
+import aro::frontend::c::parser_result, aro::frontend::c::tree, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::diagnostics, aro::frontend::c::parser_declaration;
 import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::compilation, aro::frontend::c::lang_opts;
 import aro::string_interner, aro::bigint;
 import aro::frontend::c::builtins, aro::frontend::c::builtin_call, aro::frontend::c::builtin_defs::common;
@@ -104,7 +104,19 @@ fn void Parser.restore_statement_expression_state(&self, usz scope_depth, bool e
    none). Leaves the parser at the token after the matching `}`. *>
 fn StatementExpressionBodyResult? Parser.parse_statement_expression_body(&self, bool eval) @noinline
 {
-	type_store::NodeIndex body = self.handler.handle_statement_expression_body(self, eval)!;
+	type_store::NodeIndex body;
+	bool handled = false;
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.handle_statement_expression_body)
+		{
+			body = self.test_probe.handle_statement_expression_body(self, eval)!;
+			handled = true;
+		}
+	$endif
+	if (!handled)
+	{
+		body = self.declarations.handle_statement_expression_body(self, eval)!;
+	}
 	tree::Node compound = body.get(&self.tree);
 	if (compound.kind != tree::NodeKind.COMPOUND_STMT) return PARSING_FAILED~;
 	type_store::QualType result_qt = type_store::VOID;
@@ -635,7 +647,7 @@ fn parser_result::Result? Parser.field_access(&self, parser_result::Result lhs,
 
 <*
  Parse a primary expression (`parse_primary_expr`) and all postfix suffixes.
- When the handler provides statement bodies, `({ ... })` is recognized here
+ GNU statement expressions `({ ... })` are recognized here
  before the primary grammar runs.
 *>
 fn parser_result::Result? Parser.parse_postfix_expr(&self, bool eval = true)
@@ -644,7 +656,7 @@ fn parser_result::Result? Parser.parse_postfix_expr(&self, bool eval = true)
 	// the postfix operators are applied out of line.
 	parser::Parser* p = self;
 	parser_result::Result? maybe_lhs;
-	if (self.handler && &self.handler.handle_statement_expression_body && p.is_at(tokenizer::TokenId.L_PAREN) && p.is_at(tokenizer::TokenId.L_BRACE, 1))
+	if (p.is_at(tokenizer::TokenId.L_PAREN) && p.is_at(tokenizer::TokenId.L_BRACE, 1))
 	{
 		maybe_lhs = self.parse_statement_expression_at_paren(eval);
 	}

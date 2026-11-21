@@ -1,0 +1,136 @@
+// #opt: -target x86_64-linux --emulate=clang
+enum __attribute__((vector_size(8))) HeaderVector { HV };
+enum TailVector { TV } __attribute__((aligned(8)));
+enum __attribute__((aligned(8))) HeaderAligned { HA };
+enum TailPacked { TP = 255 } __attribute__((packed));
+struct TailPackedRecord { char c; int i; } __attribute__((packed));
+struct TailAlignedRecord { char c; int i; } __attribute__((aligned(8)));
+_Static_assert(_Alignof(enum TailVector) == 8, "");
+_Static_assert(_Alignof(enum HeaderAligned) == 8, "");
+_Static_assert(sizeof(enum TailPacked) == 1, "");
+_Static_assert(__builtin_offsetof(struct TailPackedRecord, i) == 1, "");
+_Static_assert(_Alignof(struct TailAlignedRecord) == 8, "");
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+enum_decl: 'enum HeaderVector: unsigned int'
+  enum_field: 'int' (value: 0)
+   name: HV
+
+enum_decl: 'enum TailVector: unsigned int'
+ aligned: 8
+  enum_field: 'int' (value: 0)
+   name: TV
+
+enum_decl: 'enum HeaderAligned: unsigned int'
+ aligned: 8
+  enum_field: 'int' (value: 0)
+   name: HA
+
+enum_decl: 'enum TailPacked: unsigned char'
+ packed
+  enum_field: 'int' (value: 255)
+   name: TP
+   init:
+    int_literal: 'int' (value: 255)
+
+struct_decl: 'struct TailPackedRecord'
+ packed
+  record_field: 'char'
+   name: c
+
+  record_field: 'int'
+   name: i
+
+struct_decl: 'struct TailAlignedRecord'
+ aligned: 8
+  record_field: 'char'
+   name: c
+
+  record_field: 'int'
+   name: i
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      alignof_expr: 'unsigned long'
+       operand type: enum TailVector: unsigned int
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 8)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      alignof_expr: 'unsigned long'
+       operand type: enum HeaderAligned: unsigned int
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 8)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      sizeof_expr: 'unsigned long'
+       operand type: enum TailPacked: unsigned char
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      builtin_call_expr: 'unsigned long' (value: 1)
+       name: __builtin_offsetof
+       args:
+        member_access_expr: 'int'
+         lhs:
+          implicit default_init_expr: 'struct TailPackedRecord'
+         name: i
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      alignof_expr: 'unsigned long'
+       operand type: struct TailAlignedRecord
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 8)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+

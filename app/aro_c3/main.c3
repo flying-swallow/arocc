@@ -154,18 +154,15 @@ fn int main(String[] args)
 	}
 	if (try runfiles = env::get_var(mem, "RUNFILES_DIR"))
 	{
-		comp.environment.has_runfiles_dir = true;
-		comp.environment.runfiles_dir = runfiles;
+		comp.environment.runfiles_dir.set(runfiles);
 	}
 	else if (try test_srcdir = env::get_var(mem, "TEST_SRCDIR"))
 	{
-		comp.environment.has_runfiles_dir = true;
-		comp.environment.runfiles_dir = test_srcdir;
+		comp.environment.runfiles_dir.set(test_srcdir);
 	}
 	if (try epoch = env::get_var(mem, "SOURCE_DATE_EPOCH"))
 	{
-		comp.environment.has_source_date_epoch = true;
-		comp.environment.source_date_epoch = epoch;
+		comp.environment.source_date_epoch.set(epoch);
 	}
 
 	int status = driver::run(&comp, &diagnostics, args, executable_dir);

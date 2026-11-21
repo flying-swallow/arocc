@@ -1,0 +1,28 @@
+// #opt: -std=c99 -target x86_64-linux
+void static_array_parameter(x) int x[static 5]; { } // #warning@6: a function definition without a prototype is deprecated in all versions of C and is not supported in C23
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+function: 'fn (x: decayed *[static 5]int) void'
+ name: static_array_parameter
+ body:
+  compound_stmt
+    implicit return_stmt: 'void'
+

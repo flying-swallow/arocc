@@ -1017,7 +1017,6 @@ fn ir::Ref? CodeGen.gen_sub_expr(&self, type_store::NodeIndex node_index, tree::
 		return self.gen_bin_op(node.binary, ir::InstTag.FSUB);
 	}
 	return self.gen_bin_op(node.binary, ir::InstTag.SUB);
-	return ir::NONE;
 }
 
 <* `gen_expr` case DEREF_EXPR. *>
@@ -1030,7 +1029,6 @@ fn ir::Ref? CodeGen.gen_deref_expr(&self, type_store::NodeIndex node_index, tree
 	}
 	if (self.is_record_value(node.unary.qt)) return self.gen_lval(node_index);
 	return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.unary.operand)!, node.unary.qt);
-	return ir::NONE;
 }
 
 <* `gen_expr` case BOOL_NOT_EXPR. *>
@@ -1045,7 +1043,6 @@ fn ir::Ref? CodeGen.gen_bool_not_expr(&self, type_store::NodeIndex node_index, t
 	ir::InstTag compare = operand_type.is(self.comp, type_store::TypeTag.FLOAT) ? ir::InstTag.FCMP_OEQ : ir::InstTag.CMP_EQ;
 	ir::Ref is_zero = self.builder.add_inst(compare, { .bin = { .lhs = operand, .rhs = zero } }, value_interner::REF_I1);
 	return self.add_un(ir::InstTag.ZEXT, is_zero, node.unary.qt);
-	return ir::NONE;
 }
 
 <* `gen_expr` case PRE_INC_EXPR, PRE_DEC_EXPR, POST_INC_EXPR, POST_DEC_EXPR. *>
@@ -1200,7 +1197,6 @@ fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node
 			self.fail(string::tformat("TODO CodeGen gen CastKind %s\n", node.cast.kind.name))!;
 			return ir::NONE;
 	}
-	return ir::NONE;
 }
 
 <* `gen_expr` case BINARY_COND_EXPR. *>
@@ -1241,7 +1237,6 @@ fn ir::Ref? CodeGen.gen_binary_cond_expr(&self, type_store::NodeIndex node_index
 		, { .value = else_val, .label = else_exit },
 	};
 	return self.builder.add_phi(conditional_inputs[..], self.value_type(node.conditional.qt)!);
-	return ir::NONE;
 }
 
 <* `gen_expr` case COND_EXPR. *>

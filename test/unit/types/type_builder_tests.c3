@@ -34,7 +34,7 @@ macro @with_parser(; @body(Compilation* comp, Parser* p, Diagnostics* d))
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		@body(&comp, &p, &d);
 		p.free();
 		pp.free();

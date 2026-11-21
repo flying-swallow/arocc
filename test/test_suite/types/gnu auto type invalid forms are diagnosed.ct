@@ -1,0 +1,39 @@
+// #opt: -target x86_64-linux
+__auto_type first = 1, second = first; int good = 3; // #error@1: '__auto_type' may only be used with a single declarator
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+variable: 'int'
+ name: first
+ init:
+  int_literal: 'int' (value: 1)
+
+variable: 'int'
+ name: second
+ init:
+  implicit cast: (lval_to_rval) 'int'
+    decl_ref_expr: 'int' lvalue
+     name: first
+
+variable: 'int'
+ name: good
+ init:
+  int_literal: 'int' (value: 3)
+

@@ -1,0 +1,32 @@
+// #opt: -target aarch64-linux-gnu
+void f(void) { __attribute__((neon_vector_type(2))) int v; }
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: 'struct __va_list'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: '__mfp8'
+ name: __mfp8
+
+function: 'fn () void'
+ name: f
+ body:
+  compound_stmt
+    decl_stmt
+      variable: 'neon_vector(2, int)'
+       name: v
+
+    implicit return_stmt: 'void'
+

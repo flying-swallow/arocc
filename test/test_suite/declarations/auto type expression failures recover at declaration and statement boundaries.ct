@@ -1,0 +1,50 @@
+// #opt: -target x86_64-linux
+int bad_cast = (__auto_type)5; // #error@17: expected expression
+int after_cast = 1;
+void f(void) {
+    __auto_type self = self; // #error@24: variable 'self' declared with deduced type '__auto_type' cannot appear in its own initializer
+    int after_self = 2;
+}
+int tail = 3;
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+variable: 'int'
+ name: after_cast
+ init:
+  int_literal: 'int' (value: 1)
+
+function: 'fn () void'
+ name: f
+ body:
+  compound_stmt
+    decl_stmt
+      variable: 'int'
+       name: after_self
+       init:
+        int_literal: 'int' (value: 2)
+
+    implicit return_stmt: 'void'
+
+variable: 'int'
+ name: tail
+ init:
+  int_literal: 'int' (value: 3)
+

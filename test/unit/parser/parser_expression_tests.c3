@@ -12,7 +12,7 @@ alias TypeNameProbeFn = fn parser::TypeNameProbe?(void* context, parser::Parser*
 
 <* Parser handler that only supplies the speculative type-name probe. The
    probe function can be swapped to exercise different probe outcomes. *>
-struct ProbeHandler (parser::IParserHandler)
+struct ProbeHandler (parser::IParserTestProbe)
 {
 	TypeNameProbeFn probe;
 }
@@ -216,7 +216,8 @@ fn void ExpressionFixture.init(&self, String input, String path = "expr.c",
 	TokenWithExpansionLocs eof = self.pp.preprocess(src)!!;
 	self.pp.add_token(eof)!!;
 	self.probe_handler = { .probe = &expression_type_name_probe };
-	self.parser.init(&self.pp, &self.probe_handler);
+	self.parser.init(&self.pp);
+	self.parser.test_probe = &self.probe_handler;
 	self.parser.bind_finalized_tokens();
 	self.active = true;
 }
@@ -632,20 +633,12 @@ fn void parser_owned_generic_missing_association_reports_expected_type() @test
 	assert(has_expression_diagnostic(&f, "expected a type"));
 }
 
-fn void parser_owned_statement_expression_unavailable_without_body_grammar() @test
+fn void parser_owned_builtin_primary_and_compound_literal() @test
 {
-	// Statement expressions need the handler's statement grammar; this fixture
-	// has none. Specialized builtin primaries and compound literals do not.
+	// Specialized builtin primaries and compound literals need no declaration context.
 	ExpressionFixture f;
-	f.init("({ 1; })\n");
-	defer f.free();
-	parser_result::Result? statement_expr = f.parser.expr();
-	if (catch statement_expr) {}
-	else { assert(false, "statement-expression primary should report unavailable"); }
-	assert(has_expression_diagnostic(&f, "statement expressions are unavailable in this parser composition"));
-
-	f.free();
 	f.init("__builtin_choose_expr(1, 2, 3)\n");
+	defer f.free();
 	parser_result::Result builtin = f.parser.expr()!!;
 	assert(builtin.node.kind(&f.parser.tree) == tree::NodeKind.BUILTIN_CHOOSE_EXPR);
 	assert(builtin.val.to_i64(&f.comp)!! == 2);
@@ -808,8 +801,6 @@ fn void predefined_func_identifier_is_valid_inside_function() @test
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_declaration::DeclarationParser frontend;
-		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
 		assert(d.messages.len() == 0, "__func__ inside a function must not diagnose");
@@ -844,8 +835,6 @@ fn void predefined_func_identifier_warns_at_file_scope() @test
 
 		parser::Parser p;
 		p.init(&pp);
-		parser_declaration::DeclarationParser frontend;
-		frontend.bind(&p);
 		tree::Tree result = p.parse()!!;
 
 		usz warning_count = 0;

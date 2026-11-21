@@ -1,0 +1,68 @@
+// #opt: -target x86_64-linux
+struct __attribute__((packed)) P { char c; int i; }; struct Q __attribute__((aligned(8))) { int x; };
+_Static_assert(__builtin_offsetof(struct P, i) == 1, "");
+_Static_assert(_Alignof(struct Q) == 8, "");
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+struct_decl: 'struct P'
+ packed
+  record_field: 'char'
+   name: c
+
+  record_field: 'int'
+   name: i
+
+struct_decl: 'struct Q'
+ aligned: 8
+  record_field: 'int'
+   name: x
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      builtin_call_expr: 'unsigned long' (value: 1)
+       name: __builtin_offsetof
+       args:
+        member_access_expr: 'int'
+         lhs:
+          implicit default_init_expr: 'struct P'
+         name: i
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) '_Bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      alignof_expr: 'unsigned long'
+       operand type: struct Q
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 8)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+

@@ -1,0 +1,70 @@
+// #opt: -std=c23 -target x86_64-linux
+typedef int Int;
+_Alignas(16) int expr_aligned; _Alignas(int) int type_aligned;
+alignas(8) int c23_expr_aligned; alignas(Int) int c23_type_aligned;
+struct Fields { _Alignas(16) int member; };
+int local_fn(void) { _Alignas(int) int local; return 0; }
+
+// #expect: stdout
+implicit typedef: 'unsigned char'
+ name: char8_t
+
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+typedef: 'Int: int'
+ name: Int
+
+variable: 'int'
+ _Alignas: 16
+ name: expr_aligned
+ definition: 0x9
+
+variable: 'int'
+ _Alignas: 4
+ name: type_aligned
+ definition: 0xB
+
+variable: 'int'
+ alignas: 8
+ name: c23_expr_aligned
+ definition: 0xD
+
+variable: 'int'
+ alignas: 4
+ name: c23_type_aligned
+ definition: 0xF
+
+struct_decl: 'struct Fields'
+  record_field: 'int'
+   _Alignas: 16
+   name: member
+
+function: 'fn () int'
+ name: local_fn
+ body:
+  compound_stmt
+    decl_stmt
+      variable: 'int'
+       _Alignas: 4
+       name: local
+
+    return_stmt: 'int'
+     expr:
+      int_literal: 'int' (value: 0)
+

@@ -77,7 +77,7 @@ fn SourceEpoch? epoch_from_env(String text)
 	Compilation comp;
 	comp.init(mem);
 	defer comp.free();
-	comp.environment = { .has_source_date_epoch = true, .source_date_epoch = text };
+	comp.environment.source_date_epoch.set(text);
 	return comp.source_epoch();
 }
 
@@ -87,14 +87,12 @@ fn SourceEpoch? epoch_from_clock(long secs)
 	Compilation comp;
 	comp.init(mem);
 	defer comp.free();
-	comp.clock = compilation::fixed_clock(&secs);
+	comp.set_fixed_clock(secs);
 	return comp.source_epoch();
 }
 
 struct ParseVec { String s; long v; }
 struct StampVec { ulong ts; String date; String time; String stamp; }
-
-fn long? failing_clock(void* ctx) => aro::UNSUPPORTED~;
 
 // ---------------------------------------------------------------------------
 // SOURCE_DATE_EPOCH parsing
@@ -161,11 +159,6 @@ fn void source_epoch_from_clock() @test
 	// [source] a negative clock fails std.math.cast(u64) -> InvalidEpoch.
 	assert(@catch(epoch_from_clock(-1)) == preprocessor::INVALID_EPOCH);
 
-	Compilation comp;
-	comp.init(mem);
-	defer comp.free();
-	comp.clock = { null, &failing_clock };
-	assert(@catch(comp.source_epoch()) == preprocessor::INVALID_EPOCH);
 }
 
 fn void init_reports_invalid_epoch() @test
@@ -179,7 +172,7 @@ fn void init_reports_invalid_epoch() @test
 		d.init_list(&ta);
 		Compilation comp;
 		comp.init(&ta, null, &d);
-		comp.environment = { .has_source_date_epoch = true, .source_date_epoch = "abc" };
+		comp.environment.source_date_epoch.set("abc");
 		InitOptions opts = preprocessor::TESTING;
 		opts.has_source_epoch = false;
 		Preprocessor pp;
@@ -193,7 +186,7 @@ fn void init_reports_invalid_epoch() @test
 		pp.free();
 
 		// [source] a valid environment value is taken without diagnostics.
-		comp.environment.source_date_epoch = "86400";
+		comp.environment.source_date_epoch.set("86400");
 		pp.init(&comp, opts)!!;
 		check(d.messages.len(), 1);
 		assert(pp.source_epoch.provided);
@@ -203,7 +196,7 @@ fn void init_reports_invalid_epoch() @test
 		// [source] without SOURCE_DATE_EPOCH the clock is used (`system`).
 		long secs = 1234567890;
 		comp.environment = {};
-		comp.clock = compilation::fixed_clock(&secs);
+		comp.set_fixed_clock(secs);
 		pp.init(&comp, opts)!!;
 		assert(!pp.source_epoch.provided);
 		check(pp.source_epoch.timestamp, 1234567890);

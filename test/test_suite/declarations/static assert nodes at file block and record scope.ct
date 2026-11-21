@@ -1,0 +1,79 @@
+// #opt: -std=c23 -target x86_64-linux
+_Static_assert(1 == 1, "ok"); _Static_assert(0, "x"); // #error@46: static assertion failed
+int f(void) { _Static_assert(1, "b"); return 0; }
+struct S { int a; _Static_assert(1, "m"); };
+static_assert(1, "c23");
+
+// #expect: stdout
+implicit typedef: 'unsigned char'
+ name: char8_t
+
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) 'bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      int_literal: 'int' (value: 1)
+     rhs:
+      int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[3]char' lvalue (value: "ok")
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) 'bool'
+    int_literal: 'int' (value: 0)
+ diagnostic:
+  string_literal_expr: '[2]char' lvalue (value: "x")
+
+function: 'fn () int'
+ name: f
+ body:
+  compound_stmt
+    static_assert
+     condition:
+      implicit cast: (int_to_bool) 'bool'
+        int_literal: 'int' (value: 1)
+     diagnostic:
+      string_literal_expr: '[2]char' lvalue (value: "b")
+
+    return_stmt: 'int'
+     expr:
+      int_literal: 'int' (value: 0)
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) 'bool'
+    int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[2]char' lvalue (value: "m")
+
+struct_decl: 'struct S'
+  record_field: 'int'
+   name: a
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) 'bool'
+    int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[4]char' lvalue (value: "c23")
+

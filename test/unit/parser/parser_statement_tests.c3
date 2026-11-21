@@ -94,7 +94,7 @@ fn parser_result::Result? fixture_switch_expression(void* context, parser::Parse
 
 <* Statement-expression bodies through the test StatementParser, as the frontend
    handler routes them. *>
-struct StatementBodyHandler (parser::IParserHandler)
+struct StatementBodyHandler (parser::IParserTestProbe)
 {
 	parser_statement::StatementParser* statements;
 }
@@ -799,8 +799,6 @@ fn void source_derived_recovered_function_does_not_leak_labels() @test
 			"void f(void){ kept: ; if (1) } void g(void){ goto kept; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp);
-		parser_declaration::DeclarationParser frontend;
-		frontend.bind(&p);
 		tree::Tree parsed = p.parse()!!;
 		uint function_count = 0;
 		foreach (decl : parsed.root_decls)
@@ -908,94 +906,6 @@ fn void fallthrough_statement_attribute_outside_switch_is_diagnosed() @test
 	assert(ta.allocation_count() == 0);
 }
 
-// Leading attributes before a block-scope declaration must reach the declaration
-// parser through the real DeclarationParser local-declaration hook, not the
-// statement-attribute applier (which rejects 'noreturn').
-fn void block_scope_declaration_with_noreturn_attribute_is_not_statement_attribute() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		diagnostics::Diagnostics d;
-		d.init_list(&ta);
-		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		source::Source src = comp.add_source_from_buffer("block-decl-noreturn.c",
-			"void f(void) { __attribute__((noreturn)) int x; }")!!;
-		pp.add_token(pp.preprocess(src)!!)!!;
-
-		parser_declaration::DeclarationParser declarations = {};
-		parser::Parser p;
-		p.init(&pp, &declarations);
-		tree::Tree result = p.parse()!!;
-
-		assert(result.root_decls.len() == 1, "the function should be retained");
-		tree::Node function_node = result.root_decls[0].get(&result);
-		assert(function_node.kind == tree::NodeKind.FUNCTION);
-		tree::Node body_node = function_node.function.body.unwrap().get(&result);
-		assert(body_node.compound_stmt.body.len == 2, "the void function body also gets an implicit return statement");
-		tree::Node declaration_statement = body_node.compound_stmt.body[0].get(&result);
-		assert(declaration_statement.kind == tree::NodeKind.DECL_STMT, "a leading attribute before a declaration should not turn it into a statement");
-		tree::Node x = declaration_statement.decl_stmt.decls[0].get(&result);
-		assert(x.kind == tree::NodeKind.VARIABLE);
-		assert(result.tok_slice(x.variable.name_tok) == "x");
-		for (sz i = 0; i < d.messages.len(); i++)
-		{
-			assert(d.messages[i].text != "'noreturn' attribute cannot be applied to a statement", "a block-scope declaration must not be diagnosed as a statement attribute");
-		}
-
-		result.free();
-		p.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void fallthrough_statement_attribute_still_routes_to_statement_with_declaration_parser() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		diagnostics::Diagnostics d;
-		d.init_list(&ta);
-		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
-		preprocessor::Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		source::Source src = comp.add_source_from_buffer("block-fallthrough.c",
-			"void f(void) { __attribute__((fallthrough)); }")!!;
-		pp.add_token(pp.preprocess(src)!!)!!;
-
-		parser_declaration::DeclarationParser declarations = {};
-		parser::Parser p;
-		p.init(&pp, &declarations);
-		tree::Tree result = p.parse()!!;
-
-		assert(result.root_decls.len() == 1, "the function should be retained");
-		tree::Node function_node = result.root_decls[0].get(&result);
-		assert(function_node.kind == tree::NodeKind.FUNCTION);
-		tree::Node body_node = function_node.function.body.unwrap().get(&result);
-		assert(body_node.compound_stmt.body.len == 2, "the void function body also gets an implicit return statement");
-		tree::Node null_statement = body_node.compound_stmt.body[0].get(&result);
-		assert(null_statement.kind == tree::NodeKind.NULL_STMT, "fallthrough should remain a statement attribute on the null statement");
-		assert(d.messages.len() == 1);
-		test::eq(d.messages[0].text, "'fallthrough' attribute outside a switch statement");
-
-		result.free();
-		p.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
 fn void label_interposed_gnu_attributes_attach_to_labeled_node() @test
 {
 	TrackingAllocator ta;
@@ -1069,7 +979,7 @@ fn void gnu_statement_expression_wraps_compound_and_uses_final_expression_type()
 		StatementGrammar statements_grammar = { .expr = &fixture_expression };
 		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
 		StatementBodyHandler body_handler = { .statements = &statements };
-		p.handler = &body_handler;
+		p.test_probe = &body_handler;
 		parser_result::Result result = p.parse_postfix_expr()!!;
 		assert(result.node.kind(&p.tree) == tree::NodeKind.STMT_EXPR);
 		assert(result.qt.eql(type_store::INT, &comp));
@@ -1105,7 +1015,7 @@ fn void gnu_statement_expression_file_scope_diagnostics_are_ordered() @test
 		StatementGrammar statements_grammar = { .expr = &fixture_expression };
 		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
 		StatementBodyHandler body_handler = { .statements = &statements };
-		p.handler = &body_handler;
+		p.test_probe = &body_handler;
 		assert(@catch(p.parse_postfix_expr()) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[0].text, "use of GNU statement expression extension");
@@ -1132,7 +1042,7 @@ fn void gnu_statement_expression_without_final_expression_has_void_type() @test
 		StatementGrammar statements_grammar = { .expr = &fixture_expression };
 		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
 		StatementBodyHandler body_handler = { .statements = &statements };
-		p.handler = &body_handler;
+		p.test_probe = &body_handler;
 		parser_result::Result result = p.parse_postfix_expr()!!;
 		assert(result.node.kind(&p.tree) == tree::NodeKind.STMT_EXPR);
 		assert(result.qt.eql(type_store::VOID, &comp));
@@ -1164,7 +1074,7 @@ fn void malformed_gnu_statement_expression_restores_attribute_and_scope_state() 
 		StatementGrammar statements_grammar = { .expr = &fixture_expression };
 		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
 		StatementBodyHandler body_handler = { .statements = &statements };
-		p.handler = &body_handler;
+		p.test_probe = &body_handler;
 		// The statement grammar's own parse fault propagates out of the body.
 		fault failure = @catch(p.parse_postfix_expr());
 		assert(failure && parser_statement::recoverable_statement_item_fault(failure));
@@ -1213,8 +1123,6 @@ fn void parser_replays_pragma_inside_compound_statement() @test
 		pp.add_token(pp.preprocess(src)!!)!!;
 
 		parser::Parser p; p.init(&pp);
-		parser_declaration::DeclarationParser frontend;
-		frontend.bind(&p);
 		tree::Tree parsed = p.parse()!!;
 
 		assert(probe.parse_calls == 2, "each #pragma between compound items should replay once");

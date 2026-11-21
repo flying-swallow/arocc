@@ -1,0 +1,51 @@
+// #opt: -target x86_64-linux --emulate=msvc
+__int8 signed_char_width; _int8 underscored_char_width; __int16 short_width; _int16 underscored_short_width; __int32 int_width; _int32 underscored_int_width; __int64 long_long_width; _int64 underscored_long_long_width;
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+variable: 'char'
+ name: signed_char_width
+ definition: 0x5
+
+variable: 'char'
+ name: underscored_char_width
+ definition: 0x6
+
+variable: 'short'
+ name: short_width
+ definition: 0x7
+
+variable: 'short'
+ name: underscored_short_width
+ definition: 0x8
+
+variable: 'int'
+ name: int_width
+ definition: 0x9
+
+variable: 'int'
+ name: underscored_int_width
+ definition: 0xA
+
+variable: 'long long'
+ name: long_long_width
+ definition: 0xB
+
+variable: 'long long'
+ name: underscored_long_long_width
+ definition: 0xC
+

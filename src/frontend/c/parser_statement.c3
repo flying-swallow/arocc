@@ -15,7 +15,9 @@ excuse PARSING_FAILED;
 
 struct SwitchCaseEntry
 {
-	value::Value start; value::Value end; tokens::TokenIndex tok;
+	value::Value start; 
+	value::Value end; 
+	tokens::TokenIndex tok;
 }
 
 fn bool switch_case_ranges_overlap(SwitchCaseEntry previous, value::Value start, value::Value end, parser::Parser* p)

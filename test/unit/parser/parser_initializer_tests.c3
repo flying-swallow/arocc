@@ -67,7 +67,7 @@ fn void initializer_grammar_keeps_high_designators_sparse() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
@@ -101,7 +101,7 @@ fn void initializer_grammar_parses_nested_designator_paths() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -146,7 +146,7 @@ fn void initializer_grammar_elides_braces_across_nested_arrays() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
@@ -192,7 +192,7 @@ fn void initializer_grammar_elided_scalar_override_diagnostic_order() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -243,7 +243,7 @@ fn void initializer_grammar_range_and_duplicate_override_semantics() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
@@ -286,7 +286,7 @@ fn void initializer_grammar_range_override_preserves_warning_locations() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
@@ -362,7 +362,7 @@ fn void inferred_array_length_and_sparse_fillers() @test
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.tok_i = 9;
 
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
@@ -436,7 +436,7 @@ fn void union_active_member_and_compound_literal_fields() @test
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 
 		type_store::RecordField[2] fields = {
 			type_store::record_field(comp.intern_string("small"), type_store::INT),
@@ -490,7 +490,7 @@ fn void brace_elision_fills_nested_array_fields_in_order() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -544,7 +544,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		TokenWithExpansionLocs inferred_eof = inferred_pp.preprocess(inferred_src)!!;
 		inferred_pp.add_token(inferred_eof)!!;
 		parser::Parser inferred_parser;
-		inferred_parser.init(&inferred_pp, {});
+		inferred_parser.init(&inferred_pp);
 		inferred_parser.bind_finalized_tokens();
 		InitGrammar inferred_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
 		inferred_parser.set_initializer_test_probe(&inferred_parser_grammar);
@@ -564,7 +564,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		TokenWithExpansionLocs exact_eof = exact_pp.preprocess(exact_src)!!;
 		exact_pp.add_token(exact_eof)!!;
 		parser::Parser exact_parser;
-		exact_parser.init(&exact_pp, {});
+		exact_parser.init(&exact_pp);
 		exact_parser.bind_finalized_tokens();
 		InitGrammar exact_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
 		exact_parser.set_initializer_test_probe(&exact_parser_grammar);
@@ -580,7 +580,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		TokenWithExpansionLocs short_eof = short_pp.preprocess(short_src)!!;
 		short_pp.add_token(short_eof)!!;
 		parser::Parser short_parser;
-		short_parser.init(&short_pp, {});
+		short_parser.init(&short_pp);
 		short_parser.bind_finalized_tokens();
 		InitGrammar short_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
 		short_parser.set_initializer_test_probe(&short_parser_grammar);
@@ -619,7 +619,7 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		TokenWithExpansionLocs compatible_eof = compatible_pp.preprocess(compatible_src)!!;
 		compatible_pp.add_token(compatible_eof)!!;
 		parser::Parser compatible_parser;
-		compatible_parser.init(&compatible_pp, {});
+		compatible_parser.init(&compatible_pp);
 		compatible_parser.bind_finalized_tokens();
 		InitGrammar compatible_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
 		compatible_parser.set_initializer_test_probe(&compatible_parser_grammar);
@@ -639,7 +639,7 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		TokenWithExpansionLocs incompatible_eof = incompatible_pp.preprocess(incompatible_src)!!;
 		incompatible_pp.add_token(incompatible_eof)!!;
 		parser::Parser incompatible_parser;
-		incompatible_parser.init(&incompatible_pp, {});
+		incompatible_parser.init(&incompatible_pp);
 		incompatible_parser.bind_finalized_tokens();
 		InitGrammar incompatible_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
 		incompatible_parser.set_initializer_test_probe(&incompatible_parser_grammar);
@@ -672,7 +672,7 @@ fn void brace_elision_accepts_string_array_subobject() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
@@ -719,7 +719,7 @@ fn void brace_elision_does_not_replace_array_elements_with_later_string() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
@@ -766,7 +766,7 @@ fn void brace_elision_does_not_replace_initialized_char_array_with_string() @tes
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 3));
 		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
@@ -809,7 +809,7 @@ fn void brace_elision_replaces_equal_nested_array_subobject_in_order() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		StringInitializerContext literal = { .qt = chars, .kind = tree::CharLiteralKind.ASCII,
@@ -863,7 +863,7 @@ fn void range_designator_with_field_suffix_repeats_per_element() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -911,7 +911,7 @@ fn void range_designator_with_subscript_suffix_repeats_per_row() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -955,7 +955,7 @@ fn void nested_range_designators_fill_fixed_matrix() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -1001,7 +1001,7 @@ fn void range_repeats_nested_brace_value_as_struct_ast() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -1050,7 +1050,7 @@ fn void duplicate_scalar_override_reports_token_locations() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
@@ -1102,7 +1102,7 @@ fn void range_duplicate_override_reports_original_token_locations() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
@@ -1160,7 +1160,7 @@ fn void reversed_range_designator_is_an_error() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
@@ -1195,7 +1195,7 @@ fn void single_element_range_designator_is_valid() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
@@ -1232,7 +1232,7 @@ fn void range_end_out_of_bounds_is_an_error() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
@@ -1267,7 +1267,7 @@ fn void range_start_out_of_bounds_is_an_error() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
@@ -1301,7 +1301,7 @@ fn void inferred_array_length_from_range_end() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
@@ -1344,7 +1344,7 @@ fn void inferred_outer_length_from_nested_range_end() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 

@@ -9,8 +9,8 @@
 //
 // Determinism: nothing here reads the host clock or environment directly.
 // The epoch comes from comp.environment.source_date_epoch (SOURCE_DATE_EPOCH,
-// borrowed text) or comp.clock (compilation::SYSTEM_CLOCK by default; tests
-// and the probe use compilation::fixed_clock). __TIMESTAMP__ with a `system`
+// borrowed text) or comp.now_seconds() (host clock by default; tests
+// and the probe set a fixed timestamp). __TIMESTAMP__ with a `system`
 // epoch uses Preprocessor.m_time (FileProvider.source_mtime, plan 15).
 //
 // Calendar math is a direct port of Zig std.time.epoch (EpochSeconds,
@@ -26,27 +26,26 @@ excuse INVALID_EPOCH;
 
 
 <*
- Zig `Environment.sourceEpoch(io)`. With environment.has_source_date_epoch:
+ Zig `Environment.sourceEpoch(io)`. With environment.source_date_epoch present:
  parse it with Zig std.fmt.parseInt(u64, s, 10) (from Zig std knowledge,
  unverified: optional leading '+'; '_' separators allowed between digits
  but not first/last/doubled; '-' or any other non-digit, empty input and
  u64 overflow fail); a failure or a value > MAX_SOURCE_EPOCH_TIMESTAMP is
  INVALID_EPOCH, else `provided`. Otherwise read comp.now_seconds(): a
- fault or a negative value is INVALID_EPOCH, else `system` clamped to
+ negative value is INVALID_EPOCH, else `system` clamped to
  [0, MAX_SOURCE_EPOCH_TIMESTAMP].
  @return? INVALID_EPOCH
 *>
 fn SourceEpoch? compilation::Compilation.source_epoch(&self)
 {
-	if (self.environment.has_source_date_epoch)
+	if (self.environment.source_date_epoch.has_value)
 	{
-		ulong? parsed = parse_epoch_u64(self.environment.source_date_epoch);
+		ulong? parsed = parse_epoch_u64(self.environment.source_date_epoch.value);
 		if (catch parsed) return INVALID_EPOCH~;
 		if (parsed > compilation::MAX_SOURCE_EPOCH_TIMESTAMP) return INVALID_EPOCH~;
 		return { .provided = true, .timestamp = parsed };
 	}
-	long? seconds = self.now_seconds();
-	if (catch seconds) return INVALID_EPOCH~;
+	long seconds = self.now_seconds();
 	if (seconds < 0) return INVALID_EPOCH~;
 	ulong ts = (ulong)seconds;
 	if (ts > compilation::MAX_SOURCE_EPOCH_TIMESTAMP) ts = compilation::MAX_SOURCE_EPOCH_TIMESTAMP;

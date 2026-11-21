@@ -20,7 +20,7 @@ fn void check_attribute_specifier(String input, uint kind)
 		source::Source src = comp.add_source_from_buffer("attribute.c", input)!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		parser_attribute::AttributeBuffer out;
 		out.init(comp.gpa);
@@ -31,16 +31,16 @@ fn void check_attribute_specifier(String input, uint kind)
 			assert(count == 1 && out.attributes.len() == 2);
 			assert(out.attributes[0].syntax == attribute::AttributeSyntax.GNU);
 			assert(out.attributes[0].name.name() == "aligned");
-			assert(out.attributes[0].has_arg_list && out.attributes[0].args_len == 1);
+			assert(out.attributes[0].args_len == 1);
 			parser_attribute::AttributeArgTokens arg = out.arguments[(usz)out.attributes[0].args_offset];
 			assert(p.tree.tok_slice(arg.start) == "8" && p.tree.tok_slice(arg.end - 1) == "8");
-			assert(out.attributes[1].name.name() == "cold" && !out.attributes[1].has_arg_list);
+			assert(out.attributes[1].name.name() == "cold" && out.attributes[1].args_len == 0);
 		}
 		else if (kind == 1)
 		{
 			assert(count == 1 && out.attributes.len() == 2);
 			assert(out.attributes[0].syntax == attribute::AttributeSyntax.STANDARD);
-			assert(out.attributes[0].has_vendor && out.attributes[0].vendor == "gnu");
+			assert(out.attributes[0].name.ns == attribute::AttrNamespace.GNU);
 			assert(out.attributes[0].name.name() == "aligned");
 			assert(out.attributes[0].args_len == 1 && out.arguments.len() == 2);
 			parser_attribute::AttributeArgTokens arg = out.arguments[1];
@@ -52,7 +52,7 @@ fn void check_attribute_specifier(String input, uint kind)
 			assert(count == 1 && out.attributes.len() == 1);
 			assert(out.attributes[0].syntax == attribute::AttributeSyntax.DECLSPEC);
 			assert(out.attributes[0].name.name() == "noinline");
-			assert(!out.attributes[0].has_arg_list);
+			assert(out.attributes[0].args_len == 0);
 		}
 		out.free();
 		p.free();
@@ -93,7 +93,7 @@ fn void unknown_attribute_emits_unknown_name_diagnostic() @test
 		source::Source src = comp.add_source_from_buffer("unknown-attribute.c", "[[vendor::mystery]]")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		parser_attribute::AttributeBuffer out;
 		out.init(comp.gpa);
@@ -126,7 +126,7 @@ fn void malformed_attribute_rolls_back_buffer_state() @test
 		source::Source src = comp.add_source_from_buffer("malformed-attribute.c", "__attribute__((aligned(8)")!!;
 		pp.preprocess_extra(src)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		parser_attribute::AttributeBuffer out;
 		out.init(comp.gpa);

@@ -1,0 +1,43 @@
+// #opt: -std=c23 -target x86_64-linux -Wunused-parameter
+// Prototype parameters are not dumped; the definition below shows [[gnu::unused]]
+// reached the parameter because -Wunused-parameter stays silent for p.
+[[gnu::unused]] int c23_slot; void c23_param([[gnu::unused]] int p);
+void c23_param([[gnu::unused]] int p) {}
+
+// #expect: stdout
+implicit typedef: 'unsigned char'
+ name: char8_t
+
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+variable: 'int'
+ gnu::unused
+ name: c23_slot
+ definition: 0x7
+
+function: 'fn (p: int) void'
+ name: c23_param
+ definition: 0xB
+
+function: 'fn (p: int) void'
+ name: c23_param
+ body:
+  compound_stmt
+    implicit return_stmt: 'void'
+

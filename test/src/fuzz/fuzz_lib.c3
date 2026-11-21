@@ -251,8 +251,6 @@ fn bool compile_one(String input)
 	// and builtin/compound-literal expressions use the same path as the driver.
 	parser::Parser c_parser;
 	c_parser.init(&pp);
-	parser_declaration::DeclarationParser handler;
-	handler.bind(&c_parser);
 	defer c_parser.free();
 	Tree? tree_opt = c_parser.parse();
 	if (catch tree_opt) return false;

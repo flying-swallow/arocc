@@ -4,8 +4,8 @@
 // PATH.
 module library_consumer;
 
-import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::preprocessor;
-import aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::preprocessor;
+import aro::source, aro::frontend::c::tree, aro::frontend::c::type_store;
 import std::core::mem::allocators;
 
 excuse CONSUMER_FILE_NOT_FOUND;
@@ -34,37 +34,6 @@ fn char[]? fixture_read(void* context, Allocator allocator, String path, ulong l
 	return copy[:len];
 }
 
-// This deliberately small declaration handler lets the public parser
-// infrastructure build real variable nodes while keeping the consumer's
-// grammar surface explicit. A missing identifier reports a parser diagnostic;
-// Parser.parse recovers at the semicolon and continues with following input.
-struct IntegerDeclarations (parser::IParserHandler)
-{
-	int unused;
-}
-
-fn void? IntegerDeclarations.handle_declaration(&self, parser::Parser* p) @dynamic
-{
-	if (!p.is_at(tokenizer::TokenId.KEYWORD_INT)) return p.expected_token_diag(tokenizer::TokenId.KEYWORD_INT);
-	p.advance();
-	tokens::TokenIndex name_tok = p.current();
-	if (!p.is_at(tokenizer::TokenId.IDENTIFIER)) return p.expected_token_diag(tokenizer::TokenId.IDENTIFIER);
-	p.advance();
-	p.expect(tokenizer::TokenId.SEMICOLON)!;
-	type_store::NodeIndex declaration = p.tree.add_node({
-		.kind = tree::NodeKind.VARIABLE,
-		.variable = {
-			.name_tok = name_tok,
-			.qt = type_store::INT,
-			.storage_class = tree::VariableStorageClass.AUTO,
-			.initializer = type_store::NODE_NULL,
-			.definition = type_store::NODE_NULL,
-		},
-	});
-	p.tree.root_decls.push(declaration);
-	return;
-}
-
 fn void inspect_variable(tree::Tree* ast, compilation::Compilation* comp, usz index, String expected_name)
 {
 	type_store::NodeIndex index_in_tree = ast.root_decls[(sz)index];
@@ -85,9 +54,8 @@ fn void preprocess_parse_and_inspect(compilation::Compilation* comp, String path
 	pp.init(comp, options, comp.file_provider())!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
 
-	IntegerDeclarations declarations;
 	parser::Parser p;
-	p.init(&pp, &declarations);
+	p.init(&pp);
 	tree::Tree ast = p.parse()!!;
 	assert(ast.root_decls.len() == expected_names.len, "parser did not preserve all valid declarations");
 	foreach (index, name : expected_names) inspect_variable(&ast, comp, (usz)index, name);

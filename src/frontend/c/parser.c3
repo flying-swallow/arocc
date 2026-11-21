@@ -1,9 +1,9 @@
 // Parser context and lifecycle (bounded infrastructure port of Parser.zig).
-// The declaration, type-name and body grammars are supplied by an
-// IParserHandler; this module owns token/tree context, recovery, diagnostics
-// and teardown.
+// The declaration, type-name and body grammars live in the embedded
+// `DeclarationParser`; this module owns token/tree context, recovery,
+// diagnostics and teardown.
 module aro::frontend::c::parser;
-import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::pragma, aro::frontend::c::parser_result, aro::frontend::c::attribute;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::pragma, aro::frontend::c::parser_result, aro::frontend::c::attribute, aro::frontend::c::parser_declaration;
 import std::collections::list, std::collections::map, std::core::dstring, std::io;
 
 excuse PARSING_FAILED;
@@ -45,7 +45,7 @@ excuse HOOK_ABSENT;
  grammar is unavailable, and Parser reports or skips it as documented on each
  dispatcher. The handler is borrowed and must outlive the Parser.
 *>
-interface IParserHandler
+interface IParserTestProbe @feat(TESTING)
 {
 	fn void? handle_declaration(Parser* p) @optional;
 	fn void? handle_type_name(Parser* p) @optional;
@@ -132,7 +132,9 @@ struct Parser (IQueryable)
 	diagnostics::Diagnostics* diagnostics;
 	Tree tree;
 	symbol_stack::SymbolStack symbols;
-	IParserHandler handler;
+	<* Declaration, type-name and statement grammar state; set up by `Parser.init`. *>
+	parser_declaration::DeclarationParser declarations;
+	IParserTestProbe test_probe @feat(TESTING);
 	IAddressOfLabel address_of_label;
 	<* Test-only replacement for the initializer's element productions. *>
 	IExpressionGrammar initializer_test_probe @feat(TESTING);
@@ -307,16 +309,17 @@ fn value::Value Parser.referenced_integer_constant(&self, value::Value decl_valu
  `handle_implicit_typedefs`, when provided, initializes the grammar layer's typedef
  scope before parsing. This infrastructure does not invent type aliases.
 *>
-fn void Parser.init(&self, preprocessor::Preprocessor* pp, IParserHandler handler = null)
+fn void Parser.init(&self, preprocessor::Preprocessor* pp)
 {
 	*self = {};
 	self.pp = pp;
 	self.comp = pp.comp;
 	self.diagnostics = pp.diagnostics;
-	self.handler = handler;
 	self.const_decl_folding = ConstDeclFoldingMode.FOLD_CONST_DECLS;
 	self.function_context.func_ident = type_store::NODE_NULL;
 	self.function_context.pretty_ident = type_store::NODE_NULL;
+	// Parser is not moved after init, so the grammar may point at itself.
+	self.declarations.statements.expressions = &self.declarations;
 	self.symbols.init(pp.comp.gpa);
 	self.symbols.push_scope();
 	self.maybe_unused_decl.init(pp.comp.gpa);
@@ -712,8 +715,19 @@ fn void Parser.recover(&self)
 fn bool? Parser.is_recoverable_parse_fault(&self, fault parse_fault)
 {
 	if (parse_fault == PARSING_FAILED) return true;
-	if (!self.handler || !&self.handler.is_recoverable_parse_fault) return false;
-	bool? result = self.handler.is_recoverable_parse_fault(self, parse_fault);
+	bool? result;
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.is_recoverable_parse_fault)
+		{
+			result = self.test_probe.is_recoverable_parse_fault(self, parse_fault);
+		}
+		else
+		{
+			result = self.declarations.is_recoverable_parse_fault(self, parse_fault);
+		}
+	$else
+		result = self.declarations.is_recoverable_parse_fault(self, parse_fault);
+	$endif
 	if (catch handler_fault = result)
 	{
 		if (handler_fault == HOOK_ABSENT) return false;
@@ -725,14 +739,22 @@ fn bool? Parser.is_recoverable_parse_fault(&self, fault parse_fault)
 <* Dispatch the declaration grammar's legacy type-name callback, or report its absence. *>
 fn void? Parser.parse_type_name(&self)
 {
-	if (self.handler && &self.handler.handle_type_name)
+	$if env::TESTING:
+	if (self.test_probe && &self.test_probe.handle_type_name)
 	{
-		fault f = @catch(self.handler.handle_type_name(self));
+		fault f = @catch(self.test_probe.handle_type_name(self));
 		if (f != HOOK_ABSENT)
 		{
 			if (f) return f~;
 			return;
 		}
+	}
+	$endif
+	fault f = @catch(self.declarations.handle_type_name(self));
+	if (f != HOOK_ABSENT)
+	{
+		if (f) return f~;
+		return;
 	}
 	return self.grammar_unavailable();
 }
@@ -740,9 +762,10 @@ fn void? Parser.parse_type_name(&self)
 <* Dispatch the typed type-name callback, or report its absence. *>
 fn type_store::QualType? Parser.parse_typed_type_name(&self)
 {
-	if (self.handler && &self.handler.handle_typed_type_name)
+	$if env::TESTING:
+	if (self.test_probe && &self.test_probe.handle_typed_type_name)
 	{
-		type_store::QualType? qt = self.handler.handle_typed_type_name(self);
+		type_store::QualType? qt = self.test_probe.handle_typed_type_name(self);
 		if (catch f = qt)
 		{
 			if (f != HOOK_ABSENT) return f~;
@@ -752,6 +775,13 @@ fn type_store::QualType? Parser.parse_typed_type_name(&self)
 			return qt;
 		}
 	}
+	$endif
+	type_store::QualType? qt = self.declarations.handle_typed_type_name(self);
+	if (catch f = qt)
+	{
+		if (f != HOOK_ABSENT) return f~;
+	}
+	else { return qt; }
 	self.grammar_unavailable()!;
 	return PARSING_FAILED~;
 }
@@ -763,9 +793,19 @@ fn type_store::QualType? Parser.parse_typed_type_name(&self)
    this speculative contract. *>
 fn TypeNameProbe? Parser.probe_typed_type_name(&self)
 {
-	if (!self.handler || !&self.handler.handle_typed_type_name_probe) return { .matched = false };
 	tokens::TokenIndex start = self.tok_i;
-	TypeNameProbe? maybe_probe = self.handler.handle_typed_type_name_probe(self);
+	TypeNameProbe? maybe_probe = HOOK_ABSENT~;
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.handle_typed_type_name_probe)
+		{
+			maybe_probe = self.test_probe.handle_typed_type_name_probe(self);
+		}
+	$endif
+	if (catch f = maybe_probe)
+	{
+		if (f != HOOK_ABSENT) return f~;
+		maybe_probe = self.declarations.handle_typed_type_name_probe(self);
+	}
 	if (catch f = maybe_probe)
 	{
 		if (f == HOOK_ABSENT) return { .matched = false };
@@ -780,9 +820,10 @@ fn TypeNameProbe? Parser.probe_typed_type_name(&self)
  node, or report its absence and fail with PARSING_FAILED. *>
 fn type_store::NodeIndex? Parser.parse_body(&self)
 {
-	if (self.handler && &self.handler.handle_body)
+	$if env::TESTING:
+	if (self.test_probe && &self.test_probe.handle_body)
 	{
-		type_store::NodeIndex? body = self.handler.handle_body(self);
+		type_store::NodeIndex? body = self.test_probe.handle_body(self);
 		if (catch f = body)
 		{
 			if (f != HOOK_ABSENT) return f~;
@@ -792,6 +833,13 @@ fn type_store::NodeIndex? Parser.parse_body(&self)
 			return body;
 		}
 	}
+	$endif
+	type_store::NodeIndex? body = self.declarations.handle_body(self);
+	if (catch f = body)
+	{
+		if (f != HOOK_ABSENT) return f~;
+	}
+	else { return body; }
 	self.grammar_unavailable()!;
 	return PARSING_FAILED~;
 }
@@ -826,9 +874,18 @@ fn Tree? Parser.parse(&self)
 	defer self.file_scope_decl_head.free();
 	self.comp.pragmas.before_parse(self.comp);
 	defer self.comp.pragmas.after_parse(self.comp);
-	if (self.handler && &self.handler.handle_implicit_typedefs)
+	bool prelude_handled = false;
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.handle_implicit_typedefs)
+		{
+			fault f = @catch(self.test_probe.handle_implicit_typedefs(self));
+			if (f && f != HOOK_ABSENT) return f~;
+			prelude_handled = !f;
+		}
+	$endif
+	if (!prelude_handled)
 	{
-		fault f = @catch(self.handler.handle_implicit_typedefs(self));
+		fault f = @catch(self.declarations.handle_implicit_typedefs(self));
 		if (f && f != HOOK_ABSENT) return f~;
 	}
 	self.bind_finalized_tokens();
@@ -839,8 +896,7 @@ fn Tree? Parser.parse(&self)
 		if (replay_result) continue;
 		tokens::TokenIndex before = self.tok_i;
 		uint errors_before = self.diagnostics.errors;
-		fault declaration_fault = HOOK_ABSENT;
-		if (self.handler && &self.handler.handle_declaration) declaration_fault = @catch(self.handler.handle_declaration(self));
+		fault declaration_fault = @catch(self.handle_declaration());
 		if (declaration_fault != HOOK_ABSENT)
 		{
 			fault f = declaration_fault;
@@ -879,11 +935,14 @@ fn Tree? Parser.parse(&self)
 		}
 		if (before == self.tok_i && !self.at_eof()) self.advance();
 	}
-	if (self.handler && &self.handler.handle_translation_unit_end)
-	{
-		fault finalization_fault = @catch(self.handler.handle_translation_unit_end(self));
-		if (finalization_fault && finalization_fault != HOOK_ABSENT) return finalization_fault~;
-	}
+	$if env::TESTING:
+		if (self.test_probe && &self.test_probe.handle_translation_unit_end)
+		{
+			fault f = @catch(self.test_probe.handle_translation_unit_end(self));
+			if (f && f != HOOK_ABSENT) return f~;
+		}
+	$endif
+	self.declarations.handle_translation_unit_end(self)!;
 	Tree result = self.tree;
 	self.tree = {};
 	return result;

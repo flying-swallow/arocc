@@ -49,6 +49,7 @@
 module aro::frontend::c::number_literal;
 import aro::primitive_value;
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::frontend::c::lang_opts, aro::frontend::c::type_store, aro::frontend::c::text_literal;
+import std::core::array;
 
 <* Zig `Suffix.fromString` returned null: not a valid suffix of that kind. *>
 excuse INVALID_SUFFIX;
@@ -115,7 +116,7 @@ fn Prefix prefix_from_string(String buf, bool allow_msvc_extensions)
 		case 'O': return buf.len == 2 ? DECIMAL : OCTAL;
 		default:
 			// A decimal floating point number that happens to start with zero.
-			if (find_any(buf, "eE.")) return DECIMAL;
+			if (array::contains((char[])buf, 'e') || array::contains((char[])buf, 'E') || array::contains((char[])buf, '.')) return DECIMAL;
 			// `0` with a valid suffix.
 			if (try suffix_from_string(buf[1..], INT, allow_msvc_extensions)) return DECIMAL;
 			return OCTAL;
@@ -273,7 +274,7 @@ fn Suffix? suffix_from_string(String buf, SuffixKind kind, bool allow_msvc_exten
 			String part = candidate.parts[i];
 			foreach (j, c : part) scratch[j] = c.to_lower();
 			String lower = (String)scratch[:part.len];
-			if (!contains(buf, part) && !contains(buf, lower)) continue CANDIDATES;
+			if (!array::contains_slice((char[])buf, (char[])part) && !array::contains_slice((char[])buf, (char[])lower)) continue CANDIDATES;
 		}
 		if (candidate.tag.is_msvc_extension() && !allow_msvc_extensions) continue;
 		return candidate.tag;
@@ -699,34 +700,19 @@ fn String? LiteralSite.get_exponent(&self, String buf, Prefix prefix)
 		break;
 	}
 	String exponent = buf[:end];
-	if (!find_any(exponent, "0123456789"))
+	bool has_digit = false;
+	foreach (c : exponent)
+	{
+		if (array::contains((char[])"0123456789", c))
+		{
+			has_digit = true;
+			break;
+		}
+	}
+	if (!has_digit)
 	{
 		self.err(Diagnostic.EXPONENT_HAS_NO_DIGITS)!;
 		return text_literal::PARSING_FAILED~;
 	}
 	return exponent;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers (Zig std.mem)
-
-<* Zig `mem.findAny(u8, buf, set) != null`. *>
-fn bool find_any(String buf, String set)
-{
-	foreach (c : buf)
-	{
-		foreach (s : set) if (c == s) return true;
-	}
-	return false;
-}
-
-<* Zig `mem.find(u8, haystack, needle) != null`. *>
-fn bool contains(String haystack, String needle)
-{
-	if (needle.len > haystack.len) return false;
-	for (sz i = 0; i + needle.len <= haystack.len; i++)
-	{
-		if (haystack[i : needle.len] == needle) return true;
-	}
-	return false;
 }

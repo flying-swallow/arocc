@@ -1,0 +1,29 @@
+// #opt: -target i386-linux-gnu
+typedef __attribute__((fastcall)) int ExistingFn(void);
+__attribute__((stdcall)) ExistingFn existing; // #warning@16: stdcall and fastcall attributes are not compatible
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '*char'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+typedef: 'ExistingFn: fn () cc(fastcall) int'
+ name: ExistingFn
+
+function: 'ExistingFn: fn () cc(fastcall) int'
+ name: existing
+

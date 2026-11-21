@@ -1,0 +1,52 @@
+// #opt: -std=c23 -target x86_64-linux
+struct [[gnu::packed]] C23Packed { char c; int i; };
+_Static_assert(__builtin_offsetof(struct C23Packed, i) == 1, "");
+
+// #expect: stdout
+implicit typedef: 'unsigned char'
+ name: char8_t
+
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+struct_decl: 'struct C23Packed'
+ gnu::packed
+  record_field: 'char'
+   name: c
+
+  record_field: 'int'
+   name: i
+
+static_assert
+ condition:
+  implicit cast: (int_to_bool) 'bool'
+    equal_expr: 'int' (value: 1)
+     lhs:
+      builtin_call_expr: 'unsigned long' (value: 1)
+       name: __builtin_offsetof
+       args:
+        member_access_expr: 'int'
+         lhs:
+          implicit default_init_expr: 'struct C23Packed'
+         name: i
+     rhs:
+      implicit cast: (int_cast) 'unsigned long'
+        int_literal: 'int' (value: 1)
+ diagnostic:
+  string_literal_expr: '[1]char' lvalue (value: "")
+

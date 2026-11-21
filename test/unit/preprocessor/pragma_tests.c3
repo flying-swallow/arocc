@@ -12,6 +12,11 @@ import aro::frontend::c::parser;
 import aro::frontend::c::tree;
 import std::core::mem::allocators;
 
+<* Replaces the implicit typedef prelude with nothing; these tests use an untargeted Compilation. *>
+struct NoPrelude (parser::IParserTestProbe) { char unused; }
+
+fn void? NoPrelude.handle_implicit_typedefs(&self, parser::Parser* p) @dynamic {}
+
 macro check(left, right)
 {
 	test::eq((long)left, (long)right);
@@ -222,7 +227,8 @@ fn void gcc_diagnostic_state_resets_and_replays_per_parse() @test
 		assert(d.severity(diagnostics::Option.UNDEF) == diagnostics::MessageKind.WARNING);
 		assert(gcc_handler.original_state.error_warnings);
 		Parser p;
-		p.init(&pp, {});
+		NoPrelude no_prelude;
+		p.init(&pp); p.test_probe = &no_prelude;
 		p.bind_finalized_tokens();
 		assert(p.replay_pragma()!!);
 		assert(d.severity(diagnostics::Option.UNDEF) == diagnostics::MessageKind.OFF);
@@ -453,7 +459,7 @@ fn void parser_replays_pack_push_pop_and_alignment() @test
 		assert(added_pack);
 		pp.preprocess_extra(src)!!;
 		Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		comp.pragmas.before_parse(&comp);
 		pack::PackState* state = (pack::PackState*)comp.pragmas.get("pack")!!.ptr;
@@ -488,7 +494,7 @@ fn void parser_reports_pack_pop_underflow() @test
 		assert(added_pack);
 		pp.preprocess_extra(src)!!;
 		Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		bool found_pragma = false;
 		for (uint i = 0; (usz)i < p.tree.tokens.len; i++)

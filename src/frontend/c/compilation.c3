@@ -1,7 +1,7 @@
 // Port of src/aro/Compilation.zig: source storage, interners, target and
 // language options, include services, and Compilation-owned pragma handlers.
 module aro::frontend::c::compilation;
-import aro::source, aro::string_interner, aro::frontend::c::diagnostics, aro::frontend::c::lang_opts, aro::target, aro::frontend::c::type_store, std::collections::list;
+import aro::source, aro::string_interner, aro::frontend::c::diagnostics, aro::frontend::c::lang_opts, aro::target, aro::frontend::c::type_store, std::collections::list, std::collections::maybe;
 import aro::value_interner, aro::frontend::c::pragma;
 import aro::frontend::c::builtins;
 import aro::code_gen_options, std::time;
@@ -54,11 +54,9 @@ struct Compilation
 
 	<* Zig `environment` (values borrowed; empty by default, Zig `.{}`). *>
 	Environment environment;
-	<*
-	 Wall clock for SourceEpoch.system (Zig `Io.Clock.real.now(io)`); SYSTEM_CLOCK
-	 by default. Tests and the probe pass fixed_clock() for determinism.
-	*>
-	WallClock clock;
+	<* Clock used for SourceEpoch.system; SYSTEM by default. *>
+	ClockMode clock_mode;
+	long fixed_clock_seconds;
 	<* Zig `code_gen_options` (starts as code_gen_options::DEFAULT). *>
 	CodeGenOptions code_gen_options;
 	<* Zig `cmodel` (std.builtin.CodeModel, starts as DEFAULT). *>
@@ -101,8 +99,7 @@ struct Environment
 	bool has_path;
 	String path;
 	<* Bazel RUNFILES_DIR, borrowed for the life of the Compilation. *>
-	bool has_runfiles_dir;
-	String runfiles_dir;
+	Maybe{String} runfiles_dir;
 	<* Optional injected subprocess runner; ctx and callback are borrowed. *>
 	ProcessService process;
 	<*
@@ -111,43 +108,27 @@ struct Environment
 	 modification time in the __TIMESTAMP__ macro. Parsed by
 	 Compilation.source_epoch (pp_builtin_macros.c3).
 	*>
-	bool has_source_date_epoch;
-	String source_date_epoch;
+	Maybe{String} source_date_epoch;
 }
 
 <* Zig `Environment.sourceEpoch` max_timestamp: Dec 31 9999 23:59:59. *>
 const ulong MAX_SOURCE_EPOCH_TIMESTAMP = 253402300799;
 
-<*
- Seconds since the UNIX epoch (Zig `Io.Clock.real.now(io).toSeconds()`, an
- i64 truncated toward zero). A fault is treated like Zig's failed u64 cast
- (InvalidEpoch).
-*>
-alias ClockNowFn = fn long?(void* ctx);
-
-<* Clock source; `ctx` is passed to `now`. *>
-struct WallClock
+enum ClockMode : char
 {
-	void* ctx;
-	ClockNowFn now;
+	SYSTEM,
+	FIXED,
 }
 
-<* The host's real-time clock (std::time::now is microseconds since the epoch). *>
-fn long? system_clock_now(void* ctx) => (long)time::now() / 1_000_000;
-
-const WallClock SYSTEM_CLOCK = { null, &system_clock_now };
-
-<* Reads *(long*)ctx. *>
-fn long? fixed_clock_now(void* ctx) => *(long*)ctx;
-
-<* A clock that always reads `*seconds` (borrowed; must outlive the compilation's use of it). *>
-fn WallClock fixed_clock(long* seconds) =>
+<* Use a fixed timestamp for deterministic preprocessing. *>
+fn void Compilation.set_fixed_clock(&self, long seconds)
 {
-	seconds, &fixed_clock_now
-};
+	self.fixed_clock_seconds = seconds;
+	self.clock_mode = FIXED;
+}
 
-<* Read `clock` (Zig `Io.Clock.real.now(io).toSeconds()`). *>
-fn long? Compilation.now_seconds(&self) => self.clock.now(self.clock.ctx);
+<* Seconds since the UNIX epoch, truncated toward zero. *>
+fn long Compilation.now_seconds(&self) => self.clock_mode == FIXED ? self.fixed_clock_seconds : (long)time::now() / 1_000_000;
 
 <*
  Initialize an empty compilation. All owned memory comes from `gpa`.
@@ -159,7 +140,7 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 {
 	*self = { .gpa = gpa, .arena = arena, .ms_cwd_source_id = source::UNUSED_ID, .diagnostics = diagnostics };
 	self.langopts = lang_opts::DEFAULT;
-	self.clock = SYSTEM_CLOCK;
+	self.clock_mode = SYSTEM;
 	self.code_gen_options = code_gen_options::DEFAULT;
 	self.cmodel = DEFAULT;
 	// Zig's `Target.default` is the host (builtin); an undescribable host is a build configuration error.

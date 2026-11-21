@@ -1,0 +1,32 @@
+// #opt: -target x86_64-linux
+int f(void);
+int qualified(const void);
+int bad(void, int value); // #error@13: 'void' must be the only parameter if specified
+int bad_qualified(const void, int value); // #error@29: 'void' must be the only parameter if specified // #error@29: 'void' parameter cannot be qualified
+int later(int value, void); // #error@26: 'void' must be the first parameter if specified
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+function: 'fn () int'
+ name: f
+
+function: 'fn () int'
+ name: qualified
+

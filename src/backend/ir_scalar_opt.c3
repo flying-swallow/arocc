@@ -462,6 +462,236 @@ fn bool cfg_bypass_empty(ir::Decl* decl, Cfg* cfg, uint index, Allocator allocat
 	return true;
 }
 
+<* The PHI-free case of cfg_bypass_empty, applied to every such block in one body
+   rewrite. Removing jump-only blocks one per CFG rebuild is quadratic: a switch
+   with 20000 case labels lowers to that many empty blocks. A block qualifies
+   when its jump target starts with no PHI, so no incoming edge needs rewriting;
+   chains of such blocks resolve to their final non-forwarded target. *>
+fn bool cfg_bypass_empty_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
+{
+	sz block_count = cfg.blocks.len;
+	if (block_count < 2) return false;
+	// forward[i]: the block i jumps to when i is removable, else NONE_BLOCK.
+	uint[] forward = alloc::new_array(allocator, uint, block_count);
+	defer alloc::free(allocator, forward.ptr);
+	bool found = false;
+	foreach (i, &block : cfg.blocks)
+	{
+		forward[i] = NONE_BLOCK;
+		if (i == 0 || block.preds.len() == 0 || block.end != block.start + 2) continue;
+		ir::Inst jump = decl.instructions[(sz)decl.body[block.start + 1]];
+		if (jump.tag != ir::InstTag.JMP || jump.data.ref == block.label) continue;
+		uint target_index = cfg.block_of_ref[(sz)jump.data.ref];
+		if (target_index == NONE_BLOCK) continue;
+		CfgBlock* target = &cfg.blocks[(sz)target_index];
+		if (target.start + 1 < target.end &&
+			decl.instructions[(sz)decl.body[target.start + 1]].tag == ir::InstTag.PHI) continue;
+		forward[i] = target_index;
+		found = true;
+	}
+	if (!found) return false;
+	// final_target[i]: where control from removed block i lands. A cycle of empty
+	// blocks keeps the block that closes it (it becomes the loop's only block).
+	uint[] final_target = alloc::new_array(allocator, uint, block_count);
+	defer alloc::free(allocator, final_target.ptr);
+	char[] state = alloc::new_array(allocator, char, block_count); // 0 new, 1 walking, 2 done
+	defer alloc::free(allocator, state.ptr);
+	for (sz i = 0; i < block_count; i++) { final_target[i] = (uint)i; state[i] = 0; }
+	list::List{uint} path;
+	path.init(allocator);
+	defer path.free();
+	for (sz start = 0; start < block_count; start++)
+	{
+		if (state[start] != 0) continue;
+		path.clear();
+		uint cur = (uint)start;
+		while (state[(sz)cur] == 0 && forward[(sz)cur] != NONE_BLOCK)
+		{
+			state[(sz)cur] = 1;
+			path.push(cur);
+			cur = forward[(sz)cur];
+		}
+		if (state[(sz)cur] == 1)
+		{
+			// `cur` closes a cycle: keep it as a real block.
+			forward[(sz)cur] = NONE_BLOCK;
+		}
+		uint landing = final_target[(sz)cur];
+		state[(sz)cur] = 2;
+		foreach (block : path)
+		{
+			if (block == cur) continue;
+			final_target[(sz)block] = landing;
+			state[(sz)block] = 2;
+		}
+	}
+	found = false;
+	for (sz i = 0; i < block_count; i++) if (forward[i] != NONE_BLOCK) found = true;
+	if (!found) return false;
+	DeclEditor editor;
+	editor.begin(decl, allocator);
+	editor.body.clear();
+	foreach (i, &other : cfg.blocks)
+	{
+		if (i == 0) editor.body.push_all(decl.body[:other.start]);
+		if (forward[i] != NONE_BLOCK) continue;
+		editor.body.push_all(decl.body[other.start:other.end - other.start]);
+		// An implicit fallthrough into a removed block now needs an explicit jump.
+		if (i + 1 < block_count && forward[i + 1] != NONE_BLOCK &&
+			block_terminator_position(decl, other) == other.end)
+		{
+			ir::Ref landing = cfg.blocks[(sz)final_target[i + 1]].label;
+			editor.body.push(editor.append({ .tag = ir::InstTag.JMP, .data.ref = landing, .ty = value_interner::REF_VOID }));
+		}
+	}
+	foreach (ref : editor.body)
+	{
+		@each_label_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
+		{
+			uint target_block = (usz)*slot < (usz)decl.instructions.len ? cfg.block_of_ref[(sz)*slot] : NONE_BLOCK;
+			if (target_block != NONE_BLOCK && forward[(sz)target_block] != NONE_BLOCK &&
+				cfg.blocks[(sz)target_block].label == *slot)
+			{
+				*slot = cfg.blocks[(sz)final_target[(sz)target_block]].label;
+			}
+		};
+	}
+	editor.commit();
+	return true;
+}
+
+<* cfg_bypass_empty for jump-only blocks whose target starts with PHIs, batched per
+   target: a return block's PHI gathers one input per `return` arm, so bypassing
+   them one per CFG rebuild is quadratic. Each candidate is checked against the
+   target's PHIs as already rewritten by earlier candidates. Run only after
+   cfg_bypass_empty_phi_free finds nothing, so no candidate's predecessor is
+   itself being removed. *>
+alias PhiInputList = list::List{ir::PhiInput};
+
+fn bool cfg_bypass_empty_into_phis(ir::Decl* decl, Cfg* cfg, Allocator allocator)
+{
+	sz block_count = cfg.blocks.len;
+	if (block_count < 2) return false;
+	// forward[i]: the block removed block i jumped to, else NONE_BLOCK.
+	uint[] forward = alloc::new_array(allocator, uint, block_count);
+	defer alloc::free(allocator, forward.ptr);
+	for (sz i = 0; i < block_count; i++) forward[i] = NONE_BLOCK;
+	bool found = false;
+	DeclEditor editor;
+	editor.begin(decl, allocator);
+	list::List{PhiInputList} working;
+	working.init(allocator);
+	defer
+	{
+		foreach (&inputs : working) inputs.free();
+		working.free();
+	}
+	foreach (t, &target : cfg.blocks)
+	{
+		sz phi_end = target.start + 1;
+		while (phi_end < target.end && decl.instructions[(sz)decl.body[phi_end]].tag == ir::InstTag.PHI) phi_end++;
+		sz phi_count = phi_end - (target.start + 1);
+		if (phi_count == 0) continue;
+		foreach (&inputs : working) inputs.free();
+		working.clear();
+		for (sz k = 0; k < phi_count; k++)
+		{
+			PhiInputList inputs;
+			inputs.init(allocator);
+			inputs.push_all(decl.instructions[(sz)decl.body[target.start + 1 + k]].data.phi);
+			working.push(inputs);
+		}
+		bool target_changed = false;
+		foreach (b : target.preds)
+		{
+			CfgBlock* block = &cfg.blocks[(sz)b];
+			if (b == 0 || b == (uint)t || block.preds.len() == 0 || block.end != block.start + 2) continue;
+			ir::Inst jump = decl.instructions[(sz)decl.body[block.start + 1]];
+			if (jump.tag != ir::InstTag.JMP || jump.data.ref != target.label) continue;
+			bool feasible = true;
+			foreach (&inputs : working)
+			{
+				ir::Ref value = ir::NONE;
+				foreach (input : *inputs) if (input.label == block.label) value = input.value;
+				if (value == ir::NONE) { feasible = false; break; }
+				foreach (input : *inputs)
+				{
+					foreach (pred : block.preds)
+					{
+						if (input.label == cfg.blocks[(sz)pred].label && input.value != value) feasible = false;
+					}
+				}
+				if (!feasible) break;
+			}
+			if (!feasible) continue;
+			foreach (&inputs : working)
+			{
+				ir::Ref value = ir::NONE;
+				sz write = 0;
+				for (sz read = 0; read < inputs.len(); read++)
+				{
+					ir::PhiInput input = inputs.entries[read];
+					if (input.label == block.label) { value = input.value; continue; }
+					inputs.entries[write++] = input;
+				}
+				while (inputs.len() > write) inputs.pop()!!;
+				foreach (pred : block.preds)
+				{
+					ir::Ref label = cfg.blocks[(sz)pred].label;
+					bool exists = false;
+					foreach (input : *inputs) if (input.label == label) exists = true;
+					if (!exists) inputs.push({ .label = label, .value = value });
+				}
+			}
+			forward[(sz)b] = (uint)t;
+			target_changed = true;
+			found = true;
+		}
+		if (!target_changed) continue;
+		for (sz k = 0; k < phi_count; k++)
+		{
+			ir::Inst* phi = &editor.insts.entries[(sz)decl.body[target.start + 1 + k]];
+			phi.data.phi = alloc::new_array(&decl.arena, ir::PhiInput, working[k].len());
+			phi.data.phi[..] = working[k].array_view()[..];
+		}
+	}
+	if (!found)
+	{
+		editor.free();
+		return false;
+	}
+	editor.body.clear();
+	foreach (i, &other : cfg.blocks)
+	{
+		if (i == 0) editor.body.push_all(decl.body[:other.start]);
+		if (forward[i] != NONE_BLOCK) continue;
+		editor.body.push_all(decl.body[other.start:other.end - other.start]);
+		// An implicit fallthrough into a removed block now needs an explicit jump.
+		if (i + 1 < block_count && forward[i + 1] != NONE_BLOCK &&
+			block_terminator_position(decl, other) == other.end)
+		{
+			ir::Ref landing = cfg.blocks[(sz)forward[i + 1]].label;
+			editor.body.push(editor.append({ .tag = ir::InstTag.JMP, .data.ref = landing, .ty = value_interner::REF_VOID }));
+		}
+	}
+	foreach (ref : editor.body)
+	{
+		ir::Inst* inst = &editor.insts.entries[(sz)ref];
+		if (inst.tag == ir::InstTag.PHI) continue;
+		@each_label_operand(inst; ir::Ref* slot)
+		{
+			uint target_block = (usz)*slot < (usz)decl.instructions.len ? cfg.block_of_ref[(sz)*slot] : NONE_BLOCK;
+			if (target_block != NONE_BLOCK && forward[(sz)target_block] != NONE_BLOCK &&
+				cfg.blocks[(sz)target_block].label == *slot)
+			{
+				*slot = cfg.blocks[(sz)forward[(sz)target_block]].label;
+			}
+		};
+	}
+	editor.commit();
+	return true;
+}
+
 fn bool cfg_merge_successor(ir::Decl* decl, Cfg* cfg, uint index, Allocator allocator)
 {
 	CfgBlock* block = &cfg.blocks[(sz)index];
@@ -515,6 +745,91 @@ fn bool cfg_merge_successor(ir::Decl* decl, Cfg* cfg, uint index, Allocator allo
 	return true;
 }
 
+<* The PHI-free case of cfg_merge_successor, applied to whole chains in one body
+   rewrite: B -> S where B has one successor, S has one predecessor and starts
+   with no PHI. Reachable chains are acyclic (entry is never absorbed and a
+   reachable cycle needs a second predecessor), so each chain has one head. *>
+fn bool cfg_merge_successors_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
+{
+	sz block_count = cfg.blocks.len;
+	if (block_count < 2) return false;
+	uint[] next_of = alloc::new_array(allocator, uint, block_count);
+	defer alloc::free(allocator, next_of.ptr);
+	bool[] absorbed = alloc::new_array(allocator, bool, block_count);
+	defer alloc::free(allocator, absorbed.ptr);
+	for (sz i = 0; i < block_count; i++) { next_of[i] = NONE_BLOCK; absorbed[i] = false; }
+	bool found = false;
+	foreach (i, &block : cfg.blocks)
+	{
+		if (!cfg.reachable[i] || block.succs.len() != 1) continue;
+		uint next_index = block.succs.entries[0];
+		if (next_index == 0 || next_index == (uint)i || !cfg.reachable[(sz)next_index]) continue;
+		CfgBlock* next = &cfg.blocks[(sz)next_index];
+		if (next.preds.len() != 1) continue;
+		sz term = block_terminator_position(decl, block);
+		if (term < block.end && decl.instructions[(sz)decl.body[term]].tag != ir::InstTag.JMP) continue;
+		if (next.start + 1 < next.end &&
+			decl.instructions[(sz)decl.body[next.start + 1]].tag == ir::InstTag.PHI) continue;
+		next_of[i] = next_index;
+		absorbed[(sz)next_index] = true;
+		found = true;
+	}
+	if (!found) return false;
+	uint[] head_of = alloc::new_array(allocator, uint, block_count);
+	defer alloc::free(allocator, head_of.ptr);
+	for (sz i = 0; i < block_count; i++) head_of[i] = (uint)i;
+	DeclEditor editor;
+	editor.begin(decl, allocator);
+	editor.body.clear();
+	foreach (i, &other : cfg.blocks)
+	{
+		if (i == 0) editor.body.push_all(decl.body[:other.start]);
+		if (absorbed[i]) continue;
+		if (next_of[i] == NONE_BLOCK)
+		{
+			editor.body.push_all(decl.body[other.start:other.end - other.start]);
+			continue;
+		}
+		// Head and inner members contribute everything before their JMP (or
+		// implicit fallthrough); the last member keeps its own terminator.
+		uint cur = (uint)i;
+		while (true)
+		{
+			CfgBlock* block = &cfg.blocks[(sz)cur];
+			sz first = cur == (uint)i ? block.start : block.start + 1;
+			head_of[(sz)cur] = (uint)i;
+			if (next_of[(sz)cur] == NONE_BLOCK)
+			{
+				editor.body.push_all(decl.body[first:block.end - first]);
+				// Preserve the last member's original implicit fallthrough destination.
+				if (block_terminator_position(decl, block) == block.end && (sz)cur + 1 < block_count)
+				{
+					editor.body.push(editor.append({ .tag = ir::InstTag.JMP,
+						.data.ref = cfg.blocks[(sz)cur + 1].label, .ty = value_interner::REF_VOID }));
+				}
+				break;
+			}
+			sz term = block_terminator_position(decl, block);
+			editor.body.push_all(decl.body[first:term - first]);
+			cur = next_of[(sz)cur];
+		}
+	}
+	foreach (ref : editor.body)
+	{
+		@each_label_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
+		{
+			uint target_block = (usz)*slot < (usz)decl.instructions.len ? cfg.block_of_ref[(sz)*slot] : NONE_BLOCK;
+			if (target_block != NONE_BLOCK && absorbed[(sz)target_block] &&
+				cfg.blocks[(sz)target_block].label == *slot)
+			{
+				*slot = cfg.blocks[(sz)head_of[(sz)target_block]].label;
+			}
+		};
+	}
+	editor.commit();
+	return true;
+}
+
 fn bool cfg_fold_terminators(ir::Decl* decl)
 {
 	bool changed = false;
@@ -552,8 +867,10 @@ fn bool simplify_cfg(ir::Decl* decl, Allocator allocator)
 	{
 		changed = cfg_fold_terminators(decl) || changed;
 		Cfg cfg = build_cfg(decl, allocator);
-		bool edited = false;
-		foreach (i, block : cfg.blocks)
+		bool edited = cfg_bypass_empty_phi_free(decl, &cfg, allocator) ||
+			cfg_bypass_empty_into_phis(decl, &cfg, allocator) ||
+			cfg_merge_successors_phi_free(decl, &cfg, allocator);
+		if (!edited) foreach (i, block : cfg.blocks)
 		{
 			if (!cfg.reachable[i]) continue;
 			if (cfg_bypass_empty(decl, &cfg, (uint)i, allocator) || cfg_merge_successor(decl, &cfg, (uint)i, allocator))

@@ -105,42 +105,8 @@ fn bool parse_u32_decimal(String s, uint* out)
 	return true;
 }
 
-fn void parse_warning_option(DriverOptions* opts, String arg)
-{
-	if (arg == "-Werror" || arg == "-Wno-error" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers") return;
-	if (arg.starts_with("-Werror="))
-	{
-		opts.warning_policies.push(
-		{
-			.name = arg[8..], .mode = ERROR
-		}
-		); return;
-	}
-	if (arg.starts_with("-Wno-error="))
-	{
-		opts.warning_policies.push(
-		{
-			.name = arg[11..], .mode = WARNING
-		}
-		); return;
-	}
-	if (arg.starts_with("-Wno-"))
-	{
-		opts.warning_policies.push(
-		{
-			.name = arg[5..], .mode = OFF
-		}
-		); return;
-	}
-	opts.warning_policies.push(
-	{
-		.name = arg[2..], .mode = WARNING
-	}
-	);
-}
-
-<* Parse one bounded group of options to keep driver argument parsing shallow. *>
-fn bool? parse_frontend_flag_set_a(DriverOptions* opts, String arg, Diagnostics* sink)
+<* Parse frontend and code-generation options. *>
+fn bool? parse_frontend_flag(DriverOptions* opts, String arg, Diagnostics* sink)
 {
 	if (arg == "-E")
 	{
@@ -214,17 +180,7 @@ fn bool? parse_frontend_flag_set_a(DriverOptions* opts, String arg, Diagnostics*
 	{
 		opts.verbose_linker_args = true;
 	}
-	else
-	{
-		return false;
-	}
-	return true;
-}
-
-<* Parse one bounded group of options to keep driver argument parsing shallow. *>
-fn bool? parse_frontend_flag_set_b(DriverOptions* opts, String arg, Diagnostics* sink)
-{
-	if (arg == "-fapple-kext")
+	else if (arg == "-fapple-kext")
 	{
 		opts.apple_kext = true;
 	}
@@ -356,17 +312,7 @@ fn bool? parse_frontend_flag_set_b(DriverOptions* opts, String arg, Diagnostics*
 		if (sink == null) return INVALID_ARGUMENT~;
 		add_driver_fatal(opts.a, sink, "unsupported value '%s'' in '%s'", value, arg)!;
 	}
-	else
-	{
-		return false;
-	}
-	return true;
-}
-
-<* Parse one bounded group of options to keep driver argument parsing shallow. *>
-fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics* sink)
-{
-	if (arg == "-fsigned-char" || arg == "-fno-unsigned-char")
+	else if (arg == "-fsigned-char" || arg == "-fno-unsigned-char")
 	{
 		opts.char_signedness = SIGNED; opts.has_char_signedness = true;
 	}
@@ -692,15 +638,6 @@ fn bool? parse_frontend_flag_set_c(DriverOptions* opts, String arg, Diagnostics*
 	return true;
 }
 
-<* Dispatch frontend and code-generation options to bounded option groups. *>
-fn bool? parse_frontend_flag(DriverOptions* opts, String arg, Diagnostics* sink)
-{
-	if (parse_frontend_flag_set_a(opts, arg, sink)!) return true;
-	if (parse_frontend_flag_set_b(opts, arg, sink)!) return true;
-	if (parse_frontend_flag_set_c(opts, arg, sink)!) return true;
-	return false;
-}
-
 <* Parse linker search-path and library options without adding branches to the
  main argument parser. *>
 fn bool? parse_link_flag(DriverOptions* opts, String[] args, usz* i)
@@ -792,7 +729,10 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		}
 		if (arg == "--version")
 		{
-			opts.action = VERSION; result.action = VERSION; result.input_count = (uint)opts.inputs.len(); return result;
+			opts.action = VERSION;
+			result.action = VERSION;
+			result.input_count = (uint)opts.inputs.len();
+			return result;
 		}
 		if (parse_frontend_flag(opts, arg, sink)!)
 		{
@@ -809,9 +749,9 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
 			}
 			opts.defines.push(v); opts.macro_effects.push(
-			{
-				.kind = DEFINE, .value = v
-			}
+				{
+					.kind = DEFINE, .value = v
+				}
 			);
 		}
 		else if (arg.starts_with("-U"))
@@ -821,9 +761,9 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
 			}
 			opts.undefs.push(v); opts.macro_effects.push(
-			{
-				.kind = UNDEFINE, .value = v
-			}
+				{
+					.kind = UNDEFINE, .value = v
+				}
 			);
 		}
 		else if (arg.starts_with("-I"))
@@ -833,9 +773,9 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 				i++; if (i >= args.len) return MISSING_ARGUMENT~; v = args[i];
 			}
 			opts.includes.push(
-			{
-				.kind = NORMAL, .path = v
-			}
+				{
+					.kind = NORMAL, .path = v
+				}
 			);
 		}
 		else if (arg == "--embed-dir")
@@ -847,9 +787,9 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 			i++; if (i >= args.len) return MISSING_ARGUMENT~;
 			IncludeKind kind = arg == "-iquote" ? QUOTE : arg == "-isystem" ? SYSTEM : arg == "-idirafter" ? AFTER : arg == "-F" ? FRAMEWORK : SYSTEM_FRAMEWORK;
 			opts.includes.push(
-			{
-				.kind = kind, .path = args[i]
-			}
+				{
+					.kind = kind, .path = args[i]
+				}
 			);
 		}
 		else if (arg == "-o" || arg == "--sysroot" || arg == "-isysroot" || arg == "-resource-dir" || arg == "-mcpu" || arg == "-target" || arg == "--target" || arg == "-std" || arg == "-MF" || arg == "-darwin-target-variant-triple" || arg == "-rpath")
@@ -970,7 +910,42 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 		}
 		else if (arg.starts_with("-W"))
 		{
-			parse_warning_option(opts, arg);
+			if (arg == "-Werror" || arg == "-Wno-error" || arg == "-Wfatal-errors" || arg == "-Wno-fatal-errors" || arg == "-Weverything" || arg == "-Wno-everything" || arg == "-Wsystem-headers" || arg == "-Wno-system-headers")
+			{
+				// These switches are handled by the diagnostics option path.
+			}
+			else if (arg.starts_with("-Werror="))
+			{
+				opts.warning_policies.push(
+					{
+						.name = arg[8..], .mode = ERROR
+					}
+				);
+			}
+			else if (arg.starts_with("-Wno-error="))
+			{
+				opts.warning_policies.push(
+					{
+						.name = arg[11..], .mode = WARNING
+					}
+				);
+			}
+			else if (arg.starts_with("-Wno-"))
+			{
+				opts.warning_policies.push(
+					{
+						.name = arg[5..], .mode = OFF
+					}
+				);
+			}
+			else
+			{
+				opts.warning_policies.push(
+					{
+						.name = arg[2..], .mode = WARNING
+					}
+				);
+			}
 		}
 		else if (arg == "-")
 		{
@@ -1139,7 +1114,6 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 }
 
 <* Calculate target defaults and apply the last explicit -fpic family option. *>
-
 fn void? unsupported_target_option(DriverOptions* opts, Target t, Diagnostics* sink, String option)
 {
 	if (sink == null) return;
@@ -1319,8 +1293,8 @@ fn void? add_driver_error(Allocator a, Diagnostics* d, String fmt, args...) @for
 	@pool()
 	{
 		return d.add(
-		{
-			.kind = ERROR, .text = string::tformat(fmt, ...args)
+			{
+				.kind = ERROR, .text = string::tformat(fmt, ...args)
 		}
 		);
 	};
@@ -1331,8 +1305,8 @@ fn void? add_driver_fatal(Allocator a, Diagnostics* d, String fmt, args...) @for
 	@pool()
 	{
 		return d.add(
-		{
-			.kind = FATAL_ERROR, .text = string::tformat(fmt, ...args)
+			{
+				.kind = FATAL_ERROR, .text = string::tformat(fmt, ...args)
 		}
 		);
 	};
@@ -1343,8 +1317,8 @@ fn void? add_driver_warning(Allocator a, Diagnostics* d, String fmt, args...) @f
 	@pool()
 	{
 		return d.add(
-		{
-			.kind = WARNING, .text = string::tformat(fmt, ...args)
+			{
+				.kind = WARNING, .text = string::tformat(fmt, ...args)
 		}
 		);
 	};
@@ -1608,7 +1582,7 @@ fn bool? configure_toolchain(Compilation* comp, DriverOptions* opts,
 	(void)effects;
 
 	String path_env = comp.environment.has_path ? comp.environment.path : (env::get_var(tmem, "PATH") ?? "");
-	String runfiles_dir = comp.environment.has_runfiles_dir ? comp.environment.runfiles_dir : (env::get_var(tmem, "RUNFILES_DIR") ?? (env::get_var(tmem, "TEST_SRCDIR") ?? ""));
+	String runfiles_dir = comp.environment.runfiles_dir.has_value ? comp.environment.runfiles_dir.value : (env::get_var(tmem, "RUNFILES_DIR") ?? (env::get_var(tmem, "TEST_SRCDIR") ?? ""));
 	Host host = target::host()!;
 	discovery::Env tc_env = {
 		.fs = discovery::host_fs(),
@@ -1768,7 +1742,7 @@ fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* 
 	todo_report.init(comp.gpa);
 	defer todo_report.free();
 	ir::Ir? ir_opt = opts.codegen_todo_report ?
-		codegen::gen_ir(ast, pp, -1, true, &todo_report) : codegen::gen_ir(ast, pp);
+	codegen::gen_ir(ast, pp, -1, true, &todo_report) : codegen::gen_ir(ast, pp);
 	if (catch f = ir_opt)
 	{
 		if (f != compilation::FATAL_ERROR)(void)add_driver_fatal(comp.gpa, d, "unable to generate Ir: %s", f);
@@ -1979,7 +1953,7 @@ fn int report_ir_todos(Compilation* comp, Diagnostics* d, DriverOptions* opts, b
 
 	uint skipped = (uint)todo_report.skipped_definitions.len();
 	if (catch f = io::fprintf(io::stderr(), "codegen TODO report: %d of %d definitions skipped, %d distinct\n",
-			skipped, todo_report.definitions_total, (uint)todo_report.entries.len()))
+		skipped, todo_report.definitions_total, (uint)todo_report.entries.len()))
 	{
 		(void)add_driver_error(comp.gpa, d, "unable to write codegen TODO report: %s", f);
 		return 1;
@@ -2242,8 +2216,6 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 
 	parser::Parser p;
 	p.init(&pp);
-	parser_declaration::DeclarationParser handler;
-	handler.bind(&p);
 	defer p.free();
 	tree::Tree? parsed = p.parse();
 	if (catch f = parsed)
@@ -2411,19 +2383,17 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	install_default_file_services(comp);
 	install_default_pragmas(comp);
 
-	String old_epoch = comp.environment.source_date_epoch;
-	bool old_has_epoch = comp.environment.has_source_date_epoch;
-	if (!comp.environment.has_source_date_epoch)
+	Maybe{String} old_epoch = comp.environment.source_date_epoch;
+	if (!comp.environment.source_date_epoch.has_value)
 	{
 		if (try epoch = env::get_var(tmem, "SOURCE_DATE_EPOCH"))
 		{
-			comp.environment.has_source_date_epoch = true;
-			comp.environment.source_date_epoch = epoch;
+			comp.environment.source_date_epoch.set(epoch);
 		}
 	}
 	defer
 	{
-		comp.environment.source_date_epoch = old_epoch; comp.environment.has_source_date_epoch = old_has_epoch;
+		comp.environment.source_date_epoch = old_epoch;
 	};
 
 	toolchain::Options tc_opts;

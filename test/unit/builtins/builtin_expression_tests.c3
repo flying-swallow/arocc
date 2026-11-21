@@ -20,19 +20,19 @@ macro check(left, right)
 	test::eq((long)left, (long)right);
 }
 
-struct OffsetTypeContext (parser::IParserHandler) { type_store::QualType qt; }
+struct OffsetTypeContext (parser::IParserTestProbe) { type_store::QualType qt; }
 
 fn type_store::QualType? OffsetTypeContext.handle_typed_type_name(&self, parser::Parser* p) @dynamic
 	=> parse_offset_record_type((void*)self, p);
 
 <* Typed type-name handler accepting only `int`. *>
-struct IntTypeHandler (parser::IParserHandler) { int unused; }
+struct IntTypeHandler (parser::IParserTestProbe) { int unused; }
 
 fn type_store::QualType? IntTypeHandler.handle_typed_type_name(&self, parser::Parser* p) @dynamic
 	=> parse_int_type(null, p);
 
 <* Typed type-name handler mapping `int` to a 4 x int vector. *>
-struct VectorTypeHandler (parser::IParserHandler) { int unused; }
+struct VectorTypeHandler (parser::IParserTestProbe) { int unused; }
 
 fn type_store::QualType? VectorTypeHandler.handle_typed_type_name(&self, parser::Parser* p) @dynamic
 	=> parse_vector_type(null, p);
@@ -118,7 +118,7 @@ fn void types_compatible_expression_returns_constant_boolean() @test
 		Tree tree;
 		tree.init(&comp, pp.tokens.array_view());
 		IntTypeHandler int_types;
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d, .handler = &int_types };
+		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d, .test_probe = &int_types };
 		p.tree = tree;
 		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
 		parser_result::Result result = p.builtin_types_compatible(0)!!;
@@ -412,9 +412,7 @@ fn void check_builtin_constant_p_string_subscript(String text, long expected, bo
 		Source src = comp.add_source_from_buffer("constant-p-subscript.c", text)!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p;
-		parser_declaration::DeclarationParser frontend;
-		p.init(&pp, &frontend);
-		frontend.bind(&p);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		if (runtime_index)
 		{
@@ -482,9 +480,7 @@ fn void check_constant_expression_no_diagnostics(String text, long expected)
 		Source src = comp.add_source_from_buffer("constant-expression.c", text)!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p;
-		parser_declaration::DeclarationParser frontend;
-		p.init(&pp, &frontend);
-		frontend.bind(&p);
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.expr()!!;
 		assert(p.at_eof());
@@ -554,7 +550,7 @@ fn void convertvector_builds_destination_typed_node() @test
 		Source src = comp.add_source_from_buffer("convertvector.c", "(v, int)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		VectorTypeHandler vector_types;
-		parser::Parser p; p.init(&pp, &vector_types);
+		parser::Parser p; p.init(&pp); p.test_probe = &vector_types;
 		p.bind_finalized_tokens();
 		define_vector_operand(&p);
 		parser_result::Result result = p.builtin_convertvector(0)!!;
@@ -576,7 +572,7 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 		Source src = comp.add_source_from_buffer("builtin-errors.c", "(1, int)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		IntTypeHandler int_types;
-		parser::Parser p; p.init(&pp, &int_types);
+		parser::Parser p; p.init(&pp); p.test_probe = &int_types;
 		p.bind_finalized_tokens();
 		assert(@catch(p.builtin_va_arg(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
@@ -592,7 +588,7 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 		Source src = comp.add_source_from_buffer("offsetof-error.c", "(int, field) (int, field)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		IntTypeHandler int_types;
-		parser::Parser p; p.init(&pp, &int_types);
+		parser::Parser p; p.init(&pp); p.test_probe = &int_types;
 		p.bind_finalized_tokens();
 		assert(@catch(p.builtin_offsetof(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
@@ -625,7 +621,7 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 		root_fields[0].layout = { .offset_bits = 0, .size_bits = 128 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(comp.intern_string("Root"), root_fields[..], layout));
 		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp, &types);
+		parser::Parser p; p.init(&pp); p.test_probe = &types;
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.builtin_offsetof(0, true)!!;
 		assert(p.at_eof() && result.val.to_i64(&comp)!! == 64);
@@ -671,7 +667,7 @@ fn void offsetof_resolves_promoted_anonymous_record_fields() @test
 		type_store::QualType root = comp.type_store.put(type_store::type_record(
 			comp.intern_string("Root"), fields[..], layout));
 		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp, &types);
+		parser::Parser p; p.init(&pp); p.test_probe = &types;
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.builtin_offsetof(0, true)!!;
 		assert(result.val.to_i64(&comp)!! == 24);
@@ -707,7 +703,7 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 			.pointer_alignment_bits = 8, .required_alignment_bits = 8 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(comp.intern_string("Root"), fields[..], layout));
 		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp, &types);
+		parser::Parser p; p.init(&pp); p.test_probe = &types;
 		p.bind_finalized_tokens();
 		parser_result::Result byte_offset = p.builtin_offsetof(0)!!;
 		assert(byte_offset.val.to_i64(&comp)!! == 9);
@@ -753,7 +749,7 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 			.pointer_alignment_bits = 8, .required_alignment_bits = 8 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(comp.intern_string("Root"), fields[..], layout));
 		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp, &types);
+		parser::Parser p; p.init(&pp); p.test_probe = &types;
 		p.bind_finalized_tokens();
 		type_store::NodeIndex index_decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 			.variable = { .qt = type_store::INT } });
@@ -787,7 +783,7 @@ fn void bit_cast_accepts_equal_sized_operand_and_type() @test
 		Source src = comp.add_source_from_buffer("bit-cast.c", "(int, 1)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		IntTypeHandler int_types;
-		parser::Parser p; p.init(&pp, &int_types);
+		parser::Parser p; p.init(&pp); p.test_probe = &int_types;
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.builtin_bit_cast(0)!!;
 		assert(p.at_eof());

@@ -592,24 +592,23 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_context_assignment);
 		type_store::NodeIndex x_declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 			.variable = { .qt = type_store::INT } });
 		p.define_symbol({ .name = comp.intern_string("x"), .kind = symbol_stack::SymbolKind.DEF,
 			.qt = type_store::INT, .node = x_declaration, .val = value::NONE });
-		parser_declaration::DeclarationParser declaration = {};
 
-		parser_result::Result constant = declaration.parse_variable_initializer(&p, type_store::INT, false, true)!!;
+		parser_result::Result constant = p.declarations.parse_variable_initializer(&p, type_store::INT, false, true)!!;
 		assert(constant.node.kind(&p.tree) == tree::NodeKind.INT_LITERAL);
 		assert(diags.messages.len() == 0, "a saved scalar value satisfies static initialization");
 
-		parser_result::Result constexpr_constant = declaration.parse_variable_initializer(&p, type_store::INT, true, false)!!;
+		parser_result::Result constexpr_constant = p.declarations.parse_variable_initializer(&p, type_store::INT, true, false)!!;
 		assert(!constexpr_constant.val.is_none(), "constexpr parsing restores the saved scalar value for declaration processing");
 		assert(diags.messages.len() == 0);
 
-		parser_result::Result constexpr_nonconstant = declaration.parse_variable_initializer(&p, type_store::INT, true, false)!!;
+		parser_result::Result constexpr_nonconstant = p.declarations.parse_variable_initializer(&p, type_store::INT, true, false)!!;
 		assert(constexpr_nonconstant.node.kind(&p.tree) == tree::NodeKind.CAST && constexpr_nonconstant.node.form(&p.tree).implicit);
 		assert(diags.messages.len() == 1);
 		test::eq(diags.messages[0].text, "constexpr variable must be initialized by a constant expression");
@@ -617,7 +616,7 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 			"a scalar requirement is reported at its initializer expression");
 
 		type_store::QualType two_ints = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
-		parser_result::Result aggregate = declaration.parse_variable_initializer(&p, two_ints, false, true)!!;
+		parser_result::Result aggregate = p.declarations.parse_variable_initializer(&p, two_ints, false, true)!!;
 		// The storage tag is split by child count (ARRAY_INIT_EXPR_TWO, tree.c3:388); compare the kind.
 		assert(aggregate.node.get(&p.tree).kind == tree::NodeKind.ARRAY_INIT_EXPR);
 		assert(diags.messages.len() == 2, "a mixed aggregate emits one static-value error");
@@ -640,7 +639,7 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 		test::eq(diags.messages[3].text, "initializer element is not a compile-time constant");
 
 		// Explicit runtime context still accepts an expression with no saved value.
-		declaration.parse_variable_initializer(&p, type_store::INT, false, false)!!;
+		p.declarations.parse_variable_initializer(&p, type_store::INT, false, false)!!;
 		assert(diags.messages.len() == 4);
 		assert(p.init_context == parser::InitContext.RUNTIME);
 
@@ -682,7 +681,7 @@ fn void variable_length_array_initializers_are_diagnosed_and_defaulted() @test
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
 		parser::Parser p;
-		p.init(&pp, {});
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		p.set_initializer_test_probe(&grammar_parse_initializer_context_assignment);
 

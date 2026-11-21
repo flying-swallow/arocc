@@ -1,0 +1,54 @@
+// #opt: -std=c23 -target x86_64-linux
+_BitInt(1) one_bit; int after_one = 1; // #error@1: signed _BitInt must have a bit size of at least 2
+unsigned _BitInt(0) zero_unsigned; int after_zero = 2; // #error@10: unsigned _BitInt must have a bit size of at least 1
+_BitInt(65536) too_wide; int after_wide = 3; // #error@1: signed _BitInt of bit sizes greater than 65535 not supported
+
+// #expect: stdout
+implicit typedef: 'unsigned char'
+ name: char8_t
+
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+variable: 'invalid'
+ name: one_bit
+ definition: 0x8
+
+variable: 'int'
+ name: after_one
+ init:
+  int_literal: 'int' (value: 1)
+
+variable: 'invalid'
+ name: zero_unsigned
+ definition: 0xC
+
+variable: 'int'
+ name: after_zero
+ init:
+  int_literal: 'int' (value: 2)
+
+variable: 'invalid'
+ name: too_wide
+ definition: 0x10
+
+variable: 'int'
+ name: after_wide
+ init:
+  int_literal: 'int' (value: 3)
+

@@ -25,7 +25,7 @@ struct SymbolFixture
 	TentativeRecorder tentative;
 }
 
-struct TentativeRecorder (IParserHandler)
+struct TentativeRecorder (IParserTestProbe)
 {
 	NodeIndex[8] decl;
 	NodeIndex[8] def;
@@ -57,7 +57,8 @@ fn void SymbolFixture.init(&self, Allocator a, OutStream writer = null)
 		self.pp.add_token({ .id = IDENTIFIER, .loc = { .id = src.id, .byte_offset = i * 2, .line = 1 } })!!;
 	}
 	self.pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
-	self.p.init(&self.pp, &self.tentative);
+	self.p.init(&self.pp);
+	self.p.test_probe = &self.tentative;
 	self.p.bind_finalized_tokens();
 }
 

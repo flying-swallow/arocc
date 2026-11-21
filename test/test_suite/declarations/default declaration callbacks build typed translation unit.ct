@@ -1,0 +1,48 @@
+// #opt: -target x86_64-linux
+typedef int Word; Word object = 7; int sum(Word parameter) { Word local = parameter; return local; }
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+typedef: 'Word: int'
+ name: Word
+
+variable: 'Word: int'
+ name: object
+ init:
+  int_literal: 'int' (value: 7)
+
+function: 'fn (parameter: Word: int) int'
+ name: sum
+ body:
+  compound_stmt
+    decl_stmt
+      variable: 'Word: int'
+       name: local
+       init:
+        implicit cast: (lval_to_rval) 'Word: int'
+          decl_ref_expr: 'Word: int' lvalue
+           name: parameter
+
+    return_stmt: 'int'
+     expr:
+      implicit cast: (lval_to_rval) 'Word: int'
+        decl_ref_expr: 'Word: int' lvalue
+         name: local
+
