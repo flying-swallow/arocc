@@ -34,7 +34,14 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case FPTRUNC:
 		case STACK_RESTORE:
 		case VA_START:
+		case CLZ:
+		case CTZ:
 			@body(&inst.data.ref);
+		case ATOMIC_LOAD:
+			@body(&inst.data.atomic.ptr);
+		case ATOMIC_STORE:
+			@body(&inst.data.atomic.ptr);
+			@body(&inst.data.atomic.val);
 		case DYN_ALLOC:
 			@body(&inst.data.dyn_alloc.size);
 		case RET:
@@ -108,6 +115,7 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case JMP_VAL:
 		case ALLOC:
 		case STACK_SAVE:
+		case FENCE:
 			break;
 	}
 }
@@ -195,6 +203,11 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case FPEXT:
 		case FPTRUNC:
 		case SELECT:
+		case ATOMIC_LOAD:
+		case ATOMIC_STORE:
+		case FENCE:
+		case CLZ:
+		case CTZ:
 			break;
 	}
 }
@@ -227,6 +240,8 @@ fn bool is_value_tag(ir::InstTag tag)
 		case ir::InstTag.RET_PAIR:
 		case ir::InstTag.JMP_VAL:
 		case ir::InstTag.VA_START:
+		case ir::InstTag.ATOMIC_STORE:
+		case ir::InstTag.FENCE:
 			return false;
 		default: return true;
 	}
@@ -1728,7 +1743,8 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 		}
 		else if (inst.tag == ir::InstTag.ARG || inst.tag == ir::InstTag.LOAD || inst.tag == ir::InstTag.CALL ||
 			inst.tag == ir::InstTag.ALLOC || inst.tag == ir::InstTag.SYMBOL || inst.tag == ir::InstTag.DYN_ALLOC ||
-			inst.tag == ir::InstTag.STACK_SAVE)
+			inst.tag == ir::InstTag.STACK_SAVE || inst.tag == ir::InstTag.ATOMIC_LOAD ||
+			inst.tag == ir::InstTag.CLZ || inst.tag == ir::InstTag.CTZ)
 		{
 			values[i] = const_prop_bottom();
 		}
@@ -1946,6 +1962,8 @@ fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst)
 		case ir::InstTag.SELECT:
 		case ir::InstTag.PHI:
 		case ir::InstTag.CALL_HI:
+		case ir::InstTag.CLZ:
+		case ir::InstTag.CTZ:
 			return true;
 		case ir::InstTag.LOAD:
 			if ((usz)inst.data.ref >= (usz)decl.instructions.len) return false;
@@ -2275,7 +2293,7 @@ fn bool inline_is_block_terminator(ir::Decl* decl, Cfg* cfg, ir::Ref ref, sz bod
 	return block_terminator_position(decl, &cfg.blocks[(sz)block_index]) == body_pos;
 }
 
-fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Allocator allocator)
+fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Allocator allocator)
 {
 	if ((usz)call_ref >= (usz)caller.instructions.len || !inline_body_contains(caller, call_ref)) return false;
 	ir::Inst* call = &caller.instructions[(sz)call_ref];
@@ -2376,20 +2394,39 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		}
 	}
 
-	// Static-inline bodies are absent because codegen skips them; this one-call
-	// exception covers emitted internal-linkage definitions.
 	String continuation_name = string::format(allocator, "inl.%s.%d.cont", caller.name, call_ref);
 	ir::Ref continuation_label = editor.new_label(continuation_name);
 	alloc::free(allocator, continuation_name.ptr);  // new_label copied it into the decl arena
 	ir::Ref[] mapping = alloc::new_array(allocator, ir::Ref, (sz)callee.instructions.len);
 	defer alloc::free(allocator, mapping.ptr);
 	for (usz i = 0; i < (usz)mapping.len; i++) mapping[i] = ir::NONE;
+	// The caller passes sub-int integers widened to i32 (SysV promotion); the
+	// callee's ARG keeps the declared narrow type. Narrow them back in the
+	// inlined entry block so stores and arithmetic keep the callee's width.
+	list::List{ir::Ref} arg_truncs;
+	arg_truncs.init(allocator);
+	defer arg_truncs.free();
 	usz arg_index = 0;
 	for (usz pos = 0; pos < (usz)callee.body.len && arg_index < callee_arg_count; pos++)
 	{
 		ir::Ref ref = callee.body[(sz)pos];
 		if ((usz)ref >= (usz)callee.instructions.len || callee.instructions[(sz)ref].tag != ir::InstTag.ARG) break;
-		mapping[(sz)ref] = call.data.call.args[(sz)arg_index++];
+		ir::Ref passed = call.data.call.args[(sz)arg_index++];
+		value_interner::InternerRef param_ty = callee.instructions[(sz)ref].ty;
+		value_interner::InternerRef passed_ty = editor.insts.entries[(sz)passed].ty;
+		if (param_ty != passed_ty)
+		{
+			primitive_value::PrimitiveValue param_key = graph.interner.get(param_ty);
+			primitive_value::PrimitiveValue passed_key = graph.interner.get(passed_ty);
+			if (param_key.tag != primitive_value::PrimitiveType.INT_TY || passed_key.tag != primitive_value::PrimitiveType.INT_TY ||
+				param_key.ty_bits >= passed_key.ty_bits)
+			{
+				editor.free(); return false;
+			}
+			passed = editor.append({ .tag = ir::InstTag.TRUNC, .data.ref = passed, .ty = param_ty });
+			arg_truncs.push(passed);
+		}
+		mapping[(sz)ref] = passed;
 	}
 	if (arg_index != callee_arg_count)
 	{
@@ -2440,14 +2477,25 @@ fn bool inline_one_call(ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Al
 		if ((usz)source_ref >= (usz)callee.instructions.len || callee.instructions[(sz)source_ref].tag == ir::InstTag.ARG) continue;
 		ir::Inst* source = &callee.instructions[(sz)source_ref];
 		ir::Ref cloned_ref = mapping[(sz)source_ref];
+		bool entry_label = false;
 		if (source.tag == ir::InstTag.LABEL)
 		{
 			active_callee_label = cloned_ref;
-			if (callee_entry == ir::NONE) callee_entry = cloned_ref;
+			if (callee_entry == ir::NONE)
+			{
+				callee_entry = cloned_ref;
+				entry_label = true;
+			}
 		}
 		if (source.tag == ir::InstTag.ALLOC)
 		{
 			cloned_allocs.push(cloned_ref);
+			continue;
+		}
+		if (entry_label)
+		{
+			cloned_body.push(cloned_ref);
+			foreach (trunc : arg_truncs) cloned_body.push(trunc);
 			continue;
 		}
 		if (source.tag == ir::InstTag.RET)
@@ -2568,7 +2616,8 @@ fn bool inline_calls(ir::Ir* graph, OptOptions opts, Allocator allocator)
 			if (call.tag != ir::InstTag.CALL || (usz)call.data.call.func >= (usz)caller.instructions.len) continue;
 			ir::Inst* func = &caller.instructions[(sz)call.data.call.func];
 			if (func.tag != ir::InstTag.SYMBOL) continue;
-			// gen_ir in codegen.c3 skips inline functions, so static-inline helper calls can remain unresolved SYMBOLs.
+			// Calls to external symbols (including C99 external `inline` definitions,
+			// which gen_ir does not emit) stay unresolved SYMBOLs.
 			uint callee_index = inline_decl_index(&calls.decl_indices, func.data.label);
 			if (callee_index == NONE_BLOCK || calls.scc[(sz)callee_index] == calls.scc[(sz)decl_index]) continue;
 			ir::Decl* callee = &graph.decls.entries[(sz)callee_index];
@@ -2577,7 +2626,7 @@ fn bool inline_calls(ir::Ir* graph, OptOptions opts, Allocator allocator)
 			usz cost = inline_body_cost(callee);
 			bool one_call_internal = callee.linkage == ir::Linkage.INTERNAL && calls.call_count[(sz)callee_index] == 1;
 			if (cost > threshold && !one_call_internal) continue;
-			changed = inline_one_call(caller, callee, call_ref, allocator) || changed;
+			changed = inline_one_call(graph, caller, callee, call_ref, allocator) || changed;
 		}
 		worklist.free();
 	}

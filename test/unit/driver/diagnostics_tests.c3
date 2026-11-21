@@ -349,7 +349,7 @@ fn void groups_and_lookup() @test
 	assert(!diagnostics::warning_exists("nope"));
 	assert(diagnostics::option_from_flag("#pragma-messages")!! == PRAGMA_MESSAGES);
 	check(Option.CXX_COMPAT.flag, "c++-compat");
-	check(Option::len, 145);
+	check(Option::len, 146);
 
 	// State is a value: pragma push/pop saves and restores it wholesale.
 	State saved = d.state;

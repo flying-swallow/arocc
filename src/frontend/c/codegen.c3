@@ -294,7 +294,11 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 			case ENUM_FORWARD_DECL:
 				break;
 			case FUNCTION:
-				if (decl.function.body.is_null() || decl.function.is_inline) continue;
+				// Zig skips every inline body. `static inline` definitions are ordinary
+				// internal functions and must be emitted; C99 external inline
+				// definitions (plain `inline`) still produce no symbol.
+				if (decl.function.body.is_null()) continue;
+				if (decl.function.is_inline && !c.has_internal_linkage(decl_index)) continue;
 				if (keep_going)
 				{
 					todo_report.definitions_total++;
@@ -752,6 +756,19 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 					stack_offset += 8;
 				}
 			}
+			else if (self.is_int128(param.qt))
+			{
+				// SysV passes __int128 like a two-eightbyte INTEGER struct: two
+				// consecutive GPRs, or (TODO) a 16-byte-aligned stack slot.
+				if (gp_index + 2 > 6) self.fail("TODO: __int128 parameter passed on the stack\n")!;
+				ir::Ref low = self.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
+				ir::Ref high = self.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
+				alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
+				self.builder.add_store(alloc, low);
+				self.builder.add_store(self.ptr_at(alloc, 8), high);
+				self.symbols.push({ .name = param.name, .value = alloc });
+				continue;
+			}
 			else if (gp_index < 6)
 			{
 				arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
@@ -821,6 +838,12 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	self.emit_pending_gotos();
 	ir::Linkage linkage = self.has_internal_linkage(declaration) ? ir::Linkage.INTERNAL : ir::Linkage.EXTERNAL;
 	self.builder.finish_fn(name, linkage);
+}
+
+<* A 128-bit integer (`__int128`, `_BitInt(128)`), passed in two GPRs and returned in RDX:RAX. *>
+fn bool CodeGen.is_int128(&self, type_store::QualType qt)
+{
+	return qt.is_real_int(self.comp) && qt.bit_sizeof(self.comp) == 128;
 }
 
 <* The function body's last instruction is the jump to the return block. *>

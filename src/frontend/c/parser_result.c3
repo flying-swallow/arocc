@@ -659,9 +659,11 @@ fn bool is_integer_constant_expr(parser::Parser* p, type_store::NodeIndex index,
 		case CHAR_LITERAL:
 		case BOOL_LITERAL:
 		case ENUMERATION_REF:
-		case SIZEOF_EXPR:
 		case ALIGNOF_EXPR:
 			return true;
+		case SIZEOF_EXPR:
+			// sizeof a variable length array is evaluated at run time.
+			return @ok(n.type_info.operand_qt.sizeof_or_null(p.comp));
 		case FLOAT_LITERAL:
 			return float_ok;
 		case PAREN_EXPR:

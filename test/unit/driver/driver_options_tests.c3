@@ -10,6 +10,7 @@ import aro::frontend::c::compilation;
 import aro::frontend::c::diagnostics;
 import aro::frontend::c::lang_opts;
 import aro::toolchain;
+import aro::frontend::c::driver_arguments;
 import std::collections::list;
 import std::core::mem::allocators;
 import std::collections::maybe;
@@ -180,10 +181,10 @@ fn void attached_and_separate_option_arguments_are_parsed() @test
 	check(opts.includes.len(), 2);
 	check(opts.includes.get(0).path, "inc");
 	check(opts.includes.get(1).path, "more-inc");
-	check(opts.target_triple, "x86_64-linux-gnu");
-	check(opts.cpu, "x86-64");
-	check(opts.standard, "c17");
-	check(opts.output_name, "output.o");
+	check(opts.target_triple.value, "x86_64-linux-gnu");
+	check(opts.cpu.value, "x86-64");
+	check(opts.standard.value, "c17");
+	check(opts.output_name.value, "output.o");
 }
 
 fn void optimization_and_target_options_use_last_value() @test
@@ -195,20 +196,20 @@ fn void optimization_and_target_options_use_last_value() @test
 		"aro", "-O3", "-O0", "-g", "-mcmodel=large", "-mcpu", "x86-64",
 		"--target=x86_64-linux-gnu", "-std=c11", "input.c",
 	});
-	check(opts.has_optimization, true);
-	check(opts.optimization, "0");
-	check(opts.has_debug_format, true);
-	check(opts.debug_format, "dwarf32");
-	check(opts.has_code_model, true);
-	check(opts.code_model, "large");
-	check(opts.has_cpu, true);
-	check(opts.cpu, "x86-64");
-	check(opts.has_target_triple, true);
-	check(opts.target_triple, "x86_64-linux-gnu");
-	check(opts.has_standard, true);
-	check(opts.standard, "c11");
+	check(opts.optimization.has_value, true);
+	check(opts.optimization.value, "0");
+	check(opts.debug_format.has_value, true);
+	check(opts.debug_format.value, driver_options::DebugFormatRequest.DWARF32);
+	check(opts.code_model.has_value, true);
+	check(opts.code_model.value, "large");
+	check(opts.cpu.has_value, true);
+	check(opts.cpu.value, "x86-64");
+	check(opts.target_triple.has_value, true);
+	check(opts.target_triple.value, "x86_64-linux-gnu");
+	check(opts.standard.has_value, true);
+	check(opts.standard.value, "c11");
 	check(opts.inputs.len(), 1);
-	check(code_gen_options::optimization_level_from_string(opts.optimization)!!, code_gen_options::OptimizationLevel.O0);
+	check(code_gen_options::optimization_level_from_string(opts.optimization.value)!!, code_gen_options::OptimizationLevel.O0);
 }
 
 fn void optimization_and_code_model_enum_names_are_supported() @test
@@ -286,19 +287,19 @@ fn void integrated_assembler_options_follow_argument_order() @test
 	DriverOptions opts;
 	opts.init(mem);
 	defer opts.free();
-	check(opts.integrated_as, false);
-	check(opts.has_integrated_as, false);
+	check(opts.integrated_as.value, false);
+	check(opts.integrated_as.has_value, false);
 
 	parse_options(&opts, { "aro", "-fintegrated-as", "source.c" });
-	check(opts.integrated_as, true);
-	check(opts.has_integrated_as, true);
+	check(opts.integrated_as.value, true);
+	check(opts.integrated_as.has_value, true);
 	parse_options(&opts, { "aro", "-fno-integrated-as", "source.c" });
-	check(opts.integrated_as, false);
+	check(opts.integrated_as.value, false);
 
 	parse_options(&opts, { "aro", "-fno-integrated-as", "-fintegrated-as", "source.c" });
-	check(opts.integrated_as, true);
+	check(opts.integrated_as.value, true);
 	parse_options(&opts, { "aro", "-fintegrated-as", "-fno-integrated-as", "source.c" });
-	check(opts.integrated_as, false);
+	check(opts.integrated_as.value, false);
 }
 
 fn void pic_pie_policy_tracks_target_and_explicit_requests() @test
@@ -352,24 +353,24 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 		"--ld-path=/usr/bin/ld", "-shared-libgcc", "-static-pie", "-rdynamic", "-s",
 		"-r", "source.c",
 	});
-	check(opts.emulate, lang_opts::Compiler.MSVC);
-	check(opts.has_emulate, true);
-	check(opts.short_enums, false);
-	check(opts.dollars_in_identifiers, false);
-	check(opts.digraphs, false);
-	check(opts.gnu_asm, false);
-	check(opts.char_signedness, lang_opts::Signedness.UNSIGNED);
-	check(opts.fp_eval_method, lang_opts::FPEvalMethod.EXTENDED);
-	check(opts.bounds_safety, lang_opts::BoundsSafety.CLANG);
-	check(opts.char8_t_override, lang_opts::Tristate.ON);
-	check(opts.visibility, lang_opts::Visibility.HIDDEN);
+	check(opts.emulate.value, lang_opts::Compiler.MSVC);
+	check(opts.emulate.has_value, true);
+	check(opts.short_enums.value, false);
+	check(opts.dollars_in_identifiers.value, false);
+	check(opts.digraphs.value, false);
+	check(opts.gnu_asm.value, false);
+	check(opts.char_signedness.value, lang_opts::Signedness.UNSIGNED);
+	check(opts.fp_eval_method.value, lang_opts::FPEvalMethod.EXTENDED);
+	check(opts.bounds_safety.value, lang_opts::BoundsSafety.CLANG);
+	check(opts.char8_t_override.value, lang_opts::Tristate.ON);
+	check(opts.visibility.value, lang_opts::Visibility.HIDDEN);
 	check(opts.use_native_half_type, true);
 	check(opts.allow_half_args_returns, true);
-	check(opts.has_blocks, true);
-	check(opts.blocks, false);
+	check(opts.blocks.has_value, true);
+	check(opts.blocks.value, false);
 	check(opts.pthread, true);
-	check(opts.gnuc_version, "12.3.4");
-	check(opts.macro_backtrace_limit, uint::max);
+	check(opts.gnuc_version.value, "12.3.4");
+	check(opts.macro_backtrace_limit.value, uint::max);
 	check(opts.use_linker.has_value, true);
 	check(opts.use_linker.get()!!, "bfd");
 	check(opts.linker_path.get()!!, "/usr/bin/ld");
@@ -426,7 +427,7 @@ fn void target_selection_resets_compiler_emulation() @test
 	opts.init(mem);
 	defer opts.free();
 	parse_options(&opts, { "aro", "--emulate=gcc", "--target=x86_64-linux-gnu", "input.c" });
-	check(opts.has_emulate, false);
+	check(opts.emulate.has_value, false);
 }
 
 fn void warning_switches_keep_argv_order_and_exact_unknown_text() @test
@@ -556,13 +557,13 @@ fn void macro_backtrace_limit_uses_zig_unsigned_integer_rules() @test
 	separated.init(mem);
 	defer separated.free();
 	parse_options(&separated, { "aro", "-fmacro-backtrace-limit=+1_0" });
-	check(separated.macro_backtrace_limit, 10);
+	check(separated.macro_backtrace_limit.value, 10);
 
 	DriverOptions negative_zero;
 	negative_zero.init(mem);
 	defer negative_zero.free();
 	parse_options(&negative_zero, { "aro", "-fmacro-backtrace-limit=-0" });
-	check(negative_zero.macro_backtrace_limit, uint::max);
+	check(negative_zero.macro_backtrace_limit.value, uint::max);
 }
 
 fn void help_and_version_are_parse_actions_not_backend_runs() @test
@@ -613,7 +614,159 @@ fn void recognized_option_prefixes_are_options_and_option_values_may_name_dash_f
 	parse_options(&opts, { "aro", "-DNAME=1", "-fsyntax-only", "-o", "-output.c", "source.c" });
 	check(opts.defines.len(), 1);
 	check(opts.only_syntax, true);
-	check(opts.output_name, "-output.c");
+	check(opts.output_name.value, "-output.c");
 	check(opts.inputs.len(), 1);
 	check(opts.inputs.get(0), "source.c");
+}
+
+fn void emulated_args(String[] args, List{String}* kept, List{String}* dropped)
+{
+	kept.init(mem);
+	dropped.init(mem);
+	driver::filter_emulated_args(args, kept, dropped);
+}
+
+fn void driver_arguments_match_spellings_and_kinds() @test
+{
+	check(driver_arguments::match("-fapple-kext")!!, DriverArgument.APPLE_KEXT);
+	check(driver_arguments::match("--compile")!!, DriverArgument.COMPILE);
+	check(driver_arguments::match("-c")!!, DriverArgument.COMPILE);
+	// Exact spelling beats the joined prefix; otherwise the longest prefix wins.
+	check(driver_arguments::match("-fvisibility=hidden")!!, DriverArgument.VISIBILITY_HIDDEN);
+	check(driver_arguments::match("-fvisibility=internal")!!, DriverArgument.VISIBILITY_EQ);
+	check(driver_arguments::match("-Wno-error=vla")!!, DriverArgument.WNO_ERROR_EQ);
+	assert(@catch(driver_arguments::match("-fnot-an-aro-flag")) == driver_arguments::UNKNOWN_ARGUMENT);
+
+	DriverArgument std = driver_arguments::match("-std=c11")!!;
+	check(std, DriverArgument.STD_EQ);
+	check(std.kind, driver_arguments::ArgKind.EQUALS);
+	check(std.joined_value("-std=c11"), "c11");
+	check(driver_arguments::match("-std")!!, DriverArgument.STD);
+	assert(@catch(driver_arguments::match("-stdc11")) == driver_arguments::UNKNOWN_ARGUMENT);
+	check(std.takes_next("-std=c11"), false);
+	DriverArgument include_dir = driver_arguments::match("-I")!!;
+	check(include_dir.kind, driver_arguments::ArgKind.JOINED_OR_SEPARATE);
+	check(include_dir.takes_next("-I"), true);
+	check(include_dir.takes_next("-Ifoo"), false);
+	check(driver_arguments::match("-o")!!.takes_next("-o"), true);
+
+	Supported blocks = DriverArgument.BLOCKS.supported;
+	check(blocks.clang, true);
+	check(blocks.gcc, false);
+	check(DriverArgument.SYNTAX_ONLY.supported.gcc, true);
+	check(DriverArgument.TARGET_EQ.toolchain, true);
+	check(DriverArgument.WEVERYTHING.supported.gcc, false);
+	check(diagnostics::warning_support("designated-init")!!.clang, false);
+	Supported unused = diagnostics::warning_support("unused-variable")!!;
+	check(unused.gcc && unused.clang, true);
+	check(diagnostics::Option.UNUSED_VARIABLE.supported.gcc, true);
+	check(diagnostics::warning_support("gnu")!!.gcc, false);
+	check(diagnostics::OptionGroup.GNU.supported.clang, true);
+	// Specials and unknown names are not options; filtering goes by the argument.
+	assert(@catch(diagnostics::warning_support("everything")) == diagnostics::NOT_FOUND);
+	assert(@catch(diagnostics::warning_support("nope")) == diagnostics::NOT_FOUND);
+}
+
+fn void emulate_gcc_drops_clang_only_flags_and_warnings() @test
+{
+	List{String} kept;
+	List{String} dropped;
+	emulated_args({ "aro", "--target=x86_64-linux-gnu", "--emulate=gcc", "-fblocks", "-fgnuc-version=4",
+		"-Weverything", "-Wno-error=gnu", "-nobuiltininc", "-std=c11", "-Wunused-variable", "input.c" }, &kept, &dropped);
+	defer { kept.free(); dropped.free(); }
+	check(dropped.len(), 4);
+	check(dropped[0], "-fblocks");
+	check(dropped[1], "-fgnuc-version=4");
+	check(dropped[2], "-Weverything");
+	check(dropped[3], "-Wno-error=gnu");
+	// Driver plumbing (-nobuiltininc, --target=) and shared flags survive.
+	check(kept.len(), 7);
+	check(kept[1], "--target=x86_64-linux-gnu");
+	check(kept[3], "-nobuiltininc");
+	check(kept[4], "-std=c11");
+	check(kept[6], "input.c");
+}
+
+fn void emulated_filter_skips_separate_values() @test
+{
+	List{String} kept;
+	List{String} dropped;
+	// `-o -fblocks` names an output file, not a flag; it is kept untouched.
+	emulated_args({ "aro", "--emulate=gcc", "-o", "-fblocks", "-include", "-fdeclspec", "input.c" }, &kept, &dropped);
+	defer { kept.free(); dropped.free(); }
+	check(dropped.len(), 0);
+	check(kept.len(), 7);
+}
+
+fn void emulate_clang_drops_gcc_only_warnings() @test
+{
+	List{String} kept;
+	List{String} dropped;
+	emulated_args({ "aro", "--emulate=clang", "-Wdesignated-init", "-Werror=normalized", "-fblocks", "input.c" },
+		&kept, &dropped);
+	defer { kept.free(); dropped.free(); }
+	check(dropped.len(), 2);
+	check(dropped[0], "-Wdesignated-init");
+	check(dropped[1], "-Werror=normalized");
+	check(kept.len(), 4);
+}
+
+fn void implicit_or_reset_emulation_filters_nothing() @test
+{
+	String[][] cases = {
+		{ "aro", "-fblocks", "-Weverything", "input.c" },
+		{ "aro", "--emulate=gcc", "--target=x86_64-linux-gnu", "-fblocks", "input.c" },
+		{ "aro", "--emulate=gcc", "-target", "x86_64-linux-gnu", "-fblocks", "input.c" },
+		{ "aro", "--emulate=msvc", "-fblocks", "-Wdesignated-init", "input.c" },
+	};
+	foreach (args : cases)
+	{
+		List{String} kept;
+		List{String} dropped;
+		emulated_args(args, &kept, &dropped);
+		check(dropped.len(), 0);
+		check(kept.len(), args.len);
+		kept.free();
+		dropped.free();
+	}
+}
+
+fn void emulated_argument_warning_text_and_silencing() @test
+{
+	String[] kept = { "aro", "--emulate=gcc", "input.c" };
+	String[] dropped = { "-fblocks" };
+	Diagnostics d;
+	d.init_list(mem);
+	defer d.free();
+	driver::warn_emulated_args(&d, kept, dropped)!!;
+	check(d.messages.len(), 1);
+	check(d.messages[0].kind, diagnostics::MessageKind.WARNING);
+	check(d.messages[0].opt, diagnostics::Option.EMULATED_COMPILER_ARGUMENT);
+	check(d.messages[0].text, "argument '-fblocks' is only supported by clang; ignored when emulating gcc");
+
+	Diagnostics quiet;
+	quiet.init_list(mem);
+	defer quiet.free();
+	driver::apply_diagnostic_options({ "aro", "-Wno-emulated-compiler-argument" }, &quiet)!!;
+	driver::warn_emulated_args(&quiet, kept, dropped)!!;
+	check(quiet.messages.len(), 0);
+}
+
+fn void every_driver_argument_has_a_parse_args_handler() @test
+{
+	foreach (argument : DriverArgument::values)
+	{
+		foreach (spelling : argument.args)
+		{
+			DriverOptions opts;
+			opts.init(mem);
+			Diagnostics d;
+			d.init_list(mem);
+			// A value for separate/joined forms; parse_args must not reach `unreachable`.
+			String form = argument.kind == EQUALS ? string::tformat("%s=value", spelling) : spelling;
+			(void)driver::parse_args(&opts, { "aro", form, "value", "input.c" }, &d);
+			d.free();
+			opts.free();
+		}
+	}
 }

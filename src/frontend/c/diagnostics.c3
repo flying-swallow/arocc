@@ -4,12 +4,15 @@
 //
 // Zig's comptime formatting and reflection are replaced by:
 //  - `Option` carrying its flag spelling as an associated value,
-//  - explicit group tables (`option_group`),
+//  - `OptionGroup` naming each group's member table,
+//  - `Option`/`OptionGroup` carrying GCC/Clang support (refreshed by
+//    tools/gen_driver_arguments) for --emulate filtering,
 //  - C3 printf formatting, checked at compile time by `@format`.
 // Phase-specific message tables (Parser, Preprocessor, ...) are ported with
 // their callers as enums with associated values (see `DiagMeta`).
 module aro::frontend::c::diagnostics;
-import aro::source, aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::frontend::c::parser, aro::frontend::c::tokens, std::core::string::ansi, std::io, std::collections::list;
+import aro::source, aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::frontend::c::parser, aro::frontend::c::tokens, std::core::string::ansi, std::io, std::collections::list, std::collections::enumset;
+import aro::frontend::c::driver_arguments;
 
 <* Zig `Message.Kind`; the label is the `{t}` spelling used in output. Order matters (max for -Wpedantic). *>
 enum MessageKind : char(String label)
@@ -22,153 +25,154 @@ enum MessageKind : char(String label)
 }
 
 <* Zig `Diagnostics.Option` in declaration order; `flag` is the -W<flag> spelling. *>
-enum Option : ushort(String flag)
+enum Option : ushort (String flag, Supported supported)
 {
-	UNSUPPORTED_PRAGMA { "unsupported-pragma" },
-	IMPLICIT_INT { "implicit-int" },
-	DUPLICATE_DECL_SPECIFIER { "duplicate-decl-specifier" },
-	MISSING_DECLARATION { "missing-declaration" },
-	EXTERN_INITIALIZER { "extern-initializer" },
-	IMPLICIT_FUNCTION_DECLARATION { "implicit-function-declaration" },
-	UNUSED_VALUE { "unused-value" },
-	UNREACHABLE_CODE { "unreachable-code" },
-	UNKNOWN_WARNING_OPTION { "unknown-warning-option" },
-	GNU_EMPTY_STRUCT { "gnu-empty-struct" },
-	GNU_ALIGNOF_EXPRESSION { "gnu-alignof-expression" },
-	MACRO_REDEFINED { "macro-redefined" },
-	GENERIC_QUAL_TYPE { "generic-qual-type" },
-	MULTICHAR { "multichar" },
-	POINTER_INTEGER_COMPARE { "pointer-integer-compare" },
-	COMPARE_DISTINCT_POINTER_TYPES { "compare-distinct-pointer-types" },
-	LITERAL_CONVERSION { "literal-conversion" },
-	CAST_QUALIFIERS { "cast-qualifiers" },
-	ARRAY_BOUNDS { "array-bounds" },
-	INT_CONVERSION { "int-conversion" },
-	POINTER_TYPE_MISMATCH { "pointer-type-mismatch" },
-	INCOMPATIBLE_POINTER_TYPES { "incompatible-pointer-types" },
-	EXCESS_INITIALIZERS { "excess-initializers" },
-	DIVISION_BY_ZERO { "division-by-zero" },
-	INITIALIZER_OVERRIDES { "initializer-overrides" },
-	INCOMPATIBLE_POINTER_TYPES_DISCARDS_QUALIFIERS { "incompatible-pointer-types-discards-qualifiers" },
-	UNKNOWN_ATTRIBUTES { "unknown-attributes" },
-	IGNORED_ATTRIBUTES { "ignored-attributes" },
-	BUILTIN_MACRO_REDEFINED { "builtin-macro-redefined" },
-	GNU_LABEL_AS_VALUE { "gnu-label-as-value" },
-	MALFORMED_WARNING_CHECK { "malformed-warning-check" },
-	PRAGMA_MESSAGES { "#pragma-messages" },
-	NEWLINE_EOF { "newline-eof" },
-	EMPTY_TRANSLATION_UNIT { "empty-translation-unit" },
-	IMPLICITLY_UNSIGNED_LITERAL { "implicitly-unsigned-literal" },
-	UNICODE_ZERO_WIDTH { "unicode-zero-width" },
-	UNICODE_HOMOGLYPH { "unicode-homoglyph" },
-	UNICODE { "unicode" },
-	RETURN_TYPE { "return-type" },
-	DOLLAR_IN_IDENTIFIER_EXTENSION { "dollar-in-identifier-extension" },
-	UNKNOWN_PRAGMAS { "unknown-pragmas" },
-	PREDEFINED_IDENTIFIER_OUTSIDE_FUNCTION { "predefined-identifier-outside-function" },
-	MANY_BRACES_AROUND_SCALAR_INIT { "many-braces-around-scalar-init" },
-	UNINITIALIZED { "uninitialized" },
-	GNU_STATEMENT_EXPRESSION { "gnu-statement-expression" },
-	GNU_IMAGINARY_CONSTANT { "gnu-imaginary-constant" },
-	GNU_COMPLEX_INTEGER { "gnu-complex-integer" },
-	IGNORED_QUALIFIERS { "ignored-qualifiers" },
-	INTEGER_OVERFLOW { "integer-overflow" },
-	EXTRA_SEMI { "extra-semi" },
-	GNU_BINARY_LITERAL { "gnu-binary-literal" },
-	VARIADIC_MACROS { "variadic-macros" },
-	VARARGS { "varargs" },
-	WARNINGS { "#warnings" },
-	DEPRECATED_DECLARATIONS { "deprecated-declarations" },
-	BACKSLASH_NEWLINE_ESCAPE { "backslash-newline-escape" },
-	POINTER_TO_INT_CAST { "pointer-to-int-cast" },
-	GNU_CASE_RANGE { "gnu-case-range" },
-	CXX_COMPAT { "c++-compat" },
-	VLA { "vla" },
-	FLOAT_OVERFLOW_CONVERSION { "float-overflow-conversion" },
-	FLOAT_ZERO_CONVERSION { "float-zero-conversion" },
-	FLOAT_CONVERSION { "float-conversion" },
-	GNU_FOLDING_CONSTANT { "gnu-folding-constant" },
-	UNDEF { "undef" },
-	IGNORED_PRAGMAS { "ignored-pragmas" },
-	GNU_INCLUDE_NEXT { "gnu-include-next" },
-	INCLUDE_NEXT_OUTSIDE_HEADER { "include-next-outside-header" },
-	INCLUDE_NEXT_ABSOLUTE_PATH { "include-next-absolute-path" },
-	ENUM_TOO_LARGE { "enum-too-large" },
-	FIXED_ENUM_EXTENSION { "fixed-enum-extension" },
-	DESIGNATED_INIT { "designated-init" },
-	ATTRIBUTE_WARNING { "attribute-warning" },
-	INVALID_NORETURN { "invalid-noreturn" },
-	ZERO_LENGTH_ARRAY { "zero-length-array" },
-	OLD_STYLE_FLEXIBLE_STRUCT { "old-style-flexible-struct" },
-	GNU_ZERO_VARIADIC_MACRO_ARGUMENTS { "gnu-zero-variadic-macro-arguments" },
-	MAIN_RETURN_TYPE { "main-return-type" },
-	EXPANSION_TO_DEFINED { "expansion-to-defined" },
-	BIT_INT_EXTENSION { "bit-int-extension" },
-	KEYWORD_MACRO { "keyword-macro" },
-	POINTER_ARITH { "pointer-arith" },
-	SIZEOF_ARRAY_ARGUMENT { "sizeof-array-argument" },
-	POINTER_BOOL_CONVERSION { "pointer-bool-conversion" },
-	STRING_CONVERSION { "string-conversion" },
-	GNU_AUTO_TYPE { "gnu-auto-type" },
-	GNU_POINTER_ARITH { "gnu-pointer-arith" },
-	GNU_UNION_CAST { "gnu-union-cast" },
-	POINTER_SIGN { "pointer-sign" },
-	FUSE_LD_PATH { "fuse-ld-path" },
-	LANGUAGE_EXTENSION_TOKEN { "language-extension-token" },
-	COMPLEX_COMPONENT_INIT { "complex-component-init" },
-	MICROSOFT_INCLUDE { "microsoft-include" },
-	MICROSOFT_END_OF_FILE { "microsoft-end-of-file" },
-	INVALID_SOURCE_ENCODING { "invalid-source-encoding" },
-	FOUR_CHAR_CONSTANTS { "four-char-constants" },
-	UNKNOWN_ESCAPE_SEQUENCE { "unknown-escape-sequence" },
-	INVALID_PP_TOKEN { "invalid-pp-token" },
-	DEPRECATED_NON_PROTOTYPE { "deprecated-non-prototype" },
-	DUPLICATE_EMBED_PARAM { "duplicate-embed-param" },
-	UNUSED_RESULT { "unused-result" },
-	NORMALIZED { "normalized" },
-	SHIFT_COUNT_NEGATIVE { "shift-count-negative" },
-	SHIFT_COUNT_OVERFLOW { "shift-count-overflow" },
-	CONSTANT_CONVERSION { "constant-conversion" },
-	SIGN_CONVERSION { "sign-conversion" },
-	ADDRESS_OF_PACKED_MEMBER { "address-of-packed-member" },
-	NONNULL { "nonnull" },
-	ATOMIC_ACCESS { "atomic-access" },
-	GNU_DESIGNATOR { "gnu-designator" },
-	EMPTY_BODY { "empty-body" },
-	NULLABILITY_EXTENSION { "nullability-extension" },
-	NULLABILITY { "nullability" },
-	MICROSOFT_FLEXIBLE_ARRAY { "microsoft-flexible-array" },
-	MICROSOFT_ANON_TAG { "microsoft-anon-tag" },
-	OUT_OF_SCOPE_FUNCTION { "out-of-scope-function" },
-	DATE_TIME { "date-time" },
-	VARIADIC_MACRO_ARGUMENTS_OMITTED { "variadic-macro-arguments-omitted" },
-	PRAGMA_ONCE_OUTSIDE_HEADER { "pragma-once-outside-header" },
-	UNDERLYING_ATOMIC_QUALIFIER_IGNORED { "underlying-atomic-qualifier-ignored" },
-	UNDERLYING_CV_QUALIFIER_IGNORED { "underlying-cv-qualifier-ignored" },
-	BOUNDS_ATTRIBUTES_REDUNDANT { "bounds-attributes-redundant" },
-	FILE_NAME_EXTENSION { "file-name-extension" },
-	BASE_FILE_EXTENSION { "base-file-extension" },
-	INCLUDE_LEVEL_EXTENSION { "include-level-extension" },
-	BLOCKS_EXTENSION { "blocks-extension" },
-	EXTRA_TOKENS { "extra-tokens" },
-	UNSUPPORTED_VISIBILITY { "unsupported-visibility" },
-	DEPRECATED_ATTRIBUTES { "deprecated-attributes" },
-	SECTION { "section" },
-	LABEL_ATTRIBUTE { "label-attribute" },
-	UNUSED_VARIABLE { "unused-variable" },
-	UNUSED_PARAMETER { "unused-parameter" },
-	UNUSED_LOCAL_TYPEDEF { "unused-local-typedef" },
-	UNUSED_LABEL { "unused-label" },
-	UNUSED_COMPARISON { "unused-comparison" },
-	DEPRECATED_OCTAL_LITERALS { "deprecated-octal-literals" },
-	C99_EXTENSIONS { "c99-extensions" },
-	C99_COMPAT { "c99-compat" },
-	C11_EXTENSIONS { "c11-extensions" },
-	PRE_C11_COMPAT { "pre-c11-compat" },
-	C23_EXTENSIONS { "c23-extensions" },
-	PRE_C23_COMPAT { "pre-c23-compat" },
-	C2Y_EXTENSIONS { "c2y-extensions" },
-	PRE_C2Y_COMPAT { "pre-c2y-compat" },
+	UNSUPPORTED_PRAGMA { "unsupported-pragma", {} },
+	IMPLICIT_INT { "implicit-int", { .clang = true, .gcc = true } },
+	DUPLICATE_DECL_SPECIFIER { "duplicate-decl-specifier", { .clang = true, .gcc = true } },
+	MISSING_DECLARATION { "missing-declaration", {} },
+	EXTERN_INITIALIZER { "extern-initializer", { .clang = true } },
+	IMPLICIT_FUNCTION_DECLARATION { "implicit-function-declaration", { .clang = true, .gcc = true } },
+	UNUSED_VALUE { "unused-value", { .clang = true, .gcc = true } },
+	UNREACHABLE_CODE { "unreachable-code", { .clang = true, .gcc = true } },
+	UNKNOWN_WARNING_OPTION { "unknown-warning-option", { .clang = true } },
+	GNU_EMPTY_STRUCT { "gnu-empty-struct", { .clang = true } },
+	GNU_ALIGNOF_EXPRESSION { "gnu-alignof-expression", { .clang = true } },
+	MACRO_REDEFINED { "macro-redefined", { .clang = true } },
+	GENERIC_QUAL_TYPE { "generic-qual-type", {} },
+	MULTICHAR { "multichar", { .clang = true, .gcc = true } },
+	POINTER_INTEGER_COMPARE { "pointer-integer-compare", { .clang = true } },
+	COMPARE_DISTINCT_POINTER_TYPES { "compare-distinct-pointer-types", { .clang = true, .gcc = true } },
+	LITERAL_CONVERSION { "literal-conversion", { .clang = true } },
+	CAST_QUALIFIERS { "cast-qualifiers", {} },
+	ARRAY_BOUNDS { "array-bounds", { .clang = true, .gcc = true } },
+	INT_CONVERSION { "int-conversion", { .clang = true, .gcc = true } },
+	POINTER_TYPE_MISMATCH { "pointer-type-mismatch", { .clang = true } },
+	INCOMPATIBLE_POINTER_TYPES { "incompatible-pointer-types", { .clang = true, .gcc = true } },
+	EXCESS_INITIALIZERS { "excess-initializers", { .clang = true } },
+	DIVISION_BY_ZERO { "division-by-zero", { .clang = true } },
+	INITIALIZER_OVERRIDES { "initializer-overrides", { .clang = true } },
+	INCOMPATIBLE_POINTER_TYPES_DISCARDS_QUALIFIERS { "incompatible-pointer-types-discards-qualifiers", { .clang = true } },
+	UNKNOWN_ATTRIBUTES { "unknown-attributes", { .clang = true } },
+	IGNORED_ATTRIBUTES { "ignored-attributes", { .clang = true, .gcc = true } },
+	BUILTIN_MACRO_REDEFINED { "builtin-macro-redefined", { .clang = true, .gcc = true } },
+	GNU_LABEL_AS_VALUE { "gnu-label-as-value", { .clang = true } },
+	MALFORMED_WARNING_CHECK { "malformed-warning-check", { .clang = true } },
+	PRAGMA_MESSAGES { "#pragma-messages", { .clang = true } },
+	NEWLINE_EOF { "newline-eof", { .clang = true } },
+	EMPTY_TRANSLATION_UNIT { "empty-translation-unit", { .clang = true } },
+	IMPLICITLY_UNSIGNED_LITERAL { "implicitly-unsigned-literal", { .clang = true } },
+	UNICODE_ZERO_WIDTH { "unicode-zero-width", { .clang = true } },
+	UNICODE_HOMOGLYPH { "unicode-homoglyph", { .clang = true } },
+	UNICODE { "unicode", { .clang = true, .gcc = true } },
+	RETURN_TYPE { "return-type", { .clang = true, .gcc = true } },
+	DOLLAR_IN_IDENTIFIER_EXTENSION { "dollar-in-identifier-extension", { .clang = true } },
+	UNKNOWN_PRAGMAS { "unknown-pragmas", { .clang = true, .gcc = true } },
+	PREDEFINED_IDENTIFIER_OUTSIDE_FUNCTION { "predefined-identifier-outside-function", { .clang = true } },
+	MANY_BRACES_AROUND_SCALAR_INIT { "many-braces-around-scalar-init", { .clang = true } },
+	UNINITIALIZED { "uninitialized", { .clang = true, .gcc = true } },
+	GNU_STATEMENT_EXPRESSION { "gnu-statement-expression", { .clang = true } },
+	GNU_IMAGINARY_CONSTANT { "gnu-imaginary-constant", { .clang = true } },
+	GNU_COMPLEX_INTEGER { "gnu-complex-integer", { .clang = true } },
+	IGNORED_QUALIFIERS { "ignored-qualifiers", { .clang = true, .gcc = true } },
+	INTEGER_OVERFLOW { "integer-overflow", { .clang = true } },
+	EXTRA_SEMI { "extra-semi", { .clang = true } },
+	GNU_BINARY_LITERAL { "gnu-binary-literal", { .clang = true } },
+	VARIADIC_MACROS { "variadic-macros", { .clang = true, .gcc = true } },
+	VARARGS { "varargs", { .clang = true, .gcc = true } },
+	WARNINGS { "#warnings", { .clang = true } },
+	DEPRECATED_DECLARATIONS { "deprecated-declarations", { .clang = true, .gcc = true } },
+	BACKSLASH_NEWLINE_ESCAPE { "backslash-newline-escape", { .clang = true } },
+	POINTER_TO_INT_CAST { "pointer-to-int-cast", { .clang = true, .gcc = true } },
+	GNU_CASE_RANGE { "gnu-case-range", { .clang = true } },
+	CXX_COMPAT { "c++-compat", { .clang = true, .gcc = true } },
+	VLA { "vla", { .clang = true, .gcc = true } },
+	FLOAT_OVERFLOW_CONVERSION { "float-overflow-conversion", { .clang = true } },
+	FLOAT_ZERO_CONVERSION { "float-zero-conversion", { .clang = true } },
+	FLOAT_CONVERSION { "float-conversion", { .clang = true, .gcc = true } },
+	GNU_FOLDING_CONSTANT { "gnu-folding-constant", { .clang = true } },
+	UNDEF { "undef", { .clang = true, .gcc = true } },
+	IGNORED_PRAGMAS { "ignored-pragmas", { .clang = true } },
+	GNU_INCLUDE_NEXT { "gnu-include-next", { .clang = true } },
+	INCLUDE_NEXT_OUTSIDE_HEADER { "include-next-outside-header", { .clang = true } },
+	INCLUDE_NEXT_ABSOLUTE_PATH { "include-next-absolute-path", { .clang = true } },
+	ENUM_TOO_LARGE { "enum-too-large", { .clang = true } },
+	FIXED_ENUM_EXTENSION { "fixed-enum-extension", { .clang = true } },
+	DESIGNATED_INIT { "designated-init", { .gcc = true } },
+	ATTRIBUTE_WARNING { "attribute-warning", { .clang = true, .gcc = true } },
+	INVALID_NORETURN { "invalid-noreturn", { .clang = true } },
+	ZERO_LENGTH_ARRAY { "zero-length-array", { .clang = true } },
+	OLD_STYLE_FLEXIBLE_STRUCT { "old-style-flexible-struct", {} },
+	GNU_ZERO_VARIADIC_MACRO_ARGUMENTS { "gnu-zero-variadic-macro-arguments", { .clang = true } },
+	MAIN_RETURN_TYPE { "main-return-type", { .clang = true } },
+	EXPANSION_TO_DEFINED { "expansion-to-defined", { .clang = true, .gcc = true } },
+	BIT_INT_EXTENSION { "bit-int-extension", { .clang = true } },
+	KEYWORD_MACRO { "keyword-macro", { .clang = true, .gcc = true } },
+	POINTER_ARITH { "pointer-arith", { .clang = true, .gcc = true } },
+	SIZEOF_ARRAY_ARGUMENT { "sizeof-array-argument", { .clang = true, .gcc = true } },
+	POINTER_BOOL_CONVERSION { "pointer-bool-conversion", { .clang = true } },
+	STRING_CONVERSION { "string-conversion", { .clang = true } },
+	GNU_AUTO_TYPE { "gnu-auto-type", { .clang = true } },
+	GNU_POINTER_ARITH { "gnu-pointer-arith", { .clang = true } },
+	GNU_UNION_CAST { "gnu-union-cast", { .clang = true } },
+	POINTER_SIGN { "pointer-sign", { .clang = true, .gcc = true } },
+	FUSE_LD_PATH { "fuse-ld-path", { .clang = true } },
+	LANGUAGE_EXTENSION_TOKEN { "language-extension-token", { .clang = true } },
+	COMPLEX_COMPONENT_INIT { "complex-component-init", { .clang = true } },
+	MICROSOFT_INCLUDE { "microsoft-include", { .clang = true } },
+	MICROSOFT_END_OF_FILE { "microsoft-end-of-file", { .clang = true } },
+	INVALID_SOURCE_ENCODING { "invalid-source-encoding", { .clang = true } },
+	FOUR_CHAR_CONSTANTS { "four-char-constants", { .clang = true } },
+	UNKNOWN_ESCAPE_SEQUENCE { "unknown-escape-sequence", { .clang = true } },
+	INVALID_PP_TOKEN { "invalid-pp-token", { .clang = true } },
+	DEPRECATED_NON_PROTOTYPE { "deprecated-non-prototype", { .clang = true, .gcc = true } },
+	DUPLICATE_EMBED_PARAM { "duplicate-embed-param", {} },
+	UNUSED_RESULT { "unused-result", { .clang = true, .gcc = true } },
+	NORMALIZED { "normalized", { .gcc = true } },
+	SHIFT_COUNT_NEGATIVE { "shift-count-negative", { .clang = true, .gcc = true } },
+	SHIFT_COUNT_OVERFLOW { "shift-count-overflow", { .clang = true, .gcc = true } },
+	CONSTANT_CONVERSION { "constant-conversion", { .clang = true } },
+	SIGN_CONVERSION { "sign-conversion", { .clang = true, .gcc = true } },
+	ADDRESS_OF_PACKED_MEMBER { "address-of-packed-member", { .clang = true, .gcc = true } },
+	NONNULL { "nonnull", { .clang = true, .gcc = true } },
+	ATOMIC_ACCESS { "atomic-access", { .clang = true } },
+	GNU_DESIGNATOR { "gnu-designator", { .clang = true } },
+	EMPTY_BODY { "empty-body", { .clang = true, .gcc = true } },
+	NULLABILITY_EXTENSION { "nullability-extension", { .clang = true } },
+	NULLABILITY { "nullability", { .clang = true } },
+	MICROSOFT_FLEXIBLE_ARRAY { "microsoft-flexible-array", { .clang = true } },
+	MICROSOFT_ANON_TAG { "microsoft-anon-tag", { .clang = true } },
+	OUT_OF_SCOPE_FUNCTION { "out-of-scope-function", { .clang = true } },
+	DATE_TIME { "date-time", { .clang = true, .gcc = true } },
+	VARIADIC_MACRO_ARGUMENTS_OMITTED { "variadic-macro-arguments-omitted", {} },
+	PRAGMA_ONCE_OUTSIDE_HEADER { "pragma-once-outside-header", { .clang = true, .gcc = true } },
+	UNDERLYING_ATOMIC_QUALIFIER_IGNORED { "underlying-atomic-qualifier-ignored", {} },
+	UNDERLYING_CV_QUALIFIER_IGNORED { "underlying-cv-qualifier-ignored", {} },
+	BOUNDS_ATTRIBUTES_REDUNDANT { "bounds-attributes-redundant", {} },
+	FILE_NAME_EXTENSION { "file-name-extension", {} },
+	BASE_FILE_EXTENSION { "base-file-extension", {} },
+	INCLUDE_LEVEL_EXTENSION { "include-level-extension", {} },
+	BLOCKS_EXTENSION { "blocks-extension", {} },
+	EXTRA_TOKENS { "extra-tokens", { .clang = true } },
+	UNSUPPORTED_VISIBILITY { "unsupported-visibility", { .clang = true } },
+	DEPRECATED_ATTRIBUTES { "deprecated-attributes", { .clang = true } },
+	SECTION { "section", { .clang = true } },
+	LABEL_ATTRIBUTE { "label-attribute", {} },
+	UNUSED_VARIABLE { "unused-variable", { .clang = true, .gcc = true } },
+	UNUSED_PARAMETER { "unused-parameter", { .clang = true, .gcc = true } },
+	UNUSED_LOCAL_TYPEDEF { "unused-local-typedef", { .clang = true } },
+	UNUSED_LABEL { "unused-label", { .clang = true, .gcc = true } },
+	UNUSED_COMPARISON { "unused-comparison", { .clang = true } },
+	DEPRECATED_OCTAL_LITERALS { "deprecated-octal-literals", {} },
+	C99_EXTENSIONS { "c99-extensions", { .clang = true } },
+	C99_COMPAT { "c99-compat", { .clang = true } },
+	C11_EXTENSIONS { "c11-extensions", { .clang = true } },
+	PRE_C11_COMPAT { "pre-c11-compat", {} },
+	C23_EXTENSIONS { "c23-extensions", {} },
+	PRE_C23_COMPAT { "pre-c23-compat", {} },
+	C2Y_EXTENSIONS { "c2y-extensions", {} },
+	PRE_C2Y_COMPAT { "pre-c2y-compat", {} },
+	EMULATED_COMPILER_ARGUMENT { "emulated-compiler-argument", {} },
 }
 
 const Option[] GNU = {
@@ -203,27 +207,28 @@ const Option[] ALL = {
 	NONNULL, UNREACHABLE_CODE, MALFORMED_WARNING_CHECK,
 };
 
-<* Group names in Zig declaration order (`@typeInfo(Option).decl_names`). *>
-const String[] GROUP_NAMES = { "gnu", "clang", "microsoft", "extra", "implicit", "unused", "deprecated", "most", "all" };
+<* Warning groups in Zig declaration order (`@typeInfo(Option).decl_names`);
+   `flag` is the -W<flag> spelling, `options` its members. *>
+enum OptionGroup : char (String flag, Supported supported, Option[] options)
+{
+	GNU { "gnu", { .clang = true }, GNU },
+	CLANG { "clang", {}, CLANG },
+	MICROSOFT { "microsoft", { .clang = true }, MICROSOFT },
+	EXTRA { "extra", { .clang = true, .gcc = true }, EXTRA },
+	IMPLICIT { "implicit", { .clang = true, .gcc = true }, IMPLICIT },
+	UNUSED { "unused", { .clang = true, .gcc = true }, UNUSED },
+	DEPRECATED { "deprecated", { .clang = true, .gcc = true }, DEPRECATED },
+	MOST { "most", { .clang = true }, MOST },
+	ALL { "all", { .clang = true, .gcc = true }, ALL },
+}
 
 excuse NOT_FOUND;
 
-<* The options of the warning group `name`, or NOT_FOUND. *>
-fn Option[]? option_group(String name)
+<* The warning group `name`, or NOT_FOUND. *>
+fn OptionGroup? option_group(String name)
 {
-	switch (name)
-	{
-		case "gnu": return GNU;
-		case "clang": return CLANG;
-		case "microsoft": return MICROSOFT;
-		case "extra": return EXTRA;
-		case "implicit": return IMPLICIT;
-		case "unused": return UNUSED;
-		case "deprecated": return DEPRECATED;
-		case "most": return MOST;
-		case "all": return ALL;
-		default: return NOT_FOUND~;
-	}
+	foreach (g : OptionGroup::values) if (g.flag == name) return g;
+	return NOT_FOUND~;
 }
 
 <* Zig `std.meta.stringToEnum(Option, name)`. *>
@@ -241,23 +246,34 @@ fn bool warning_exists(String name)
 	return @ok(option_from_flag(name));
 }
 
-<* Zig `std.EnumMap(Option, Message.Kind)`: a plain value so `State` can be saved and restored. *>
+<* GCC/Clang support of the option or group `name` in -W<name>, or NOT_FOUND. *>
+fn Supported? warning_support(String name)
+{
+	if (try o = option_from_flag(name)) return o.supported;
+	if (try g = option_group(name)) return g.supported;
+	return NOT_FOUND~;
+}
+
+alias OptionSet = EnumSet{Option};
+
+<* Zig `std.EnumMap(Option, Message.Kind)` as one `EnumSet` per kind; an option is
+   in at most one set, none when no -W<name> or pragma set it. A plain value so
+   `State` can be saved and restored. *>
 struct OptionKindMap
 {
-	bool[Option::len] present;
-	MessageKind[Option::len] kinds;
+	OptionSet[MessageKind::len] by_kind;
 }
 
 fn void OptionKindMap.put(&self, Option o, MessageKind kind)
 {
-	self.present[o.ordinal] = true;
-	self.kinds[o.ordinal] = kind;
+	foreach (&set : self.by_kind) set.remove(o);
+	self.by_kind[kind.ordinal].add(o);
 }
 
 fn MessageKind? OptionKindMap.get(&self, Option o)
 {
-	if (!self.present[o.ordinal]) return NOT_FOUND~;
-	return self.kinds[o.ordinal];
+	foreach (kind : MessageKind::values) if (self.by_kind[kind.ordinal].has(o)) return kind;
+	return NOT_FOUND~;
 }
 
 <*
@@ -527,7 +543,7 @@ fn void? Diagnostics.set(&self, String name, MessageKind to)
 	}
 	if (try group = option_group(name))
 	{
-		foreach (option : group) self.state.options.put(option, to);
+		foreach (option : group.options) self.state.options.put(option, to);
 		return;
 	}
 

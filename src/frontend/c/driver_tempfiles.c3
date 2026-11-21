@@ -93,7 +93,7 @@ fn String? DriverTempFiles.get_out_file_name(&self, driver_options::DriverOption
 {
 	if (opts.only_compile || opts.only_preprocess_and_compile)
 	{
-		if (opts.has_output_name) return opts.output_name;
+		if (try output_name = opts.output_name.get()) return output_name;
 		String extension = opts.only_preprocess_and_compile ? ".s" : target.ofmt.file_ext(target.cpu.arch);
 		return self.remember_filename(file_stem(src.path), "", extension, false);
 	}

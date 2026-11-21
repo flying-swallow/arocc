@@ -204,6 +204,19 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "phi")!; term.set_color(ansi::Ansi.RESET)!; io::write_all(w, " {")!;
 				foreach (input : inst.data.phi) { io::write_all(w, "\n        ")!; self.write_label(decl, labels, input.label, term)!; term.set_color(ansi::Ansi.RESET)!; io::write_all(w, " => ")!; self.write_ref(decl, refs, input.value, term)!; term.set_color(ansi::Ansi.RESET)!; }
 				io::write_all(w, "\n    }\n")!;
+			case ATOMIC_LOAD:
+				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "atomic_load ")!;
+				self.write_ref(decl, refs, inst.data.atomic.ptr, term)!;
+				IrDumpRole.ATTRIBUTE.apply(term)!; io::fprintf(w, " %s", inst.data.atomic.order.name)!; w.write_byte('\n')!;
+			case ATOMIC_STORE:
+				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    atomic_store ")!; self.write_ref(decl, refs, inst.data.atomic.ptr, term)!; term.set_color(ansi::Ansi.RESET)!;
+				io::write_all(w, ", ")!; self.write_ref(decl, refs, inst.data.atomic.val, term)!;
+				IrDumpRole.ATTRIBUTE.apply(term)!; io::fprintf(w, " %s", inst.data.atomic.order.name)!; w.write_byte('\n')!;
+			case FENCE:
+				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    fence")!;
+				IrDumpRole.ATTRIBUTE.apply(term)!; io::fprintf(w, " %s", inst.data.atomic.order.name)!; w.write_byte('\n')!;
+			case CLZ:
+			case CTZ:
 			case LOAD:
 			case BIT_NOT:
 			case NEGATE:

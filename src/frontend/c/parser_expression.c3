@@ -520,6 +520,19 @@ fn parser_result::Result? Parser.parse_sizeof_alignof(&self, tokenizer::TokenId 
 	ulong? size_opt = operand_qt.sizeof_or_null(p.comp);
 	if (catch f = size_opt)
 	{
+		if (is_sizeof_op && !operand_qt.has_incomplete_size(p.comp))
+		{
+			// Zig: sizeof a variable length array is a runtime size_t with no value.
+			type_store::QualType size_qt = p.comp.type_store.size;
+			type_store::NodeIndex vla_node = p.tree.add_node(
+				{
+					.kind = tree::NodeKind.SIZEOF_EXPR, .type_info = {
+						.qt = size_qt, .op_tok = op_tok, .expr = expr, .operand_qt = operand_qt
+					}
+				}
+			);
+			return { .node = vla_node, .qt = size_qt, .val = value::NONE };
+		}
 		if (op == tokenizer::TokenId.KEYWORD_SIZEOF)
 		{
 			Diagnostic.INVALID_SIZEOF.@emit(p, op_tok, p.fmt_qt(operand_qt))!;
@@ -1335,7 +1348,9 @@ fn parser_result::Result? Parser.combine_binary(&self, parser_result::Result lhs
 	if ((kind == tree::NodeKind.SHL_EXPR || kind == tree::NodeKind.SHR_EXPR) && eval && !lhs.val.is_none() && !rhs.val.is_none()) emit_shift_count_diag(p, rhs.val, lhs.qt, op_tok)!;
 	value::Value folded = value::NONE;
 	bool overflowed = false;
-	if (kind == tree::NodeKind.COMMA_EXPR && eval) folded = rhs.val;
+	// A comma folds only when its left operand folded too: `(f(), 3)` must keep
+	// the call, and codegen emits any value-mapped node as a bare constant.
+	if (kind == tree::NodeKind.COMMA_EXPR && eval && !lhs.val.is_none()) folded = rhs.val;
 	// Fold regardless of `eval` (see unary_expr); diagnostics stay gated on it.
 	if (!is_assignment(op))
 	{

@@ -413,8 +413,10 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 		case FLOAT_LITERAL:
 		case IMAGINARY_LITERAL:
 		case STRING_LITERAL_EXPR:
-		case ALIGNOF_EXPR:
 			unreachable("constant expression missing value map entry");
+		case SIZEOF_EXPR:
+		case ALIGNOF_EXPR:
+			return self.gen_type_info_constant(node_index, node);
 		case EMPTY_DECL:
 		case STATIC_ASSERT:
 		case FUNCTION: return ir::NONE;
@@ -608,7 +610,6 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 		case ADDR_OF_LABEL:
 		case IMAG_EXPR:
 		case REAL_EXPR:
-		case SIZEOF_EXPR:
 		case ARRAY_ACCESS_EXPR:  // only reached for an rvalue vector element
 		case BUILTIN_CONVERTVECTOR:
 		case BUILTIN_SHUFFLEVECTOR:
@@ -633,6 +634,27 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 			unreachable("non-expression node %s in CodeGen.gen_expr", node.kind.name);
 	}
 	return ir::NONE;
+}
+
+<*
+ `sizeof`/`alignof` whose folded value was not saved in the value map (the parser
+ only saves operand values when an enclosing expression fails to fold, so
+ `(void) sizeof (x)` from glibc `assert` and comma operands reach here). The
+ operand is never evaluated. `sizeof` a VLA has no folded value: its size is
+ computed at run time (evaluating the length expression on first use of the type).
+*>
+fn ir::Ref? CodeGen.gen_type_info_constant(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
+{
+	type_store::QualType operand_qt = node.type_info.operand_qt;
+	if (node.kind == tree::NodeKind.SIZEOF_EXPR && !@ok(operand_qt.sizeof_or_null(self.comp)))
+	{
+		ir::Ref size = self.gen_type_size(operand_qt)!;
+		type_store::QualType result_qt = node_index.qt(self.tree);
+		if (result_qt.bit_sizeof(self.comp) == 64) return size;
+		return self.builder.add_inst(ir::InstTag.TRUNC, { .ref = size }, self.value_type(result_qt)!);
+	}
+	ulong amount = node.kind == tree::NodeKind.SIZEOF_EXPR ? operand_qt.sizeof(self.comp) : (ulong)operand_qt.alignof(self.comp);
+	return self.builder.add_constant(value::int_u64(amount, self.comp).ref(), self.gen_type(node_index.qt(self.tree))!);
 }
 
 <* `gen_expr` case VARIABLE. *>
@@ -1563,8 +1585,8 @@ fn ir::Ref? CodeGen.gen_truth_compare(&self, ir::Ref value, type_store::QualType
 <*
  Lower a builtin call. Upstream Zig leaves this a TODO; the C3 port lowers the
  integer/libc subset and SysV integer/pointer varargs that the native backend
- can express. Scalar float va_arg is handled here; aggregate va_arg, atomics,
- alloca and setjmp remain TODO.
+ can express. Scalar float va_arg, atomic load/store/fences and clz/ctz are
+ handled here; aggregate va_arg, atomic read-modify-write, alloca and setjmp remain TODO.
 *>
 fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_store::NodeIndex[] arg_nodes, type_store::QualType qt)
 {
@@ -1603,6 +1625,51 @@ fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_sto
 		ulong bits = qt.bit_sizeof(self.comp);
 		ulong unknown = kind & 2 ? 0 : (bits >= 64 ? ~(ulong)0 : (1UL << bits) - 1);
 		return self.builder.add_constant(value::int_u64(unknown, self.comp).ref(), self.gen_type(qt)!);
+	}
+	if (builtin_call::is_overflow_builtin(tag))
+	{
+		return self.gen_overflow_builtin(tag, arg_nodes);
+	}
+	if (tag == common::TAG___ATOMIC_LOAD_N || tag == common::TAG___C11_ATOMIC_LOAD)
+	{
+		ir::Ref ptr = self.gen_expr(arg_nodes[0])!;
+		ir::AtomicOrder order = self.atomic_order_arg(arg_nodes[1])!;
+		return self.builder.add_atomic_load(ptr, order, self.gen_type(qt)!);
+	}
+	if (tag == common::TAG___ATOMIC_STORE_N || tag == common::TAG___C11_ATOMIC_STORE)
+	{
+		type_store::QualType pointee = self.atomic_pointee(arg_nodes[0]);
+		ir::Ref ptr = self.gen_expr(arg_nodes[0])!;
+		ir::Ref val = self.convert_scalar(self.gen_expr(arg_nodes[1])!, arg_nodes[1].qt(self.tree), pointee)!;
+		ir::AtomicOrder order = self.atomic_order_arg(arg_nodes[2])!;
+		self.builder.add_atomic_store(ptr, val, order);
+		return ir::NONE;
+	}
+	if (tag == common::TAG___ATOMIC_THREAD_FENCE || tag == common::TAG___C11_ATOMIC_THREAD_FENCE)
+	{
+		self.builder.add_fence(self.atomic_order_arg(arg_nodes[0])!);
+		return ir::NONE;
+	}
+	if (tag == common::TAG___SYNC_SYNCHRONIZE)
+	{
+		self.builder.add_fence(ir::AtomicOrder.SEQ_CST);
+		return ir::NONE;
+	}
+	if (tag == common::TAG___ATOMIC_SIGNAL_FENCE || tag == common::TAG___C11_ATOMIC_SIGNAL_FENCE)
+	{
+		// A compiler-only barrier; IR passes never move memory operations.
+		self.atomic_order_arg(arg_nodes[0])!;
+		return ir::NONE;
+	}
+	if (tag == common::TAG___BUILTIN_CLZ || tag == common::TAG___BUILTIN_CLZL || tag == common::TAG___BUILTIN_CLZLL ||
+		tag == common::TAG___BUILTIN_CLZS || tag == common::TAG___BUILTIN_CTZ || tag == common::TAG___BUILTIN_CTZL ||
+		tag == common::TAG___BUILTIN_CTZLL || tag == common::TAG___BUILTIN_CTZS)
+	{
+		bool leading = tag == common::TAG___BUILTIN_CLZ || tag == common::TAG___BUILTIN_CLZL ||
+			tag == common::TAG___BUILTIN_CLZLL || tag == common::TAG___BUILTIN_CLZS;
+		type_store::QualType operand_qt = arg_nodes[0].qt(self.tree);
+		ir::Ref count = self.add_un(leading ? ir::InstTag.CLZ : ir::InstTag.CTZ, self.gen_expr(arg_nodes[0])!, operand_qt)!;
+		return self.convert_scalar(count, operand_qt, qt);
 	}
 	if (tag == common::TAG___BUILTIN_BSWAP16 || tag == common::TAG___BUILTIN_BSWAP32 || tag == common::TAG___BUILTIN_BSWAP64)
 	{
@@ -1759,6 +1826,69 @@ fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_sto
 	}
 	self.fail(string::tformat("TODO CodeGen.genBuiltinCall %s\n", builtins::name_from_tag(tag)))!;
 	return ir::NONE;
+}
+
+<*
+ `__builtin_{add,sub,mul}_overflow(a, b, res)`: compute in i128, which is exact
+ for operands of at most 64 bits, store the result truncated to `*res`'s type,
+ and report whether truncation changed the value.
+*>
+fn ir::Ref? CodeGen.gen_overflow_builtin(&self, builtin_properties::BuiltinTag tag, type_store::NodeIndex[] arg_nodes) @noinline
+{
+	type_store::QualType result_qt = self.atomic_pointee(arg_nodes[2]);
+	type_store::QualType lhs_qt = arg_nodes[0].qt(self.tree);
+	type_store::QualType rhs_qt = arg_nodes[1].qt(self.tree);
+	if (lhs_qt.bit_sizeof(self.comp) > 64 || rhs_qt.bit_sizeof(self.comp) > 64 || result_qt.bit_sizeof(self.comp) > 64)
+	{
+		self.fail("TODO: __builtin_*_overflow on integers wider than 64 bits\n")!;
+	}
+	type_store::QualType wide_qt = type_store::INT128;
+	ir::Ref lhs = self.convert_scalar(self.gen_expr(arg_nodes[0])!, lhs_qt, wide_qt)!;
+	ir::Ref rhs = self.convert_scalar(self.gen_expr(arg_nodes[1])!, rhs_qt, wide_qt)!;
+	ir::Ref result_ptr = self.gen_expr(arg_nodes[2])!;
+	ir::InstTag op = tag == common::TAG___BUILTIN_ADD_OVERFLOW ? ir::InstTag.ADD :
+		(tag == common::TAG___BUILTIN_SUB_OVERFLOW ? ir::InstTag.SUB : ir::InstTag.MUL);
+	ir::Ref exact = self.add_bin(op, lhs, rhs, wide_qt)!;
+	ir::Ref truncated = self.convert_scalar(exact, wide_qt, result_qt)!;
+	self.builder.add_store(result_ptr, truncated);
+	ir::Ref round_trip = self.convert_scalar(truncated, result_qt, wide_qt)!;
+	return self.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { .lhs = round_trip, .rhs = exact } }, value_interner::REF_I1);
+}
+
+<* The non-atomic, unqualified object type an `__atomic_*`/`__c11_atomic_*` pointer argument points to. *>
+fn type_store::QualType CodeGen.atomic_pointee(&self, type_store::NodeIndex pointer_arg)
+{
+	type_store::QualType pointer_qt = pointer_arg.qt(self.tree);
+	type_store::Type pointer = pointer_qt.get(self.comp, type_store::TypeTag.POINTER)!!;
+	return pointer.pointer.child.non_atomic(self.comp).unqualified();
+}
+
+<* A `__ATOMIC_*` memory-order argument. A non-constant order is evaluated and treated as seq_cst. *>
+fn ir::AtomicOrder? CodeGen.atomic_order_arg(&self, type_store::NodeIndex order_arg)
+{
+	if (try order_val = self.tree.value_of(order_arg))
+	{
+		if (try order = order_val.to_i64(self.comp))
+		{
+			if (order >= 0 && order <= (long)ir::AtomicOrder.SEQ_CST) return (ir::AtomicOrder)order;
+		}
+	}
+	else
+	{
+		self.gen_expr(order_arg)!;
+	}
+	return ir::AtomicOrder.SEQ_CST;
+}
+
+<* Integer/pointer value conversion between scalar types of possibly different widths. *>
+fn ir::Ref? CodeGen.convert_scalar(&self, ir::Ref value, type_store::QualType from, type_store::QualType to)
+{
+	ulong from_bits = from.bit_sizeof(self.comp);
+	ulong to_bits = to.bit_sizeof(self.comp);
+	if (from_bits == to_bits) return value;
+	if (from_bits > to_bits) return self.add_un(ir::InstTag.TRUNC, value, to);
+	bool unsigned_source = from.is_pointer(self.comp) || from.signedness(self.comp) == lang_opts::Signedness.UNSIGNED;
+	return self.add_un(unsigned_source ? ir::InstTag.ZEXT : ir::InstTag.SEXT, value, to);
 }
 
 <* Byte-reverse `operand` (16, 32 or 64 bits wide, per `qt`) with shifts and masks. *>
@@ -1942,6 +2072,23 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 		}
 
 		ir::Ref scalar_arg = self.gen_expr(arg_node)!;
+		if (self.is_int128(arg_type))
+		{
+			// Two i64 words in consecutive GPRs, matching the callee side in gen_fn.
+			if (gp_index + 2 > 6) self.fail("TODO: __int128 argument passed on the stack\n")!;
+			ir::Ref shift = self.builder.add_constant(value::int_u64(64, self.comp).ref(), self.gen_type(arg_type)!);
+			ir::Ref high_wide = self.builder.add_inst(ir::InstTag.BIT_LSHR, { .bin = { .lhs = scalar_arg, .rhs = shift } }, self.gen_type(arg_type)!);
+			args[arg_count] = self.builder.add_inst(ir::InstTag.TRUNC, { .ref = scalar_arg }, value_interner::REF_I64);
+			stack_only[arg_count] = false;
+			memory_copy_bytes[arg_count] = 0;
+			arg_count++;
+			args[arg_count] = self.builder.add_inst(ir::InstTag.TRUNC, { .ref = high_wide }, value_interner::REF_I64);
+			stack_only[arg_count] = false;
+			memory_copy_bytes[arg_count] = 0;
+			arg_count++;
+			gp_index += 2;
+			continue;
+		}
 		if (fixed_parameter && arg_type.is_real_int(self.comp) && arg_type.bit_sizeof(self.comp) < 32)
 		{
 			ir::InstTag extend = arg_type.signedness(self.comp) == SIGNED ? ir::InstTag.SEXT : ir::InstTag.ZEXT;

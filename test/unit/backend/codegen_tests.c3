@@ -470,8 +470,9 @@ fn void gen_ir_rejects_unimplemented_statement_nodes() @test
 
 fn void gen_ir_rejects_unimplemented_expression_nodes() @test
 {
-	tree::NodeKind[6] kinds = { tree::NodeKind.ADDR_OF_LABEL, tree::NodeKind.IMAG_EXPR,
-		tree::NodeKind.REAL_EXPR, tree::NodeKind.SIZEOF_EXPR, tree::NodeKind.BUILTIN_VA_ARG_PACK,
+	// SIZEOF_EXPR/ALIGNOF_EXPR lower to constants (sizeof_unsaved_value.c run test).
+	tree::NodeKind[5] kinds = { tree::NodeKind.ADDR_OF_LABEL, tree::NodeKind.IMAG_EXPR,
+		tree::NodeKind.REAL_EXPR, tree::NodeKind.BUILTIN_VA_ARG_PACK,
 		tree::NodeKind.BUILTIN_VA_ARG_PACK_LEN };
 	foreach (kind : kinds)
 	{
@@ -487,10 +488,6 @@ fn void gen_ir_rejects_unimplemented_expression_nodes() @test
 			case IMAG_EXPR: case REAL_EXPR:
 				expression = f.tree.add_node({ .kind = kind,
 					.unary = { .qt = type_store::INT, .operand = operand } });
-			case SIZEOF_EXPR:
-				expression = f.tree.add_node({ .kind = kind,
-					.type_info = { .qt = type_store::INT, .op_tok = 0,
-						.expr = operand.pack(), .operand_qt = type_store::INT } });
 			case BUILTIN_VA_ARG_PACK: case BUILTIN_VA_ARG_PACK_LEN:
 				expression = f.tree.add_node({ .kind = kind,
 					.va_arg_pack = { .builtin_tok = 0 } });

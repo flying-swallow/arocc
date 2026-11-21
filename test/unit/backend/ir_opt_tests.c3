@@ -2198,3 +2198,39 @@ fn void lowers_va_start_va_arg_va_end() @test
 		"O1 should preserve the source-generated VA_START");
 	f.free();
 }
+
+// Atomic accesses on a local are not promoted or deleted, a fence with no users
+// survives DCE, and an unused CLZ is removed.
+fn void atomics_and_fences_survive_o1() @test
+{
+	OptFixture f;
+	f.init();
+	// The fixture has no predefined macros: 5 = __ATOMIC_SEQ_CST, 2 = __ATOMIC_ACQUIRE.
+	f.lower("int f(int v) { int x; __atomic_store_n(&x, v, 5); __atomic_thread_fence(5);"
+		" (void)__builtin_clz((unsigned)v); return __atomic_load_n(&x, 2); }");
+	String actual = f.dump();
+	test::eq(actual,
+		"i32 @f(i32 %0) {\n"
+		"entry.0:\n"
+		"    ptr_ty %1 = alloc size 4 align 4\n"
+		"    ptr_ty %2 = alloc size 4 align 4\n"
+		"    store ptr_ty %1, i32 %0\n"
+		"    i32 %3 = load ptr_ty %1\n"
+		"    atomic_store ptr_ty %2, i32 %3 seq_cst\n"
+		"    fence seq_cst\n"
+		"    i32 %4 = load ptr_ty %1\n"
+		"    i32 %5 = clz i32 %4\n"
+		"    i32 %6 = atomic_load ptr_ty %2 acquire\n"
+		"    ret i32 %6\n"
+		"}\n\n");
+	alloc::free(&f.ta, actual.ptr);
+	f.run_o1();
+	f.verify_graph();
+	ir::Decl* func = find_function(&f.graph, "f");
+	assert(count_body_tag(func, ir::InstTag.ALLOC) == 1, "O1 keeps the atomically accessed local");
+	assert(count_body_tag(func, ir::InstTag.ATOMIC_STORE) == 1, "O1 keeps the atomic store");
+	assert(count_body_tag(func, ir::InstTag.ATOMIC_LOAD) == 1, "O1 keeps the atomic load");
+	assert(count_body_tag(func, ir::InstTag.FENCE) == 1, "O1 keeps the fence");
+	assert(count_body_tag(func, ir::InstTag.CLZ) == 0, "O1 removes the unused clz");
+	f.free();
+}

@@ -85,7 +85,7 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 			has_modrm = true;
 			rm_op = ops[0];
 			reg_code = (uint)row.modrm_ext;
-		case MR:
+		case MR: case MRI: case MRC:
 			has_modrm = true;
 			rm_op = ops[0];
 			reg_op = ops[1];
@@ -106,7 +106,7 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 	switch (row.op_en)
 	{
 		case Z: case ZI: case I: case D: case O: case OI: case ZO: case OZ:
-		case M: case MI: case M1: case MC: case MR: case RM: case RMI:
+		case M: case MI: case M1: case MC: case MR: case MRI: case MRC: case RM: case RMI:
 			break;
 		default: return NO_ENCODING~;
 	}

@@ -36,7 +36,7 @@ fn void write_operand(DString* out, Operand op)
 			}
 		case IMM: out.appendf("%d", op.imm);
 		case TARGET:
-			out.append_string(op.target);
+			write_symbol(out, op.target);
 			if (op.external) out.append_string("@PLT");
 		case MEM:
 			Memory m = op.mem;
@@ -50,7 +50,8 @@ fn void write_operand(DString* out, Operand op)
 					out.append_char(']');
 				case SYMBOL:
 				case LABEL:
-					out.appendf("[rip + %s", m.name);
+					out.append_string("[rip + ");
+					write_symbol(out, m.name);
 					if (m.gotpc) out.append_string("@GOTPCREL");
 					if (m.disp > 0) out.appendf(" + %d", m.disp);
 					if (m.disp < 0) out.appendf(" - %d", -(long)m.disp);
@@ -59,12 +60,33 @@ fn void write_operand(DString* out, Operand op)
 	}
 }
 
+const String[*] INTEL_OPERATOR_WORDS = {
+	"and", "eq", "ge", "gt", "le", "lt", "mod", "ne", "not", "or", "shl", "shr", "xor",
+	"byte", "word", "dword", "fword", "qword", "mmword", "tbyte", "oword", "xmmword",
+	"ymmword", "zmmword", "ptr", "offset", "flat", "short", "near", "far",
+};
+
+<* Whether GNU as in Intel syntax would read `name` as an operator, size keyword or register. *>
+fn bool is_intel_reserved(String name)
+{
+	String lower = name.to_lower_tcopy();
+	foreach (word : INTEL_OPERATOR_WORDS) if (word == lower) return true;
+	foreach (reg : Register::values) if (reg.name == lower) return true;
+	return false;
+}
+
+<* `name` as written in assembly: quoted when Intel syntax would misparse it (a C
+   symbol called `byte`, `shl` or `rax`). *>
+fn String asm_symbol(String name) => is_intel_reserved(name) ? string::tformat("\"%s\"", name) : name;
+
+fn void write_symbol(DString* out, String name) => out.append_string(asm_symbol(name));
+
 fn void write_linkage(DString* out, ir::Linkage linkage, String name)
 {
 	switch (linkage)
 	{
-		case EXTERNAL: out.appendf("\t.globl %s\n", name);
-		case INTERNAL: out.appendf("\t.local %s\n", name);
+		case EXTERNAL: out.appendf("\t.globl %s\n", asm_symbol(name));
+		case INTERNAL: out.appendf("\t.local %s\n", asm_symbol(name));
 	}
 }
 
@@ -105,7 +127,7 @@ fn void write_global_data(DString* out, ir::GlobalData* global)
 		usz relocation_pos = (usz)relocation.offset;
 		assert(relocation_pos >= pos && relocation_pos + 8 <= global.bytes.len, "global relocation is outside serialized data");
 		write_byte_range(out, global.bytes, pos, relocation_pos);
-		out.appendf("\t.quad %s", relocation.symbol);
+		out.appendf("\t.quad %s", asm_symbol(relocation.symbol));
 		if (relocation.addend > 0) out.appendf("+%d", relocation.addend);
 		if (relocation.addend < 0) out.appendf("%d", relocation.addend);
 		out.append_char('\n');
@@ -141,15 +163,15 @@ fn void write_global_text(DString* out, ir::Decl* decl)
 	{
 		if (decl.linkage == ir::Linkage.INTERNAL) write_linkage(out, decl.linkage, decl.name);
 		uint align = global.align > 0 ? global.align : 1;
-		out.appendf("\t.comm %s, %d, %d\n\n", decl.name, global.size, align);
+		out.appendf("\t.comm %s, %d, %d\n\n", asm_symbol(decl.name), global.size, align);
 		return;
 	}
 	write_linkage(out, decl.linkage, decl.name);
 	write_global_section(out, decl);
-	out.appendf("\t.type %s, @object\n\t.size %s, %d\n", decl.name, decl.name, global.size);
+	out.appendf("\t.type %s, @object\n\t.size %s, %d\n", asm_symbol(decl.name), asm_symbol(decl.name), global.size);
 	uint align = global.align > 0 ? global.align : 1;
 	out.appendf("\t.align %d\n", align);
-	out.appendf("%s:\n", decl.name);
+	out.appendf("%s:\n", asm_symbol(decl.name));
 	if (global.section == ir::DataSection.BSS) { out.appendf("\t.zero %d\n", global.size); }
 	else { write_global_data(out, global); }
 	out.append_char('\n');
@@ -161,7 +183,7 @@ fn void? Lowering.write_text(&self, DString* out)
 	ir::Decl* decl = self.decl;
 	out.append_string("\t.text\n");
 	write_linkage(out, decl.linkage, decl.name);
-	out.appendf("\t.p2align 4\n\t.type %s, @function\n%s:\n", decl.name, decl.name);
+	out.appendf("\t.p2align 4\n\t.type %s, @function\n%s:\n", asm_symbol(decl.name), asm_symbol(decl.name));
 	foreach (&line : self.lines)
 	{
 		if (line.is_label)
@@ -184,7 +206,7 @@ fn void? Lowering.write_text(&self, DString* out)
 		}
 		out.append_char('\n');
 	}
-	out.appendf("\t.size %s, .-%s\n\n", decl.name, decl.name);
+	out.appendf("\t.size %s, .-%s\n\n", asm_symbol(decl.name), asm_symbol(decl.name));
 }
 
 <*

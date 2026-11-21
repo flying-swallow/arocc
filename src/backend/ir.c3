@@ -89,6 +89,27 @@ enum InstTag : char (String name)
 	UITOFP { "uitofp" },
 	FPEXT { "fpext" },
 	FPTRUNC { "fptrunc" },
+	<* Atomic load of `atomic.ptr`; `atomic.order` is a C `__ATOMIC_*` memory order. *>
+	ATOMIC_LOAD { "atomic_load" },
+	<* Atomic store of `atomic.val` to `atomic.ptr` with memory order `atomic.order`. *>
+	ATOMIC_STORE { "atomic_store" },
+	<* Thread fence with memory order `atomic.order`; `ptr`/`val` are NONE. *>
+	FENCE { "fence" },
+	<* Count leading zero bits of `ref`; undefined for zero (`__builtin_clz`). *>
+	CLZ { "clz" },
+	<* Count trailing zero bits of `ref`; undefined for zero (`__builtin_ctz`). *>
+	CTZ { "ctz" },
+}
+
+<* C11 / GCC `__ATOMIC_*` memory orders, as stored in `AtomicData.order`. *>
+enum AtomicOrder : char (String name)
+{
+	RELAXED { "relaxed" },
+	CONSUME { "consume" },
+	ACQUIRE { "acquire" },
+	RELEASE { "release" },
+	ACQ_REL { "acq_rel" },
+	SEQ_CST { "seq_cst" },
 }
 
 <* The compare computing the logical negation of `tag`. Ordered float compares
@@ -119,6 +140,7 @@ enum ArgLocationKind : char { ORDINAL, GP_REGISTER, STACK, SSE_REGISTER }
 struct ArgData { ArgLocationKind location_kind; uint location; uint stack_size; bool stack_address; }
 struct AllocData { uint size; uint align; bool is_volatile; }
 struct DynAllocData { Ref size; uint align; }
+struct AtomicData { Ref ptr; Ref val; AtomicOrder order; }
 struct BranchData { Ref cond; Ref then_label; Ref else_label; }
 struct SwitchData { Ref target; value_interner::InternerRef[] values; Ref[] labels; Ref default_label; }
 struct CallData { Ref func; Ref[] args; bool[] stack_only; uint[] memory_copy_bytes; }
@@ -176,6 +198,7 @@ struct InstData
 		Ref ref;
 		AllocData alloc;
 		DynAllocData dyn_alloc;
+		AtomicData atomic;
 		BinData bin;
 		BranchData branch;
 		SwitchData switch_data;
@@ -362,6 +385,21 @@ fn void Builder.add_stack_restore(&self, Ref saved)
 {
 	if (self.block_terminated()) return;
 	self.add_inst(STACK_RESTORE, { .ref = saved }, value_interner::REF_VOID);
+}
+
+fn Ref Builder.add_atomic_load(&self, Ref ptr, AtomicOrder order, value_interner::InternerRef ty)
+	=> self.add_inst(ATOMIC_LOAD, { .atomic = { .ptr = ptr, .val = NONE, .order = order } }, ty);
+
+fn void Builder.add_atomic_store(&self, Ref ptr, Ref val, AtomicOrder order)
+{
+	if (self.block_terminated()) return;
+	self.add_inst(ATOMIC_STORE, { .atomic = { .ptr = ptr, .val = val, .order = order } }, value_interner::REF_VOID);
+}
+
+fn void Builder.add_fence(&self, AtomicOrder order)
+{
+	if (self.block_terminated()) return;
+	self.add_inst(FENCE, { .atomic = { .ptr = NONE, .val = NONE, .order = order } }, value_interner::REF_VOID);
 }
 
 fn Ref Builder.add_inst(&self, InstTag tag, InstData data, value_interner::InternerRef ty)

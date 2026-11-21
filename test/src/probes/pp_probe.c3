@@ -48,7 +48,7 @@
 // -fsyntax-only exits 1 when errors were emitted.
 module pp_probe;
 import aro::frontend::c::compilation, aro::frontend::c::include_search, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::lang_opts, aro::target, aro::frontend::c::predefined_macros;
-import std::io, std::io::os, std::io::path, std::os::env, std::collections::list;
+import std::io, std::io::os, std::io::path, std::os::env, std::collections::list, std::collections::maybe;
 import aro::toolchain, aro::toolchain::discovery;
 import aro::frontend::c::dep_file, aro::frontend::c::pragma, aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::once, aro::frontend::c::pragmas::message;
 
@@ -72,10 +72,8 @@ struct Options
 	bool dump_d;
 	bool dump_m;
 	bool dump_n;
-	bool has_emulate;
-	Compiler emulate;
-	bool has_ms_extensions;
-	bool ms_extensions;
+	Maybe{Compiler} emulate;
+	Maybe{bool} ms_extensions;
 	String comment_arg;
 	String target_triple;
 	String target_cpu;
@@ -247,11 +245,9 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 				comp.langopts.preserve_comments_in_macros = true;
 				o.comment_arg = arg;
 			case "-fms-extensions":
-				o.has_ms_extensions = true;
-				o.ms_extensions = true;
+				o.ms_extensions.set(true);
 			case "-fno-ms-extensions":
-				o.has_ms_extensions = true;
-				o.ms_extensions = false;
+				o.ms_extensions.set(false);
 			case "-fdollars-in-identifiers": comp.langopts.dollars_in_identifiers = true;
 			case "-fno-dollars-in-identifiers": comp.langopts.dollars_in_identifiers = false;
 			case "-fdigraphs": comp.langopts.digraphs = ON;
@@ -292,14 +288,13 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 				{
 					switch (name)
 					{
-						case "clang": o.emulate = CLANG;
-						case "gcc": o.emulate = GCC;
-						case "msvc": o.emulate = MSVC;
+						case "clang": o.emulate.set(CLANG);
+						case "gcc": o.emulate.set(GCC);
+						case "msvc": o.emulate.set(MSVC);
 						default:
 							probe_error("invalid compiler '%s'", arg);
 							return PROBE_FAILED~;
 					}
-					o.has_emulate = true;
 				}
 				else if (try name = option(arg, "--target="))
 				{
@@ -356,9 +351,9 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 		return PROBE_FAILED~;
 	}
 	// Driver.parseArgs tail and main(): emulation, MS extensions, checks.
-	if (o.has_emulate)
+	if (try emulate = o.emulate.get())
 	{
-		comp.langopts.set_emulated_compiler(o.emulate);
+		comp.langopts.set_emulated_compiler(emulate);
 		switch (comp.langopts.emulate)
 		{
 			case CLANG: d.set("clang", OFF)!;
@@ -367,7 +362,7 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 			case NO: break;
 		}
 	}
-	if (o.has_ms_extensions) comp.langopts.set_ms_extensions(o.ms_extensions);
+	if (try ms_extensions = o.ms_extensions.get()) comp.langopts.set_ms_extensions(ms_extensions);
 	if (!o.input.len)
 	{
 		probe_error("no input files");

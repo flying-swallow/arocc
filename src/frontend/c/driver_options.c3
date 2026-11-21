@@ -15,6 +15,12 @@ enum PicRequest : char
 	DEFAULT, PIC, PIC_LARGE, PIE, PIE_LARGE, NO_PIC
 }
 
+<* Debug info format requested by -g / -gdwarf* / -gcodeview / -g0. *>
+enum DebugFormatRequest : char
+{
+	STRIP, DWARF32, DWARF64, CODE_VIEW
+}
+
 enum ParseEffectKind : char
 {
 	DEFINE, UNDEFINE
@@ -54,65 +60,38 @@ struct DriverOptions
 	List{WarningPolicy} warning_policies;
 	List{IncludeDir} includes;
 	List{String} embed_dirs;
-	String output_name;
-	bool has_output_name;
-	String target_triple;
-	bool has_target_triple;
-	String darwin_variant_triple;
-	bool has_darwin_variant_triple;
-	String cpu;
-	bool has_cpu;
-	String standard;
-	bool has_standard;
-	lang_opts::Compiler emulate;
-	bool has_emulate;
-	String gnuc_version;
-	bool has_gnuc_version;
-	uint macro_backtrace_limit;
-	bool has_macro_backtrace_limit;
-	bool short_enums;
-	bool has_short_enums;
-	bool ms_extensions;
-	bool has_ms_extensions;
-	bool declspec_attrs;
-	bool has_declspec_attrs;
-	bool dollars_in_identifiers;
-	bool has_dollars_in_identifiers;
-	bool digraphs;
-	bool has_digraphs;
-	bool gnu_asm;
-	bool has_gnu_asm;
-	lang_opts::Signedness char_signedness;
-	bool has_char_signedness;
-	lang_opts::FPEvalMethod fp_eval_method;
-	bool has_fp_eval_method;
-	lang_opts::BoundsSafety bounds_safety;
-	bool has_bounds_safety;
-	lang_opts::Tristate char8_t_override;
-	bool has_char8_t_override;
-	lang_opts::Visibility visibility;
-	bool has_visibility;
+	Maybe{String} output_name;
+	Maybe{String} target_triple;
+	Maybe{String} darwin_variant_triple;
+	Maybe{String} cpu;
+	Maybe{String} standard;
+	Maybe{lang_opts::Compiler} emulate;
+	Maybe{String} gnuc_version;
+	Maybe{uint} macro_backtrace_limit;
+	Maybe{bool} short_enums;
+	Maybe{bool} ms_extensions;
+	Maybe{bool} declspec_attrs;
+	Maybe{bool} dollars_in_identifiers;
+	Maybe{bool} digraphs;
+	Maybe{bool} gnu_asm;
+	Maybe{lang_opts::Signedness} char_signedness;
+	Maybe{lang_opts::FPEvalMethod} fp_eval_method;
+	Maybe{lang_opts::BoundsSafety} bounds_safety;
+	Maybe{lang_opts::Tristate} char8_t_override;
+	Maybe{lang_opts::Visibility} visibility;
 	bool use_native_half_type;
 	bool allow_half_args_returns;
-	bool has_blocks;
-	bool blocks;
+	Maybe{bool} blocks;
 	bool pthread;
-	bool hosted;
-	bool has_hosted;
-	String optimization;
-	bool has_optimization;
+	Maybe{bool} hosted;
+	Maybe{String} optimization;
 	<* Force whole-program IR generation regardless of optimization level. *>
 	bool whole_program;
-	<* Prefer the in-process IR object emitter over the external assembler. *>
-	bool integrated_as;
-	<* -f[no-]integrated-as was given; otherwise the target picks (on for x86_64 Linux). *>
-	bool has_integrated_as;
-	String code_model;
-	bool has_code_model;
-	String debug_format;
-	bool has_debug_format;
-	uint dwarf_version;
-	bool has_dwarf_version;
+	<* Prefer the in-process IR object emitter over the external assembler; empty: the target picks (on for x86_64 Linux). *>
+	Maybe{bool} integrated_as;
+	Maybe{String} code_model;
+	Maybe{DebugFormatRequest} debug_format;
+	Maybe{uint} dwarf_version;
 	PicRequest pic;
 	String pic_arg;
 	bool only_preprocess;
@@ -135,8 +114,7 @@ struct DriverOptions
 	bool apple_kext;
 	bool common;
 	bool kernel;
-	bool has_mabicalls;
-	bool mabicalls;
+	Maybe{bool} mabicalls;
 	bool dynamic_nopic;
 	bool ropi;
 	bool rwpi;
@@ -168,8 +146,7 @@ struct DriverOptions
 	bool dependency_only;
 	bool write_dependencies;
 	bool dependency_nmake;
-	bool has_dependency_file;
-	String dependency_file;
+	Maybe{String} dependency_file;
 }
 
 fn void DriverOptions.init(&self, Allocator a)

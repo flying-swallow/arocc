@@ -1738,3 +1738,20 @@ fn void lowers_dynamic_alloc_and_stack_restore() @test
 		"\t.size vla, .-vla\n\n"
 		"\t.section .note.GNU-stack,\"\",@progbits\n");
 }
+
+fn void encode_wide_integer_atomic_and_bit_scan_rows() @test
+{
+	// Bytes from GNU as.
+	assert_encoded(ADC, { x86_64::reg_op(RDX), x86_64::reg_op(RCX) }, (char[]){ 0x48, 0x11, 0xca });
+	assert_encoded(SBB, { x86_64::reg_op(RDX), x86_64::reg_op(RCX) }, (char[]){ 0x48, 0x19, 0xca });
+	assert_encoded(ADC, { x86_64::reg_op(RDX), x86_64::imm_op(0) }, (char[]){ 0x48, 0x83, 0xd2, 0x00 });
+	assert_encoded(MUL, { x86_64::reg_op(RCX) }, (char[]){ 0x48, 0xf7, 0xe1 });
+	assert_encoded(SHLD, { x86_64::reg_op(RDX), x86_64::reg_op(RAX), x86_64::reg_op(CL) }, (char[]){ 0x48, 0x0f, 0xa5, 0xc2 });
+	assert_encoded(SHRD, { x86_64::reg_op(RAX), x86_64::reg_op(RDX), x86_64::reg_op(CL) }, (char[]){ 0x48, 0x0f, 0xad, 0xd0 });
+	assert_encoded(SHLD, { x86_64::reg_op(RDX), x86_64::reg_op(RAX), x86_64::imm_op(5) }, (char[]){ 0x48, 0x0f, 0xa4, 0xc2, 0x05 });
+	assert_encoded(BSR, { x86_64::reg_op(RAX), x86_64::reg_op(RAX) }, (char[]){ 0x48, 0x0f, 0xbd, 0xc0 });
+	assert_encoded(BSF, { x86_64::reg_op(R8), x86_64::reg_op(RCX) }, (char[]){ 0x4c, 0x0f, 0xbc, 0xc1 });
+	assert_encoded(MFENCE, {}, (char[]){ 0x0f, 0xae, 0xf0 });
+	assert_encoded(XCHG, { x86_64::mem_op(RCX, 0, 64), x86_64::reg_op(RAX) }, (char[]){ 0x48, 0x87, 0x01 });
+	assert_encoded(XCHG, { x86_64::mem_op(RCX, 0, 32), x86_64::reg_op(EAX) }, (char[]){ 0x87, 0x01 });
+}

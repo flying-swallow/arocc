@@ -296,6 +296,18 @@ fn ulong PrimitiveValue.int_low_u64(self)
 	return c.positive ? low : 0 - low;
 }
 
+<*
+ The low 128 bits of the integer in two's complement (wraps when wider).
+ @require self.tag.kind == INT
+*>
+fn uint128 PrimitiveValue.int_low_u128(self)
+{
+	BigIntConst c = canonical_int(self.to_big_int());
+	uint128 low = c.limbs.len > 0 ? (uint128)c.limbs[0] : 0;
+	if (c.limbs.len > 1) low |= (uint128)c.limbs[1] << 64;
+	return c.positive ? low : 0 - low;
+}
+
 // Float and complex keys.
 
 <*

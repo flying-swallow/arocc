@@ -68,6 +68,7 @@ c3_library(
         "src/frontend/c/hideset.c3",
         "src/frontend/c/include_search.c3",
         "src/frontend/c/identifier_tables.c3",
+        "src/frontend/c/driver_arguments.c3",
         "src/frontend/c/lang_opts.c3",
         "src/frontend/c/macro_expand.c3",
         "src/frontend/c/macro_paste.c3",

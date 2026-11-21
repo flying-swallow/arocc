@@ -150,8 +150,16 @@ fn bool Lowering.is_f80_type(&self, value_interner::InternerRef ty)
 
 fn uint Lowering.value_slot_bytes(&self, value_interner::InternerRef ty)
 {
-	if (self.is_f80_type(ty)) return 16;
+	if (self.is_f80_type(ty) || self.is_wide_int(ty)) return 16;
 	return 8;
+}
+
+<* A 128-bit integer: kept in a 16-byte slot as little-endian lo/hi words, never in a register. *>
+fn bool Lowering.is_wide_int(&self, value_interner::InternerRef ty)
+{
+	if (ty == value_interner::REF_PTR || is_void_type(ty)) return false;
+	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
+	return key.tag == primitive_value::PrimitiveType.INT_TY && key.ty_bits == 128;
 }
 
 fn ushort? Lowering.float_width(&self, value_interner::InternerRef ty)
@@ -525,7 +533,7 @@ fn void? Lowering.layout(&self)
 			default: break;
 		}
 		if (is_void_type(inst.ty)) continue;
-		if (self.is_f80_type(inst.ty))
+		if (self.value_slot_bytes(inst.ty) == 16)
 		{
 			offset = (offset + 15) / 16 * 16 + 16;
 		}
@@ -630,7 +638,14 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 		case FPTRUNC:
 		case STACK_RESTORE:
 		case VA_START:
+		case CLZ:
+		case CTZ:
 			@body(inst.data.ref);
+		case ATOMIC_LOAD:
+			@body(inst.data.atomic.ptr);
+		case ATOMIC_STORE:
+			@body(inst.data.atomic.ptr);
+			@body(inst.data.atomic.val);
 		case DYN_ALLOC:
 			@body(inst.data.dyn_alloc.size);
 		case RET:
@@ -697,6 +712,7 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 		case ALLOC:
 		case PHI:
 		case STACK_SAVE:
+		case FENCE:
 			break;
 	}
 }
@@ -895,7 +911,7 @@ fn void Lowering.allocate(&self)
 		if ((usz)ref < count)
 		{
 			block_of_ref[(sz)ref] = block;
-			candidates[(sz)ref] = is_allocatable_value(inst) && !self.is_float_type(inst.ty);
+			candidates[(sz)ref] = is_allocatable_value(inst) && !self.is_float_type(inst.ty) && !self.is_wide_int(inst.ty);
 		}
 		split_after = is_terminator(inst.tag);
 	}
@@ -1109,7 +1125,14 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 		foreach (input : self.inst(phi).data.phi)
 		{
 			if (input.label != self.current_label) continue;
-			if (self.is_f80_type(self.inst(phi).ty))
+			if (self.is_wide_int(self.inst(phi).ty))
+			{
+				int destination = -(self.phi_area - (int)phi_offset);
+				self.load_pair(input.value, RAX, RDX)!;
+				self.emit(MOV, mem_op(RBP, destination, 64), reg_op(RAX));
+				self.emit(MOV, mem_op(RBP, destination + 8, 64), reg_op(RDX));
+			}
+			else if (self.is_f80_type(self.inst(phi).ty))
 			{
 				ir::Inst source = self.inst(input.value);
 				if (source.tag == CONSTANT)
@@ -1150,7 +1173,7 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 		foreach (input : self.inst(phi).data.phi)
 		{
 			if (input.label != self.current_label) continue;
-			if (self.is_f80_type(self.inst(phi).ty))
+			if (self.value_slot_bytes(self.inst(phi).ty) == 16)
 			{
 				int source = -(self.phi_area - (int)phi_offset);
 				int destination = -self.slots[(sz)phi];
@@ -1680,6 +1703,8 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 	foreach (i, arg : args)
 	{
 		uint copy_bytes = self.call_memory_copy_bytes(inst, (usz)i);
+		// CodeGen passes __int128 as two i64 words, like a two-eightbyte INTEGER struct.
+		if (self.is_wide_int(self.inst(arg).ty)) self.fail("TODO: unsplit 128-bit integer call argument")!;
 		if (self.is_f80_type(self.inst(arg).ty))
 		{
 			stack_bytes = (stack_bytes + 15) / 16 * 16 + 16;
@@ -1808,6 +1833,11 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		{
 			self.store_float(ref, SYSV_SSE_RETURN_REGS[0])!;
 		}
+		else if (self.is_wide_int(inst.ty))
+		{
+			// SysV returns __int128 in RDX:RAX.
+			self.store_pair(ref, RAX, RDX)!;
+		}
 		else
 		{
 			self.store(ref, RAX)!;
@@ -1905,6 +1935,10 @@ fn void? Lowering.ret(&self, ir::Ref ref)
 		{
 			self.load_float(inst.data.ref, SYSV_SSE_RETURN_REGS[0])!;
 		}
+		else if (self.is_wide_int(self.inst(inst.data.ref).ty))
+		{
+			self.load_pair(inst.data.ref, RAX, RDX)!;
+		}
 		else
 		{
 			self.load(inst.data.ref, RAX)!;
@@ -1962,8 +1996,314 @@ fn void Lowering.copy_f80_into_slot(&self, ir::Ref destination, int source_offse
 }
 
 <* Lower one instruction of the body. *>
+// ---------------------------------------------------------------------------
+// 128-bit integers: each value lives in a 16-byte slot (lo word at the slot,
+// hi word 8 bytes above) and is computed in register pairs, scratch only.
+// ---------------------------------------------------------------------------
+
+fn Operand Lowering.slot_hi(&self, ir::Ref ref) => mem_op(RBP, -self.slots[(sz)ref] + 8, 64);
+
+<* Load 128-bit `ref` into `lo`:`hi`. *>
+fn void? Lowering.load_pair(&self, ir::Ref ref, Register lo, Register hi)
+{
+	ir::Inst inst = self.inst(ref);
+	if (!self.is_wide_int(inst.ty)) self.fail("128-bit operation on a narrower value")!;
+	if (inst.tag == CONSTANT)
+	{
+		primitive_value::PrimitiveValue key = self.ir.interner.get(inst.data.constant);
+		if (key.tag != primitive_value::PrimitiveType.INT_POSITIVE && key.tag != primitive_value::PrimitiveType.INT_NEGATIVE)
+		{
+			self.fail("TODO: 128-bit constants of this kind")!;
+		}
+		uint128 bits = key.int_low_u128();
+		self.emit(MOV, reg_op(lo), imm_op((long)(ulong)bits));
+		self.emit(MOV, reg_op(hi), imm_op((long)(ulong)(bits >> 64)));
+		return;
+	}
+	self.emit(MOV, reg_op(lo), self.slot(ref, 64));
+	self.emit(MOV, reg_op(hi), self.slot_hi(ref));
+}
+
+fn void? Lowering.store_pair(&self, ir::Ref ref, Register lo, Register hi)
+{
+	if (!self.is_wide_int(self.inst(ref).ty)) self.fail("128-bit result stored into a narrower value")!;
+	self.emit(MOV, self.slot(ref, 64), reg_op(lo));
+	self.emit(MOV, self.slot_hi(ref), reg_op(hi));
+}
+
+<* Load a (possibly narrower) integer operand into the 64-bit `reg`, zero- or sign-extended. *>
+fn void? Lowering.load_extended_64(&self, ir::Ref ref, Register reg, bool signed)
+{
+	ushort from = self.load(ref, reg)!;
+	if (from == 64) return;
+	if (from == 32)
+	{
+		if (signed)
+		{
+			self.emit(MOVSXD, reg_op(reg), reg_op(reg.to_bits(32)));
+		}
+		else
+		{
+			self.emit(MOV, reg_op(reg.to_bits(32)), reg_op(reg.to_bits(32)));
+		}
+		return;
+	}
+	self.emit(signed ? MOVSX : MOVZX, reg_op(reg), reg_op(reg.to_bits(from)));
+}
+
+<* The low 64 bits of a shift count, whatever its width. *>
+fn void? Lowering.load_shift_count(&self, ir::Ref ref)
+{
+	if (self.is_wide_int(self.inst(ref).ty))
+	{
+		self.load_pair(ref, RCX, R11)!;
+		return;
+	}
+	self.load_extended_64(ref, RCX, false)!;
+}
+
+<* Whether `ref` reads or produces a 128-bit integer; such instructions are lowered here. *>
+fn bool? Lowering.lower_wide_int(&self, ir::Ref ref)
+{
+	ir::Inst inst = self.inst(ref);
+	switch (inst.tag)
+	{
+		case CMP_EQ:
+		case CMP_NE:
+		case CMP_SLT:
+		case CMP_SLTE:
+		case CMP_SGT:
+		case CMP_SGTE:
+		case CMP_ULT:
+		case CMP_ULTE:
+		case CMP_UGT:
+		case CMP_UGTE:
+			if (!self.is_wide_int(self.inst(inst.data.bin.lhs).ty)) return false;
+			self.wide_compare(ref)!;
+			return true;
+		case STORE:
+			if (!self.is_wide_int(self.inst(inst.data.bin.rhs).ty)) return false;
+			self.load_pair(inst.data.bin.rhs, RAX, RDX)!;
+			self.load(inst.data.bin.lhs, RCX)!;
+			self.emit(MOV, mem_op(RCX, 0, 64), reg_op(RAX));
+			self.emit(MOV, mem_op(RCX, 8, 64), reg_op(RDX));
+			return true;
+		case TRUNC:
+			if (!self.is_wide_int(self.inst(inst.data.ref).ty)) return false;
+			if (self.is_wide_int(inst.ty))
+			{
+				self.load_pair(inst.data.ref, RAX, RDX)!;
+				self.store_pair(ref, RAX, RDX)!;
+				return true;
+			}
+			self.load_pair(inst.data.ref, RAX, RDX)!;
+			self.store(ref, RAX)!;
+			return true;
+		case ATOMIC_STORE:
+			if (self.is_wide_int(self.inst(inst.data.atomic.val).ty)) self.fail("TODO: 128-bit atomic store")!;
+			return false;
+		case SWITCH:
+			if (self.is_wide_int(self.inst(inst.data.switch_data.target).ty)) self.fail("TODO: switch on a 128-bit integer")!;
+			return false;
+		case SITOFP:
+		case UITOFP:
+			if (self.is_wide_int(self.inst(inst.data.ref).ty)) self.fail("TODO: 128-bit integer to floating point conversion")!;
+			return false;
+		case BIT_SHL:
+		case BIT_LSHR:
+		case BIT_ASHR:
+			if (!self.is_wide_int(inst.ty)) return false;
+			self.wide_shift(ref)!;
+			return true;
+		default:
+			break;
+	}
+	if (!self.is_wide_int(inst.ty)) return false;
+	switch (inst.tag)
+	{
+		case ADD:
+		case SUB:
+		case BIT_AND:
+		case BIT_OR:
+		case BIT_XOR:
+			Mnemonic lo_op;
+			Mnemonic hi_op;
+			switch (inst.tag)
+			{
+				case ADD: lo_op = ADD; hi_op = ADC;
+				case SUB: lo_op = SUB; hi_op = SBB;
+				case BIT_AND: lo_op = AND; hi_op = AND;
+				case BIT_OR: lo_op = OR; hi_op = OR;
+				default: lo_op = XOR; hi_op = XOR;
+			}
+			self.load_pair(inst.data.bin.lhs, RAX, RDX)!;
+			self.load_pair(inst.data.bin.rhs, RCX, R11)!;
+			self.emit(lo_op, reg_op(RAX), reg_op(RCX));
+			self.emit(hi_op, reg_op(RDX), reg_op(R11));
+			self.store_pair(ref, RAX, RDX)!;
+		case MUL:
+			// (ah:al) * (bh:bl) mod 2^128 = al*bl + ((al*bh + ah*bl) << 64).
+			self.load_pair(inst.data.bin.lhs, RAX, RDX)!;
+			self.load_pair(inst.data.bin.rhs, RCX, R11)!;
+			self.emit(IMUL, reg_op(RDX), reg_op(RCX));
+			self.emit(IMUL, reg_op(R11), reg_op(RAX));
+			self.emit(ADD, reg_op(R11), reg_op(RDX));
+			self.emit(MUL, reg_op(RCX));
+			self.emit(ADD, reg_op(RDX), reg_op(R11));
+			self.store_pair(ref, RAX, RDX)!;
+		case BIT_NOT:
+			self.load_pair(inst.data.ref, RAX, RDX)!;
+			self.emit(NOT, reg_op(RAX));
+			self.emit(NOT, reg_op(RDX));
+			self.store_pair(ref, RAX, RDX)!;
+		case NEGATE:
+			// -(hi:lo) = (-(hi + carry(lo != 0))):(-lo).
+			self.load_pair(inst.data.ref, RAX, RDX)!;
+			self.emit(NEG, reg_op(RAX));
+			self.emit(ADC, reg_op(RDX), imm_op(0));
+			self.emit(NEG, reg_op(RDX));
+			self.store_pair(ref, RAX, RDX)!;
+		case ZEXT:
+		case SEXT:
+			if (self.is_wide_int(self.inst(inst.data.ref).ty))
+			{
+				self.load_pair(inst.data.ref, RAX, RDX)!;
+				self.store_pair(ref, RAX, RDX)!;
+				return true;
+			}
+			bool signed = inst.tag == SEXT;
+			self.load_extended_64(inst.data.ref, RAX, signed)!;
+			if (signed)
+			{
+				self.emit(MOV, reg_op(RDX), reg_op(RAX));
+				self.emit(SAR, reg_op(RDX), imm_op(63));
+			}
+			else
+			{
+				self.emit(XOR, reg_op(EDX), reg_op(EDX));
+			}
+			self.store_pair(ref, RAX, RDX)!;
+		case LOAD:
+			self.load(inst.data.ref, RCX)!;
+			self.emit(MOV, reg_op(RAX), mem_op(RCX, 0, 64));
+			self.emit(MOV, reg_op(RDX), mem_op(RCX, 8, 64));
+			self.store_pair(ref, RAX, RDX)!;
+		case SELECT:
+			ir::BranchData select = inst.data.branch;
+			self.load(select.cond, RAX)!;
+			self.emit(TEST, reg_op(AL), reg_op(AL));
+			String else_label = self.new_edge_label();
+			String done_label = self.new_edge_label();
+			self.emit(JE, target_op(else_label));
+			self.load_pair(select.then_label, RAX, RDX)!;
+			self.emit(JMP, target_op(done_label));
+			self.emit_label(else_label);
+			self.load_pair(select.else_label, RAX, RDX)!;
+			self.emit_label(done_label);
+			self.store_pair(ref, RAX, RDX)!;
+		case CALL:
+		case PHI:
+		case CONSTANT:
+			return false;
+		case SDIV:
+		case UDIV:
+		case SREM:
+		case UREM:
+			self.fail("TODO: 128-bit integer division")!;
+		case FPTOSI:
+		case FPTOUI:
+			self.fail("TODO: floating point to 128-bit integer conversion")!;
+		default:
+			self.fail("TODO: 128-bit integer %s", inst.tag.name)!;
+	}
+	return true;
+}
+
+<* Shift a 128-bit value by a count in [0, 127] held in CL. SHLD/SHRD and the
+   single-word shifts use the count mod 64; bit 6 selects a whole-word move. *>
+fn void? Lowering.wide_shift(&self, ir::Ref ref)
+{
+	ir::Inst inst = self.inst(ref);
+	self.load_shift_count(inst.data.bin.rhs)!;
+	self.load_pair(inst.data.bin.lhs, RAX, RDX)!;
+	String done_label = self.new_edge_label();
+	switch (inst.tag)
+	{
+		case BIT_SHL:
+			self.emit(SHLD, reg_op(RDX), reg_op(RAX), reg_op(CL));
+			self.emit(SHL, reg_op(RAX), reg_op(CL));
+			self.emit(TEST, reg_op(CL), imm_op(64));
+			self.emit(JE, target_op(done_label));
+			self.emit(MOV, reg_op(RDX), reg_op(RAX));
+			self.emit(XOR, reg_op(EAX), reg_op(EAX));
+		case BIT_LSHR:
+			self.emit(SHRD, reg_op(RAX), reg_op(RDX), reg_op(CL));
+			self.emit(SHR, reg_op(RDX), reg_op(CL));
+			self.emit(TEST, reg_op(CL), imm_op(64));
+			self.emit(JE, target_op(done_label));
+			self.emit(MOV, reg_op(RAX), reg_op(RDX));
+			self.emit(XOR, reg_op(EDX), reg_op(EDX));
+		default:
+			self.emit(SHRD, reg_op(RAX), reg_op(RDX), reg_op(CL));
+			self.emit(SAR, reg_op(RDX), reg_op(CL));
+			self.emit(TEST, reg_op(CL), imm_op(64));
+			self.emit(JE, target_op(done_label));
+			self.emit(MOV, reg_op(RAX), reg_op(RDX));
+			self.emit(SAR, reg_op(RDX), imm_op(63));
+	}
+	self.emit_label(done_label);
+	self.store_pair(ref, RAX, RDX)!;
+}
+
+<* Compare two 128-bit values. Ordered compares subtract with borrow (`cmp lo;
+   sbb hi`), which sets SF/OF/CF like a full 128-bit compare; `>` and `<=` swap
+   the operands so only the flags valid after SBB (L/GE/B/AE) are read. *>
+fn void? Lowering.wide_compare(&self, ir::Ref ref)
+{
+	ir::Inst inst = self.inst(ref);
+	ir::Ref lhs = inst.data.bin.lhs;
+	ir::Ref rhs = inst.data.bin.rhs;
+	if (inst.tag == CMP_EQ || inst.tag == CMP_NE)
+	{
+		self.load_pair(lhs, RAX, RDX)!;
+		self.load_pair(rhs, RCX, R11)!;
+		self.emit(XOR, reg_op(RAX), reg_op(RCX));
+		self.emit(XOR, reg_op(RDX), reg_op(R11));
+		self.emit(OR, reg_op(RAX), reg_op(RDX));
+		self.emit(inst.tag == CMP_EQ ? Mnemonic.SETE : Mnemonic.SETNE, reg_op(AL));
+		self.store(ref, RAX)!;
+		return;
+	}
+	Condition cc;
+	bool swap = false;
+	switch (inst.tag)
+	{
+		case CMP_SLT: cc = L;
+		case CMP_SGTE: cc = GE;
+		case CMP_SGT: cc = L; swap = true;
+		case CMP_SLTE: cc = GE; swap = true;
+		case CMP_ULT: cc = B;
+		case CMP_UGTE: cc = AE;
+		case CMP_UGT: cc = B; swap = true;
+		default: cc = AE; swap = true;
+	}
+	if (swap)
+	{
+		ir::Ref swapped = lhs;
+		lhs = rhs;
+		rhs = swapped;
+	}
+	self.load_pair(lhs, RAX, RDX)!;
+	self.load_pair(rhs, RCX, R11)!;
+	self.emit(CMP, reg_op(RAX), reg_op(RCX));
+	self.emit(SBB, reg_op(RDX), reg_op(R11));
+	self.emit(cc.set, reg_op(AL));
+	self.store(ref, RAX)!;
+}
+
 fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 {
+	if (self.lower_wide_int(ref)!) return;
 	ir::Inst inst = self.inst(ref);
 	switch (inst.tag)
 	{
@@ -2114,6 +2454,48 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 			ushort w = self.bits(inst.ty)!;
 			self.load(inst.data.ref, RCX)!;
 			self.emit(MOV, reg_op(Register.RAX.to_bits(w)), mem_op(RCX, 0, w));
+			self.store(ref, RAX)!;
+		// x86-64 is TSO: every aligned load is an acquire load and every plain store
+		// a release store, so only seq_cst stores and fences need a full barrier.
+		case ATOMIC_LOAD:
+			if (self.is_float_type(inst.ty)) self.fail("TODO: floating point atomic load")!;
+			ushort w = self.bits(inst.ty)!;
+			self.load(inst.data.atomic.ptr, RCX)!;
+			self.emit(MOV, reg_op(Register.RAX.to_bits(w)), mem_op(RCX, 0, w));
+			self.store(ref, RAX)!;
+		case ATOMIC_STORE:
+			if (self.is_float_type(self.inst(inst.data.atomic.val).ty)) self.fail("TODO: floating point atomic store")!;
+			ushort w = self.load(inst.data.atomic.val, RAX)!;
+			self.load(inst.data.atomic.ptr, RCX)!;
+			// XCHG with a memory operand is implicitly locked: a full barrier.
+			Mnemonic op = inst.data.atomic.order == ir::AtomicOrder.SEQ_CST ? Mnemonic.XCHG : Mnemonic.MOV;
+			self.emit(op, mem_op(RCX, 0, w), reg_op(Register.RAX.to_bits(w)));
+		case FENCE:
+			if (inst.data.atomic.order == ir::AtomicOrder.SEQ_CST) self.emit(MFENCE);
+		case CLZ:
+		case CTZ:
+			// CLZ/CTZ results have the operand's type; size from it, since a folded
+			// constant operand may come back wider.
+			ushort operand_bits = self.bits(inst.ty)!;
+			self.load(inst.data.ref, RAX)!;
+			ushort w = operand_bits;
+			if (w < 32)
+			{
+				self.emit(MOVZX, reg_op(EAX), reg_op(Register.RAX.to_bits(w)));
+				w = 32;
+			}
+			Register wide = Register.RAX.to_bits(w);
+			if (inst.tag == CTZ)
+			{
+				self.emit(BSF, reg_op(wide), reg_op(wide));
+			}
+			else
+			{
+				// BSR yields the index of the highest set bit; clz = (bits - 1) - index.
+				self.emit(BSR, reg_op(wide), reg_op(wide));
+				// The index is below the (power-of-two) operand width, so XOR subtracts.
+				self.emit(XOR, reg_op(wide), imm_op((long)operand_bits - 1));
+			}
 			self.store(ref, RAX)!;
 		case ADD: self.alu(ref, ADD)!;
 		case SUB: self.alu(ref, SUB)!;
