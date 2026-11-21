@@ -9,8 +9,8 @@
 // test/cases/{wide strings, char literal sign extension, concat improperly
 // encoded strings}.c; no Zig executable was run.
 module text_semantics_manual_tests;
-import aro::text_literal_semantics, aro::text_literal, aro::value, aro::value_interner;
-import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::tokenizer, aro::lang_opts;
+import aro::frontend::c::text_literal_semantics, aro::frontend::c::text_literal, aro::frontend::c::value, aro::value_interner;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::target, aro::frontend::c::type_store, aro::frontend::c::tokenizer, aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

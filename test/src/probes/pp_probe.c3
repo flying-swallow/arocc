@@ -47,10 +47,10 @@
 // printing (Driver.processSource fast_exit), a fatal error exits 1, and
 // -fsyntax-only exits 1 when errors were emitted.
 module pp_probe;
-import aro::compilation, aro::include_search, aro::diagnostics, aro::preprocessor, aro::source, aro::tokens, aro::lang_opts, aro::target, aro::predefined_macros;
+import aro::frontend::c::compilation, aro::frontend::c::include_search, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::lang_opts, aro::target, aro::frontend::c::predefined_macros;
 import std::io, std::io::os, std::io::path, std::os::env, std::collections::list;
 import aro::toolchain, aro::toolchain::discovery;
-import aro::dep_file, aro::pragma, aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message;
+import aro::frontend::c::dep_file, aro::frontend::c::pragma, aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::once, aro::frontend::c::pragmas::message;
 
 excuse PROBE_FAILED;
 

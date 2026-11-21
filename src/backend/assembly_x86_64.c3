@@ -1,8 +1,8 @@
 // x86-64 GNU assembler data emitter, ported from src/assembly_backend/x86_64.zig.
 module aro::backend::assembly_x86_64;
 import aro::primitive_value;
-import aro::tree, aro::tokens, aro::source, aro::compilation, aro::diagnostics;
-import aro::type_store, aro::value, aro::value_interner, aro::text_literal_semantics, aro::code_gen_options;
+import aro::frontend::c::tree, aro::frontend::c::tokens, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::text_literal_semantics, aro::code_gen_options;
 import std::core::dstring;
 
 enum StorageUnit : char (char bits, String directive, ulong mask)

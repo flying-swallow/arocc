@@ -1,8 +1,8 @@
 // Source-derived backend CLI lifecycle coverage. The injected child records
 // argv as separate strings; these checks do not claim executable parity.
 module backend_cli_regression;
-import aro, aro::driver, aro::compilation, aro::diagnostics;
-import aro::driver_exec;
+import aro, aro::frontend::c::driver, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::driver_exec;
 import std::io, std::io::path, std::os::env, std::core::mem::allocators, std::core::string, std::core::dstring;
 
 enum ChildFailure : char { NONE, SPAWN, WAIT, EXIT, SIGNAL }

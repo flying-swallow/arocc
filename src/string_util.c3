@@ -11,13 +11,12 @@ fn bool first_is(String s, sz offset, String cs)
 {
 	char c;
 	if (!first(s, offset, &c)) return false;
-	foreach (x : cs) if (c == x) return true;
-	return false;
+	return cs.contains_char(c);
 }
 fn bool first_is_lower(String s, sz offset, char lower)
 {
 	char c;
-	return first(s, offset, &c) && (c | 0x20) == lower;
+	return first(s, offset, &c) && c.to_lower() == lower;
 }
 fn bool first_is_digit(String s, sz offset, int base)
 {
@@ -68,18 +67,12 @@ fn bool starts_with_ignore_case(String s, String prefix)
 	if (s.len < prefix.len) return false;
 	for (sz i = 0; i < prefix.len; i++)
 	{
-		char a = s[i];
-		char b = prefix[i];
-		if (a >= 'A' && a <= 'Z') a += 32;
-		if (b >= 'A' && b <= 'Z') b += 32;
-		if (a != b) return false;
+		if (s[i].to_lower() != prefix[i].to_lower()) return false;
 	}
 	return true;
 }
 
 fn bool string_ieq(String a, String b)
 {
-	if (a.len != b.len) return false;
-	foreach (i, c : a) if (c.to_lower() != b[i].to_lower()) return false;
-	return true;
+	return a.compare_to_ignore_case(b) == 0;
 }

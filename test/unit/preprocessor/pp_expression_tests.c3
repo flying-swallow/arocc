@@ -1,4 +1,4 @@
-// Tests for src/pp_expression.c3 (port of src/aro/Preprocessor/Parser.zig).
+// Tests for src/frontend/c/pp_expression.c3 (port of src/aro/Preprocessor/Parser.zig).
 //
 // Each case tokenizes a single `#if <expr>` line with the raw tokenizer and
 // feeds the tokens after `if` directly to PpExprParser (no macro expansion),
@@ -10,8 +10,8 @@
 //            (lines that need macro expansion are left out).
 //  [source]  hand-derived from Preprocessor/Parser.zig (no Zig executable was run).
 module pp_expression_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::type_store, aro::lang_opts;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::type_store, aro::frontend::c::lang_opts;
 import std::io, std::collections::list, std::core::mem::allocators;
 
 macro check(left, right)

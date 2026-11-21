@@ -36,12 +36,12 @@
 //     with the dispatching methods, so they work at every width.
 //   aro::value_interner  (value_interner.c3)
 //     Storage only: refs, hash / eql / to_ref, put / get.
-//   aro::value  (value.c3 integers, bytes, pointers; value_float.c3 floats)
+//   aro::frontend::c::value  (value.c3 integers, bytes, pointers; value_float.c3 floats)
 //     Everything that takes a `Value` and a `Compilation*`: read the key, call
 //     the layers above, intern the result.
 //
 // Placement rule: a signature that mentions Value / Compilation / QualType goes
-// in aro::value; interner storage goes in aro::value_interner; everything else
+// in aro::frontend::c::value; interner storage goes in aro::value_interner; everything else
 // on PrimitiveValue goes here.
 //
 // Reference vectors: test/unit/values/data/float_values (bit patterns produced
@@ -201,7 +201,7 @@ const F128Bits STD_NAN_F128 = { .lo = 0, .hi = 0x7FFF_8000_0000_0000 };
 // Bit access (implemented in stage 0)
 // =============================================================================
 
-<* Biased exponent field. *>
+<* Biased exponent field. @require self.tag.kind == FLOAT *>
 fn uint PrimitiveValue.biased_exponent(self)
 {
 	FloatFormat fmt = self.tag.format;
@@ -209,15 +209,17 @@ fn uint PrimitiveValue.biased_exponent(self)
 	return (uint)(self.float_bits() >> shift) & (((uint)1 << fmt.exp_bits) - 1);
 }
 
-<* Stored fraction field (f80: bits 0..62, i.e. without the explicit integer bit). *>
+<* Stored fraction field (f80: bits 0..62, i.e. without the explicit integer bit). @require self.tag.kind == FLOAT *>
 fn uint128 PrimitiveValue.fraction(self)
 {
 	FloatFormat fmt = self.tag.format;
 	return self.float_bits() & (((uint128)1 << fmt.frac_bits) - 1);
 }
 
+<* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.signbit(self) => (self.float_bits() & self.tag.sign_mask()) != 0;
 
+<* @require self.tag.kind == FLOAT *>
 fn FloatClass PrimitiveValue.classify(self)
 {
 	FloatFormat fmt = self.tag.format;
@@ -237,25 +239,30 @@ fn FloatClass PrimitiveValue.classify(self)
 	return NORMAL;
 }
 
+<* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_nan(self) => self.classify() == NAN;
+<* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_inf(self) => self.classify() == INFINITE;
-<* std.math.isFinite: not inf and not NaN. *>
+<* std.math.isFinite: not inf and not NaN. @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_finite(self) => self.classify() != INFINITE && self.classify() != NAN;
-<* Zig `x == 0` (either sign). *>
+<* Zig `x == 0` (either sign). @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_zero(self) => self.classify() == ZERO;
+<* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_positive_zero(self) => self.classify() == ZERO && !self.signbit();
+<* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_negative_zero(self) => self.classify() == ZERO && self.signbit();
-<* std.math.isPositiveInf / isNegativeInf *>
+<* std.math.isPositiveInf. @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_positive_inf(self) => self.classify() == INFINITE && !self.signbit();
+<* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_negative_inf(self) => self.classify() == INFINITE && self.signbit();
 
-<* Zig unary minus: flips the sign bit only (also of NaN; no quieting). *>
+<* Zig unary minus: flips the sign bit only (also of NaN; no quieting). @require self.tag.kind == FLOAT *>
 fn PrimitiveValue PrimitiveValue.neg(self) => float_key(self.tag, self.float_bits() ^ self.tag.sign_mask());
-<* Zig @abs: clears the sign bit only. *>
+<* Zig @abs: clears the sign bit only. @require self.tag.kind == FLOAT *>
 fn PrimitiveValue PrimitiveValue.abs(self) => float_key(self.tag, self.float_bits() & ~self.tag.sign_mask());
 <*
  std.math.copysign(magnitude = self, sign = sign_of): bit operation, NaN included.
- @require self.tag == sign_of.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && sign_of.tag == self.tag : "operands must be floats of the same width"
 *>
 fn PrimitiveValue PrimitiveValue.copysign(self, PrimitiveValue sign_of)
 {
@@ -263,10 +270,10 @@ fn PrimitiveValue PrimitiveValue.copysign(self, PrimitiveValue sign_of)
 	return float_key(self.tag, (self.float_bits() & ~m) | (sign_of.float_bits() & m));
 }
 
-<* +0.0 or -0.0 *>
+<* +0.0 or -0.0. @require tag.kind == FLOAT *>
 fn PrimitiveValue zero(PrimitiveType tag, bool negative = false) => float_key(tag, negative ? tag.sign_mask() : 0);
 
-<* 1.0 *>
+<* 1.0. @require tag.kind == FLOAT *>
 fn PrimitiveValue one(PrimitiveType tag)
 {
 	FloatFormat fmt = tag.format;
@@ -276,7 +283,7 @@ fn PrimitiveValue one(PrimitiveType tag)
 	return float_key(tag, bits);
 }
 
-<* std.math.inf(T), negated when `negative`. *>
+<* std.math.inf(T), negated when `negative`. @require tag.kind == FLOAT *>
 fn PrimitiveValue inf(PrimitiveType tag, bool negative = false)
 {
 	FloatFormat fmt = tag.format;
@@ -287,7 +294,7 @@ fn PrimitiveValue inf(PrimitiveType tag, bool negative = false)
 	return float_key(tag, bits);
 }
 
-<* std.math.nan(T) *>
+<* std.math.nan(T). @require tag.kind == FLOAT *>
 fn PrimitiveValue std_nan(PrimitiveType tag)
 {
 	switch (tag)
@@ -301,7 +308,7 @@ fn PrimitiveValue std_nan(PrimitiveType tag)
 	}
 }
 
-<* The reference's result of an invalid operation at this width (see NaN rules). *>
+<* The reference's result of an invalid operation at this width (see NaN rules). @require tag.kind == FLOAT *>
 fn PrimitiveValue default_nan(PrimitiveType tag)
 {
 	switch (tag)
@@ -315,7 +322,7 @@ fn PrimitiveValue default_nan(PrimitiveType tag)
 	}
 }
 
-<* Sets the quiet bit (the top fraction bit) of a NaN; other values unchanged. *>
+<* Sets the quiet bit (the top fraction bit) of a NaN; other values unchanged. @require self.tag.kind == FLOAT *>
 fn PrimitiveValue PrimitiveValue.quiet(self)
 {
 	if (!self.is_nan()) return self;
@@ -331,7 +338,7 @@ fn PrimitiveValue PrimitiveValue.quiet(self)
 // f80/f128 to primitive_float_soft_wide.c3 (status flags are dropped here).
 
 <*
- @require self.tag == rhs.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && rhs.tag == self.tag : "operands must be floats of the same width"
 *>
 fn PrimitiveValue PrimitiveValue.add(self, PrimitiveValue rhs)
 {
@@ -347,7 +354,7 @@ fn PrimitiveValue PrimitiveValue.add(self, PrimitiveValue rhs)
 }
 
 <*
- @require self.tag == rhs.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && rhs.tag == self.tag : "operands must be floats of the same width"
 *>
 fn PrimitiveValue PrimitiveValue.sub(self, PrimitiveValue rhs)
 {
@@ -363,7 +370,7 @@ fn PrimitiveValue PrimitiveValue.sub(self, PrimitiveValue rhs)
 }
 
 <*
- @require self.tag == rhs.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && rhs.tag == self.tag : "operands must be floats of the same width"
 *>
 fn PrimitiveValue PrimitiveValue.mul(self, PrimitiveValue rhs)
 {
@@ -379,7 +386,7 @@ fn PrimitiveValue PrimitiveValue.mul(self, PrimitiveValue rhs)
 }
 
 <*
- @require self.tag == rhs.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && rhs.tag == self.tag : "operands must be floats of the same width"
 *>
 fn PrimitiveValue PrimitiveValue.div(self, PrimitiveValue rhs)
 {
@@ -433,6 +440,7 @@ fn bool cast_keeps_nan_quiet_bit(PrimitiveType src, PrimitiveType dest)
  zero kept. NaN: sign and the top payload bits kept; the quiet bit per
  cast_keeps_nan_quiet_bit. Non-canonical f80 sources as described above. Same
  tag returns `self` unchanged.
+ @require self.tag.kind == FLOAT && dest.kind == FLOAT
 *>
 fn PrimitiveValue PrimitiveValue.cast(self, PrimitiveType dest)
 {
@@ -459,10 +467,11 @@ fn PrimitiveValue PrimitiveValue.cast(self, PrimitiveType dest)
 <*
  Zig @floatFromInt(x) for a u64 into `dest`: rounded once to nearest even
  (u64 -> f16 overflows to +inf from 65520 up; u64 fits f80/f128 exactly).
+ @require dest.kind == FLOAT
 *>
 fn PrimitiveValue from_u64(ulong x, PrimitiveType dest) => round_pack(dest, false, 0, (uint128)x, false);
 
-<* Zig @floatFromInt(x) for an i64 into `dest`; -0 never results (0 -> +0.0). *>
+<* Zig @floatFromInt(x) for an i64 into `dest`; -0 never results (0 -> +0.0). @require dest.kind == FLOAT *>
 fn PrimitiveValue from_i64(long x, PrimitiveType dest)
 {
 	bool negative = x < 0;
@@ -534,6 +543,7 @@ fn F128Bits big_int_to_f128(BigIntConst big)
  Value.toFloat(T) of an int key: u64/i64 -> from_u64/from_i64 (one rounding);
  big_int -> @floatCast(bigIntToFloat(..)) i.e. big_int_to_f128 then cast to
  `dest` (two roundings - a reference quirk to keep).
+ @require i.tag.kind == INT && dest.kind == FLOAT
 *>
 fn PrimitiveValue key_int_to_float(PrimitiveValue i, PrimitiveType dest)
 {

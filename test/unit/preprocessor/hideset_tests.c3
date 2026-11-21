@@ -1,10 +1,10 @@
-// Tests for aro::hideset (port of src/aro/Hideset.zig, plan 13.1).
+// Tests for aro::frontend::c::hideset (port of src/aro/Hideset.zig, plan 13.1).
 // Expected orders and contents are source-derived from Hideset.zig (no Zig
 // executable was run): union walks `a` in order and pushes each element not
 // in `b` onto the front of `b`; intersection keeps the order of `b`;
 // identity is the (source id, byte offset) pair, not the spelling.
 module hideset_tests;
-import aro::hideset, aro::source, aro::compilation, aro::diagnostics;
+import aro::frontend::c::hideset, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import std::core::mem::allocators;
 
 macro check(left, right)

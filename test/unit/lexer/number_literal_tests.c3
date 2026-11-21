@@ -1,4 +1,4 @@
-// Tests for plan 11.1 `number-syntax`: src/number_literal.c3 (port of
+// Tests for plan 11.1 `number-syntax`: src/frontend/c/number_literal.c3 (port of
 // src/aro/Tokenizer/number_literal.zig).
 //
 // Provenance of expected values:
@@ -8,8 +8,8 @@
 //   langopts the fixture's manifest selects.
 // - [source] hand-derived from number_literal.zig; no Zig executable was run.
 module number_literal_tests;
-import aro::number_literal, aro::text_literal;
-import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts;
+import aro::frontend::c::number_literal, aro::frontend::c::text_literal;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts;
 import std::core::mem::allocators;
 
 macro check(left, right)

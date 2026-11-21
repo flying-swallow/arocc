@@ -8,7 +8,7 @@
 // `.language` lines other than `.all_languages`), and sample records were read
 // from the cited lines. Total: 13,552 builtins (tools/builtins_schema.md).
 module def_parse_tests;
-import std::io, std::collections::list, generate_def, aro::builtin_properties;
+import std::io, std::collections::list, generate_def, aro::frontend::c::builtin_properties;
 
 macro check(left, right)
 {

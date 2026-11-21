@@ -48,7 +48,7 @@
 //                                            -> Query, resolve_query, parse_triple
 //   toElfMachine (ELF backend)               -> not ported (plan 27 owns ELF output)
 module aro::target;
-import aro::lang_opts;
+import aro::frontend::c::lang_opts;
 
 <* std.Target.ptrBitWidth_arch_abi. *>
 fn ushort ptr_bit_width_arch_abi(Arch arch, Abi abi)

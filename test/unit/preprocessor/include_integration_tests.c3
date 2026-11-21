@@ -1,9 +1,9 @@
 // Integration coverage for include lookup, preprocessing, pragma callbacks,
 // and dependency recording using an injected in-memory file tree.
 module include_integration_tests;
-import aro::compilation, aro::dep_file, aro::include_search, aro::pragma;
-import aro::preprocessor, aro::source, aro::tokenizer, aro::diagnostics, aro::lang_opts;
-import aro::pragmas::once, aro::pragmas::gcc;
+import aro::frontend::c::compilation, aro::frontend::c::dep_file, aro::frontend::c::include_search, aro::frontend::c::pragma;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer, aro::frontend::c::diagnostics, aro::frontend::c::lang_opts;
+import aro::frontend::c::pragmas::once, aro::frontend::c::pragmas::gcc;
 import aro::toolchain::discovery;
 import std::core::mem::allocators, std::core::dstring;
 

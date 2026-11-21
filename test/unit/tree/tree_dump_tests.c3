@@ -1,8 +1,8 @@
 // AST dump smoke checks. Format expectations are source-derived from
 // src/aro/Tree.zig; no Zig executable was run.
 module tree_dump_tests;
-import aro::compilation, aro::tree, aro::diagnostics;
-import aro::tokens, aro::tokenizer, aro::source, aro::type_store, aro::attribute, aro::attribute_map;
+import aro::frontend::c::compilation, aro::frontend::c::tree, aro::frontend::c::diagnostics;
+import aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::type_store, aro::frontend::c::attribute, aro::frontend::c::attribute_map;
 import std::core::mem::allocators, std::core::dstring, std::io;
 
 macro check(left, right)

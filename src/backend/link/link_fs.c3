@@ -1,6 +1,6 @@
 // Linker input filesystem with deterministic in-memory overlays and read cache.
 module aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::collections::list;
 import std::io::file;
 

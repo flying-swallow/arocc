@@ -1,7 +1,7 @@
 """Owner: 12.2 table-gen (skeleton by plan 12 stage 0).
 
 `builtin_defs` runs //tools:generate_def once per .def file and outputs the
-generated C3 table modules (aro::builtin_defs::<group>), which //:aro_c3_lib
+generated C3 table modules (aro::frontend::c::builtin_defs::<group>), which //:aro_c3_lib
 lists as sources. Layout: tools/builtins_schema.md.
 
 Invariants:
@@ -44,5 +44,5 @@ builtin_defs = rule(
             cfg = "exec",
         ),
     },
-    doc = "Generates aro::builtin_defs::<group> C3 modules from Builtins/*.def.",
+    doc = "Generates aro::frontend::c::builtin_defs::<group> C3 modules from Builtins/*.def.",
 )

@@ -9,7 +9,7 @@
 // //test/unit/values:float_vector_tests.
 module float_value_tests;
 import aro::primitive_value;
-import aro::value, aro::value_interner, aro::type_store, aro::target, aro::compilation;
+import aro::frontend::c::value, aro::value_interner, aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 macro check(left, right)

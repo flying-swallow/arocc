@@ -1,4 +1,4 @@
-// Tests for aro::builtin_type_description (src/builtin_type_description.c3).
+// Tests for aro::frontend::c::builtin_type_description (src/frontend/c/builtin_type_description.c3).
 //
 // Sources of expected values (no Zig executable was run; no differential
 // parity is claimed):
@@ -11,7 +11,7 @@
 //   (isLP64, long/long double widths), and is printed with QualType.dump,
 //   the spelling used by the AST goldens in test/cases/ast.
 module builtin_type_description_tests;
-import aro::builtin_type_description, aro::type_store, aro::target, aro::compilation;
+import aro::frontend::c::builtin_type_description, aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 macro check(left, right)

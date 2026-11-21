@@ -1,8 +1,8 @@
-// Tests for aro::attribute_map (src/attribute_map.c3).
+// Tests for aro::frontend::c::attribute_map (src/frontend/c/attribute_map.c3).
 // Expected payloads and compact layouts are source-derived from
 // src/aro/Attribute/Map.zig; no Zig runtime parity is claimed.
 module attribute_map_tests;
-import aro::attribute, aro::attribute_map, aro::compilation, aro::target, aro::tokens, aro::tree, aro::type_store;
+import aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::compilation, aro::target, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store;
 import std::core::mem::allocators;
 
 macro check(left, right)

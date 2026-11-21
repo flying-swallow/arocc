@@ -30,7 +30,7 @@
 // - Native CPU detection (cpuid etc.) is not ported: a "native" CPU resolves to
 //   the baseline model of the host architecture.
 module aro::target;
-import aro::lang_opts;
+import aro::frontend::c::lang_opts;
 
 excuse UNKNOWN_ARCH;
 excuse UNKNOWN_OS;
@@ -765,7 +765,7 @@ fn Target? resolve_query(Query* q, Host h)
 	}
 	FeatureSet fs = model.feature_set();
 	fs.remove_all(q.cpu_features_sub);
-	fs.union_with(q.cpu_features_add);
+	fs.add_all(q.cpu_features_add);
 	fs.populate_dependencies();
 	fs.remove_all(q.cpu_features_sub);
 
@@ -890,7 +890,7 @@ fn Target? parse_triple(String arch_os_abi, Host h, String cpu = "", TripleError
 			{
 				query.cpu_model_kind = EXPLICIT;
 				query.cpu_model = EMPTY;
-				query.cpu_features_add.set(feature);
+				query.cpu_features_add.add(feature);
 			}
 		}
 	}
@@ -948,7 +948,7 @@ fn void? apply_cpu_features(Query* query, Arch arch, String cpu_features, bool h
 	}
 	if (has_sub_arch)
 	{
-		if (try feature = sub_arch.to_feature(arch)) query.cpu_features_add.set(feature);
+		if (try feature = sub_arch.to_feature(arch)) query.cpu_features_add.add(feature);
 	}
 	while (index < cpu_features.len)
 	{
@@ -965,10 +965,10 @@ fn void? apply_cpu_features(Query* query, Arch arch, String cpu_features, bool h
 		}
 		if (op == '+')
 		{
-			query.cpu_features_add.set(f);
+			query.cpu_features_add.add(f);
 		} else
 		{
-			query.cpu_features_sub.set(f);
+			query.cpu_features_sub.add(f);
 		}
 	}
 }

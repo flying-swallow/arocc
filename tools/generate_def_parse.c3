@@ -14,7 +14,7 @@
 //   missing param_str is detected when the builtin ends, i.e. at the next name
 //   line or at EOF, and is reported at the builtin's name line).
 module generate_def;
-import std::collections::list, std::collections::map, aro::builtin_properties;
+import std::collections::list, std::collections::map, aro::frontend::c::builtin_properties;
 
 <* The five supported properties, in schema order. *>
 enum DefProperty : char (String name)

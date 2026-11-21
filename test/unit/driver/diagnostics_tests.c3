@@ -1,4 +1,4 @@
-// Tests for aro::diagnostics (port of src/aro/Diagnostics.zig).
+// Tests for aro::frontend::c::diagnostics (port of src/aro/Diagnostics.zig).
 //
 // Expected texts are hand-derived from the Zig source (Message.write,
 // effectiveKind, addWithLocation, set) and, where a fixture exists, copied
@@ -8,7 +8,7 @@
 // No Zig binary was run; every golden below marked "hand-derived" comes from
 // reading the Zig code, the color escapes from std/Io/Terminal.zig.
 module diagnostics_tests;
-import aro::source, aro::compilation, aro::diagnostics;
+import aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import std::core::mem::allocators, std::collections::list, std::io;
 
 macro check(left, right)

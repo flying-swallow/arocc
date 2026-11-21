@@ -3,7 +3,7 @@
 // compatible Zig run. Inputs and outputs live in a temporary directory;
 // include and child-process services are injected through Compilation.
 module cli_tests;
-import aro, aro::driver, aro::compilation, aro::diagnostics, aro::preprocessor, aro::toolchain::multilib;
+import aro, aro::frontend::c::driver, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::toolchain::multilib;
 import std::io, std::io::path, std::os::env, std::collections::list, std::core::dstring, std::core::mem::allocators, std::core::string;
 import aro_runner;
 

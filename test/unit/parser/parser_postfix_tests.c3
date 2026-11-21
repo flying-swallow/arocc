@@ -1,7 +1,7 @@
 // Parser-owned postfix tests: calls, subscripts, member access, inc/dec and
 // closers, driven through finalized tokens and seeded symbols.
 //
-// Expectations assert the approved final semantics of src/parser_postfix.c3.
+// Expectations assert the approved final semantics of src/frontend/c/parser_postfix.c3.
 // Labels on each expectation:
 //   "Source-derived (Parser.zig <fn>)": read from the named reference function.
 //   "C11 <clause>": standard behavior where the reference is silent.
@@ -10,9 +10,9 @@
 // Message text is `Message.text` as rendered; types print quoted, e.g. 'int'.
 // Note: QualType.eql ignores top-level qualifiers, so qualifier expectations also assert is_const.
 module parser_postfix_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
-import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::lang_opts;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::string_interner, aro::frontend::c::symbol_stack, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::frontend::c::lang_opts;
 import std::core::mem::allocators;
 
 struct PostfixFixture

@@ -1,6 +1,6 @@
 module type_builder_tests;
-import aro::type_store, aro::target, aro::compilation, aro::parser;
-import aro::diagnostics, aro::preprocessor, aro::lang_opts;
+import aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation, aro::frontend::c::parser;
+import aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::frontend::c::lang_opts;
 import std::core::mem::allocators;
 
 const Host HOST = { X86_64, LINUX, GNU };

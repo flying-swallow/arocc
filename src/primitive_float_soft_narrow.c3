@@ -239,6 +239,7 @@ fn int narrow_ctz(uint128 x, FloatFormat fmt) @inline
  Exact port, also for non-canonical f80 encodings: Zig compares the 79-bit
  magnitude with inf's bits, so a pseudo-infinity (integer bit clear) gives
  int::max, and an unnormal gives e - bias.
+ @require self.tag.kind == FLOAT
 *>
 fn int PrimitiveValue.ilogb(self)
 {
@@ -277,6 +278,7 @@ fn int PrimitiveValue.ilogb(self)
  (FLT_MIN) and scalbn(+0, 300) = +inf. The intermediates are `long`, so no n
  (int::min included) overflows, and Zig's results are reproduced wherever Zig
  itself does not trap.
+ @require self.tag.kind == FLOAT
 *>
 fn PrimitiveValue PrimitiveValue.scalbn(self, int n_in)
 {
@@ -343,6 +345,7 @@ fn PrimitiveValue PrimitiveValue.scalbn(self, int n_in)
  Magnitude of a non-NaN value as an integer that orders like the value. An f80
  pseudo-denormal (exponent 0, integer bit set) has the value of biased
  exponent 1, so it is moved there.
+ @require f.tag.kind == FLOAT && !f.is_nan()
 *>
 fn uint128 narrow_magnitude_key(PrimitiveValue f) @inline
 {
@@ -351,7 +354,10 @@ fn uint128 narrow_magnitude_key(PrimitiveValue f) @inline
 	return m;
 }
 
-<* `a < b` for two non-NaN values of one width (+0 == -0). *>
+<*
+ `a < b` for two non-NaN values of one width (+0 == -0).
+ @require a.tag.kind == FLOAT && b.tag == a.tag && !a.is_nan() && !b.is_nan()
+*>
 fn bool narrow_less_than(PrimitiveValue a, PrimitiveValue b)
 {
 	if (a.is_zero() && b.is_zero()) return false;
@@ -369,7 +375,7 @@ fn bool narrow_less_than(PrimitiveValue a, PrimitiveValue b)
  returned unchanged (not quieted). +0 vs -0: f32/f64 return the lhs, f16/f80/f128
  return +0 (Zig leaves this unspecified; Annex G only passes absolute values).
  Otherwise the larger value (equal values: the lhs).
- @require self.tag == other.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && other.tag == self.tag : "operands must be floats of the same width"
 *>
 fn PrimitiveValue PrimitiveValue.max(self, PrimitiveValue other)
 {

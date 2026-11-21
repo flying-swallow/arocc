@@ -4,7 +4,7 @@
 // finish_fn transfers the current arena to the declaration.
 module ir_tests;
 import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::target, aro::value_interner, aro::primitive_value;
-import aro::diagnostics, std::core::dstring;
+import aro::frontend::c::diagnostics, std::core::dstring;
 
 macro check(left, right)
 {

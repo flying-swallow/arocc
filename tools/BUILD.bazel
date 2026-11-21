@@ -10,7 +10,7 @@ c3_library(
         "generate_def.c3",
         "generate_def_parse.c3",
         "generate_def_schema.c3",
-        "//:src/builtin_properties.c3",
+        "//:src/frontend/c/builtin_properties.c3",
     ],
     visibility = ["//visibility:public"],
 )

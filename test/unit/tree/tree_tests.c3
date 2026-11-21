@@ -1,7 +1,7 @@
-// Storage and handle checks for aro::tree. Expected tag and node values are
+// Storage and handle checks for aro::frontend::c::tree. Expected tag and node values are
 // source-derived from src/aro/Tree.zig; no Zig executable was run.
 module tree_tests;
-import aro::compilation, aro::tree, aro::type_store, aro::source, aro::tokens, aro::tokenizer, aro::value;
+import aro::frontend::c::compilation, aro::frontend::c::tree, aro::frontend::c::type_store, aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::value;
 import std::core::mem::allocators;
 
 macro check(left, right)

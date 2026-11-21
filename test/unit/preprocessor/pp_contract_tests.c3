@@ -1,12 +1,12 @@
 // Tests for the plan 13 stage-0 contract code that is implemented (not
-// stubbed): aro::tokens (expansion-location chains, precedence), the
+// stubbed): aro::frontend::c::tokens (expansion-location chains, precedence), the
 // MacroTable, Preprocessor init/free/builtin registration, error reporting,
 // the output token list and the ExpandBuf ownership helpers, the provider
 // defaults and a spot check of the Preprocessor/Diagnostic.zig records.
 // Expected values are source-derived from Tree.zig, Preprocessor.zig and
 // Preprocessor/Diagnostic.zig; no Zig executable was run.
 module pp_contract_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

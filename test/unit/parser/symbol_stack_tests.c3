@@ -2,8 +2,8 @@
 // Expected behavior is source-derived from src/aro/SymbolStack.zig; no Zig
 // executable parity is claimed.
 module symbol_stack_tests;
-import aro::symbol_stack, aro::compilation, aro::diagnostics, aro::type_store, aro::value, aro::tokens, aro::tokenizer, aro::string_interner;
-import aro::parser, aro::preprocessor, aro::source;
+import aro::frontend::c::symbol_stack, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::type_store, aro::frontend::c::value, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::string_interner;
+import aro::frontend::c::parser, aro::frontend::c::preprocessor, aro::source;
 import std::core::mem::allocators, std::io;
 
 excuse WRITE_FAILURE;

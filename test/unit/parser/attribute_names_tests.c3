@@ -1,6 +1,6 @@
 module attribute_names_tests;
-import aro::attribute;
-import aro::tokenizer;
+import aro::frontend::c::attribute;
+import aro::frontend::c::tokenizer;
 
 // Expected names and aliases are source-derived from src/aro/Attribute.zig.
 

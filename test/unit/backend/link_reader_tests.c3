@@ -2,7 +2,7 @@
 // Synthetic ELF fixtures use the small byte builders in data/link_test_builders.c3.
 module link_reader_tests;
 import aro::backend::object, aro::backend::link;
-import aro::diagnostics, aro::host_process, aro::target;
+import aro::frontend::c::diagnostics, aro::host_process, aro::target;
 import link_test_builders;
 import std::collections::list;
 import std::core::mem, std::core::mem::allocators;

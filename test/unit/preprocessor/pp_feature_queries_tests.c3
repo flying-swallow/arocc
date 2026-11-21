@@ -1,4 +1,4 @@
-// Tests for src/pp_feature_queries.c3 (plan 14.5 `queries`): has_feature /
+// Tests for src/frontend/c/pp_feature_queries.c3 (plan 14.5 `queries`): has_feature /
 // has_extension, the Compilation.is_target_* queries, paste_strings_unsafe,
 // reconstruct_include_string, handle_builtin_macro and expand_builtin_func.
 // Builtin macro arguments are fed directly (lexed from a fixture-shaped line;
@@ -12,8 +12,8 @@
 //               isTarget*, Target.zig and Preprocessor.zig
 //               handleBuiltinMacro / expandFuncMacro / reconstructIncludeString.
 module pp_feature_queries_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::target, aro::lang_opts;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::target, aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators, std::collections::list;
 
 macro check(left, right)

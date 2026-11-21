@@ -1,15 +1,15 @@
 // Focused contract tests for the compilation-owned pragma registry.
 module pragma_tests;
-import aro::pragma;
-import aro::preprocessor, aro::tokens, aro::compilation, aro::source;
-import aro::diagnostics;
-import aro::pragmas::pack;
-import aro::pragmas::gcc;
-import aro::pragmas::once;
-import aro::pragmas::message;
-import aro::tokenizer;
-import aro::parser;
-import aro::tree;
+import aro::frontend::c::pragma;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::compilation, aro::source;
+import aro::frontend::c::diagnostics;
+import aro::frontend::c::pragmas::pack;
+import aro::frontend::c::pragmas::gcc;
+import aro::frontend::c::pragmas::once;
+import aro::frontend::c::pragmas::message;
+import aro::frontend::c::tokenizer;
+import aro::frontend::c::parser;
+import aro::frontend::c::tree;
 import std::core::mem::allocators;
 
 macro check(left, right)

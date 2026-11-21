@@ -1,4 +1,4 @@
-// Tests for src/macro_paste.c3 (plan 13.4 `stringify-paste`): stringify,
+// Tests for src/frontend/c/macro_paste.c3 (plan 13.4 `stringify-paste`): stringify,
 // destringify, paste_tokens and make_generated_token(_extra). Tokens are fed
 // directly (lexed from small buffers; whitespace becomes MACRO_WS as in macro
 // argument collection), not through the macro expander.
@@ -9,8 +9,8 @@
 //  [source]     derived by reading Preprocessor.zig stringify / pasteTokens /
 //               makeGeneratedTokenExtra and Tokenizer.zig.
 module macro_paste_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::hideset;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::hideset;
 import std::io, std::core::mem::allocators, std::collections::list;
 
 macro check(left, right)

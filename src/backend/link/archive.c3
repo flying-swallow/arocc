@@ -1,6 +1,6 @@
 // Lazy, bounds-checked reader for GNU System V archives.
 module aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::collections::list;
 
 const ulong AR_MAGIC_SIZE = 8;

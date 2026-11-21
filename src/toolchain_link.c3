@@ -4,7 +4,7 @@
 module aro::toolchain;
 import aro::target;
 import aro::system_defaults;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::collections::list, std::collections::maybe;
 
 excuse INVALID_LINKER_PATH;

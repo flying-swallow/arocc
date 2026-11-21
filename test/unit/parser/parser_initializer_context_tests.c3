@@ -1,7 +1,7 @@
 // Initializer value requirements and variable-length-array diagnostics.
 module parser_init_ctx_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_result;
-import aro::preprocessor, aro::source, aro::symbol_stack, aro::tokens, aro::tokenizer, aro::tree, aro::type_store, aro::value;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::symbol_stack, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value;
 
 fn parser_result::Result? parse_context_test_expr(void* context, parser::Parser* p, bool eval)
 {

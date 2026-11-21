@@ -1,4 +1,4 @@
-// Tests for src/pp_directives.c3 (plan 13.5): IfContext packing,
+// Tests for src/frontend/c/pp_directives.c3 (plan 13.5): IfContext packing,
 // find_include_guard, expect_* helpers, skip and preprocess_extra on inputs
 // that only contain directives, whitespace and skipped text, so no macro
 // expansion (13.3), stringify (13.4) or #if expression evaluation (13.2) is
@@ -6,8 +6,8 @@
 // Preprocessor/Diagnostic.zig; the "#elifndef error.c" and "nested #ifs.c"
 // shapes come from test/cases. No Zig executable was run.
 module pp_directives_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::lang_opts, aro::type_store;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::lang_opts, aro::frontend::c::type_store;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

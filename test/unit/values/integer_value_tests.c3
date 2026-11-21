@@ -1,5 +1,5 @@
-// Tests for the integer, byte and pointer operations of aro::value
-// (src/value.c3, a port of src/aro/Value.zig).
+// Tests for the integer, byte and pointer operations of aro::frontend::c::value
+// (src/frontend/c/value.c3, a port of src/aro/Value.zig).
 //
 // Sources of expected values (no Zig executable was run; no differential
 // parity is claimed):
@@ -18,7 +18,7 @@
 // allocations (Zig's `defer gpa.free` of scratch limbs).
 module integer_value_tests;
 import aro::primitive_value;
-import aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
+import aro::frontend::c::value, aro::value_interner, aro::bigint, aro::frontend::c::type_store, aro::target, aro::frontend::c::lang_opts, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

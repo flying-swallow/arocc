@@ -1,7 +1,7 @@
 // Linker argv parsing and library lookup tests.
 module link_args_tests;
 import aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import aro::target;
 import aro::toolchain;
 import aro::toolchain::discovery;

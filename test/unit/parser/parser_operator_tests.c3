@@ -4,10 +4,10 @@
 // values (integers, pointers, floats, complex) into folding.
 module parser_operator_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
-import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::value_interner;
-import aro::lang_opts;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::string_interner, aro::frontend::c::symbol_stack, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
+import aro::frontend::c::lang_opts;
 import std::core::mem::allocators;
 
 // Source-derived: arithmetic expectations use Value's wrapping integer
@@ -336,7 +336,9 @@ fn void address_dereference_sizeof_and_alignment() @test
 	check_int_expr("&x\n", tree::NodeKind.ADDR_OF_EXPR, 0, false, false, true, false, false, false, true);
 	check_int_expr("*&x\n", tree::NodeKind.DEREF_EXPR, 0, true);
 	check_int_expr("sizeof x\n", tree::NodeKind.SIZEOF_EXPR, 4, false, false, true, false, false, false, false, true);
-	check_int_expr("__alignof x\n", tree::NodeKind.ALIGNOF_EXPR, 4, false, false, true, false, false, false, false, true, 1);
+	check_int_expr("__alignof x\n", tree::NodeKind.ALIGNOF_EXPR, 4, false, false, true, false, false, false, false, true, 0);
+	check_int_expr("__alignof__ x\n", tree::NodeKind.ALIGNOF_EXPR, 4, false, false, true, false, false, false, false, true, 0);
+	check_int_expr("_Alignof x\n", tree::NodeKind.ALIGNOF_EXPR, 4, false, false, true, false, false, false, false, true, 1);
 }
 
 fn void pointer_arithmetic_subtraction_and_null_comparison() @test

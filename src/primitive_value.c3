@@ -5,7 +5,7 @@
 // (int_key, float_key, complex_key, float_bits, re / im, to_big_int).
 // Key hashing, equality and the static-ref mapping (Key.hash / eql / toRef)
 // live here too. Storage lives in value_interner.c3,
-// float semantics in primitive_float.c3, Value-level operations in aro::value.
+// float semantics in primitive_float.c3, Value-level operations in aro::frontend::c::value.
 module aro::primitive_value;
 import aro::value_interner, aro::bigint, std::io, std::hash::metro64;
 

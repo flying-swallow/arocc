@@ -31,7 +31,7 @@ fn int128 compare_key(PrimitiveValue f)
 <*
  std.math.compare(a, op, b) for two floats of the same width: IEEE ordering,
  -0 == +0, any comparison with a NaN is false except NEQ, which is true.
- @require self.tag == rhs.tag : "operands must have the same width"
+ @require self.tag.kind == FLOAT && rhs.tag == self.tag : "operands must be floats of the same width"
 *>
 fn bool PrimitiveValue.compare(self, CompareOperator op, PrimitiveValue rhs)
 {
@@ -418,7 +418,10 @@ fn ulong f64_round_half_away(ulong bits)
 	return sign | (mag & ~mask);
 }
 
-<* Zig @as(f64, @floatCast(x)); f64 itself is passed through (PrimitiveValue.cast of the same tag is the identity). *>
+<*
+ Zig @as(f64, @floatCast(x)); f64 itself is passed through (PrimitiveValue.cast of the same tag is the identity).
+ @require f.tag.kind == FLOAT
+*>
 fn PrimitiveValue print_to_f64(PrimitiveValue f)
 {
 	// if, not `?:`: see CONVENTIONS.md (c3c by-value aggregate ternary).

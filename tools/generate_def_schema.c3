@@ -5,7 +5,7 @@
 // tools/builtins_schema.md.
 //
 // Invariants:
-// - The generator links only std plus src/builtin_properties.c3 (never
+// - The generator links only std plus src/frontend/c/builtin_properties.c3 (never
 //   aro_c3_lib, which depends on the generator's output).
 // - A DefFile borrows the input buffer: every String in it (names, param_str,
 //   features, DefDiag.detail) is a slice of `input` and is valid only while
@@ -13,7 +13,7 @@
 // - entries are in file order; the parser has already rejected duplicates,
 //   so the emitter only sorts.
 module generate_def;
-import std::collections::list, aro::builtin_properties;
+import std::collections::list, aro::frontend::c::builtin_properties;
 
 // Parse errors. DefDiag carries the line and the offending text.
 <* Text that matches no supported construct (incl. Zig `const`/`pub const` header lines). *>

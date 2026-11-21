@@ -1,6 +1,6 @@
 // Public assembly result and architecture dispatcher.
 module aro::backend::assembly;
-import aro::tree, aro::target, aro::compilation, aro::backend::assembly_x86_64;
+import aro::frontend::c::tree, aro::target, aro::frontend::c::compilation, aro::backend::assembly_x86_64;
 import std::core::dstring;
 
 excuse UNSUPPORTED_ARCHITECTURE;

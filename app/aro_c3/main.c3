@@ -1,13 +1,13 @@
 module aro_c3_main;
 
-import aro::compilation;
-import aro::diagnostics;
-import aro::driver;
+import aro::frontend::c::compilation;
+import aro::frontend::c::diagnostics;
+import aro::frontend::c::driver;
 import aro::host_process;
-import aro::pragmas::gcc;
-import aro::pragmas::message;
-import aro::pragmas::once;
-import aro::pragmas::pack;
+import aro::frontend::c::pragmas::gcc;
+import aro::frontend::c::pragmas::message;
+import aro::frontend::c::pragmas::once;
+import aro::frontend::c::pragmas::pack;
 import std::io;
 import std::io::os;
 import std::io::path;

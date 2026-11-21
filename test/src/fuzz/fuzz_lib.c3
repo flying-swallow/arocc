@@ -1,8 +1,8 @@
 module aro::fuzz_lib;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::preprocessor;
-import aro::predefined_macros, aro::pragmas::gcc, aro::pragmas::message, aro::pragmas::once;
-import aro::pragma, aro::source, aro::target, aro::toolchain, aro::tree;
-import aro::tokens;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::preprocessor;
+import aro::frontend::c::predefined_macros, aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::message, aro::frontend::c::pragmas::once;
+import aro::frontend::c::pragma, aro::source, aro::target, aro::toolchain, aro::frontend::c::tree;
+import aro::frontend::c::tokens;
 import std::collections::list, std::core::mem::allocators, std::io, std::io::file, std::io::path, std::io::os, libc;
 
 const usz MAX_FUZZ_BYTES = 20 * 1024 * 1024;

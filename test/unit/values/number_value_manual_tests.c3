@@ -4,8 +4,8 @@
 // the tag then. Expected values: see number_value_tests.c3 for the labels.
 module number_value_manual_tests;
 import aro::primitive_value;
-import aro::number_value, aro::number_literal, aro::value, aro::value_interner;
-import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts;
+import aro::frontend::c::number_value, aro::frontend::c::number_literal, aro::frontend::c::value, aro::value_interner;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

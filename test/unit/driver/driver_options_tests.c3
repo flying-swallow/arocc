@@ -2,13 +2,13 @@
 // These tests only parse arguments and resolve synthetic target triples; they
 // do not read files, launch subprocesses, or invoke a compiler backend.
 module driver_options_tests;
-import aro::driver;
-import aro::driver_options;
+import aro::frontend::c::driver;
+import aro::frontend::c::driver_options;
 import aro::target;
 import aro::code_gen_options;
-import aro::compilation;
-import aro::diagnostics;
-import aro::lang_opts;
+import aro::frontend::c::compilation;
+import aro::frontend::c::diagnostics;
+import aro::frontend::c::lang_opts;
 import aro::toolchain;
 import std::collections::list;
 import std::core::mem::allocators;

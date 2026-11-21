@@ -15,7 +15,7 @@ fn void arrays_follow_python_regex() @test
 		"// Header one\n"
 		"// two\n"
 		"// The table data is Unicode data; see LICENSE-UNICODE at the repository root.\n"
-		"module aro::identifier_tables;\n"
+		"module aro::frontend::c::identifier_tables;\n"
 		"\n"
 		"const uint CHUNK = 0064;\n"
 		"\n"

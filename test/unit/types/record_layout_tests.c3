@@ -1,9 +1,9 @@
-// Direct ABI contract tests for aro::type_store.record_layout.compute.
+// Direct ABI contract tests for aro::frontend::c::type_store.record_layout.compute.
 // Inputs are hand-built; source-derived cases below model fixtures but do not
 // parse or execute those C sources and do not claim compiler parity.
 module record_layout_tests;
-import aro::type_store, aro::target, aro::compilation, aro::lang_opts;
-import aro::attribute, aro::attribute_map, aro::tokens;
+import aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation, aro::frontend::c::lang_opts;
+import aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::tokens;
 import std::io, std::core::mem::allocators, std::math;
 
 const Host HOST = { X86_64, LINUX, GNU };

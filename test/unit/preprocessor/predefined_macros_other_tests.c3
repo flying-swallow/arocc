@@ -10,7 +10,7 @@
 //   target_cpu.c3 feature data (itself source-derived). No Zig executable
 //   was run.
 module predefined_macros_other_tests;
-import aro::predefined_macros, aro::compilation, aro::target, aro::type_store, aro::code_gen_options, aro::lang_opts;
+import aro::frontend::c::predefined_macros, aro::frontend::c::compilation, aro::target, aro::frontend::c::type_store, aro::code_gen_options, aro::frontend::c::lang_opts;
 import std::core::mem::allocators, std::io;
 
 macro check(left, right)

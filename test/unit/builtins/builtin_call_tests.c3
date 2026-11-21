@@ -1,12 +1,12 @@
 // Focused tests for the generated-signature builtin-call path.
 // Contract expectations are source-derived from Parser.zig CallExpr's
 // paramCountOverride/checkArithOverflowArg/checkVaStartArg/finish and Builtins/eval.zig,
-// cross-checked against src/builtin_eval.c3. No Zig executable was run;
+// cross-checked against src/frontend/c/builtin_eval.c3. No Zig executable was run;
 // these tests do not claim executable Zig parity.
 module builtin_call_tests;
-import aro::builtin_call, aro::builtins, aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
-import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::target, aro::primitive_value, aro::symbol_stack;
+import aro::frontend::c::builtin_call, aro::frontend::c::builtins, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::target, aro::primitive_value, aro::frontend::c::symbol_stack;
 import std::core::mem::allocators;
 
 struct CallOperands

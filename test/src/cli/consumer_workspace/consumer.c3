@@ -4,8 +4,8 @@
 // PATH.
 module library_consumer;
 
-import aro::compilation, aro::diagnostics, aro::parser, aro::preprocessor;
-import aro::source, aro::tokenizer, aro::tokens, aro::tree, aro::type_store;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::preprocessor;
+import aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store;
 import std::core::mem::allocators;
 
 excuse CONSUMER_FILE_NOT_FOUND;

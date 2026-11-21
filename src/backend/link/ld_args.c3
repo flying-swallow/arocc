@@ -1,7 +1,7 @@
 // Parser and lookup helpers for the subset of GNU ld arguments used by the
 // in-process ELF linker.
 module aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::collections::list;
 import std::core::string;
 import aro::toolchain::discovery;

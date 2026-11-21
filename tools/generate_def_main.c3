@@ -10,7 +10,7 @@
 // Invariants: exit 0 and write the output only on success; on any error print
 // "<input>:<line>: error: <fault>: <detail>" to stderr, exit 1, write nothing.
 module generate_def_main;
-import std::io, std::io::file, generate_def, aro::builtin_properties;
+import std::io, std::io::file, generate_def, aro::frontend::c::builtin_properties;
 
 fn String basename(String path)
 {

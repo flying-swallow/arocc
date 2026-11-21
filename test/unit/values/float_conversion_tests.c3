@@ -18,7 +18,7 @@
 // Bazel target is tagged "manual" until those land.
 module float_conversion_tests;
 import aro::primitive_value;
-import aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation;
+import aro::frontend::c::value, aro::value_interner, aro::bigint, aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

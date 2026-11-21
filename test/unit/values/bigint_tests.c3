@@ -19,7 +19,7 @@
 //   base-32 regrouped from base-2 output), _BitInt(65535)-sized (1024-limb) values,
 //   and a few values derived by reading int.zig (marked "source-derived").
 module bigint_tests;
-import aro::bigint, aro::lang_opts;
+import aro::bigint, aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators;
 
 struct Vec

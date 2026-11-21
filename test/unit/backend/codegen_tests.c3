@@ -1,11 +1,11 @@
 // Focused checks for AST-to-IR lowering and typed IR construction. Expected IR
-// shapes are source-derived from src/codegen.c3, codegen_nodes.c3, and
+// shapes are source-derived from src/frontend/c/codegen.c3, codegen_nodes.c3, and
 // backend/ir.c3; this is not executable differential coverage against Zig.
 module codegen_tests;
 import aro::primitive_value;
-import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::builtins, aro::codegen, aro::compilation, aro::diagnostics, aro::preprocessor, aro::target;
-import aro::source, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
-import aro::value, aro::value_interner;
+import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::frontend::c::builtins, aro::frontend::c::codegen, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::target;
+import aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store;
+import aro::frontend::c::value, aro::value_interner;
 import std::core::dstring, std::core::string;
 
 struct CodeGenFixture

@@ -1,9 +1,9 @@
 // Tests the parser's constant-declaration folding modes through its public
 // constant-expression entry points. These target the upcoming mode API.
 module parser_const_folding_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
-import aro::preprocessor, aro::source, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
-import aro::string_interner, aro::type_store, aro::value;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::symbol_stack, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::string_interner, aro::frontend::c::type_store, aro::frontend::c::value;
 import std::core::mem::allocators;
 
 fn void stored_value_equals(tree::Tree* tree, NodeIndex node, long expected, Compilation* comp)

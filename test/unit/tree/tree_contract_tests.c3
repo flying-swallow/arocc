@@ -5,7 +5,7 @@
 // Expected values are source-derived from Tree.zig, Attribute.zig and
 // Attribute/Map.zig; no Zig executable was run.
 module tree_contract_tests;
-import aro::tree, aro::type_store, aro::attribute, aro::attribute_map, aro::symbol_stack;
+import aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::symbol_stack;
 
 macro check(left, right)
 {
@@ -48,9 +48,9 @@ fn void tag_counts() @test
 	// NodeKind + NodeForm bits here.)
 	check(NodeKind::len, 118);
 	check(CastKind::len, 31);
-	// Attribute.zig: 104 Args tags; Map.zig: 35 Repr tags.
+	// Attribute.zig: 104 Args tags; 35 upstream map tags plus two storage-order tags.
 	check(AttributeTag::len, 104);
-	check(AttrReprTag::len, 35);
+	check(AttrReprTag::len, 37);
 	check(AttrGnu::len, 98);
 	check(AttrClang::len, 25);
 	check(AttrKeyword::len, 25);

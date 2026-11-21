@@ -1,6 +1,6 @@
-// Focused tests for sparse initializer child storage in aro::init_list.
+// Focused tests for sparse initializer child storage in aro::frontend::c::init_list.
 module init_list_tests;
-import aro::init_list;
+import aro::frontend::c::init_list;
 
 fn void sparse_children_are_sorted_and_reused() @test
 {

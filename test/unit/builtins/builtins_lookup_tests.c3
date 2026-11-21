@@ -1,4 +1,4 @@
-// Tests for aro::builtins lookup and aro::builtin_properties (plan 12, agent
+// Tests for aro::frontend::c::builtins lookup and aro::frontend::c::builtin_properties (plan 12, agent
 // 12.4 lookup-props).
 //
 // Sources of expected values (no Zig executable was run; no differential
@@ -12,8 +12,8 @@
 // - The tests over the real generated tables (round trip, sortedness, arch
 //   gating) are generic; //test/unit/builtins:builtins_tests checks their contents.
 module builtins_lookup_tests;
-import aro::builtins, aro::builtin_properties, aro::builtin_defs::sample;
-import aro::target, aro::lang_opts, aro::compilation, aro::type_store;
+import aro::frontend::c::builtins, aro::frontend::c::builtin_properties, aro::frontend::c::builtin_defs::sample;
+import aro::target, aro::frontend::c::lang_opts, aro::frontend::c::compilation, aro::frontend::c::type_store;
 import std::core::mem::allocators;
 
 macro check(left, right)

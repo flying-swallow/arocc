@@ -43,7 +43,7 @@
 //   OS version ranges, glibc/Android defaults, CPU model feature lists beyond the
 //   fixture-checked ARM/x86 ones, non-x86_64 dynamic linker paths.
 module target_tests;
-import aro::target, aro::lang_opts, aro::compilation, std::io, std::core::mem::allocators;
+import aro::target, aro::frontend::c::lang_opts, aro::frontend::c::compilation, std::io, std::core::mem::allocators;
 
 <* test::eq for integers of mixed signedness, compared as long. *>
 macro check(left, right)

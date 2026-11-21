@@ -6,8 +6,8 @@
 // test fails at the end if the count is not zero. The Zig "destringify" test
 // between the two is ported elsewhere.
 module pp_reference_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::pragma, aro::pragmas::gcc, aro::pragmas::once, aro::pragmas::message, aro::pragmas::pack;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::pragma, aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::once, aro::frontend::c::pragmas::message, aro::frontend::c::pragmas::pack;
 import std::io, std::core::mem::allocators, std::core::dstring, std::core::string;
 
 macro check(left, right)

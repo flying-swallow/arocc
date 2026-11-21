@@ -1,9 +1,9 @@
 // Tests for aro::source, aro::string_interner and the source storage in
-// aro::compilation. The add_source_from_buffer / carriage-return / BOM cases
+// aro::frontend::c::compilation. The add_source_from_buffer / carriage-return / BOM cases
 // are ported from the `test` blocks at src/aro/Compilation.zig:2899 onward
 // (expected values copied verbatim from the Zig source).
 module source_tests;
-import aro::source, aro::string_interner, aro::compilation, aro::diagnostics;
+import aro::source, aro::string_interner, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import std::core::mem::allocators, std::collections::list;
 
 <* test::eq for slices; numeric values are compared as long (test::eq rejects int vs uint). *>

@@ -1,6 +1,6 @@
 // Tests for plan 14 agent 14.3 (`builtin-macros`): write_builtin_macros,
 // write_compiler_defines, write_common_defines and the int/float/type limit
-// helpers in src/predefined_macros.c3.
+// helpers in src/frontend/c/predefined_macros.c3.
 //
 // Provenance of expected values:
 // - [fixture] test/cases files named at each check (their _Static_asserts /
@@ -15,7 +15,7 @@
 // INCLUDE_SYSTEM_DEFINES inventories are not tested here; every 14.3 section
 // is tested on its own.
 module predefined_macros_tests;
-import aro, aro::predefined_macros, aro::compilation, aro::target, aro::type_store, aro::lang_opts, aro::code_gen_options;
+import aro, aro::frontend::c::predefined_macros, aro::frontend::c::compilation, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts, aro::code_gen_options;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

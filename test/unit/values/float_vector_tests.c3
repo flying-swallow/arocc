@@ -23,7 +23,7 @@
 // from $FLOAT_VECTORS_DIR when set.
 module float_vector_tests;
 import aro::primitive_value;
-import aro::annex_g, aro::lang_opts, aro::value, aro::value_interner, aro::bigint, aro::type_store, aro::target, aro::compilation;
+import aro::annex_g, aro::frontend::c::lang_opts, aro::frontend::c::value, aro::value_interner, aro::bigint, aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation;
 import std::io, std::os::env, std::core::mem::allocators, std::core::dstring;
 
 const Host HOST = { X86_64, LINUX, GNU };

@@ -6,6 +6,7 @@
 // Uses f128_mul / f128_div (primitive_float_soft_wide.c3) for the fast path.
 module aro::primitive_value;
 import aro::string_util;
+import std::collections::fixedlist;
 
 <* Zig error.InvalidCharacter from std.fmt.parseFloat. *>
 excuse INVALID_CHARACTER;
@@ -217,7 +218,7 @@ fn bool parse_inf_or_nan(String s, bool negative, F128Bits* out)
 	if (string_util::starts_with_ignore_case(s, "inf"))
 	{
 		consumed = 3;
-		if (string_util::starts_with_ignore_case(s[3..], "inity")) consumed = 8;
+		if (s.len > 3 && string_util::starts_with_ignore_case(s[3..], "inity")) consumed = 8;
 		value = inf(F128, negative);
 	}
 	else if (string_util::starts_with_ignore_case(s, "nan"))
@@ -350,7 +351,6 @@ fn bool convert_fast(ParsedNumber n, F128Bits* out)
 }
 
 <* decimal.zig Decimal(f128) constants. *>
-const sz DECIMAL_MAX_DIGITS = 11564;
 const sz DECIMAL_MAX_DIGITS_WITHOUT_OVERFLOW = 38;
 const int DECIMAL_POINT_RANGE = 32767;
 const int DECIMAL_MIN_EXPONENT = -4966;
@@ -360,44 +360,42 @@ const int DECIMAL_MAX_DECIMAL_DIGITS = 37;
 <* decimal.zig Decimal(f128): the "Simple Decimal Conversion" big decimal. *>
 struct Decimal
 {
-	<* The number of significant digits in the decimal. *>
-	sz num_digits;
 	<* The offset of the decimal point in the significant digits. *>
 	int decimal_point;
 	<* If the number of significant digits stored in the decimal is truncated. *>
 	bool truncated;
-	<* buffer of the raw digits, in the range [0, 9]. *>
-	char[DECIMAL_MAX_DIGITS] digits;
+	<* Significant decimal digits, in the range [0, 9]. *>
+	FixedList{char, 11564} digits;
 }
 
-fn void Decimal.try_add_digit(&self, char digit)
+fn void Decimal.try_add_digit(&self, char digit, sz* total_digits)
 {
-	if (self.num_digits < DECIMAL_MAX_DIGITS) self.digits[self.num_digits] = digit;
-	self.num_digits++;
+	if (!self.digits.is_full()) self.digits.push(digit);
+	(*total_digits)++;
 }
 
 fn void Decimal.trim(&self)
 {
-	assert(self.num_digits <= DECIMAL_MAX_DIGITS);
-	while (self.num_digits != 0 && self.digits[self.num_digits - 1] == 0) self.num_digits--;
+	while (!self.digits.is_empty() && self.digits[self.digits.len() - 1] == 0) self.digits.size--;
 }
 
 fn uint128 Decimal.round(&self)
 {
-	if (self.num_digits == 0 || self.decimal_point < 0) return 0;
+	sz num_digits = self.digits.len();
+	if (num_digits == 0 || self.decimal_point < 0) return 0;
 	if (self.decimal_point > DECIMAL_MAX_DECIMAL_DIGITS) return ~(uint128)0;
 	sz dp = (sz)self.decimal_point;
 	uint128 n = 0;
 	for (sz i = 0; i < dp; i++)
 	{
 		n *= 10;
-		if (i < self.num_digits) n += (uint128)self.digits[i];
+		if (i < num_digits) n += (uint128)self.digits[i];
 	}
 	bool round_up = false;
-	if (dp < self.num_digits)
+	if (dp < num_digits)
 	{
 		round_up = self.digits[dp] >= 5;
-		if (self.digits[dp] == 5 && dp + 1 == self.num_digits)
+		if (self.digits[dp] == 5 && dp + 1 == num_digits)
 		{
 			round_up = self.truncated || (dp != 0 && (self.digits[dp - 1] & 1) != 0);
 		}
@@ -447,7 +445,7 @@ fn sz Decimal.number_of_digits_left_shift(&self, usz shift)
 	sz delta = pow_decimal_digits(2, shift, p2[..]);
 	for (sz i = 0; i < p5_len; i++)
 	{
-		if (i >= self.num_digits) return delta - 1;
+		if (i >= self.digits.len()) return delta - 1;
 		if (self.digits[i] == p5[i]) continue;
 		if (self.digits[i] < p5[i]) return delta - 1;
 		return delta;
@@ -458,10 +456,11 @@ fn sz Decimal.number_of_digits_left_shift(&self, usz shift)
 <* Decimal.leftShift: decimal * 2^shift. *>
 fn void Decimal.left_shift(&self, usz shift)
 {
-	if (self.num_digits == 0) return;
+	sz num_digits = self.digits.len();
+	if (num_digits == 0) return;
 	sz num_new_digits = self.number_of_digits_left_shift(shift);
-	sz read_index = self.num_digits;
-	sz write_index = self.num_digits + num_new_digits;
+	sz read_index = num_digits;
+	sz write_index = num_digits + num_new_digits;
 	uint128 n = 0;
 	while (read_index != 0)
 	{
@@ -470,9 +469,9 @@ fn void Decimal.left_shift(&self, usz shift)
 		n += (uint128)self.digits[read_index] << shift;
 		uint128 quotient = n / 10;
 		uint128 remainder = n - 10 * quotient;
-		if (write_index < DECIMAL_MAX_DIGITS)
+		if (write_index < self.digits.entries.len)
 		{
-			self.digits[write_index] = (char)remainder;
+			self.digits.entries[write_index] = (char)remainder;
 		}
 		else if (remainder > 0)
 		{
@@ -485,9 +484,9 @@ fn void Decimal.left_shift(&self, usz shift)
 		write_index--;
 		uint128 quotient = n / 10;
 		uint128 remainder = n - 10 * quotient;
-		if (write_index < DECIMAL_MAX_DIGITS)
+		if (write_index < self.digits.entries.len)
 		{
-			self.digits[write_index] = (char)remainder;
+			self.digits.entries[write_index] = (char)remainder;
 		}
 		else if (remainder > 0)
 		{
@@ -495,8 +494,8 @@ fn void Decimal.left_shift(&self, usz shift)
 		}
 		n = quotient;
 	}
-	self.num_digits += num_new_digits;
-	if (self.num_digits > DECIMAL_MAX_DIGITS) self.num_digits = DECIMAL_MAX_DIGITS;
+	self.digits.size = num_digits + num_new_digits;
+	if (self.digits.size > self.digits.entries.len) self.digits.size = self.digits.entries.len;
 	self.decimal_point += (int)num_new_digits;
 	self.trim();
 }
@@ -504,12 +503,13 @@ fn void Decimal.left_shift(&self, usz shift)
 <* Decimal.rightShift: decimal * 2^-shift. *>
 fn void Decimal.right_shift(&self, usz shift)
 {
+	sz num_digits = self.digits.len();
 	sz read_index = 0;
 	sz write_index = 0;
 	uint128 n = 0;
 	while (n >> shift == 0)
 	{
-		if (read_index < self.num_digits)
+		if (read_index < num_digits)
 		{
 			n = 10 * n + (uint128)self.digits[read_index];
 			read_index++;
@@ -532,14 +532,14 @@ fn void Decimal.right_shift(&self, usz shift)
 	self.decimal_point -= (int)read_index - 1;
 	if (self.decimal_point < -DECIMAL_POINT_RANGE)
 	{
-		self.num_digits = 0;
+		self.digits.clear();
 		self.decimal_point = 0;
 		self.truncated = false;
 		return;
 	}
 
 	uint128 mask = ((uint128)1 << shift) - 1;
-	while (read_index < self.num_digits)
+	while (read_index < num_digits)
 	{
 		char new_digit = (char)(n >> shift);
 		n = 10 * (n & mask) + (uint128)self.digits[read_index];
@@ -551,9 +551,9 @@ fn void Decimal.right_shift(&self, usz shift)
 	{
 		char new_digit = (char)(n >> shift);
 		n = 10 * (n & mask);
-		if (write_index < DECIMAL_MAX_DIGITS)
+		if (write_index < self.digits.entries.len)
 		{
-			self.digits[write_index] = new_digit;
+			self.digits.entries[write_index] = new_digit;
 			write_index++;
 		}
 		else if (new_digit > 0)
@@ -561,7 +561,7 @@ fn void Decimal.right_shift(&self, usz shift)
 			self.truncated = true;
 		}
 	}
-	self.num_digits = write_index;
+	self.digits.size = write_index;
 	self.trim();
 }
 
@@ -573,24 +573,25 @@ fn void Decimal.right_shift(&self, usz shift)
 fn void Decimal.parse(&self, String s)
 {
 	*self = {};
+	sz total_digits = 0;
 	sz pos = 0; sz underscores = 0;
 	sz* offset = &pos;
 	sz* underscore_count = &underscores;
 	char digit;
 
 	string_util::skip_chars(s, offset, "0_");
-	while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255)) self.try_add_digit(digit);
+	while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255)) self.try_add_digit(digit, &total_digits);
 
 	if (string_util::first_is(s, *offset, "."))
 	{
 		(*offset += 1);
 		sz marker = (*offset - *underscore_count);
 		// Skip leading zeroes
-		if (self.num_digits == 0) string_util::skip_chars(s, offset, "0");
-		while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255)) self.try_add_digit(digit);
+		if (total_digits == 0) string_util::skip_chars(s, offset, "0");
+		while (((digit = string_util::scan_digit(s, offset, underscore_count, 10)) != 255)) self.try_add_digit(digit, &total_digits);
 		self.decimal_point = (int)marker - (int)(*offset - *underscore_count);
 	}
-	if (self.num_digits != 0)
+	if (total_digits != 0)
 	{
 		// Ignore trailing zeros if any
 		sz n_trailing_zeros = 0;
@@ -609,14 +610,15 @@ fn void Decimal.parse(&self, String s)
 			if (i == 0) break;
 		}
 		self.decimal_point += (int)n_trailing_zeros;
-		self.num_digits -= n_trailing_zeros;
-		self.decimal_point += (int)self.num_digits;
-		if (self.num_digits > DECIMAL_MAX_DIGITS)
+		total_digits -= n_trailing_zeros;
+		self.decimal_point += (int)total_digits;
+		if (total_digits > self.digits.entries.len)
 		{
 			self.truncated = true;
-			self.num_digits = DECIMAL_MAX_DIGITS;
+			total_digits = self.digits.entries.len;
 		}
 	}
+	self.digits.size = total_digits;
 	if (string_util::first_is_lower(s, *offset, 'e'))
 	{
 		(*offset += 1);
@@ -638,7 +640,7 @@ fn void Decimal.parse(&self, String s)
 		self.decimal_point += neg_exp ? -exp_num : exp_num;
 	}
 
-	for (sz i = self.num_digits; i < DECIMAL_MAX_DIGITS_WITHOUT_OVERFLOW; i++) self.digits[i] = 0;
+	for (sz i = self.digits.len(); i < DECIMAL_MAX_DIGITS_WITHOUT_OVERFLOW; i++) self.digits.entries[i] = 0;
 }
 
 <* common.zig BiasedFp(f128): significand bits and biased exponent. *>
@@ -673,7 +675,7 @@ fn BiasedFp convert_slow(String s)
 
 	Decimal d;
 	d.parse(s);  // no need to recheck underscores
-	if (d.num_digits == 0 || d.decimal_point < DECIMAL_MIN_EXPONENT) return ZERO_FP;
+	if (d.digits.is_empty() || d.decimal_point < DECIMAL_MIN_EXPONENT) return ZERO_FP;
 	if (d.decimal_point >= DECIMAL_MAX_EXPONENT) return INF_FP;
 
 	int exp2 = 0;

@@ -1,4 +1,4 @@
-// Tests for aro::number_value (plan 11 agent 11.2). Inputs are constructed
+// Tests for aro::frontend::c::number_value (plan 11 agent 11.2). Inputs are constructed
 // NumberLiteral / Prefix / Suffix values, so these tests do not need
 // number_literal's syntax parser (11.1); the end-to-end path through
 // number_value::parse is in number_value_manual_tests.c3.
@@ -11,8 +11,8 @@
 //                primaryExpr, plus IEEE-754 encodings. No Zig executable was run.
 module number_value_tests;
 import aro::primitive_value;
-import aro::number_value, aro::number_literal, aro::value, aro::value_interner, aro::bigint;
-import aro::compilation, aro::diagnostics, aro::target, aro::type_store, aro::lang_opts;
+import aro::frontend::c::number_value, aro::frontend::c::number_literal, aro::frontend::c::value, aro::value_interner, aro::bigint;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

@@ -2,7 +2,7 @@
 // xcrun is always invoked through the borrowed process service so tests can
 // exercise status and output handling without a host Apple toolchain.
 module aro::toolchain::darwin;
-import aro::toolchain, aro::toolchain::discovery, aro::compilation;
+import aro::toolchain, aro::toolchain::discovery, aro::frontend::c::compilation;
 import aro::target;
 import std::collections::list;
 

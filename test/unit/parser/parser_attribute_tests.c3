@@ -1,8 +1,8 @@
 // Token-level coverage for attribute syntax. Declaration grammar is still
 // callback-only, so these tests cover syntax spans, not semantic AST attachment.
 module parser_attribute_tests;
-import aro::attribute, aro::compilation, aro::diagnostics, aro::parser, aro::parser_attribute;
-import aro::preprocessor, aro::source, aro::tokenizer;
+import aro::frontend::c::attribute, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_attribute;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer;
 
 fn void check_attribute_specifier(String input, uint kind)
 {

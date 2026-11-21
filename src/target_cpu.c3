@@ -25,7 +25,7 @@
 // which Zig generates std/Target/<arch>.zig (MIT licensed). Only the
 // features listed are tracked; any other feature reads as absent.
 module aro::target;
-import aro::enum_bitset;
+import std::collections::enumset;
 
 enum FeatureFamily : char
 {
@@ -688,7 +688,13 @@ enum Feature : ushort (FeatureFamily family, String name)
 }
 
 <* Bit set over `Feature` (Zig Cpu.Feature.Set). *>
-alias FeatureSet = enum_bitset::EnumBitset{Feature};
+alias FeatureSet = enumset::EnumSet{Feature};
+
+fn bool FeatureSet.is_empty(self)
+{
+	foreach (feature : Feature::values) if (self.has(feature)) return false;
+	return true;
+}
 
 struct FeatureDeps
 {
@@ -881,7 +887,7 @@ fn void FeatureSet.populate_dependencies(&self)
 			foreach (f : dep.implies)
 			{
 				if (self.has(f)) continue;
-				self.set(f);
+				self.add(f);
 				changed = true;
 			}
 		}
@@ -1010,7 +1016,8 @@ enum CpuModel : ushort (String name, String llvm_name, FeatureFamily family, Fea
 <* The model's features with dependencies populated (Model.toCpu). *>
 fn FeatureSet CpuModel.feature_set(self)
 {
-	FeatureSet s = enum_bitset::of{Feature}(...self.features);
+	FeatureSet s;
+	foreach (feature : self.features) s.add(feature);
 	s.populate_dependencies();
 	return s;
 }

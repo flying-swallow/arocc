@@ -1,4 +1,4 @@
-// Tests for src/macro_expand.c3 (plan 13.3 `expansion`): #define parsing
+// Tests for src/frontend/c/macro_expand.c3 (plan 13.3 `expansion`): #define parsing
 // and redefinition checks, function-macro argument collection, exhaustive
 // rescanning, hideset recursion blocking, __VA_ARGS__ / __VA_OPT__ /
 // placemarkers, GNU comma deletion and expansion-location chains.
@@ -19,8 +19,8 @@
 //  - "source-derived": read from Preprocessor.zig by hand; no Zig executable
 //    was run.
 module macro_expand_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::hideset, aro::lang_opts;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::hideset, aro::frontend::c::lang_opts;
 import std::io, std::core::string, std::core::mem::allocators;
 
 macro check(left, right)

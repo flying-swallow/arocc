@@ -1,8 +1,8 @@
 // Tests for Compilation's ordered include lookup. All paths and bytes come
 // from an injected synthetic tree; these tests never include host files.
 module include_search_tests;
-import aro::compilation, aro::dep_file, aro::include_search, aro::preprocessor, aro::source;
-import aro::tokenizer;
+import aro::frontend::c::compilation, aro::frontend::c::dep_file, aro::frontend::c::include_search, aro::frontend::c::preprocessor, aro::source;
+import aro::frontend::c::tokenizer;
 import aro::toolchain::discovery;
 import std::core::mem::allocators;
 

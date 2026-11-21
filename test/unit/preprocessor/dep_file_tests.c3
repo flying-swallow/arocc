@@ -1,5 +1,5 @@
 module dep_file_tests;
-import aro::dep_file;
+import aro::frontend::c::dep_file;
 import std::core::mem::allocators;
 
 fn void expect_rule(DepFile* d, String expected)

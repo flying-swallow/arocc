@@ -2,10 +2,10 @@
 // primary/postfix/binary productions, with symbols seeded into the parser.
 module parser_expression_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
-import aro::preprocessor, aro::source, aro::string_interner, aro::symbol_stack, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::value_interner, aro::lang_opts;
-import aro::parser_declaration;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::string_interner, aro::frontend::c::symbol_stack, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::lang_opts;
+import aro::frontend::c::parser_declaration;
 import std::core::mem::allocators;
 
 alias TypeNameProbeFn = fn parser::TypeNameProbe?(void* context, parser::Parser* p);

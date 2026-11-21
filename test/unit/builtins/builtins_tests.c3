@@ -1,5 +1,5 @@
 // Plan 12 stage 2 acceptance tests over the real generated builtin tables
-// (//:builtin_defs, one aro::builtin_defs::<group> module per .def file).
+// (//:builtin_defs, one aro::frontend::c::builtin_defs::<group> module per .def file).
 //
 // Sources of expected values (no Zig executable was run; no differential
 // parity is claimed):
@@ -16,9 +16,9 @@
 // - Attribute bits are computed by hand from the Attributes bit table in
 //   tools/builtins_schema.md (eval_args 0x10000 is the default).
 module builtins_tests;
-import aro::builtins, aro::builtin_properties, aro::builtin_type_description;
-import aro::builtin_defs::common, aro::builtin_defs::ve, aro::builtin_defs::x86;
-import aro::target, aro::compilation, aro::type_store;
+import aro::frontend::c::builtins, aro::frontend::c::builtin_properties, aro::frontend::c::builtin_type_description;
+import aro::frontend::c::builtin_defs::common, aro::frontend::c::builtin_defs::ve, aro::frontend::c::builtin_defs::x86;
+import aro::target, aro::frontend::c::compilation, aro::frontend::c::type_store;
 import std::io, std::core::mem::allocators, std::core::dstring, std::collections::list;
 
 macro check(left, right)

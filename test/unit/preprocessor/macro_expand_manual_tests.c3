@@ -1,4 +1,4 @@
-// Manual tests for src/macro_expand.c3 (plan 13.3 `expansion`) whose
+// Manual tests for src/frontend/c/macro_expand.c3 (plan 13.3 `expansion`) whose
 // paths reach code owned by 13.4 (stringify / paste_tokens /
 // make_generated_token in macro_paste.c3) or 13.5 (skip_to_nl in
 // pp_directives.c3). Tagged "manual" until those land; the integrator should
@@ -9,8 +9,8 @@
 // per line (empty lines dropped) plus manifest diagnostics; "source-derived"
 // = read from Preprocessor.zig, no Zig executable was run.
 module macro_expand_manual_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::hideset, aro::lang_opts;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::hideset, aro::frontend::c::lang_opts;
 import std::io, std::core::string, std::core::mem::allocators;
 
 macro check(left, right)

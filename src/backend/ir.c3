@@ -91,6 +91,28 @@ enum InstTag : char (String name)
 	FPTRUNC { "fptrunc" },
 }
 
+<* The compare computing the logical negation of `tag`. Ordered float compares
+have no unordered inverse in the IR (NaN), so the caller inverts the branch. *>
+fn InstTag? inverse_compare(InstTag tag)
+{
+	switch (tag)
+	{
+		case CMP_EQ: return InstTag.CMP_NE;
+		case CMP_NE: return InstTag.CMP_EQ;
+		case CMP_SLT: return InstTag.CMP_SGTE;
+		case CMP_SGTE: return InstTag.CMP_SLT;
+		case CMP_SLTE: return InstTag.CMP_SGT;
+		case CMP_SGT: return InstTag.CMP_SLTE;
+		case CMP_ULT: return InstTag.CMP_UGTE;
+		case CMP_UGTE: return InstTag.CMP_ULT;
+		case CMP_ULTE: return InstTag.CMP_UGT;
+		case CMP_UGT: return InstTag.CMP_ULTE;
+		case FCMP_OEQ: return InstTag.FCMP_UNE;
+		case FCMP_UNE: return InstTag.FCMP_OEQ;
+		default: return NOT_FOUND~;
+	}
+}
+
 struct BinData { Ref lhs; Ref rhs; }
 // Keep existing values stable: SSE_REGISTER is appended after the original ABI locations.
 enum ArgLocationKind : char { ORDINAL, GP_REGISTER, STACK, SSE_REGISTER }

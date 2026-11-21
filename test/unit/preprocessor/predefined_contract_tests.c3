@@ -5,7 +5,7 @@
 // Compilation.zig, CodeGenOptions.zig and Attribute.zig; no Zig executable
 // was run.
 module predefined_contract_tests;
-import aro::predefined_macros, aro::preprocessor, aro::compilation, aro::code_gen_options, aro::target;
+import aro::frontend::c::predefined_macros, aro::frontend::c::preprocessor, aro::frontend::c::compilation, aro::code_gen_options, aro::target;
 import std::core::mem::allocators;
 
 macro check(left, right)

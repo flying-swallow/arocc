@@ -1,6 +1,6 @@
 // Diagnostics and shared failures for the in-process linker.
 module aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::core::string;
 
 excuse FILE_NOT_FOUND;

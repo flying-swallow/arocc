@@ -1,8 +1,8 @@
 // Focused coverage for sparse conversion, initializer designators, and nested
 // initializer grammar behavior.
 module parser_initializer_tests;
-import aro::compilation, aro::diagnostics, aro::init_list, aro::parser, aro::parser_result;
-import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree, aro::type_store, aro::value;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::init_list, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value;
 import aro::value_interner;
 
 fn parser_result::Result? parse_initializer_test_integer(void* context, parser::Parser* p, bool eval)

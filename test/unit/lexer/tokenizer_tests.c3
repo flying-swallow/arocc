@@ -1,5 +1,5 @@
-// Tests for aro::tokenizer, aro::lang_opts, aro::char_info and the generated
-// aro::identifier_tables.
+// Tests for aro::frontend::c::tokenizer, aro::frontend::c::lang_opts, aro::frontend::c::char_info and the generated
+// aro::frontend::c::identifier_tables.
 //
 // The expect_tokens cases are ported verbatim from the `test` blocks in
 // src/aro/Tokenizer.zig; "ArmLdrex versions" from src/aro/LangOpts.zig;
@@ -10,7 +10,7 @@
 // ("Tokenizer fuzz test") with a deterministic PRNG and checks the same
 // progress invariant.
 module tokenizer_tests;
-import aro::tokenizer, aro::tokens, aro::lang_opts, aro::char_info, aro::source, aro::compilation;
+import aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::lang_opts, aro::frontend::c::char_info, aro::source, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators;
 
 <* test::eq for slices; numeric values are compared as long (test::eq rejects int vs uint). *>

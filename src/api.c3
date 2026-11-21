@@ -4,10 +4,10 @@
 module aro::api;
 
 import aro::backend::assembly, aro::backend::ir, aro::backend::object;
-import aro::code_gen_options, aro::codegen, aro::compilation, aro::diagnostics;
-import aro::driver, aro::parser, aro::preprocessor, aro::source;
-import aro::string_interner, aro::target, aro::tokenizer, aro::toolchain;
-import aro::tree, aro::type_store, aro::value, aro::value_interner;
+import aro::code_gen_options, aro::frontend::c::codegen, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::driver, aro::frontend::c::parser, aro::frontend::c::preprocessor, aro::source;
+import aro::string_interner, aro::target, aro::frontend::c::tokenizer, aro::toolchain;
+import aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
 
 // Zig src/aro.zig module exports and named type aliases.
 alias CodeGen = codegen::CodeGen;

@@ -1,7 +1,7 @@
 // Synthetic GNU archive and linker-script tests, plus host format cross-checks.
 module link_archive_tests;
 import aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import link_test_builders;
 import std::core::mem, std::core::mem::allocators, std::core::string;
 

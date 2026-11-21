@@ -1,8 +1,8 @@
 // Focused direct-AST tests for Result's type conversions.
 module parser_result_tests;
 import aro::primitive_value;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration, aro::parser_result, aro::tree, aro::type_store, aro::value, aro::value_interner;
-import aro::preprocessor, aro::source, aro::symbol_stack, aro::tokens;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::parser_result, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::symbol_stack, aro::frontend::c::tokens;
 import std::core::mem::allocators;
 
 fn parser_result::Result? parse_initializer_context_assignment(void* context, parser::Parser* p, bool eval)

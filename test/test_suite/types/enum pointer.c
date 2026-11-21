@@ -5,7 +5,7 @@ enum E {
 void foo(void) {
     int x;
     unsigned y;
-    enum E *p1 = &x; // #warning@18: incompatible pointer types initializing 'enum E *' from incompatible type 'int *' [-Wincompatible-pointer-types]
+    enum E *p1 = &x; // #warning@18: incompatible pointer types initializing 'enum E *' from incompatible type 'int *' converts between pointers to integer types with different sign [-Wpointer-sign]
     enum E *p2 = &y;
 }
 

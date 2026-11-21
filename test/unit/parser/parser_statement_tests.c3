@@ -2,11 +2,11 @@
 // and asm-string callbacks below intentionally provide only fixture behavior.
 // Declaration-form for initializers remains callback supplied by the owner.
 module parser_statement_tests;
-import aro::attribute, aro::attribute_map, aro::compilation, aro::diagnostics, aro::parser;
-import aro::parser_declaration, aro::parser_result, aro::parser_statement, aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value;
-import aro::text_literal;
-import aro::pragma, aro::symbol_stack;
+import aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser;
+import aro::frontend::c::parser_declaration, aro::frontend::c::parser_result, aro::frontend::c::parser_statement, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value;
+import aro::frontend::c::text_literal;
+import aro::frontend::c::pragma, aro::frontend::c::symbol_stack;
 import std::core::mem::allocators, std::core::mem;
 
 fn parser_result::Result? fixture_expression(void* context, parser::Parser* p, bool eval)

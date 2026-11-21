@@ -16,7 +16,7 @@
 // - "source-derived": Value.zig compare + std.math.compare, by hand.
 module float_print_manual_tests;
 import aro::primitive_value;
-import aro::value_interner, aro::value, aro::bigint, aro::type_store, aro::target, aro::lang_opts, aro::compilation;
+import aro::value_interner, aro::frontend::c::value, aro::bigint, aro::frontend::c::type_store, aro::target, aro::frontend::c::lang_opts, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 struct RealVector

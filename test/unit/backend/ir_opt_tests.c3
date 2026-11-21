@@ -1,8 +1,8 @@
 // Source-to-IR optimization harness and structural analysis tests.
 module ir_opt_tests;
-import std, aro::backend::ir, aro::backend::ir_opt, aro::code_gen_options, aro::codegen, aro::compilation;
-import aro::diagnostics, aro::lang_opts, aro::parser, aro::parser_declaration, aro::predefined_macros;
-import aro::preprocessor, aro::source, aro::target, aro::tokens, aro::tree, aro::type_store;
+import std, aro::backend::ir, aro::backend::ir_opt, aro::code_gen_options, aro::frontend::c::codegen, aro::frontend::c::compilation;
+import aro::frontend::c::diagnostics, aro::frontend::c::lang_opts, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::predefined_macros;
+import aro::frontend::c::preprocessor, aro::source, aro::target, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store;
 import aro::value_interner, aro::primitive_value, std::core::dstring;
 
 const target::Host HOST = { target::Arch.X86_64, target::OsTag.LINUX, target::Abi.GNU };

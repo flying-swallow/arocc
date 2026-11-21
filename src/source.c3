@@ -2,6 +2,7 @@
 // expansion. A `Source` is a plain value; the bytes it points to are owned by
 // the `Compilation` that created it (see compilation.c3).
 module aro::source;
+import aro::utf8;
 
 <*
  Stable identifier of a source. Mirrors Zig's `packed struct(u32)`:
@@ -75,50 +76,6 @@ struct Source
 
 fn bool Source.has_umbrella_framework_path(&self) => self.umbrella_framework_path.ptr != null;
 
-<* Number of bytes of a UTF-8 sequence starting with `b`, or 0 if `b` is not a valid start byte. *>
-fn uint utf8_sequence_length(char b) @private
-{
-	switch
-	{
-		case b < 0x80: return 1;
-		case (b & 0xE0) == 0xC0: return 2;
-		case (b & 0xF0) == 0xE0: return 3;
-		case (b & 0xF8) == 0xF0: return 4;
-		default: return 0;
-	}
-}
-
-<*
- Decode a UTF-8 sequence of length `len` (2..4) with the same validity rules as
- std.unicode.utf8Decode2/3/4. Returns false for malformed sequences.
-*>
-fn bool utf8_decode(char* s, uint len, uint* out) @private
-{
-	for (uint k = 1; k < len; k++)
-	{
-		if ((s[k] & 0xC0) != 0x80) return false;
-	}
-	uint cp;
-	switch (len)
-	{
-		case 2:
-			cp = (uint)(s[0] & 0x1F) << 6 | (s[1] & 0x3F);
-			if (cp < 0x80) return false;
-		case 3:
-			cp = (uint)(s[0] & 0x0F) << 12 | (uint)(s[1] & 0x3F) << 6 | (s[2] & 0x3F);
-			if (cp < 0x800) return false;
-			if (cp >= 0xD800 && cp <= 0xDFFF) return false;
-		case 4:
-			cp = (uint)(s[0] & 0x07) << 18 | (uint)(s[1] & 0x3F) << 12 | (uint)(s[2] & 0x3F) << 6 | (s[3] & 0x3F);
-			if (cp < 0x10000) return false;
-			if (cp > 0x10FFFF) return false;
-		default:
-			unreachable();
-	}
-	*out = cp;
-	return true;
-}
-
 <* Expand `loc` (which must be inside this source) into line text, column and display width. *>
 fn ExpandedLocation Source.line_col(&self, Location loc)
 {
@@ -156,7 +113,7 @@ fn ExpandedLocation Source.line_col(&self, Location loc)
 	// TODO (from Zig) this is still incorrect, but better
 	for (; i < offset; col++)
 	{
-		uint len = utf8_sequence_length(buf[i]);
+		uint len = utf8::sequence_length(buf[i]);
 		if (len == 0)
 		{
 			i++;
@@ -164,7 +121,7 @@ fn ExpandedLocation Source.line_col(&self, Location loc)
 		}
 		if (len > buf.len - i) break;
 		uint cp = buf[i];
-		if (len > 1 && !utf8_decode(&buf[i], len, &cp))
+		if (len > 1 && !utf8::decode(&buf[i], len, &cp))
 		{
 			i++;
 			continue;

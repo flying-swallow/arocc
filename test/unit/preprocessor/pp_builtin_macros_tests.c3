@@ -1,4 +1,4 @@
-// Tests for src/pp_builtin_macros.c3 (plan 14.4 `dynamic-macros`):
+// Tests for src/frontend/c/pp_builtin_macros.c3 (plan 14.4 `dynamic-macros`):
 // Compilation.source_epoch, source_epoch_from_environment, write_date_time_stamp and
 // expand_builtin_obj (called directly; the object-macro expander is not used).
 //
@@ -10,8 +10,8 @@
 //               (same format strings). Std only; aro itself was not built.
 //  [source]     derived by reading Preprocessor.zig / Compilation.zig.
 module pp_builtin_macros_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::lang_opts;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators, std::collections::list;
 
 macro check(left, right)

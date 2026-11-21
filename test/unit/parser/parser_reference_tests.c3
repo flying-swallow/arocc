@@ -1,6 +1,6 @@
 module parser_reference_tests;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_declaration;
-import aro::predefined_macros, aro::preprocessor, aro::source, aro::tokens, aro::tree, aro::type_store;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration;
+import aro::frontend::c::predefined_macros, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store;
 
 // Verbatim port of src/aro/Parser.zig:11591 test "Node locations"
 fn void parser_zig_node_locations() @test

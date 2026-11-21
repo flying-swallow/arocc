@@ -4,9 +4,9 @@
 // to code generation. Scenarios are source-derived and do not claim parity
 // with a compatible reference executable.
 module ir_probe;
-import aro::backend::ir, aro::backend::object, aro::codegen, aro::compilation, aro::diagnostics;
-import aro::preprocessor, aro::source, aro::target, aro::tokens, aro::tokenizer, aro::tree;
-import aro::type_store, aro::value, aro::value_interner, aro::primitive_value, std::io;
+import aro::backend::ir, aro::backend::object, aro::frontend::c::codegen, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::preprocessor, aro::source, aro::target, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::primitive_value, std::io;
 
 struct AstFixture
 {

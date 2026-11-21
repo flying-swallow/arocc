@@ -3,9 +3,9 @@
 // parity.
 module assembly_tests;
 import aro::primitive_value;
-import aro::backend::assembly, aro::compilation, aro::diagnostics;
-import aro::code_gen_options, aro::source, aro::target, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
-import aro::value, aro::value_interner;
+import aro::backend::assembly, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::code_gen_options, aro::source, aro::target, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store;
+import aro::frontend::c::value, aro::value_interner;
 
 const Host HOST = { X86_64, LINUX, GNU };
 
@@ -157,7 +157,7 @@ fn void assembly_serializes_supported_integer_and_float_values() @test
 		"  .globl \"half_value\"\n  .data\n  .type \"half_value\", @object\n  .size \"half_value\", 2\n  .align 2\n\"half_value\":\n  .short  0x3e00\n"
 		"  .globl \"float_value\"\n  .data\n  .type \"float_value\", @object\n  .size \"float_value\", 4\n  .align 4\n\"float_value\":\n  .long  0x3fc00000\n"
 		"  .globl \"double_value\"\n  .data\n  .type \"double_value\", @object\n  .size \"double_value\", 8\n  .align 8\n\"double_value\":\n  .quad  0x3ff8000000000000\n"
-		"  .globl \"extended_value\"\n  .data\n  .type \"extended_value\", @object\n  .size \"extended_value\", 10\n  .align 16\n\"extended_value\":\n  .quad  0x8000000000000000\n  .short  0x3fff\n  .zero 6\n"
+		"  .globl \"extended_value\"\n  .data\n  .type \"extended_value\", @object\n  .size \"extended_value\", 16\n  .align 16\n\"extended_value\":\n  .quad  0x8000000000000000\n  .short  0x3fff\n  .zero 6\n"
 		"  .globl \"quad_value\"\n  .data\n  .type \"quad_value\", @object\n  .size \"quad_value\", 16\n  .align 16\n\"quad_value\":\n  .quad  0x0\n  .quad  0x3fff000000000000\n");
 	f.free();
 }

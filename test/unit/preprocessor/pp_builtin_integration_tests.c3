@@ -3,7 +3,7 @@
 // pp_builtin_macros.c3, pp_feature_queries.c3 and preprocessor.c3; no Zig
 // differential run is claimed.
 module pp_builtin_integration_tests;
-import aro::preprocessor, aro::source, aro::compilation, aro::diagnostics, aro::tokens;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::tokens;
 import std::core::mem::allocators, std::core::dstring;
 
 macro check(left, right)

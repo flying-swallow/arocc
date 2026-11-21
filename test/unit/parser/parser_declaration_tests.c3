@@ -1,11 +1,11 @@
 // Focused tests for declaration helpers, source-derived integration, and parser recovery.
 module parser_declaration_tests;
-import aro::parser, aro::preprocessor, aro::tokens, aro::tokenizer, aro::tree;
-import aro::compilation, aro::diagnostics, aro::source, aro::type_store, aro::symbol_stack, aro::string_interner, aro::value;
-import aro::parser_declaration;
-import aro::lang_opts, aro::target;
-import aro::pragma;
-import aro::attribute;
+import aro::frontend::c::parser, aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::frontend::c::type_store, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::value;
+import aro::frontend::c::parser_declaration;
+import aro::frontend::c::lang_opts, aro::target;
+import aro::frontend::c::pragma;
+import aro::frontend::c::attribute;
 
 <* Full-frontend trees begin with the implicit typedef prelude, whose size depends on the target. *>
 fn sz first_user_root(tree::Tree* result)

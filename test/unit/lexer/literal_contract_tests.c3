@@ -6,8 +6,8 @@
 // Tokenizer/text_literal.zig (Ascii.format), Compilation.zig (wcharMax,
 // float80Type) and the Diagnostic constants; no Zig executable was run.
 module literal_contract_tests;
-import aro::text_literal, aro::number_literal, aro::number_value, aro::text_literal_semantics;
-import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts;
+import aro::frontend::c::text_literal, aro::frontend::c::number_literal, aro::frontend::c::number_value, aro::frontend::c::text_literal_semantics;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

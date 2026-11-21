@@ -1,7 +1,7 @@
 // Integration coverage for the declaration grammar and its composed expressions.
 module parser_grammar_tests;
-import aro::parser, aro::parser_declaration, aro::preprocessor, aro::source, aro::tree;
-import aro::compilation, aro::diagnostics, aro::type_store, aro::string_interner, aro::symbol_stack, aro::value;
+import aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tree;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::type_store, aro::string_interner, aro::frontend::c::symbol_stack, aro::frontend::c::value;
 import aro::bigint, aro::value_interner;
 import std::core::mem::allocators;
 

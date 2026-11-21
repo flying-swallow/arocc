@@ -56,9 +56,9 @@
 // or from $LITERAL_VECTORS_DIR when set.
 module literal_tests;
 import aro::primitive_value;
-import aro::number_literal, aro::number_value, aro::text_literal, aro::text_literal_semantics;
-import aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts, aro::tokenizer;
-import aro::value, aro::value_interner, aro::bigint;
+import aro::frontend::c::number_literal, aro::frontend::c::number_value, aro::frontend::c::text_literal, aro::frontend::c::text_literal_semantics;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts, aro::frontend::c::tokenizer;
+import aro::frontend::c::value, aro::value_interner, aro::bigint;
 import std::io, std::os::env, std::core::mem::allocators, std::core::dstring;
 
 const Host HOST = { X86_64, LINUX, GNU };

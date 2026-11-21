@@ -1,16 +1,16 @@
 // Source-derived direct tests for the specialized builtin parsers
-// (src/parser_builtin.c3) and builtin_eval. Operands go through the Parser's
+// (src/frontend/c/parser_builtin.c3) and builtin_eval. Operands go through the Parser's
 // real expression grammar; type names come from small test handlers.
 module builtin_expression_tests;
 import aro::primitive_value;
-import aro::builtin_eval, aro::builtin_defs::common, aro::builtins;
-import aro::compilation, aro::diagnostics, aro::parser, aro::parser_result;
-import aro::parser_declaration;
-import aro::target, aro::lang_opts;
-import aro::attribute, aro::attribute_map;
-import aro::preprocessor, aro::source, aro::tokenizer, aro::tokens, aro::tree;
-import aro::type_store, aro::value, aro::value_interner;
-import aro::string_interner, aro::symbol_stack;
+import aro::frontend::c::builtin_eval, aro::frontend::c::builtin_defs::common, aro::frontend::c::builtins;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;
+import aro::frontend::c::parser_declaration;
+import aro::target, aro::frontend::c::lang_opts;
+import aro::frontend::c::attribute, aro::frontend::c::attribute_map;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree;
+import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
+import aro::string_interner, aro::frontend::c::symbol_stack;
 import std::core::mem::allocators;
 
 const Host HOST = { X86_64, LINUX, GNU };

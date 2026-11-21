@@ -1,6 +1,6 @@
 // Bounds-checked ELF64 reader for the in-process linker's ET_REL/ET_DYN inputs.
 module aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::collections::list;
 
 const ushort ET_REL = 1;

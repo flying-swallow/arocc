@@ -1,4 +1,4 @@
-// Tests for aro::type_store (src/type_store*.c3, src/type_print.c3).
+// Tests for aro::frontend::c::type_store (src/type_store*.c3, src/frontend/c/type_print.c3).
 //
 // Sources of expected values (no Zig executable was run; no differential
 // parity is claimed):
@@ -21,7 +21,7 @@
 //   Compilation.zig and record_layout.zig (va_list record sizes for
 //   powerpc/s390x/aarch64/arm/hexagon, promotions, ranks, equality rules).
 module type_store_tests;
-import aro::type_store, aro::target, aro::lang_opts, aro::compilation, aro::string_interner;
+import aro::frontend::c::type_store, aro::target, aro::frontend::c::lang_opts, aro::frontend::c::compilation, aro::string_interner;
 import std::io, std::core::mem::allocators, std::core::dstring;
 
 macro check(left, right)

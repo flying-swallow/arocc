@@ -1,7 +1,7 @@
 module parse_buffer_example;
 
-import aro::compilation, aro::diagnostics, aro::parser, aro::preprocessor;
-import aro::source, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::preprocessor;
+import aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store;
 import std::core::mem::allocators;
 
 // A tiny caller-supplied grammar: only `int identifier;` is recognized.

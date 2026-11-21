@@ -1,4 +1,4 @@
-// Generate src/identifier_tables.c3 from src/aro/char_info/identifier_tables.zig.
+// Generate src/frontend/c/identifier_tables.c3 from src/aro/char_info/identifier_tables.zig.
 //
 // The Zig file is the reference copy of the unicode-ident XID_Start/XID_Continue
 // trie (Unicode data, see LICENSE-UNICODE). This tool copies its data verbatim
@@ -10,7 +10,7 @@ module gen_identifier_tables;
 import std::io, std::collections::list, aro_harness;
 
 const String SRC_REL = "src/aro/char_info/identifier_tables.zig";
-const String DST_REL = "src/identifier_tables.c3";
+const String DST_REL = "src/frontend/c/identifier_tables.c3";
 
 faultdef BAD_INPUT;
 
@@ -179,7 +179,7 @@ fn String? generate(Allocator a, String text)
 			if (line.starts_with("//!")) out.appendf("// %s\n", py_strip(line[3..]));
 		}
 		out.append("// The table data is Unicode data; see LICENSE-UNICODE at the repository root.\n");
-		out.append("module aro::identifier_tables;\n");
+		out.append("module aro::frontend::c::identifier_tables;\n");
 		out.append("\n");
 		out.appendf("const uint CHUNK = %s;\n", chunk);
 		ZigArray[] arrays = find_arrays(tmem, text);

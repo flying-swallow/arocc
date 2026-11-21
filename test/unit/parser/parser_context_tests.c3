@@ -1,10 +1,10 @@
 // Focused tests for parser context ownership and token-buffer lifetime.
 module parser_context_tests;
-import aro::parser, aro::parser_declaration, aro::parser_result;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::tree;
-import aro::compilation, aro::diagnostics, aro::source;
-import aro::type_store, aro::symbol_stack, aro::string_interner, aro::value;
-import aro::attribute, aro::attribute_map;
+import aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source;
+import aro::frontend::c::type_store, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::value;
+import aro::frontend::c::attribute, aro::frontend::c::attribute_map;
 import std::core::mem::allocators, std::io;
 
 excuse CALLBACK_FAILURE;

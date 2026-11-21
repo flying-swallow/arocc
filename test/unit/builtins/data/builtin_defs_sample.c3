@@ -6,8 +6,8 @@
 // the Attributes bit table (eval_args 0x10000 is the default).
 // _Exit/_exit collide when uppercased, so (as in the real common table) they
 // get no TAG_ constant.
-module aro::builtin_defs::sample;
-import aro::builtin_properties;
+module aro::frontend::c::builtin_defs::sample;
+import aro::frontend::c::builtin_properties;
 
 const BuiltinGroup GROUP = COMMON;
 const ushort COUNT = 8;

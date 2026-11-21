@@ -1,12 +1,12 @@
-// Tests for src/pp_print.c3 (plan 13.6): fmtEscapes, printLinemarker,
+// Tests for src/frontend/c/pp_print.c3 (plan 13.6): fmtEscapes, printLinemarker,
 // prettyPrintMacro / prettyPrintMacrosOnly and prettyPrintTokens over
 // hand-built output token lists (no macro expansion involved).
 // Every expected string is source-derived: traced by hand through
 // src/aro/Preprocessor.zig (prettyPrintTokens and helpers). No Zig executable
 // was run.
 module pp_print_tests;
-import aro::preprocessor, aro::tokens, aro::tokenizer, aro::source, aro::compilation, aro::diagnostics;
-import aro::pragma;
+import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::frontend::c::pragma;
 import std::io, std::core::mem::allocators;
 
 macro check(left, right)

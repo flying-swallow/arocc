@@ -1,6 +1,6 @@
 // Parser for the input-list subset of GNU ld scripts used by system libraries.
 module aro::backend::link;
-import aro::diagnostics;
+import aro::frontend::c::diagnostics;
 import std::collections::list;
 
 enum ScriptInputKind : char

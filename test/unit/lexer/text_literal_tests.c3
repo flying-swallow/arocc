@@ -1,4 +1,4 @@
-// Tests for aro::text_literal (plan 11.3 `text-decoding`): Kind
+// Tests for aro::frontend::c::text_literal (plan 11.3 `text-decoding`): Kind
 // classification/widths/types, the escape / UCN / encoding decoder
 // (TextLiteralParser.next) and character constants (TextLiteralParser.parse).
 //
@@ -12,7 +12,7 @@
 //   src/aro/Tokenizer/text_literal.zig, Compilation.zig (wcharMax) and the
 //   target data (x86_64-linux: wchar_t = int; x86_64-windows: unsigned short).
 module text_literal_tests;
-import aro::text_literal, aro::compilation, aro::diagnostics, aro::source, aro::target, aro::type_store, aro::lang_opts, aro::tokenizer;
+import aro::frontend::c::text_literal, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::utf8, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts, aro::frontend::c::tokenizer;
 import std::io, std::core::mem::allocators, std::collections::list;
 
 macro check(left, right)
@@ -604,22 +604,22 @@ fn void escape_overflow_and_errors_once() @test
 
 fn void utf8_helpers() @test
 {
-	assert(text_literal::utf8_validate(""));
-	assert(text_literal::utf8_validate("abc\xC2\xA3\xE2\x82\xAC\xF0\x9F\xA4\x97"));
-	assert(!text_literal::utf8_validate("\xC0\x80")); // overlong NUL
-	assert(!text_literal::utf8_validate("\xE0\x80\x80")); // overlong
-	assert(!text_literal::utf8_validate("\xED\xA0\x80")); // U+D800
-	assert(!text_literal::utf8_validate("\xF4\x90\x80\x80")); // U+110000
-	assert(!text_literal::utf8_validate("\x80"));
-	assert(!text_literal::utf8_validate("\xE2\x82")); // truncated
-	assert(!text_literal::utf8_validate("\xF8\x88\x80\x80\x80"));
-	assert(text_literal::utf8_validate("\xF4\x8F\xBF\xBF")); // U+10FFFF
+	assert(utf8::validate(""));
+	assert(utf8::validate("abc\xC2\xA3\xE2\x82\xAC\xF0\x9F\xA4\x97"));
+	assert(!utf8::validate("\xC0\x80")); // overlong NUL
+	assert(!utf8::validate("\xE0\x80\x80")); // overlong
+	assert(!utf8::validate("\xED\xA0\x80")); // U+D800
+	assert(!utf8::validate("\xF4\x90\x80\x80")); // U+110000
+	assert(!utf8::validate("\x80"));
+	assert(!utf8::validate("\xE2\x82")); // truncated
+	assert(!utf8::validate("\xF8\x88\x80\x80\x80"));
+	assert(utf8::validate("\xF4\x8F\xBF\xBF")); // U+10FFFF
 
 	String s = "a\xC2\xA3\xE2\x82\xAC\xF0\x9F\xA4\x97";
 	sz i = 0;
-	check(text_literal::utf8_decode_next(s, &i), 'a');
-	check(text_literal::utf8_decode_next(s, &i), 0xA3);
-	check(text_literal::utf8_decode_next(s, &i), 0x20AC);
-	check(text_literal::utf8_decode_next(s, &i), 0x1F917);
+	check(utf8::decode_next(s, &i), 'a');
+	check(utf8::decode_next(s, &i), 0xA3);
+	check(utf8::decode_next(s, &i), 0x20AC);
+	check(utf8::decode_next(s, &i), 0x1F917);
 	check(i, s.len);
 }

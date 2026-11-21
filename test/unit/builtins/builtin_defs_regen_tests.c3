@@ -7,7 +7,7 @@
 // ties the tables compiled into //:aro_c3_lib to a pure function of the .def
 // text. No Zig output is involved.
 module builtin_defs_regen_tests;
-import std::io, generate_def, aro::builtin_properties;
+import std::io, generate_def, aro::frontend::c::builtin_properties;
 
 fn String emit_group(BuiltinGroup g, String text)
 {

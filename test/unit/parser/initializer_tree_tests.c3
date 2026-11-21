@@ -2,7 +2,7 @@
 // representation used after parsing; they do not claim that declaration
 // initializer grammar is wired into the C3 parser yet.
 module initializer_tree_tests;
-import aro::compilation, aro::tree, aro::type_store;
+import aro::frontend::c::compilation, aro::frontend::c::tree, aro::frontend::c::type_store;
 
 fn void sparse_array_initializer_round_trip() @test
 {

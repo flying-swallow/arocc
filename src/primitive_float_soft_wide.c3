@@ -88,7 +88,10 @@ struct Unpacked
 	uint128 sig;
 }
 
-<* Split a value of any width (f80 non-canonical encodings classify as in primitive_float.c3). *>
+<*
+ Split a float value of any width (f80 non-canonical encodings classify as in primitive_float.c3).
+ @require self.tag.kind == FLOAT
+*>
 fn Unpacked PrimitiveValue.unpack(self)
 {
 	FloatFormat fmt = self.tag.format;
@@ -196,6 +199,7 @@ fn WideRounded wide_round_at(uint128 sig, long exp, bool sticky, long lsb, Round
  Callers that pass `sticky` must give sig at least two bits more than the
  target precision (or a value far below the subnormal range), so that the
  sticky delta can never decide a tie on its own.
+ @require tag.kind == FLOAT
 *>
 fn PrimitiveValue round_pack(PrimitiveType tag, bool sign, int exp, uint128 sig, bool sticky, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
 {
@@ -273,6 +277,7 @@ fn PrimitiveValue round_pack(PrimitiveType tag, bool sign, int exp, uint128 sig,
  top of the f128 fraction, quiet bit kept as is (extendf.zig does not quiet).
  f80 follows __extendxftf2 bit for bit (see the file header for what it does
  with non-canonical encodings).
+ @require self.tag.kind == FLOAT
 *>
 fn F128Bits PrimitiveValue.to_f128(self)
 {
@@ -324,6 +329,7 @@ fn F128Bits PrimitiveValue.to_f128(self)
  returns x unchanged). NaN: sign kept, quiet bit set, top payload bits kept.
  Exception (reference): dest F80 keeps the NaN's quiet bit as is and may turn a
  signaling NaN into an infinity (__trunctfxf2, see the file header).
+ @require dest.kind == FLOAT
 *>
 fn PrimitiveValue from_f128(F128Bits x, PrimitiveType dest, RoundingMode rm = NEAREST_EVEN, FloatStatus* status = null)
 {

@@ -1,4 +1,4 @@
-// Tests for plan 14.1 `sysdefs-a` (src/predefined_macros_x86.c3):
+// Tests for plan 14.1 `sysdefs-a` (src/frontend/c/predefined_macros_x86.c3):
 // write_target_os_macros, write_windows_os_defines, write_darwin_os_defines
 // and write_x86_defines.
 //
@@ -11,7 +11,7 @@
 //   itself source-derived (see its header); the tests that depend on a
 //   model say which features they expect it to carry.
 module predefined_macros_x86_tests;
-import aro::predefined_macros, aro::compilation, aro::target, aro::lang_opts, aro::code_gen_options;
+import aro::frontend::c::predefined_macros, aro::frontend::c::compilation, aro::target, aro::frontend::c::lang_opts, aro::code_gen_options;
 import std::core::mem::allocators;
 
 macro check(left, right)
@@ -61,7 +61,7 @@ const String SEG = "#define __SEG_GS 1\n#define __SEG_FS 1\n"
 	"#define __seg_fs __attribute__((address_space(257)))\n";
 
 module predefined_macros_x86_tests @test;
-import aro::predefined_macros, aro::compilation, aro::target, aro::lang_opts, aro::code_gen_options;
+import aro::frontend::c::predefined_macros, aro::frontend::c::compilation, aro::target, aro::frontend::c::lang_opts, aro::code_gen_options;
 import std::core::mem::allocators;
 
 fn void target_os_macros_match_fixtures()

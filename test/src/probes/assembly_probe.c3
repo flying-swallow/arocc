@@ -2,9 +2,9 @@
 // input files select a hand-built Tree scenario; they are not parsed as C.
 module assembly_probe;
 import aro::primitive_value;
-import aro::backend::assembly, aro::compilation, aro::diagnostics;
-import aro::source, aro::target, aro::tokens, aro::tokenizer, aro::tree, aro::type_store;
-import aro::value, aro::value_interner, std::io;
+import aro::backend::assembly, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
+import aro::source, aro::target, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store;
+import aro::frontend::c::value, aro::value_interner, std::io;
 
 const Host HOST = { X86_64, LINUX, GNU };
 const String[17] NAMES = {

@@ -1,7 +1,7 @@
 // Direct tests of the WIP attribute state and semantic application helpers.
-// Expected behavior is derived from src/attribute_wip.c3; no Zig executable parity is claimed.
+// Expected behavior is derived from src/frontend/c/attribute_wip.c3; no Zig executable parity is claimed.
 module attribute_wip_tests;
-import aro::attribute, aro::attribute_map, aro::attribute_wip, aro::compilation, aro::diagnostics, aro::parser, aro::parser_result, aro::preprocessor, aro::source, aro::target, aro::tokens, aro::tree, aro::type_store, aro::value, aro::value_interner;
+import aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::attribute_wip, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result, aro::frontend::c::preprocessor, aro::source, aro::target, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
 import std::core::mem::allocators;
 import std::core::dstring;
 
