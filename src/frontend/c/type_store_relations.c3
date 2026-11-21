@@ -469,3 +469,24 @@ fn String QualType.format_modifier(self, Compilation* comp)
 		default: unreachable("TODO");
 	}
 }
+
+<* Whether a type contains a runtime array bound, including behind pointers. *>
+fn bool QualType.is_variably_modified(self, Compilation* comp)
+{
+ QualType current = self;
+ while (!current.is_invalid())
+ {
+  Type ty = current.get_type(comp);
+  switch (ty.tag)
+  {
+   case TYPEOF: current = ty.type_of.base;
+   case TYPEDEF: current = ty.type_def.base;
+   case POINTER: current = ty.pointer.child;
+   case ARRAY:
+    if (ty.array.len.kind == VARIABLE || ty.array.len.kind == UNSPECIFIED_VARIABLE) return true;
+    current = ty.array.elem;
+   default: return false;
+  }
+ }
+ return false;
+}

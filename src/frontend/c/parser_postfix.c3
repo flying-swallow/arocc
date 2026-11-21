@@ -64,7 +64,7 @@ fn parser_result::Result? Parser.parse_compound_literal(&self, tokens::TokenInde
 	// vector literals never carry a scalar value.
 	bool scalar = !qt.is(self.comp, type_store::TypeTag.ARRAY) && !qt.is(self.comp, type_store::TypeTag.VECTOR) &&
 	!qt.is(self.comp, type_store::TypeTag.COMPLEX) && !@ok(qt.get_record(self.comp));
-	if (scalar)
+	if (scalar && !qt.is_variably_modified(self.comp))
 	{
 		if (try saved = self.tree.value_of(initializer.node))
 		{

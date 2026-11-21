@@ -376,6 +376,8 @@ fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 {
 	tree::Node node = node_index.get(self.tree);
+	if (node.kind == tree::NodeKind.CAST && !node.cast.implicit) self.gen_runtime_type(node.cast.qt)!;
+
 	// A record lvalue already has the representation used for every record
 	// expression: its address. Never load an IR RECORD_TY from object memory.
 	if (self.is_record_value(node_index.qt(self.tree)) && self.tree.is_lval(node_index))
@@ -415,8 +417,10 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 			unreachable("constant expression missing value map entry");
 		case EMPTY_DECL:
 		case STATIC_ASSERT:
-		case FUNCTION:
+		case FUNCTION: return ir::NONE;
 		case TYPEDEF:
+			self.gen_runtime_type(node.type_def.qt.get_type(self.comp).type_def.base)!;
+			return ir::NONE;
 		case STRUCT_DECL:
 		case UNION_DECL:
 		case ENUM_DECL:
@@ -634,6 +638,7 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 <* `gen_expr` case VARIABLE. *>
 fn ir::Ref? CodeGen.gen_variable(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
 {
+	self.gen_runtime_type(node.variable.qt)!;
 	if (node.variable.storage_class == tree::VariableStorageClass.EXTERN || node.variable.storage_class == tree::VariableStorageClass.STATIC)
 	{
 		self.gen_var(node.variable, node_index)!;
@@ -1395,6 +1400,7 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 			}
 			// `(int[]){4, 5, 6}`: the completed type is the initializer's.
 			type_store::QualType literal_qt = node.compound_literal.qt;
+			self.gen_runtime_type(literal_qt)!;
 			if (!@ok(literal_qt.sizeof_or_null(self.comp))) literal_qt = node.compound_literal.initializer.qt(self.tree);
 			uint size = (uint)self.object_size(literal_qt);
 			uint alignment = (uint)literal_qt.alignof(self.comp);
@@ -3174,4 +3180,22 @@ fn void CodeGen.emit_pending_gotos(&self)
 		if (save != ir::NONE) self.builder.add_stack_restore(save);
 		self.builder.add_jump(target.label);
 	}
+}
+
+<* Evaluate fresh type syntax; a typedef reference reuses its captured bounds. *>
+fn void? CodeGen.gen_runtime_type(&self, type_store::QualType qt)
+{
+ type_store::Type ty = qt.get_type(self.comp);
+ switch (ty.tag)
+ {
+  case TYPEOF:
+   if (!ty.type_of.base.is_variably_modified(self.comp)) return;
+   if (ty.type_of.has_expr) self.gen_expr(ty.type_of.expr)!;
+   self.gen_runtime_type(ty.type_of.base)!;
+  case POINTER: self.gen_runtime_type(ty.pointer.child)!;
+  case ARRAY:
+   if (ty.array.len.kind == type_store::ArrayLenKind.VARIABLE) { self.gen_type_size(qt)!; }
+   else { self.gen_runtime_type(ty.array.elem)!; }
+  default: break;
+ }
 }
