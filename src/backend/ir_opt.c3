@@ -2755,8 +2755,25 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 			ir::Ref ref = decl.body[i];
 			ir::Inst* inst = &decl.instructions[(sz)ref];
 			if (inst.tag != ir::InstTag.PHI) continue;
-			foreach (input : inst.data.phi)
+			// Unreachable blocks need not have complete PHIs. SCCP also removes
+			// inputs on non-executable edges before unreachable blocks are pruned.
+			if (cfg.reachable[block_index])
 			{
+				foreach (pred : block.preds)
+				{
+					if (!cfg.reachable[(sz)pred]) continue;
+					bool present = false;
+					foreach (input : inst.data.phi) if (input.label == cfg.blocks[(sz)pred].label) present = true;
+					if (!present) return verify_error(errors, decl.name, "PHI is missing a reachable predecessor input");
+				}
+			}
+			foreach (input_index, input : inst.data.phi)
+			{
+				for (sz prior = 0; prior < input_index; prior++)
+				{
+					if (inst.data.phi[prior].label == input.label) return verify_error(errors, decl.name, "PHI has duplicate predecessor inputs");
+				}
+				if (decl.instructions[(sz)input.value].ty != inst.ty) return verify_error(errors, decl.name, "PHI input type does not match its result type");
 				uint pred = cfg.block_of_ref[(sz)input.label];
 				bool found = false;
 				foreach (candidate : block.preds) if (candidate == pred) found = true;
@@ -2847,6 +2864,7 @@ fn bool verify(ir::Ir* graph, ir::ErrorList* errors)
 <* Fixed pass pipeline entry point. *>
 fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 {
+	if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 	switch (opts.level)
 	{
 		case code_gen_options::OptimizationLevel.O0: return;
@@ -2863,9 +2881,17 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) mem2reg(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
+			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			foreach (&decl : graph.decls) early_cse(graph, decl, graph.allocator);
+			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) const_prop(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) remove_unreachable_blocks(decl, graph.allocator);
+			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			foreach (&decl : graph.decls) simplify_cfg(decl, graph.allocator);
+			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
@@ -2879,9 +2905,17 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) mem2reg(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				foreach (&decl : graph.decls) early_cse(graph, decl, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) const_prop(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) remove_unreachable_blocks(decl, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				foreach (&decl : graph.decls) simplify_cfg(decl, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;

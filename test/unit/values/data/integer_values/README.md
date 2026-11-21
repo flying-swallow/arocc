@@ -7,7 +7,7 @@
 > `test/unit/<area>/data/<name>`).
 
 Expected results for the integer paths of `src/aro/Value.zig`. The plan 09 C3
-port (`src/bigint.c3`, `src/value.c3`) is tested against them in
+port (`src/bigint.c3`, `src/frontend/c/value.c3`) is tested against them in
 `//test/unit/values:integer_value_tests`. These files are test data only. No production
 target reads them, and nothing here needs Zig at build or test time.
 

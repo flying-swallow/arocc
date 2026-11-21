@@ -13,7 +13,7 @@ the literal value logic of `src/aro/Parser.zig` (`parseNumberToken`,
 `charLiteral`, `stringLiteral`), the `#if` literal rules of
 `src/aro/Preprocessor/Parser.zig` (`primaryExpr`) and the decoding loop of
 `Preprocessor.unescapeUcn`. They are inputs for the C3 port
-(`src/number_literal.c3`, `number_value.c3`, `text_literal.c3`,
+(`src/frontend/c/number_literal.c3`, `number_value.c3`, `text_literal.c3`,
 `text_literal_semantics.c3`) and its test target `//test/unit/lexer:literal_tests`.
 These files are test data only. No production target reads them, and nothing
 here needs Zig or Python at build or test time.

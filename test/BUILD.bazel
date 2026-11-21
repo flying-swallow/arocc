@@ -80,6 +80,7 @@ test_suite(
         "//test/src/manifest:runner_tests",
         "//test/src/test_suite:test_suite_runner_tests",
         "//test/src/gcc:gcc_testsuite_tests",
+        "//test/src/clang:clang_testsuite_tests",
     ],
 )
 
@@ -114,3 +115,4 @@ test_suite(
         "//test/src/probes:assembly_regression",
     ],
 )
+filegroup(name = "clang_testsuite", srcs = glob(["clang/**"]), visibility = ["//test:__subpackages__"])

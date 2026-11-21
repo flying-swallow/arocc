@@ -2349,7 +2349,7 @@ fn void sort_strings(String[] items) @local
 	sort::quicksort(items, fn int(String x, String y) => x.compare_to(y));
 }
 
-fn int main(String[] argv)
+fn int main(String[] argv) @feat(!CLANG_RUNNER)
 {
 	Options args;
 	String root = root_dir(mem);

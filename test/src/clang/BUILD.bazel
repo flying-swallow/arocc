@@ -1,0 +1,6 @@
+load("//tools:c3.bzl", "c3_binary", "c3_main_test", "c3_test")
+_SOURCES = ["clang_testsuite.c3", "//test/src/gcc:gcc_testsuite.c3"]
+c3_binary(name = "clang_testsuite_run", args = ["--aro", "$(rootpath //:aro_c3)"], srcs = _SOURCES, deps = ["//test/src/lib:harness_lib"], copts = ["-D", "CLANG_RUNNER"], data = ["//:aro_c3", "//test:clang_testsuite"])
+[c3_main_test(name = "clang_testsuite_" + area.lower(), srcs = _SOURCES, deps = ["//test/src/lib:harness_lib"], copts = ["-D", "CLANG_RUNNER"], args = ["--aro", "$(rootpath //:aro_c3)", "--suite", area], data = ["//:aro_c3", "//test:clang_testsuite"], tags = ["manual"], shard_count = 4, size = "large") for area in ["Lexer", "Preprocessor", "Parser", "Sema", "C"]]
+c3_test(name = "clang_testsuite_tests", srcs = _SOURCES + ["clang_testsuite_tests.c3"], deps = ["//test/src/lib:harness_lib"], copts = ["-D", "CLANG_RUNNER"], data = ["data/fake_aro.sh"])
+test_suite(name = "clang_testsuite", tags = ["manual"], tests = [":clang_testsuite_" + area for area in ["lexer", "preprocessor", "parser", "sema", "c"]])

@@ -3,6 +3,7 @@
 module backend_cli_regression;
 import aro, aro::frontend::c::driver, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import aro::frontend::c::driver_exec;
+import aro::backend::ir_opt;
 import std::io, std::io::path, std::os::env, std::core::mem::allocators, std::core::string, std::core::dstring;
 
 enum ChildFailure : char { NONE, SPAWN, WAIT, EXIT, SIGNAL }
@@ -535,7 +536,8 @@ fn void missing_linker_host_spawn_reports_exact_fatal_text() @test
 		"-o", output, prototype, input }, &d, empty_path);
 	String expected = "unable to spawn linker: file not found";
 	assert(status == 1, "missing host linker should exit with status 1, got %d; diagnostics: %s", status, backend_diag_text(&d));
-	assert(d.messages.len() == 1 && d.messages[0].kind == diagnostics::MessageKind.FATAL_ERROR && d.messages[0].text == expected,
+	assert(backend_diag_count(&d, diagnostics::MessageKind.FATAL_ERROR, expected) == 1 &&
+		d.messages.len() == (ir_opt::AVAILABLE ? 1 : 2),
 		"real host linker spawn did not produce exactly the expected FATAL text; diagnostics: %s", backend_diag_text(&d));
 	assert(!file::exists(output), "failed host linker spawn created its output file");
 	d.free();
@@ -558,7 +560,8 @@ fn void expect_windows_linker_spawn_fatal(String dir, String linker, String expe
 		string::tformat("--ld-path=%s", linker), string::tformat("--sysroot=%s", sysroot),
 		"-nostdinc", "-nobuiltininc", "-nostdlib", "-r", "-o", output, prototype, input }, &d, empty_path);
 	assert(status == 1, "host linker spawn should exit with status 1, got %d; diagnostics: %s", status, backend_diag_text(&d));
-	assert(d.messages.len() == 1 && d.messages[0].kind == diagnostics::MessageKind.FATAL_ERROR && d.messages[0].text == expected,
+	assert(backend_diag_count(&d, diagnostics::MessageKind.FATAL_ERROR, expected) == 1 &&
+		d.messages.len() == (ir_opt::AVAILABLE ? 1 : 2),
 		"real host linker spawn did not produce exactly the expected FATAL text; diagnostics: %s", backend_diag_text(&d));
 	assert(!file::exists(output), "failed host linker spawn created its output file");
 	d.free();
@@ -832,4 +835,21 @@ fn void codegen_todo_report_handles_multiple_unsupported_definitions() @test
 		"without --codegen-todo-report the first fatal TODO changed; diagnostics: %s", backend_diag_text(&default_d));
 	assert(!file::exists(default_output), "default codegen failure created an object");
 	default_d.free();
+}
+
+fn void unavailable_optimizer_warns_once_for_multiple_inputs() @test
+{
+	String dir = backend_scratch("optional optimizer");
+	String first = backend_put(dir, "first.c", "int first(void) { return 1; }\n");
+	String second = backend_put(dir, "second.c", "int second(void) { return 2; }\n");
+	diagnostics::Diagnostics d;
+	d.init_list(mem);
+	defer d.free();
+	BackendChild child;
+	int status = run_backend_driver({ "aro", "--target=x86_64-linux-gnu", "-O2", "-O3",
+		"-nostdinc", "-nobuiltininc", "-fsyntax-only", first, second }, &d, &child, dir);
+	assert(status == 0 && d.errors == 0);
+	assert(backend_diag_count(&d, diagnostics::MessageKind.WARNING, "IR optimization is unavailable") ==
+		(ir_opt::AVAILABLE ? 0 : 1));
+	assert(child.calls == 0);
 }

@@ -68,3 +68,4 @@ c3_binary(
     data = ["//:aro_c3"],
     deps = ["//test/src/lib:harness_lib"],
 )
+exports_files(["gcc_testsuite.c3"], visibility = ["//test/src/clang:__pkg__"])

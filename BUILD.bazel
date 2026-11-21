@@ -20,6 +20,7 @@ c3_library(
         "src/frontend/c/builtin_type_description.c3",
         "src/backend/ir.c3",
         "src/backend/ir_opt.c3",
+        "src/backend/ir_scalar_opt.c3",
         "src/backend/ir_renderer.c3",
         "src/frontend/c/codegen.c3",
         "src/frontend/c/codegen_abi.c3",
