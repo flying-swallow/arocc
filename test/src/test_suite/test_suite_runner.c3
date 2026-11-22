@@ -14,7 +14,9 @@
 //     // #todo: <note>         informational, ignored by the runner
 //     // #error: <text>        expected diagnostic anywhere (any file or none);
 //     // #warning: / #note: / #fatal:   <text> is a substring of `loc: message`
-//     // #file: <name>         .ct: start another input file (written, not passed)
+//     // #file: <name>         .ct: start another input file (written, not passed;
+//                              for `run`, extra `.c` files are compiled with the
+//                              same flags and linked in as separate units)
 //     // #expect: stdout       .ct: the rest of the section is the expected stdout
 //
 //   trailing (after code, removed from the written line):
@@ -739,9 +741,40 @@ fn TestResult test_file(String file_path, String test_dir, DString* out)
 			aro_runner::append_escaped(out, r.stderr);
 			return FAILED;
 		}
+		List{String} link_cmd;
+		link_cmd.tinit();
+		link_cmd.push_all({ context.cc_path, object_name });
+		defer
+		{
+			foreach (i, arg : link_cmd)
+			{
+				if (i >= 2 && arg.ends_with(".c.o")) (void)file::delete(aro_runner::join_path(tmem, test_dir, arg));
+			}
+		}
+		// Extra `.c` inputs are separate translation units (e.g. weak overrides).
+		foreach (i, f : spec.files)
+		{
+			if (i == 0 || !f.name.ends_with(".c")) continue;
+			String unit_object = string::tformat("%s.o", f.name);
+			List{String} unit_cmd;
+			unit_cmd.tinit();
+			unit_cmd.push_all({ context.compiler_path, "-fno-color-diagnostics" });
+			unit_cmd.push_all(context.extra_flags);
+			unit_cmd.push_all({ context.opt_level, "-c", f.name, "-o", unit_object });
+			unit_cmd.push_all(spec.opts.array_view());
+			ChildResult unit = aro_runner::run_child(tmem, unit_cmd.array_view(), test_dir, child_env(&spec));
+			link_cmd.push(unit_object);
+			if (!unit.spawned || !unit.exited || unit.exit_code != 0 || unit.stderr.len)
+			{
+				out.appendf("FAILED - extra unit failed: %s\n", string::join(tmem, unit_cmd.array_view(), " "));
+				aro_runner::append_escaped(out, unit.stderr);
+				return FAILED;
+			}
+		}
 		String exe_name = string::tformat("%s.exe", main_name);
 		defer (void)file::delete(aro_runner::join_path(tmem, test_dir, exe_name));
-		ChildResult link = aro_runner::run_child(tmem, { context.cc_path, object_name, "-o", exe_name }, test_dir, child_env(&spec));
+		link_cmd.push_all({ "-o", exe_name });
+		ChildResult link = aro_runner::run_child(tmem, link_cmd.array_view(), test_dir, child_env(&spec));
 		if (!link.spawned || !link.exited || link.exit_code != 0)
 		{
 			out.appendf("FAILED - link failed:\n");

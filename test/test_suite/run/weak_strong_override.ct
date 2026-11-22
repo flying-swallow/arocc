@@ -1,0 +1,26 @@
+// #kind: run
+// #exit: 0
+/* A weak definition in this unit must not be folded, inlined or summarized:
+   the strong definitions in override.c win at link time. Also covers a weak
+   variable and an undefined weak reference that resolves to null. */
+int __attribute__((weak)) get(void) { return 1; }
+int weak_value __attribute__((weak)) = 10;
+extern void missing(void) __attribute__((weak));
+static int twice(void) { return get() + get(); }
+int __attribute__((weak)) pure_weak(int x) { return x; }
+
+int calls;
+int main(void)
+{
+	if (twice() != 4) return 1;
+	if (weak_value != 20) return 2;
+	if (missing) return 3;
+	pure_weak(5);
+	if (calls != 1) return 4;
+	return 0;
+}
+// #file: override.c
+extern int calls;
+int get(void) { return 2; }
+int weak_value = 20;
+int pure_weak(int x) { calls++; return x; }

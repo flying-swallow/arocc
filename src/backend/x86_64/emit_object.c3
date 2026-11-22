@@ -29,9 +29,10 @@ fn void patch_rel32(List{char}* bytes, usz field, long displacement)
 	for (uint i = 0; i < 4; i++) bytes.set((sz)(field + i), (char)((ulong)displacement >> (i * 8)));
 }
 
-fn object::Linkage object_linkage(ir::Linkage linkage)
+fn object::Linkage object_linkage(ir::Linkage linkage, bool is_weak = false)
 {
-	return linkage == ir::Linkage.INTERNAL ? object::Linkage.INTERNAL : object::Linkage.STRONG;
+	if (linkage == ir::Linkage.INTERNAL) return object::Linkage.INTERNAL;
+	return is_weak ? object::Linkage.WEAK : object::Linkage.STRONG;
 }
 
 fn object::Section global_section(ir::DataSection section)
@@ -76,14 +77,14 @@ fn void declare_object_symbols(ir::Ir* ir, object::Object* obj, List{String}* na
 		if (decl.kind == ir::DeclKind.FUNCTION)
 		{
 			if (decl.is_definition()) continue; // Defined functions are declared after their size is known.
-			object::declare_symbol(obj, object::SECTION_UNDEFINED, decl.name, true, object_linkage(decl.linkage),
+			object::declare_symbol(obj, object::SECTION_UNDEFINED, decl.name, true, object_linkage(decl.linkage, decl.is_weak),
 				object::SymbolType.EXTERNAL, 0, 0);
 			names.push(decl.name);
 			continue;
 		}
 		if (!decl.is_definition())
 		{
-			object::declare_symbol(obj, object::SECTION_UNDEFINED, decl.name, true, object_linkage(decl.linkage),
+			object::declare_symbol(obj, object::SECTION_UNDEFINED, decl.name, true, object_linkage(decl.linkage, decl.is_weak),
 				object::SymbolType.EXTERNAL, 0, 0);
 			names.push(decl.name);
 			continue;
@@ -127,7 +128,7 @@ fn void declare_object_symbols(ir::Ir* ir, object::Object* obj, List{String}* na
 			bytes.push_all(decl.global.bytes);
 			for (ulong i = (ulong)decl.global.bytes.len; i < decl.global.size; i++) bytes.push(0);
 		}
-		object::declare_symbol(obj, section, decl.name, true, object_linkage(decl.linkage),
+		object::declare_symbol(obj, section, decl.name, true, object_linkage(decl.linkage, decl.is_weak),
 			object::SymbolType.VARIABLE, offset, decl.global.size);
 		names.push(decl.name);
 
@@ -231,7 +232,7 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 			while (start % 16 != 0) { text.push(0); start++; }
 			start = (ulong)text.len();
 			text.push_all(encoded.array_view());
-			object::declare_symbol(obj, object::SECTION_FUNC, decl.name, true, object_linkage(decl.linkage),
+			object::declare_symbol(obj, object::SECTION_FUNC, decl.name, true, object_linkage(decl.linkage, decl.is_weak),
 				object::SymbolType.FUNC, start, (ulong)encoded.len());
 			if (!declared(&names, decl.name)) names.push(decl.name);
 
@@ -264,6 +265,20 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 			object::declare_symbol(obj, object::SECTION_READ_ONLY_DATA, label, true, object::Linkage.INTERNAL,
 				object::SymbolType.VARIABLE, offset, (ulong)string.bytes.len);
 			names.push(label);
+		}
+
+		// Constructor/destructor pointers: one 8-byte ABS64 slot per function.
+		foreach (&decl : ir.decls)
+		{
+			if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0 || decl.static_init == ir::StaticInit.NONE) continue;
+			object::Section section = { .kind = object::SectionKind.CUSTOM,
+				.custom_name = object::copy_name(obj, decl.static_init_section(tmem)) };
+			List{char}* bytes = object::get_section(obj, section);
+			object::set_section_align(obj, section, 8);
+			ulong offset = (ulong)bytes.len();
+			for (uint i = 0; i < 8; i++) bytes.push(0);
+			relocations.push({ .name = decl.name, .section = section, .offset = offset, .addend = 0,
+				.kind = object::RelocKind.ABS64 });
 		}
 
 		// The Object API requires both section and symbol declarations before relocation.

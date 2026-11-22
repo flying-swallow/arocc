@@ -112,8 +112,8 @@ enum AtomicOrder : char (String name)
 	SEQ_CST { "seq_cst" },
 }
 
-<* The compare computing the logical negation of `tag`. Ordered float compares
-have no unordered inverse in the IR (NaN), so the caller inverts the branch. *>
+<* The compare computing the logical negation of `tag`. FCMP_OEQ and FCMP_UNE
+are exact inverses; ordered relations have no inverse in the IR because of NaN. *>
 fn InstTag? inverse_compare(InstTag tag)
 {
 	switch (tag)
@@ -152,6 +152,26 @@ enum DeclKind : char
 	GLOBAL,
 }
 
+<* Inferred function properties for a function definition. Argument masks use bit
+   i for ARG i (first 64). `readnone` means no memory reads or writes; `readonly`
+   means no memory writes. Per-argument masks describe argument values that are
+   not captured, read, or written; capture bits are cleared conservatively even
+   for integer arguments because pointer/integer casts can reuse one IR value.
+   `will_return` is set only when every reachable
+   control-flow path terminates and every called function is known to return.
+   Passes that change a function's parameters or memory effects must reset attrs
+   to `{}` so downstream users stay conservative. *>
+struct FnAttrs
+{
+	bool computed;
+	bool readnone;
+	bool readonly;
+	bool will_return;
+	ulong arg_nocapture;
+	ulong arg_noread;
+	ulong arg_nowrite;
+}
+
 <* Linkage of a declaration; external definitions are strong by default downstream. *>
 enum Linkage : char
 {
@@ -185,6 +205,8 @@ struct GlobalData
 	DataSection section;
 	bool tentative;
 	bool own_section;
+	<* Some part of the object is volatile or atomic; global memory accesses stay observable. *>
+	bool is_volatile;
 }
 
 struct InstData
@@ -208,7 +230,34 @@ struct InstData
 	}
 }
 
-struct Inst { InstTag tag; InstData data; value_interner::InternerRef ty; }
+<* `is_volatile` marks a volatile LOAD/STORE (C volatile-qualified lvalue): the
+   access is observable and must not be removed, merged, reordered with other
+   volatile accesses, or promoted, whatever its address. Ignored on other tags. *>
+struct Inst { InstTag tag; bool is_volatile; InstData data; value_interner::InternerRef ty; }
+
+<* A volatile LOAD or STORE. *>
+fn bool Inst.is_volatile_access(&self) => self.is_volatile && (self.tag == InstTag.LOAD || self.tag == InstTag.STORE);
+
+<* Source-level inlining request for a function definition (C `noinline` /
+   `always_inline`). The inliner honors it; other IPO passes ignore it, as in LLVM. *>
+enum InlineHint : char
+{
+	NONE,
+	NEVER,
+	ALWAYS,
+}
+
+<* Whether the C runtime calls a function before `main` or at exit, through
+   `.init_array` / `.fini_array` (C `constructor` / `destructor`). *>
+enum StaticInit : char
+{
+	NONE,
+	CONSTRUCTOR,
+	DESTRUCTOR,
+}
+
+<* `.init_array`/`.fini_array` priority meaning "no priority" (GCC default). *>
+const ushort DEFAULT_INIT_PRIORITY = 65535;
 
 struct Decl
 {
@@ -217,10 +266,34 @@ struct Decl
 	String name;
 	DeclKind kind;
 	Linkage linkage;
+	<* A weak symbol (C `__attribute__((weak))`): another object may provide the
+	   definition the program uses, so optimizations must not rely on this body.
+	   Only meaningful with EXTERNAL linkage. *>
+	bool is_weak;
+	<* C `used`: referenced from outside the IR (e.g. inline asm), so the symbol is
+	   kept and emitted even when internal and otherwise unreferenced. *>
+	bool retain;
+	StaticInit static_init;
+	ushort init_priority;
+	InlineHint inline_hint;
+	<* Conservatively inferred properties for a function definition. *>
+	FnAttrs attrs;
 	Inst[] instructions;
 	Ref[] body;
 	GlobalData global;
 }
+
+<* ELF section (without the leading dot) holding this decl's constructor or
+   destructor pointer; prioritized entries get the `.NNNNN` suffix GNU ld sorts. *>
+fn String Decl.static_init_section(&self, Allocator allocator)
+{
+	String base = self.static_init == StaticInit.CONSTRUCTOR ? "init_array" : "fini_array";
+	if (self.init_priority == DEFAULT_INIT_PRIORITY) return base.copy(allocator);
+	return string::format(allocator, "%s.%05d", base, self.init_priority);
+}
+
+<* Referenced from outside the IR: a `used` symbol or a constructor/destructor. *>
+fn bool Decl.is_external_root(&self) => self.retain || self.static_init != StaticInit.NONE;
 
 fn bool Decl.is_definition(&self)
 {
@@ -236,6 +309,8 @@ struct Ir
 	Allocator allocator;
 	value_interner::Interner* interner;
 	List{Decl} decls;
+	<* Byte order of `GlobalData.bytes` (the target's). Hand-built IR defaults to little-endian. *>
+	bool big_endian;
 }
 
 fn void Ir.init(&self, Allocator allocator, value_interner::Interner* interner)
@@ -437,9 +512,17 @@ fn void Builder.add_branch(&self, Ref cond, Ref then_label, Ref else_label)
 	self.add_inst(BRANCH, { .branch = { cond, then_label, else_label } }, value_interner::REF_NORETURN);
 }
 
-fn void Builder.add_store(&self, Ref ptr, Ref val)
+fn void Builder.add_store(&self, Ref ptr, Ref val, bool is_volatile = false)
 {
-	self.add_inst(STORE, { .bin = { ptr, val } }, value_interner::REF_VOID);
+	Ref ref = self.append({ .tag = STORE, .is_volatile = is_volatile, .data.bin = { ptr, val }, .ty = value_interner::REF_VOID });
+	self.body.push(ref);
+}
+
+fn Ref Builder.add_load(&self, Ref ptr, value_interner::InternerRef ty, bool is_volatile = false)
+{
+	Ref ref = self.append({ .tag = LOAD, .is_volatile = is_volatile, .data.ref = ptr, .ty = ty });
+	self.body.push(ref);
+	return ref;
 }
 
 fn Ref Builder.add_constant(&self, value_interner::InternerRef val, value_interner::InternerRef ty)
@@ -532,8 +615,17 @@ fn void Builder.merge_global(&self, Decl decl)
 
 		Linkage merged_linkage = (existing.linkage == Linkage.INTERNAL || decl.linkage == Linkage.INTERNAL) ?
 			Linkage.INTERNAL : Linkage.EXTERNAL;
+		// Weak on any declaration makes the symbol weak (GCC semantics).
+		bool merged_weak = existing.is_weak || decl.is_weak;
+		bool merged_retain = existing.retain || decl.retain;
 		bool keep_existing = false;
-		if (existing.kind == DeclKind.FUNCTION && decl.kind == DeclKind.FUNCTION)
+		if (existing.kind != decl.kind)
+		{
+			// An undefined weak function reference is carried as an EXTERN global
+			// placeholder; a real definition of either kind replaces it.
+			keep_existing = !decl.is_definition();
+		}
+		else if (existing.kind == DeclKind.FUNCTION && decl.kind == DeclKind.FUNCTION)
 		{
 			// Function prototypes have no body in the IR; preserve a definition
 			// when a later prototype of the same name is merged.
@@ -562,6 +654,8 @@ fn void Builder.merge_global(&self, Decl decl)
 		if (keep_existing)
 		{
 			existing.linkage = merged_linkage;
+			existing.is_weak = merged_weak;
+			existing.retain = merged_retain;
 			// A discarded function declaration owns copies of its instruction,
 			// body, and name data. Free the copied arena too; finish_fn resets its
 			// builder arena immediately after this merge.
@@ -571,6 +665,8 @@ fn void Builder.merge_global(&self, Decl decl)
 
 		existing.free();
 		decl.linkage = merged_linkage;
+		decl.is_weak = merged_weak;
+		decl.retain = merged_retain;
 		*existing = decl;
 		return;
 	}
@@ -579,18 +675,25 @@ fn void Builder.merge_global(&self, Decl decl)
 }
 
 <* Finish the current function. Linkage defaults to external, including declarations without a body. *>
-fn void Builder.finish_fn(&self, String name, Linkage linkage = Linkage.EXTERNAL)
+fn void Builder.finish_fn(&self, String name, Linkage linkage = Linkage.EXTERNAL, InlineHint inline_hint = InlineHint.NONE, bool is_weak = false)
 {
 	Inst[] instructions = alloc::new_array(self.allocator, Inst, self.instructions.len());
 	instructions[..] = self.instructions.array_view()[..];
 	Ref[] body = alloc::new_array(self.allocator, Ref, self.body.len());
 	body[..] = self.body.array_view()[..];
 	String owned_name = name.copy(&self.arena);
-	Decl decl = { .allocator = self.allocator, .arena = self.arena, .name = owned_name, .kind = DeclKind.FUNCTION, .linkage = linkage, .instructions = instructions, .body = body };
+	Decl decl = { .allocator = self.allocator, .arena = self.arena, .name = owned_name, .kind = DeclKind.FUNCTION, .linkage = linkage, .is_weak = is_weak, .inline_hint = inline_hint, .instructions = instructions, .body = body };
 	self.merge_global(decl);
 	self.arena.init(self.allocator, 4096);
 	self.instructions.clear(); self.body.clear(); self.arg_count = 0; self.alloc_count = 0;
 	self.current_label = NONE;
+}
+
+<* The merged declaration named `name`, or null. *>
+fn Decl* Builder.find_decl(&self, String name)
+{
+	if (try index = self.decl_index.get(name)) return &self.decls.entries[(sz)index];
+	return null;
 }
 
 <* Discard the current function and reset the builder's temporary storage. *>
@@ -606,7 +709,7 @@ fn void Builder.abort_fn(&self)
  Add a global declaration, copying its data and relocation symbols into an owned arena.
  The input slices and strings may be changed or freed after this call.
 *>
-fn void Builder.add_global(&self, String name, Linkage linkage, GlobalData global)
+fn void Builder.add_global(&self, String name, Linkage linkage, GlobalData global, bool is_weak = false)
 {
 	if (global.section == DataSection.DATA || global.section == DataSection.RODATA)
 	{
@@ -638,6 +741,6 @@ fn void Builder.add_global(&self, String name, Linkage linkage, GlobalData globa
 	GlobalData owned_global = global;
 	owned_global.bytes = owned_bytes;
 	owned_global.relocs = owned_relocs;
-	Decl decl = { .allocator = self.allocator, .arena = arena, .name = owned_name, .kind = DeclKind.GLOBAL, .linkage = linkage, .global = owned_global };
+	Decl decl = { .allocator = self.allocator, .arena = arena, .name = owned_name, .kind = DeclKind.GLOBAL, .linkage = linkage, .is_weak = is_weak, .global = owned_global };
 	self.merge_global(decl);
 }

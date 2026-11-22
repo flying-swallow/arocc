@@ -62,6 +62,7 @@ fn void? Ir.dump_global(&self, Decl* decl, Terminal term)
 		IrDumpRole.INSTRUCTION.write(term, "extern ")!;
 		IrDumpRole.REFERENCE.apply(term)!; io::fprintf(w, "@%s", decl.name)!; term.set_color(ansi::Ansi.RESET)!;
 		if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, " internal")!;
+		if (decl.is_weak) IrDumpRole.ATTRIBUTE.write(term, " weak")!;
 		io::write_all(w, "\n\n")!;
 		return;
 	}
@@ -69,6 +70,7 @@ fn void? Ir.dump_global(&self, Decl* decl, Terminal term)
 	IrDumpRole.REFERENCE.apply(term)!; io::fprintf(w, "@%s", decl.name)!; term.set_color(ansi::Ansi.RESET)!;
 	io::fprintf(w, " size %d align %d %s", decl.global.size, decl.global.align, decl.global.section.dump_name())!;
 	if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, " internal")!;
+	if (decl.is_weak) IrDumpRole.ATTRIBUTE.write(term, " weak")!;
 	if (decl.global.tentative) io::write_all(w, " tentative")!;
 	if (decl.global.own_section) io::write_all(w, " own_section")!;
 	bool has_data = decl.global.section != DataSection.BSS && decl.global.section != DataSection.COMMON;
@@ -116,6 +118,7 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 		}
 	}
 	if (decl.linkage == Linkage.INTERNAL) IrDumpRole.ATTRIBUTE.write(term, "internal ")!;
+	if (decl.is_weak) IrDumpRole.ATTRIBUTE.write(term, "weak ")!;
 	self.write_type(return_ty, term)!;
 	IrDumpRole.REFERENCE.apply(term)!; io::fprintf(w, " @%s", name)!; term.set_color(ansi::Ansi.RESET)!;
 	w.write_byte('(')!;
@@ -165,7 +168,7 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 				IrDumpRole.LITERAL.apply(term)!; io::write_all(w, "\n        default ")!; term.set_color(ansi::Ansi.RESET)!;
 				io::write_all(w, "=> ")!; self.write_label(decl, labels, inst.data.switch_data.default_label, term)!; term.set_color(ansi::Ansi.RESET)!; io::write_all(w, "\n    }\n")!;
 			case STORE:
-				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    store ")!; self.write_ref(decl, refs, inst.data.bin.lhs, term)!; term.set_color(ansi::Ansi.RESET)!;
+				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, inst.is_volatile ? "    store volatile " : "    store ")!; self.write_ref(decl, refs, inst.data.bin.lhs, term)!; term.set_color(ansi::Ansi.RESET)!;
 				io::write_all(w, ", ")!; self.write_ref(decl, refs, inst.data.bin.rhs, term)!; w.write_byte('\n')!;
 			case RET:
 				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    ret ")!;
@@ -231,6 +234,7 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case FPEXT:
 			case FPTRUNC:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", inst.tag.name)!;
+				if (inst.is_volatile_access()) io::write_all(w, "volatile ")!;
 				self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
 			case BIT_OR:
 			case BIT_XOR:
@@ -272,7 +276,11 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case ARG:
 				case SYMBOL: unreachable();
 			case LABEL_ADDR:
-			case JMP_VAL: {}
+				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "label_addr ")!;
+				self.write_label(decl, labels, inst.data.ref, term)!; term.set_color(ansi::Ansi.RESET)!; w.write_byte('\n')!;
+			case JMP_VAL:
+				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    jmp_val ")!; term.set_color(ansi::Ansi.RESET)!;
+				self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
 		}
 	}
 	term.set_color(ansi::Ansi.RESET)!; io::write_all(w, "}\n\n")!;

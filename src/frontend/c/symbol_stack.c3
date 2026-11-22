@@ -307,7 +307,7 @@ fn NodeOptIndex? SymbolStack.define_symbol(&self, parser::Parser* p, StringId na
 					Diagnostic.PREVIOUS_DEFINITION.@emit(p, prev.tok)!;
 				} else
 				{
-					if ((NodeOptIndex)prev.node != type_store::NODE_NULL) p.symbol_tentative_definition(prev.node, node); old = (NodeOptIndex)prev.node;
+					if ((NodeOptIndex)prev.node != type_store::NODE_NULL) p.declarations.set_tentative_definition(p, prev.node, node); old = (NodeOptIndex)prev.node;
 				}
 			case DEF:
 			case CONSTEXPR:
@@ -362,7 +362,7 @@ fn NodeOptIndex? SymbolStack.declare_symbol(&self, parser::Parser* p, StringId n
 				}
 				else
 				{
-					if ((NodeOptIndex)prev.node != type_store::NODE_NULL) p.symbol_tentative_definition(node, prev.node); old = (NodeOptIndex)prev.node;
+					if ((NodeOptIndex)prev.node != type_store::NODE_NULL) p.declarations.set_tentative_definition(p, node, prev.node); old = (NodeOptIndex)prev.node;
 				}
 			case DEF:
 			case CONSTEXPR:
@@ -372,7 +372,7 @@ fn NodeOptIndex? SymbolStack.declare_symbol(&self, parser::Parser* p, StringId n
 				}
 				else
 				{
-					if ((NodeOptIndex)prev.node != type_store::NODE_NULL) p.symbol_tentative_definition(node, prev.node); return type_store::NODE_NULL;
+					if ((NodeOptIndex)prev.node != type_store::NODE_NULL) p.declarations.set_tentative_definition(p, node, prev.node); return type_store::NODE_NULL;
 				}
 			case TYPEDEF:
 				if (qt.is_invalid()) return type_store::NODE_NULL;

@@ -321,89 +321,6 @@ fn void AttributeUseSnapshot.restore(&self, attribute_wip::Wip* wip)
 
 fn void AttributeUseSnapshot.free(&self) { self.used.free(); }
 
-<* The declaration grammar owns record members and enumerators. Parser's tag
-   header creates the incomplete type and reserves its declaration node; this
-   callback fills both in place so every earlier pointer keeps the same type
-   identity. *>
-fn type_store::QualType? record_body_callback(void* context, parser::Parser* p, parser::ContainerBodySeed seed)
-{
-	DeclarationParser* self = (DeclarationParser*)context;
-	return self.parse_container_body(p, seed);
-}
-
-fn type_store::QualType? enum_underlying_callback(void* context, parser::Parser* p)
-{
-	TagAttributeContext* tag_context = (TagAttributeContext*)context;
-	return tag_context.declaration_parser.parse_enum_underlying(p, tag_context.record_member);
-}
-
-struct TagAttributeContext
-{
-	DeclarationParser* declaration_parser;
-	attribute_wip::Wip* wip;
-	type_store::NodeIndex* tag_decl_node_out;
-	bool* has_tag_decl_node_out;
-	// The specifier begins a struct/union member, so `enum E : width` may be a bit-field.
-	bool record_member;
-}
-
-fn void? tag_attribute_callback(void* context, parser::Parser* p, parser::TagHeader header, parser::TagAttributeStage stage)
-{
-	TagAttributeContext* tag_context = (TagAttributeContext*)context;
-	switch (stage)
-	{
-		case parser::TagAttributeStage.PARSE_HEADER:
-			tag_context.declaration_parser.append_attributes(p, tag_context.wip)!;
-			return;
-		case parser::TagAttributeStage.APPLY_HEADER:
-			type_store::QualType type_qt = tag_context.wip.apply_type_attrs(p, header.qt)!;
-			assert(type_qt.eql(header.qt, p.comp), "type attributes on a tag must preserve its qualified type");
-			tag_context.wip.apply_decl_attrs_extra(p, header.decl_node, header.qt, header.decl_node.pack())!;
-			tag_context.wip.top = (uint)tag_context.wip.attrs.len();
-			*tag_context.tag_decl_node_out = header.decl_node;
-			*tag_context.has_tag_decl_node_out = true;
-			return;
-		case parser::TagAttributeStage.PARSE_BODY_END:
-			tag_context.wip.top = (uint)tag_context.wip.attrs.len();
-			tag_context.declaration_parser.append_attributes(p, tag_context.wip)!;
-			return;
-		case parser::TagAttributeStage.APPLY_BODY_END:
-			type_store::QualType type_qt = tag_context.wip.apply_type_attrs(p, header.qt)!;
-			assert(type_qt.eql(header.qt, p.comp), "type attributes on a tag must preserve its qualified type");
-			tag_context.wip.apply_decl_attrs_extra(p, header.decl_node, header.qt, header.decl_node.pack())!;
-			tag_context.wip.top = (uint)tag_context.wip.attrs.len();
-			return;
-	}
-}
-
-fn void? DeclarationParser.apply_tag_body_end_attributes(&self, parser::Parser* p, parser::ContainerBodySeed seed)
-{
-	if (!seed.tag_attributes) return;
-	parser::TagHeader tag_header = { .qt = seed.qt, .name = seed.name,
-		.keyword_tok = seed.keyword_tok, .name_tok = seed.name_tok, .decl_node = seed.decl_node,
-		.is_union = seed.is_union, .is_enum = seed.is_enum, .is_definition = true,
-		.has_fixed = seed.has_fixed, .fixed_qt = seed.fixed_qt };
-	seed.tag_attributes(seed.tag_attribute_context, p, tag_header, parser::TagAttributeStage.PARSE_BODY_END)!;
-	seed.tag_attributes(seed.tag_attribute_context, p, tag_header, parser::TagAttributeStage.APPLY_BODY_END)!;
-}
-
-fn type_store::QualType? DeclarationParser.parse_record_specifier(&self, parser::Parser* p, bool is_enum,
-	attribute_wip::Wip* declaration_wip, type_store::NodeIndex* tag_decl_node_out,
-	bool* has_tag_decl_node_out, bool record_member)
-{
-	*has_tag_decl_node_out = false;
-	// Zig recordSpec/enumSpec: `state(true)` so attributes parsed before the
-	// tag keyword (e.g. `__declspec(align(8)) typedef enum {...} A;`) belong
-	// to the declaration, not the tag.
-	attribute_wip::State tag_state = declaration_wip.state(true);
-	defer declaration_wip.restore(tag_state);
-	TagAttributeContext tag_context = { .declaration_parser = (DeclarationParser*)self, .wip = declaration_wip,
-		.tag_decl_node_out = tag_decl_node_out, .has_tag_decl_node_out = has_tag_decl_node_out,
-		.record_member = record_member };
-	return p.record_spec_with_body(&record_body_callback, (void*)self, is_enum,
-		&enum_underlying_callback, (void*)&tag_context, &tag_attribute_callback, (void*)&tag_context);
-}
-
 fn type_store::QualType? DeclarationParser.parse_enum_underlying(&self, parser::Parser* p, bool record_member)
 {
 	attribute_wip::Wip wip;
@@ -583,7 +500,7 @@ fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Par
 {
 	if (catch p.expect(tokenizer::TokenId.R_BRACE)) return PARSING_FAILED~;
 	attribute::Attribute? header_storage = p.tree.attr_map.get_attribute(seed.decl_node.pack(), attribute::AttributeTag.SCALAR_STORAGE_ORDER);
-	self.apply_tag_body_end_attributes(p, seed)!;
+	seed.tags.apply_body_end(p, seed.qt, seed.decl_node)!;
 
 	type_store::RecordField[] record_fields = fields.array_view();
 	if (try storage = p.tree.attr_map.get_attribute(seed.decl_node.pack(), attribute::AttributeTag.SCALAR_STORAGE_ORDER) ?? header_storage)
@@ -850,7 +767,7 @@ fn void? Enumerator.set(&self, parser::Parser* p, parser_result::Result* result,
 				return PARSING_FAILED~;
 			}
 			result.qt = self.qt;
-			result.implicit_cast(p, tree::CastKind.INT_CAST);
+			result.node = p.tree.implicit_cast(result.node, result.qt, tree::CastKind.INT_CAST);
 		}
 		self.val = result.val;
 		return;
@@ -1042,7 +959,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 	}
 	if (catch p.expect(tokenizer::TokenId.R_BRACE)) return PARSING_FAILED~;
 	done = true;
-	self.apply_tag_body_end_attributes(p, seed)!;
+	seed.tags.apply_body_end(p, seed.qt, seed.decl_node)!;
 
 	type_store::EnumField[] fields = enum_fields.array_view();
 	type_store::NodeIndex[] fixup_nodes = field_nodes.array_view();
@@ -1072,10 +989,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 			field_node.enum_field.qt = dest_qt;
 			if (!field_node.enum_field.init.is_null())
 			{
-				parser_result::Result result = { .val = value::NONE };
-				result.init(field_node.enum_field.init.unwrap(), dest_qt, symbol.val);
-				result.implicit_cast(p, tree::CastKind.INT_CAST);
-				field_node.enum_field.init = result.node.pack();
+				field_node.enum_field.init = p.tree.implicit_cast(field_node.enum_field.init.unwrap(), dest_qt, tree::CastKind.INT_CAST).pack();
 			}
 			p.tree.set_node(field_node, (sz)fixup_nodes[i]);
 		}
@@ -1246,7 +1160,7 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 		if (id == KEYWORD_STRUCT || id == KEYWORD_UNION || id == KEYWORD_ENUM)
 		{
 			result.recognized = true;
-			type_store::QualType? record_type = self.parse_record_specifier(p, id == KEYWORD_ENUM, wip,
+			type_store::QualType? record_type = p.record_spec_with_body(self, id == KEYWORD_ENUM, wip,
 				&result.tag_decl_node, &result.has_tag_decl_node, record_member);
 			if (catch record_type) return PARSING_FAILED~;
 			if (catch builder.combine({ .tag = type_store::BuilderSpecifierTag.OTHER, .other = record_type }, tok)) return PARSING_FAILED~;
@@ -1705,12 +1619,6 @@ fn void? DeclarationParser.bind_declaration_symbol(&self, parser::Parser* p,
 
 <* Set a declaration's actual definition and propagate the link through
    prior declarations of the same symbol. Self-links are terminal. *>
-fn void DeclarationParser.handle_tentative_decl_definition(&self, parser::Parser* p,
-	type_store::NodeIndex declaration, type_store::NodeIndex definition) @dynamic
-{
-	self.set_tentative_definition(p, declaration, definition);
-}
-
 fn void DeclarationParser.set_tentative_definition(&self, parser::Parser* p,
 	type_store::NodeIndex declaration, type_store::NodeIndex definition)
 {

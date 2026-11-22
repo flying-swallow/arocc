@@ -1,5 +1,6 @@
 // IR optimization passes, analyses, and verifier.
 module aro::backend::ir_opt;
+import std::sort;
 import aro::primitive_value;
 import aro::backend::ir, aro::value_interner, aro::code_gen_options, std::collections::list, std::collections::map;
 
@@ -36,6 +37,7 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case VA_START:
 		case CLZ:
 		case CTZ:
+		case JMP_VAL: // the indirect jump target address
 			@body(&inst.data.ref);
 		case ATOMIC_LOAD:
 			@body(&inst.data.atomic.ptr);
@@ -112,7 +114,6 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case LABEL:
 		case LABEL_ADDR:
 		case JMP:
-		case JMP_VAL:
 		case ALLOC:
 		case STACK_SAVE:
 		case FENCE:
@@ -125,6 +126,7 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 	switch (inst.tag)
 	{
 		case JMP:
+		case LABEL_ADDR: // names the block whose address it takes (LLVM blockaddress)
 			@body(&inst.data.ref);
 		case BRANCH:
 			@body(&inst.data.branch.then_label);
@@ -144,7 +146,6 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case ARG:
 		case SYMBOL:
 		case LABEL:
-		case LABEL_ADDR:
 		case JMP_VAL:
 		case CALL:
 		case CALL_HI:
@@ -382,6 +383,22 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 	uint[] edge_from = alloc::new_array(allocator, uint, (sz)block_count);
 	defer if (block_count) alloc::free(allocator, edge_from.ptr);
 	for (usz i = 0; i < block_count; i++) edge_from[i] = NONE_BLOCK;
+	// Like LLVM indirectbr, a computed goto may reach any block whose address the
+	// function takes (LABEL_ADDR); C forbids jumping into another function.
+	list::List{uint} address_taken;
+	address_taken.init(allocator);
+	defer address_taken.free();
+	for (usz i = arg_end; i < body_len; i++)
+	{
+		ir::Ref ref = decl.body[i];
+		if ((usz)ref >= inst_count || decl.instructions[(sz)ref].tag != ir::InstTag.LABEL_ADDR) continue;
+		ir::Ref label = decl.instructions[(sz)ref].data.ref;
+		if ((usz)label >= inst_count || cfg.block_of_ref[(sz)label] == NONE_BLOCK) continue;
+		uint target = cfg.block_of_ref[(sz)label];
+		bool seen = false;
+		foreach (old : address_taken) if (old == target) seen = true;
+		if (!seen) address_taken.push(target);
+	}
 	foreach (i, &block : cfg.blocks)
 	{
 		sz terminator_pos = block_terminator_position(decl, block);
@@ -424,6 +441,8 @@ fn Cfg build_cfg(ir::Decl* decl, Allocator allocator)
 				{
 					cfg_append_edge(&cfg, edge_from, (uint)i, cfg.block_of_ref[(sz)default_ref]);
 				}
+			case ir::InstTag.JMP_VAL:
+				foreach (target : address_taken) cfg_append_edge(&cfg, edge_from, (uint)i, target);
 			default: break;
 		}
 	}
@@ -609,7 +628,7 @@ fn Uses compute_uses(ir::Decl* decl, Allocator allocator)
 {
 	Uses uses = { .allocator = allocator };
 	uses.users = alloc::new_array(allocator, list::List{ir::Ref}, decl.instructions.len);
-	foreach (&user : uses.users) user.init(allocator);
+	foreach (&user : uses.users) user.init(allocator, 0);
 	foreach (user_ref : decl.body)
 	{
 		if ((usz)user_ref >= (usz)decl.instructions.len) continue;
@@ -826,20 +845,22 @@ fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program, bool keep
 	bool has_main = false;
 	foreach (decl : graph.decls)
 	{
-		if (decl.kind == ir::DeclKind.FUNCTION && decl.name == "main") has_main = true;
+		// Decl.is_definition() treats every FUNCTION as a definition; declarations have no body.
+		if (decl.kind == ir::DeclKind.FUNCTION && decl.name == "main" && decl.body.len != 0) has_main = true;
 	}
+	// Like LLVM GlobalDCE's llvm.used / llvm.global_ctors roots, `used` symbols and
+	// constructors/destructors are always live, even internal ones.
 	if (whole_program && has_main && !keep_external_definitions)
 	{
 		mark_decl_symbol(&decl_indices, reachable, &pending, "main");
 	}
-	else
+	foreach (i, decl : graph.decls)
 	{
-		foreach (i, decl : graph.decls)
-		{
-			if (decl.linkage != ir::Linkage.EXTERNAL) continue;
-			reachable[(sz)i] = true;
-			pending.push((uint)i);
-		}
+		bool root = decl.is_external_root() ||
+			(!(whole_program && has_main && !keep_external_definitions) && decl.linkage == ir::Linkage.EXTERNAL);
+		if (!root || reachable[(sz)i]) continue;
+		reachable[(sz)i] = true;
+		pending.push((uint)i);
 	}
 
 	// Follow references from each newly reached declaration.
@@ -849,7 +870,8 @@ fn void eliminate_dead_declarations(ir::Ir* graph, bool whole_program, bool keep
 		ir::Decl* decl = &graph.decls.entries[(sz)index];
 		if (decl.kind == ir::DeclKind.FUNCTION)
 		{
-			// Include all instructions, including unplaced tombstones.
+			// Include unplaced tombstones too. LLVM removes dead constant users before
+			// GlobalDCE, so its dependency walk can be more precise than this one.
 			foreach (inst : decl.instructions)
 			{
 				if (inst.tag != ir::InstTag.SYMBOL) continue;
@@ -908,6 +930,23 @@ fn bool remove_unreachable_blocks(ir::Decl* decl, Allocator allocator)
 			changed = true;
 		}
 	}
+	// An address-taken block can be unreachable when no reachable computed goto
+	// exists. Its address can then only be compared, never jumped to; replace it
+	// with null so no LABEL_ADDR names a removed block (LLVM substitutes a
+	// constant for such blockaddress uses too).
+	foreach (ref : decl.body)
+	{
+		if ((usz)ref >= (usz)decl.instructions.len || remove[(sz)ref]) continue;
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag != ir::InstTag.LABEL_ADDR || (usz)inst.data.ref >= (usz)cfg.block_of_ref.len) continue;
+		uint target = cfg.block_of_ref[(sz)inst.data.ref];
+		if (target != NONE_BLOCK && cfg.reachable[(sz)target]) continue;
+		// Constants are unplaced: rewrite in place and drop it from the body, so
+		// its users now read the null constant.
+		*inst = { .tag = ir::InstTag.CONSTANT, .data.constant = value_interner::REF_NULL, .ty = inst.ty };
+		remove[(sz)ref] = true;
+		changed = true;
+	}
 	foreach (block_index, block : cfg.blocks)
 	{
 		if (!cfg.reachable[block_index]) continue;
@@ -941,11 +980,9 @@ fn bool remove_unreachable_blocks(ir::Decl* decl, Allocator allocator)
 			usz keep_count = 0;
 			foreach (input : phi.data.phi)
 			{
-				if ((usz)input.label < (usz)cfg.block_of_ref.len)
-				{
-					uint pred = cfg.block_of_ref[(sz)input.label];
-					if (pred != NONE_BLOCK && !cfg.reachable[(sz)pred]) continue;
-				}
+				if ((usz)input.label >= (usz)cfg.block_of_ref.len) continue;
+				uint pred = cfg.block_of_ref[(sz)input.label];
+				if (pred == NONE_BLOCK || !cfg.reachable[(sz)pred]) continue;
 				keep_count++;
 			}
 			if (keep_count != (usz)phi.data.phi.len)
@@ -954,13 +991,9 @@ fn bool remove_unreachable_blocks(ir::Decl* decl, Allocator allocator)
 				sz write = 0;
 				foreach (input : phi.data.phi)
 				{
-					bool unreachable_pred = false;
-					if ((usz)input.label < (usz)cfg.block_of_ref.len)
-					{
-						uint pred = cfg.block_of_ref[(sz)input.label];
-						unreachable_pred = pred != NONE_BLOCK && !cfg.reachable[(sz)pred];
-					}
-					if (unreachable_pred) continue;
+					if ((usz)input.label >= (usz)cfg.block_of_ref.len) continue;
+					uint pred = cfg.block_of_ref[(sz)input.label];
+					if (pred == NONE_BLOCK || !cfg.reachable[(sz)pred]) continue;
 					inputs[write++] = input;
 				}
 				phi.data.phi = inputs;
@@ -1011,11 +1044,30 @@ struct Mem2RegRenameContext
 	ir::Ref zero_ref;
 	ir::Ref[] phi_for_block;
 	bool[] remove;
+	// Deferred load replacements, applied in one body walk after renaming.
+	ir::Ref[] replacements;
+}
+
+fn ir::Ref mem2reg_resolve(ir::Ref[] replacements, ir::Ref ref)
+{
+	while ((usz)ref < (usz)replacements.len && replacements[(sz)ref] != ir::NONE) ref = replacements[(sz)ref];
+	return ref;
+}
+
+fn void mem2reg_apply_replacements(DeclEditor* editor, ir::Ref[] replacements)
+{
+	foreach (user_ref : editor.body)
+	{
+		if ((usz)user_ref >= (usz)editor.insts.len()) continue;
+		ir::Inst* inst = &editor.insts.entries[(sz)user_ref];
+		@each_value_operand(inst; ir::Ref* slot) { *slot = mem2reg_resolve(replacements, *slot); };
+	}
 }
 
 <* Lazily materialize the zero value used for paths that read before a store. *>
 fn ir::Ref mem2reg_initial_zero(Mem2RegRenameContext* context)
 {
+	// LLVM seeds these reads with undef; C3 deliberately uses typed zero instead.
 	if (context.zero_ref == ir::NONE)
 	{
 		context.zero_ref = context.editor.add_constant(value_interner::REF_ZERO, context.access_type);
@@ -1055,7 +1107,7 @@ fn bool mem2reg_rename_block(Mem2RegRenameContext* context, uint block_index, ir
 		if (inst.tag == ir::InstTag.LOAD && inst.data.ref == context.alloc_ref)
 		{
 			if (current == ir::NONE) current = mem2reg_initial_zero(context);
-			editor_replace_all_uses(context.editor, ref, current);
+			context.replacements[(sz)ref] = current;
 			context.remove[(sz)ref] = true;
 		}
 		else if (inst.tag == ir::InstTag.STORE && inst.data.bin.lhs == context.alloc_ref)
@@ -1076,7 +1128,7 @@ fn bool mem2reg_rename_block(Mem2RegRenameContext* context, uint block_index, ir
 }
 
 <* Collapse PHIs that have one distinct incoming value, ignoring self edges. *>
-fn bool editor_cleanup_trivial_phis(DeclEditor* editor, bool[] remove)
+fn bool editor_cleanup_trivial_phis(DeclEditor* editor, bool[] remove, ir::Ref[] replacements)
 {
 	bool any_changed = false;
 	bool changed = true;
@@ -1092,24 +1144,26 @@ fn bool editor_cleanup_trivial_phis(DeclEditor* editor, bool[] remove)
 			bool conflict = false;
 			foreach (input : inst.data.phi)
 			{
-				if (input.value == ref) continue;
+				ir::Ref value = mem2reg_resolve(replacements, input.value);
+				if (value == ref) continue;
 				if (candidate == ir::NONE)
 				{
-					candidate = input.value;
+					candidate = value;
 				}
-				else if (candidate != input.value)
+				else if (candidate != value)
 				{
 					conflict = true;
 					break;
 				}
 			}
 			if (candidate == ir::NONE || conflict) continue;
-			editor_replace_all_uses(editor, ref, candidate);
+			replacements[(sz)ref] = candidate;
 			remove[(sz)ref] = true;
 			changed = true;
 			any_changed = true;
 		}
 	}
+	if (any_changed) mem2reg_apply_replacements(editor, replacements);
 	return any_changed;
 }
 
@@ -1186,10 +1240,18 @@ fn bool editor_cleanup_unused_mem2reg_phis(DeclEditor* editor, ir::Ref[] phi_for
 fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator allocator)
 {
 	if ((usz)alloc_ref >= (usz)decl.instructions.len || decl.instructions[(sz)alloc_ref].tag != ir::InstTag.ALLOC) return false;
+	// Volatility is tracked per allocated object here, not per LOAD/STORE access.
 	if (decl.instructions[(sz)alloc_ref].data.alloc.is_volatile) return false;
 	Cfg cfg = build_cfg(decl, allocator);
 	defer cfg.free();
 	if (cfg.blocks.len == 0 || cfg.block_of_ref[(sz)alloc_ref] == NONE_BLOCK) return false;
+	uint[] body_position = alloc::new_array(allocator, uint, (sz)decl.instructions.len);
+	defer alloc::free(allocator, body_position.ptr);
+	for (usz i = 0; i < (usz)decl.instructions.len; i++) body_position[i] = NONE_BLOCK;
+	foreach (pos, ref : decl.body)
+	{
+		if ((usz)ref < (usz)decl.instructions.len) body_position[(sz)ref] = (uint)pos;
+	}
 	cfg.compute_dominators();
 	cfg.compute_frontiers();
 	uint alloc_block = cfg.block_of_ref[(sz)alloc_ref];
@@ -1205,6 +1267,16 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	{
 		if ((usz)user_ref >= (usz)decl.instructions.len) return false;
 		ir::Inst* user = &decl.instructions[(sz)user_ref];
+		// Like LLVM's isAllocaPromotable, a volatile access pins the slot in memory.
+		if (user.is_volatile_access()) return false;
+		// LLVM leaves unvisited loads in place and resolves leftover alloca uses
+		// with poison. Decline promotion while any load is outside executable code.
+		if (user.tag == ir::InstTag.LOAD)
+		{
+			uint block = cfg.block_of_ref[(sz)user_ref];
+			if (block == NONE_BLOCK || !cfg.reachable[(sz)block] || body_position[(sz)user_ref] == NONE_BLOCK) return false;
+			if (body_position[(sz)user_ref] >= (uint)block_terminator_position(decl, &cfg.blocks[(sz)block])) return false;
+		}
 		value_interner::InternerRef user_type;
 		if (user.tag == ir::InstTag.LOAD && user.data.ref == alloc_ref)
 		{
@@ -1232,6 +1304,21 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 			return false;
 		}
 	}
+	if (!has_load)
+	{
+		// With no executable loads, the allocation and its direct accesses are unobserved.
+		DeclEditor editor;
+		editor.begin(decl, allocator);
+		bool[] remove = alloc::new_array(allocator, bool, (sz)editor.insts.len());
+		defer alloc::free(allocator, remove.ptr);
+		for (sz i = 0; i < editor.insts.len(); i++) remove[i] = false;
+		remove[(sz)alloc_ref] = true;
+		foreach (user_ref : uses.users[(sz)alloc_ref]) remove[(sz)user_ref] = true;
+		BodyRemovalContext context = { .remove = remove };
+		editor.remove_body_where(&body_ref_marked_for_removal, (void*)&context);
+		editor.commit();
+		return true;
+	}
 	if (!has_access_type) return false;
 	primitive_value::PrimitiveValue access_key = ir.interner.get(access_type);
 	uint expected_size;
@@ -1246,24 +1333,12 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 		default:
 			return false;
 	}
-	if (decl.instructions[(sz)alloc_ref].data.alloc.size != expected_size) return false;
-	if (!has_load)
-	{
-		if (!has_store) return false;
-		// Stores to an unobserved local allocation have no externally visible effect.
-		DeclEditor editor;
-		editor.begin(decl, allocator);
-		bool[] remove = alloc::new_array(allocator, bool, (sz)editor.insts.len());
-		defer alloc::free(allocator, remove.ptr);
-		for (sz i = 0; i < editor.insts.len(); i++) remove[i] = false;
-		remove[(sz)alloc_ref] = true;
-		foreach (user_ref : uses.users[(sz)alloc_ref]) remove[(sz)user_ref] = true;
-		BodyRemovalContext context = { .remove = remove };
-		editor.remove_body_where(&body_ref_marked_for_removal, (void*)&context);
-		editor.commit();
-		return true;
-	}
-
+	uint allocation_size = decl.instructions[(sz)alloc_ref].data.alloc.size;
+	// F80 has an 80-bit IR value stored in a padded 16-byte ABI object slot.
+	// Promote direct scalar accesses to that slot like other scalars.
+	bool padded_f80 = access_key.tag == primitive_value::PrimitiveType.FLOAT_TY &&
+		access_key.ty_bits == 80 && allocation_size == 16;
+	if (allocation_size != expected_size && !padded_f80) return false;
 	bool[] def_blocks = alloc::new_array(allocator, bool, (sz)cfg.blocks.len);
 	defer alloc::free(allocator, def_blocks.ptr);
 	bool[] phi_sites = alloc::new_array(allocator, bool, (sz)cfg.blocks.len);
@@ -1287,6 +1362,8 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	while (worklist.len())
 	{
 		uint block = worklist.pop()!!;
+		// LLVM prunes the IDF by live-in blocks; C3 builds the full IDF and
+		// removes unused inserted PHIs after renaming.
 		foreach (frontier : cfg.blocks[(sz)block].frontier)
 		{
 			if (phi_sites[(sz)frontier]) continue;
@@ -1344,6 +1421,9 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	defer alloc::free(allocator, remove.ptr);
 	for (sz i = 0; i < editor.insts.len(); i++) remove[i] = false;
 	remove[(sz)alloc_ref] = true;
+	ir::Ref[] replacements = alloc::new_array(allocator, ir::Ref, (sz)editor.insts.len());
+	defer alloc::free(allocator, replacements.ptr);
+	for (sz i = 0; i < editor.insts.len(); i++) replacements[i] = ir::NONE;
 	Mem2RegRenameContext context = {
 		.editor = &editor,
 		.cfg = &cfg,
@@ -1352,12 +1432,14 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 		.zero_ref = ir::NONE,
 		.phi_for_block = phi_for_block,
 		.remove = remove,
+		.replacements = replacements,
 	};
 	if (cfg.rpo.len == 0 || !mem2reg_rename_block(&context, cfg.rpo[0], ir::NONE))
 	{
 		editor.free();
 		return false;
 	}
+	mem2reg_apply_replacements(&editor, replacements);
 	foreach (phi_ref : phi_for_block)
 	{
 		if (phi_ref == ir::NONE) continue;
@@ -1374,7 +1456,7 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 		ir::Inst* user = &editor.insts.entries[(sz)user_ref];
 		if (user.tag == ir::InstTag.LOAD || user.tag == ir::InstTag.STORE) remove[(sz)user_ref] = true;
 	}
-	editor_cleanup_trivial_phis(&editor, remove);
+	editor_cleanup_trivial_phis(&editor, remove, replacements);
 	editor_cleanup_unused_mem2reg_phis(&editor, phi_for_block, remove);
 	BodyRemovalContext removal_context = { .remove = remove };
 	editor.remove_body_where(&body_ref_marked_for_removal, (void*)&removal_context);
@@ -1382,7 +1464,382 @@ fn bool promote_alloca(ir::Ir* ir, ir::Decl* decl, ir::Ref alloc_ref, Allocator 
 	return true;
 }
 
-<* Promote all eligible local allocations, rebuilding analyses after each edit. *>
+enum Mem2RegClass : char
+{
+	REJECT,
+	// No executable load: the slot and its stores are unobserved.
+	REMOVE,
+	PROMOTE,
+	// Its address is stored into another slot; promoting that slot can change
+	// this one's users, so decide after the batch commits.
+	DEFER,
+}
+
+<* The exact acceptance checks of promote_alloca, against analyses shared by one
+   batch (all built from the unedited body). *>
+fn Mem2RegClass mem2reg_classify(ir::Ir* ir, ir::Decl* decl, Cfg* cfg, Uses* uses, uint[] body_position,
+	sz[] terminator_position, ir::Ref alloc_ref, value_interner::InternerRef* out_type)
+{
+	if ((usz)alloc_ref >= (usz)uses.users.len || decl.instructions[(sz)alloc_ref].tag != ir::InstTag.ALLOC) return REJECT;
+	if (decl.instructions[(sz)alloc_ref].data.alloc.is_volatile) return REJECT;
+	if (cfg.block_of_ref[(sz)alloc_ref] == NONE_BLOCK) return REJECT;
+	if (!cfg.reachable[(sz)cfg.block_of_ref[(sz)alloc_ref]]) return REJECT;
+	foreach (user_ref : uses.users[(sz)alloc_ref])
+	{
+		ir::Inst* user = &decl.instructions[(sz)user_ref];
+		if (user.tag == ir::InstTag.STORE && user.data.bin.rhs == alloc_ref) return DEFER;
+	}
+	bool has_load = false;
+	bool has_access_type = false;
+	value_interner::InternerRef access_type = value_interner::REF_VOID;
+	foreach (user_ref : uses.users[(sz)alloc_ref])
+	{
+		ir::Inst* user = &decl.instructions[(sz)user_ref];
+		if (user.is_volatile_access()) return REJECT;
+		if (user.tag == ir::InstTag.LOAD)
+		{
+			uint block = cfg.block_of_ref[(sz)user_ref];
+			if (block == NONE_BLOCK || !cfg.reachable[(sz)block] || body_position[(sz)user_ref] == NONE_BLOCK) return REJECT;
+			if ((sz)body_position[(sz)user_ref] >= terminator_position[(sz)block]) return REJECT;
+		}
+		value_interner::InternerRef user_type;
+		if (user.tag == ir::InstTag.LOAD && user.data.ref == alloc_ref)
+		{
+			has_load = true;
+			user_type = user.ty;
+		}
+		else if (user.tag == ir::InstTag.STORE && user.data.bin.lhs == alloc_ref && user.data.bin.rhs != alloc_ref)
+		{
+			if (!valid_ref(decl, user.data.bin.rhs)) return REJECT;
+			user_type = decl.instructions[(sz)user.data.bin.rhs].ty;
+		}
+		else
+		{
+			return REJECT;
+		}
+		if (!has_access_type)
+		{
+			access_type = user_type;
+			has_access_type = true;
+		}
+		else if (access_type != user_type)
+		{
+			return REJECT;
+		}
+	}
+	if (!has_load) return REMOVE;
+	primitive_value::PrimitiveValue access_key = ir.interner.get(access_type);
+	uint expected_size;
+	switch (access_key.tag)
+	{
+		case primitive_value::PrimitiveType.INT_TY:
+		case primitive_value::PrimitiveType.FLOAT_TY:
+			if (access_key.ty_bits == 0) return REJECT;
+			expected_size = ((uint)access_key.ty_bits + 7) / 8;
+		case primitive_value::PrimitiveType.PTR_TY:
+			expected_size = 8;
+		default:
+			return REJECT;
+	}
+	uint allocation_size = decl.instructions[(sz)alloc_ref].data.alloc.size;
+	bool padded_f80 = access_key.tag == primitive_value::PrimitiveType.FLOAT_TY &&
+		access_key.ty_bits == 80 && allocation_size == 16;
+	if (allocation_size != expected_size && !padded_f80) return REJECT;
+	foreach (user_ref : uses.users[(sz)alloc_ref])
+	{
+		ir::Inst* user = &decl.instructions[(sz)user_ref];
+		if (user.tag != ir::InstTag.STORE || user.data.bin.lhs != alloc_ref) continue;
+		uint block = cfg.block_of_ref[(sz)user_ref];
+		if (block == NONE_BLOCK || !cfg.reachable[(sz)block]) return REJECT;
+	}
+	*out_type = access_type;
+	return PROMOTE;
+}
+
+struct Mem2RegPhi
+{
+	uint slot;
+	ir::Ref phi;
+}
+
+struct Mem2RegUndo
+{
+	uint slot;
+	ir::Ref old;
+}
+
+struct Mem2RegBatch
+{
+	DeclEditor* editor;
+	Cfg* cfg;
+	ir::Decl* decl;
+	<* Original ref -> promoted slot index, or uint::max. *>
+	uint[] slot_of;
+	value_interner::InternerRef[] slot_type;
+	ir::Ref[] slot_zero;
+	ir::Ref[] current;
+	list::List{Mem2RegPhi}[] block_phis;
+	list::List{Mem2RegUndo} undo;
+	sz[] executable_end;
+	bool[] remove;
+	ir::Ref[] replacements;
+}
+
+fn ir::Ref mem2reg_batch_value(Mem2RegBatch* batch, uint slot)
+{
+	if (batch.current[(sz)slot] != ir::NONE) return batch.current[(sz)slot];
+	// LLVM seeds these reads with undef; C3 deliberately uses typed zero instead.
+	if (batch.slot_zero[(sz)slot] == ir::NONE)
+	{
+		batch.slot_zero[(sz)slot] = batch.editor.add_constant(value_interner::REF_ZERO, batch.slot_type[(sz)slot]);
+	}
+	return batch.slot_zero[(sz)slot];
+}
+
+fn void mem2reg_batch_set(Mem2RegBatch* batch, uint slot, ir::Ref value) @inline
+{
+	batch.undo.push({ slot, batch.current[(sz)slot] });
+	batch.current[(sz)slot] = value;
+}
+
+fn uint mem2reg_batch_slot(Mem2RegBatch* batch, ir::Ref ref) @inline
+{
+	return (usz)ref < (usz)batch.slot_of.len ? batch.slot_of[(sz)ref] : uint::max;
+}
+
+<* Rename every promoted slot down the dominator tree at once; each child starts
+   from this block's exit values. *>
+fn bool mem2reg_batch_rename(Mem2RegBatch* batch, uint block_index)
+{
+	CfgBlock* block = &batch.cfg.blocks[(sz)block_index];
+	foreach (entry : batch.block_phis[(sz)block_index]) mem2reg_batch_set(batch, entry.slot, entry.phi);
+	// CFG ranges refer to the original body; PHIs are placed after renaming.
+	for (sz pos = block.start + 1; pos < batch.executable_end[(sz)block_index]; pos++)
+	{
+		ir::Ref ref = batch.decl.body[pos];
+		if ((usz)ref >= (usz)batch.slot_of.len) continue;
+		ir::Inst* inst = &batch.editor.insts.entries[(sz)ref];
+		if (inst.tag == ir::InstTag.LOAD)
+		{
+			uint slot = mem2reg_batch_slot(batch, inst.data.ref);
+			if (slot == uint::max) continue;
+			batch.replacements[(sz)ref] = mem2reg_batch_value(batch, slot);
+			batch.remove[(sz)ref] = true;
+		}
+		else if (inst.tag == ir::InstTag.STORE)
+		{
+			uint slot = mem2reg_batch_slot(batch, inst.data.bin.lhs);
+			if (slot == uint::max) continue;
+			mem2reg_batch_set(batch, slot, inst.data.bin.rhs);
+			batch.remove[(sz)ref] = true;
+		}
+	}
+	ir::Ref pred_label = block.label;
+	foreach (successor : block.succs)
+	{
+		foreach (entry : batch.block_phis[(sz)successor])
+		{
+			ir::Ref value = mem2reg_batch_value(batch, entry.slot);
+			ir::Inst* phi = &batch.editor.insts.entries[(sz)entry.phi];
+			bool filled = false;
+			foreach (i, input : phi.data.phi)
+			{
+				if (input.label != pred_label) continue;
+				phi.data.phi[i].value = value;
+				filled = true;
+				break;
+			}
+			if (!filled) return false;
+		}
+	}
+	sz mark = batch.undo.len();
+	foreach (child : block.dom_children)
+	{
+		if (!mem2reg_batch_rename(batch, child)) return false;
+		while (batch.undo.len() > mark)
+		{
+			Mem2RegUndo entry = batch.undo.pop()!!;
+			batch.current[(sz)entry.slot] = entry.old;
+		}
+	}
+	return true;
+}
+
+<* Promote every PROMOTE/REMOVE slot of one function with one CFG, one rename
+   walk and one commit. Returns false, leaving `decl` untouched, when renaming
+   fails; the caller then falls back to one-at-a-time promotion. *>
+fn bool mem2reg_batch(ir::Ir* ir, ir::Decl* decl, Cfg* cfg, Uses* uses, ir::Ref[] promote,
+	value_interner::InternerRef[] promote_type, ir::Ref[] removed, sz[] executable_end, Allocator allocator)
+{
+	usz count = (usz)decl.instructions.len;
+	DeclEditor editor;
+	editor.begin(decl, allocator);
+	uint[] slot_of = alloc::new_array(allocator, uint, (sz)count);
+	defer alloc::free(allocator, slot_of.ptr);
+	for (usz i = 0; i < count; i++) slot_of[i] = uint::max;
+	foreach (slot, alloc_ref : promote) slot_of[(sz)alloc_ref] = (uint)slot;
+	usz block_count = cfg.blocks.len;
+	list::List{Mem2RegPhi}[] block_phis = alloc::new_array(allocator, list::List{Mem2RegPhi}, (sz)block_count);
+	for (usz i = 0; i < block_count; i++) block_phis[i].init(allocator, 0);
+	defer
+	{
+		for (usz i = 0; i < block_count; i++) block_phis[i].free();
+		alloc::free(allocator, block_phis.ptr);
+	}
+	list::List{ir::Ref} new_phis;
+	new_phis.init(allocator);
+	defer new_phis.free();
+
+	// Place PHIs at each slot's iterated dominance frontier (LLVM prunes by
+	// live-in blocks; C3 builds the full IDF and removes unused PHIs later).
+	uint[] def_mark = alloc::new_array(allocator, uint, (sz)block_count);
+	defer alloc::free(allocator, def_mark.ptr);
+	uint[] phi_mark = alloc::new_array(allocator, uint, (sz)block_count);
+	defer alloc::free(allocator, phi_mark.ptr);
+	for (usz i = 0; i < block_count; i++) { def_mark[i] = 0; phi_mark[i] = 0; }
+	list::List{uint} worklist;
+	worklist.init(allocator);
+	defer worklist.free();
+	list::List{uint} sites;
+	sites.init(allocator);
+	defer sites.free();
+	foreach (slot, alloc_ref : promote)
+	{
+		uint stamp = (uint)slot + 1;
+		worklist.clear();
+		sites.clear();
+		foreach (user_ref : uses.users[(sz)alloc_ref])
+		{
+			ir::Inst* user = &decl.instructions[(sz)user_ref];
+			if (user.tag != ir::InstTag.STORE || user.data.bin.lhs != alloc_ref) continue;
+			def_mark[(sz)cfg.block_of_ref[(sz)user_ref]] = stamp;
+		}
+		foreach (block : cfg.rpo) if (def_mark[(sz)block] == stamp) worklist.push(block);
+		while (worklist.len())
+		{
+			uint block = worklist.pop()!!;
+			foreach (frontier : cfg.blocks[(sz)block].frontier)
+			{
+				if (phi_mark[(sz)frontier] == stamp) continue;
+				// Only reachable predecessors participate after unreachable pruning.
+				uint reachable_preds = 0;
+				foreach (pred : cfg.blocks[(sz)frontier].preds) if (cfg.reachable[(sz)pred]) reachable_preds++;
+				if (reachable_preds < 2) continue;
+				phi_mark[(sz)frontier] = stamp;
+				sites.push(frontier);
+				if (def_mark[(sz)frontier] != stamp) worklist.push(frontier);
+			}
+		}
+		// Create this slot's PHIs in block-index order.
+		quicksort(sites.array_view());
+		foreach (block_index : sites)
+		{
+			usz input_count = 0;
+			foreach (pred : cfg.blocks[(sz)block_index].preds) if (cfg.reachable[(sz)pred]) input_count++;
+			ir::PhiInput[] inputs = alloc::new_array(allocator, ir::PhiInput, (sz)input_count);
+			sz input_index = 0;
+			foreach (pred : cfg.blocks[(sz)block_index].preds)
+			{
+				if (!cfg.reachable[(sz)pred]) continue;
+				inputs[input_index++] = { .label = cfg.blocks[(sz)pred].label, .value = ir::NONE };
+			}
+			ir::Ref phi_ref = editor.append({ .tag = ir::InstTag.PHI, .data.phi = inputs, .ty = promote_type[slot] });
+			alloc::free(allocator, inputs.ptr);
+			block_phis[(sz)block_index].push({ (uint)slot, phi_ref });
+			new_phis.push(phi_ref);
+		}
+	}
+
+	usz edited_count = (usz)editor.insts.len();
+	bool[] remove = alloc::new_array(allocator, bool, (sz)edited_count);
+	defer alloc::free(allocator, remove.ptr);
+	ir::Ref[] replacements = alloc::new_array(allocator, ir::Ref, (sz)edited_count);
+	defer alloc::free(allocator, replacements.ptr);
+	for (usz i = 0; i < edited_count; i++) { remove[i] = false; replacements[i] = ir::NONE; }
+	ir::Ref[] current = alloc::new_array(allocator, ir::Ref, promote.len + 1);
+	defer alloc::free(allocator, current.ptr);
+	ir::Ref[] slot_zero = alloc::new_array(allocator, ir::Ref, promote.len + 1);
+	defer alloc::free(allocator, slot_zero.ptr);
+	for (usz i = 0; i < promote.len; i++) { current[i] = ir::NONE; slot_zero[i] = ir::NONE; }
+	Mem2RegBatch batch = {
+		.editor = &editor, .cfg = cfg, .decl = decl, .slot_of = slot_of, .slot_type = promote_type,
+		.slot_zero = slot_zero, .current = current, .block_phis = block_phis,
+		.executable_end = executable_end, .remove = remove, .replacements = replacements,
+	};
+	batch.undo.init(allocator);
+	defer batch.undo.free();
+	if (cfg.rpo.len == 0 || !mem2reg_batch_rename(&batch, cfg.rpo[0]))
+	{
+		editor.free();
+		return false;
+	}
+	foreach (phi_ref : new_phis)
+	{
+		foreach (input : editor.insts.entries[(sz)phi_ref].data.phi) if (input.value == ir::NONE)
+		{
+			editor.free();
+			return false;
+		}
+	}
+
+	// Place each block's new PHIs after its label and existing PHIs, in slot order.
+	ir::Ref[] label_block = alloc::new_array(allocator, ir::Ref, (sz)count);
+	defer alloc::free(allocator, label_block.ptr);
+	for (usz i = 0; i < count; i++) label_block[i] = (ir::Ref)NONE_BLOCK;
+	foreach (block_index, block : cfg.blocks)
+	{
+		if ((usz)block.label < count) label_block[(sz)block.label] = (ir::Ref)block_index;
+	}
+	list::List{ir::Ref} new_body;
+	new_body.init(allocator, editor.body.len() + new_phis.len());
+	sz pos = 0;
+	while (pos < editor.body.len())
+	{
+		ir::Ref ref = editor.body.entries[pos++];
+		new_body.push(ref);
+		if ((usz)ref >= count || label_block[(sz)ref] == (ir::Ref)NONE_BLOCK) continue;
+		uint block_index = (uint)label_block[(sz)ref];
+		if (!block_phis[(sz)block_index].len()) continue;
+		while (pos < editor.body.len())
+		{
+			ir::Ref next = editor.body.entries[pos];
+			if ((usz)next >= (usz)editor.insts.len() || editor.insts.entries[(sz)next].tag != ir::InstTag.PHI) break;
+			new_body.push(next);
+			pos++;
+		}
+		foreach (entry : block_phis[(sz)block_index]) new_body.push(entry.phi);
+	}
+	editor.body.free();
+	editor.body = new_body;
+
+	mem2reg_apply_replacements(&editor, replacements);
+	foreach (alloc_ref : promote)
+	{
+		remove[(sz)alloc_ref] = true;
+		// Promoted loads and stores are now represented by SSA values.
+		foreach (user_ref : uses.users[(sz)alloc_ref])
+		{
+			ir::Inst* user = &editor.insts.entries[(sz)user_ref];
+			if (user.tag == ir::InstTag.LOAD || user.tag == ir::InstTag.STORE) remove[(sz)user_ref] = true;
+		}
+	}
+	foreach (alloc_ref : removed)
+	{
+		remove[(sz)alloc_ref] = true;
+		foreach (user_ref : uses.users[(sz)alloc_ref]) remove[(sz)user_ref] = true;
+	}
+	editor_cleanup_trivial_phis(&editor, remove, replacements);
+	editor_cleanup_unused_mem2reg_phis(&editor, new_phis.array_view(), remove);
+	BodyRemovalContext removal_context = { .remove = remove };
+	editor.remove_body_where(&body_ref_marked_for_removal, (void*)&removal_context);
+	editor.commit();
+	return true;
+}
+
+<* Promote all eligible local allocations. Slots are classified against one set
+   of analyses and promoted together; slots whose eligibility can depend on
+   another promotion, and every slot when batch renaming fails, go through
+   promote_alloca one at a time afterwards. *>
 fn bool mem2reg(ir::Ir* ir, ir::Decl* decl, Allocator a)
 {
 	if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0) return false;
@@ -1391,11 +1848,151 @@ fn bool mem2reg(ir::Ir* ir, ir::Decl* decl, Allocator a)
 	defer candidates.free();
 	foreach (ref : decl.body)
 	{
+		// LLVM also has dedicated single-store and single-block rewrites; C3
+		// uses the general SSA algorithm for every fixed-size ALLOC. VLAs use
+		// DYN_ALLOC and are deliberately outside this promotion pass.
 		if ((usz)ref < (usz)decl.instructions.len && decl.instructions[(sz)ref].tag == ir::InstTag.ALLOC) candidates.push(ref);
 	}
-	bool changed = false;
-	foreach (alloc_ref : candidates) changed = promote_alloca(ir, decl, alloc_ref, a) || changed;
+	if (!candidates.len()) return false;
+	usz count = (usz)decl.instructions.len;
+	list::List{ir::Ref} promote;
+	promote.init(a);
+	defer promote.free();
+	list::List{value_interner::InternerRef} promote_type;
+	promote_type.init(a);
+	defer promote_type.free();
+	list::List{ir::Ref} removed;
+	removed.init(a);
+	defer removed.free();
+	list::List{ir::Ref} deferred;
+	deferred.init(a);
+	defer deferred.free();
+	bool batched = false;
+	{
+		Cfg cfg = build_cfg(decl, a);
+		defer cfg.free();
+		if (cfg.blocks.len == 0) return false;
+		cfg.compute_dominators();
+		cfg.compute_frontiers();
+		Uses uses = compute_uses(decl, a);
+		defer uses.free();
+		uint[] body_position = alloc::new_array(a, uint, (sz)count);
+		defer alloc::free(a, body_position.ptr);
+		for (usz i = 0; i < count; i++) body_position[i] = NONE_BLOCK;
+		foreach (pos, ref : decl.body)
+		{
+			if ((usz)ref < count) body_position[(sz)ref] = (uint)pos;
+		}
+		sz[] terminator_position = alloc::new_array(a, sz, (sz)cfg.blocks.len);
+		defer alloc::free(a, terminator_position.ptr);
+		sz[] executable_end = alloc::new_array(a, sz, (sz)cfg.blocks.len);
+		defer alloc::free(a, executable_end.ptr);
+		foreach (block_index, &block : cfg.blocks)
+		{
+			terminator_position[block_index] = block_terminator_position(decl, block);
+			executable_end[block_index] = block_executable_end(decl, block);
+		}
+		foreach (alloc_ref : candidates)
+		{
+			value_interner::InternerRef access_type;
+			switch (mem2reg_classify(ir, decl, &cfg, &uses, body_position, terminator_position, alloc_ref, &access_type))
+			{
+				case REJECT: break;
+				case REMOVE: removed.push(alloc_ref);
+				case PROMOTE: promote.push(alloc_ref); promote_type.push(access_type);
+				case DEFER: deferred.push(alloc_ref);
+			}
+		}
+		if (!promote.len() && !removed.len() && !deferred.len()) return false;
+		if (!promote.len() && !removed.len()) { batched = true; }
+		else
+		{
+			batched = mem2reg_batch(ir, decl, &cfg, &uses, promote.array_view(), promote_type.array_view(),
+				removed.array_view(), executable_end, a);
+		}
+	}
+	bool changed = batched && (promote.len() || removed.len());
+	if (!batched)
+	{
+		deferred.clear();
+		deferred.push_all(candidates.array_view());
+	}
+	if (!deferred.len()) return changed;
+	Uses uses = compute_uses(decl, a);
+	defer uses.free();
+	foreach (alloc_ref : deferred)
+	{
+		if (!mem2reg_may_promote(ir, decl, &uses, alloc_ref)) continue;
+		changed = promote_alloca(ir, decl, alloc_ref, a) || changed;
+	}
 	return changed;
+}
+
+<* False only when promote_alloca must reject `alloc_ref` whatever else this
+   run promotes. Promoting another slot B only rewrites B's loads, stores and
+   inserted PHIs, so the users of `alloc_ref` can change only when its address
+   is itself stored (`STORE B, alloc_ref`); that case is left to promote_alloca.
+   The CFG-dependent load checks are also left to promote_alloca. *>
+fn bool mem2reg_may_promote(ir::Ir* ir, ir::Decl* decl, Uses* uses, ir::Ref alloc_ref)
+{
+	if ((usz)alloc_ref >= (usz)uses.users.len) return true;
+	ir::Inst* alloc_inst = &decl.instructions[(sz)alloc_ref];
+	if (alloc_inst.tag != ir::InstTag.ALLOC || alloc_inst.data.alloc.is_volatile) return false;
+	foreach (user_ref : uses.users[(sz)alloc_ref])
+	{
+		ir::Inst* user = &decl.instructions[(sz)user_ref];
+		if (user.tag == ir::InstTag.STORE && user.data.bin.rhs == alloc_ref) return true;
+	}
+	bool has_load = false;
+	bool has_access_type = false;
+	value_interner::InternerRef access_type = value_interner::REF_VOID;
+	foreach (user_ref : uses.users[(sz)alloc_ref])
+	{
+		ir::Inst* user = &decl.instructions[(sz)user_ref];
+		if (user.is_volatile_access()) return false;
+		value_interner::InternerRef user_type;
+		if (user.tag == ir::InstTag.LOAD && user.data.ref == alloc_ref)
+		{
+			has_load = true;
+			user_type = user.ty;
+		}
+		else if (user.tag == ir::InstTag.STORE && user.data.bin.lhs == alloc_ref)
+		{
+			if (!valid_ref(decl, user.data.bin.rhs)) return false;
+			user_type = decl.instructions[(sz)user.data.bin.rhs].ty;
+		}
+		else
+		{
+			return false;
+		}
+		if (!has_access_type)
+		{
+			access_type = user_type;
+			has_access_type = true;
+		}
+		else if (access_type != user_type)
+		{
+			return false;
+		}
+	}
+	if (!has_load) return true;
+	primitive_value::PrimitiveValue access_key = ir.interner.get(access_type);
+	uint expected_size;
+	switch (access_key.tag)
+	{
+		case primitive_value::PrimitiveType.INT_TY:
+		case primitive_value::PrimitiveType.FLOAT_TY:
+			if (access_key.ty_bits == 0) return false;
+			expected_size = ((uint)access_key.ty_bits + 7) / 8;
+		case primitive_value::PrimitiveType.PTR_TY:
+			expected_size = 8;
+		default:
+			return false;
+	}
+	uint allocation_size = alloc_inst.data.alloc.size;
+	bool padded_f80 = access_key.tag == primitive_value::PrimitiveType.FLOAT_TY &&
+		access_key.ty_bits == 80 && allocation_size == 16;
+	return allocation_size == expected_size || padded_f80;
 }
 
 enum ConstPropTag : char
@@ -1476,6 +2073,9 @@ fn ConstPropValue const_prop_binary(ir::Ir* graph, ir::Decl* decl, ir::Inst* ins
 {
 	ConstPropValue lhs = const_prop_ref(values, decl, inst.data.bin.lhs);
 	ConstPropValue rhs = const_prop_ref(values, decl, inst.data.bin.rhs);
+	// Unlike LLVM's ConstantFold poison results, keep UB-producing constants unfolded to preserve
+	// the existing x86 runtime behavior.
+	// This also deliberately skips absorbing folds such as x & 0; integer_simplify handles those.
 	if (lhs.tag == ConstPropTag.BOTTOM || rhs.tag == ConstPropTag.BOTTOM) return const_prop_bottom();
 	if (lhs.tag == ConstPropTag.TOP || rhs.tag == ConstPropTag.TOP) return const_prop_top();
 	ushort width;
@@ -1590,6 +2190,7 @@ fn ConstPropValue const_prop_eval(ir::Ir* graph, ir::Decl* decl, Cfg* cfg, bool[
 			{
 				return cond.bits != 0 ? then_value : else_value;
 			}
+			if (cond.tag == ConstPropTag.TOP) return const_prop_top();
 			return const_prop_join(then_value, else_value);
 		case ir::InstTag.BIT_NOT:
 		case ir::InstTag.NEGATE:
@@ -1721,6 +2322,11 @@ fn bool const_prop_switch_value(ir::Ir* graph, value_interner::InternerRef ref, 
 fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 {
 	if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0) return false;
+	// build_cfg has no JMP_VAL successors, so SCCP cannot safely reason about computed goto.
+	foreach (inst : decl.instructions)
+	{
+		if (inst.tag == ir::InstTag.LABEL_ADDR || inst.tag == ir::InstTag.JMP_VAL) return false;
+	}
 	Cfg cfg = build_cfg(decl, allocator);
 	defer cfg.free();
 	if (cfg.blocks.len == 0) return false;
@@ -1776,6 +2382,10 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 		uint block_index = cfg.block_of_ref[(sz)ref];
 		if (block_index == NONE_BLOCK || !executable_blocks[(sz)block_index]) continue;
 		ir::Inst* inst = &decl.instructions[(sz)ref];
+		// A TOP branch condition or switch target is transient while its defining
+		// instruction is queued; updates re-enqueue the terminator. In verified IR,
+		// executable blocks have feasible incoming edges and mem2reg zero-fills
+		// uninitialized slots, so these terminators cannot retain TOP.
 		if (is_value_tag(inst.tag) && inst.tag != ir::InstTag.CONSTANT)
 		{
 			ConstPropValue evaluated = const_prop_eval(graph, decl, &cfg, executable_edges, ref, inst, values);
@@ -1931,10 +2541,26 @@ fn bool const_prop(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 	return changed;
 }
 
-fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst)
+fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst, ir::Ir* graph = null)
 {
 	switch (inst.tag)
 	{
+		case ir::InstTag.CALL:
+			// LLVM also drops will-return calls without side effects (including readonly+nounwind
+			// calls); this conservative rule requires readnone and a known matching body.
+			if (graph == null || (usz)inst.data.call.func >= (usz)decl.instructions.len) return false;
+			ir::Inst* func = &decl.instructions[(sz)inst.data.call.func];
+			if (func.tag != ir::InstTag.SYMBOL) return false;
+			// Match build_inline_call_graph's last-declaration-wins name lookup.
+			for (sz i = graph.decls.len(); i > 0; i--)
+			{
+				ir::Decl* callee = &graph.decls.entries[i - 1];
+				if (callee.name != func.data.label) continue;
+				return callee.kind == ir::DeclKind.FUNCTION && callee.body.len != 0 &&
+					callee.attrs.computed && callee.attrs.readnone && callee.attrs.will_return &&
+					(usz)inst.data.call.args.len == inline_arg_count(callee);
+			}
+			return false;
 		case ir::InstTag.BIT_OR:
 		case ir::InstTag.BIT_XOR:
 		case ir::InstTag.BIT_AND:
@@ -1966,6 +2592,7 @@ fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst)
 		case ir::InstTag.CTZ:
 			return true;
 		case ir::InstTag.LOAD:
+			if (inst.is_volatile) return false;
 			if ((usz)inst.data.ref >= (usz)decl.instructions.len) return false;
 			if (decl.instructions[(sz)inst.data.ref].tag != ir::InstTag.ALLOC) return false;
 			return !decl.instructions[(sz)inst.data.ref].data.alloc.is_volatile;
@@ -1973,17 +2600,21 @@ fn bool removable_if_unused(ir::Decl* decl, ir::Inst* inst)
 		case ir::InstTag.UDIV:
 		case ir::InstTag.SREM:
 		case ir::InstTag.UREM:
+			// LLVM's wouldInstructionBeTriviallyDead can drop unused division even with
+			// an unknown/zero divisor. C3's simpler rule only drops it for a known
+			// constant nonzero divisor, preserving possible divide-by-zero behavior.
 			if ((usz)inst.data.bin.rhs >= (usz)decl.instructions.len) return false;
 			ir::Inst* divisor = &decl.instructions[(sz)inst.data.bin.rhs];
 			// Integer zero is canonicalized by the interner to REF_ZERO. These
 			// operations have integer operands, so any other constant is nonzero.
 			return divisor.tag == ir::InstTag.CONSTANT && divisor.data.constant != value_interner::REF_ZERO;
+		// LLVM can delete an unused stacksave; this conservative fallback retains it.
 		default: return false;
 	}
 }
 
 <* Remove dead pure instructions and unobserved local allocations to a fixpoint. *>
-fn bool dead_instruction_elim(ir::Decl* decl, Allocator allocator)
+fn bool dead_instruction_elim(ir::Decl* decl, Allocator allocator, ir::Ir* graph = null)
 {
 	if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0) return false;
 	bool[] remove = alloc::new_array(allocator, bool, (sz)decl.instructions.len);
@@ -2019,7 +2650,7 @@ fn bool dead_instruction_elim(ir::Decl* decl, Allocator allocator)
 					ir::Inst* user = &decl.instructions[(sz)user_ref];
 					// A self-store contributes a second use of the allocation as
 					// its value. Keep it conservatively instead of misclassifying it.
-					if (user.tag != ir::InstTag.STORE || user.data.bin.lhs != ref || user.data.bin.rhs == ref)
+					if (user.tag != ir::InstTag.STORE || user.is_volatile || user.data.bin.lhs != ref || user.data.bin.rhs == ref)
 					{
 						stores_only = false;
 						break;
@@ -2038,7 +2669,7 @@ fn bool dead_instruction_elim(ir::Decl* decl, Allocator allocator)
 				ir::Inst* destination = &decl.instructions[(sz)inst.data.bin.lhs];
 				if (destination.tag == ir::InstTag.ALLOC && destination.data.alloc.is_volatile) continue;
 			}
-			if (users.len() == 0 && removable_if_unused(decl, inst))
+			if (users.len() == 0 && removable_if_unused(decl, inst, graph))
 			{
 				remove[(sz)ref] = true;
 				changed = true;
@@ -2053,6 +2684,20 @@ fn bool dead_instruction_elim(ir::Decl* decl, Allocator allocator)
 		BodyRemovalContext context = { .remove = remove };
 		editor.remove_body_where(&body_ref_marked_for_removal, (void*)&context);
 		editor.commit();
+		// Removed calls can leave an unplaced SYMBOL behind. Retire it only
+		// after checking uses in the committed body, as the inliner does.
+		Uses committed_uses = compute_uses(decl, allocator);
+		for (usz i = 0; i < (usz)decl.instructions.len; i++)
+		{
+			if (!remove[i]) continue;
+			ir::Inst* removed = &decl.instructions[(sz)i];
+			if (removed.tag != ir::InstTag.CALL || (usz)removed.data.call.func >= (usz)decl.instructions.len) continue;
+			ir::Ref func_ref = removed.data.call.func;
+			if (committed_uses.users[(sz)func_ref].len() != 0) continue;
+			ir::Inst* func = &decl.instructions[(sz)func_ref];
+			if (func.tag == ir::InstTag.SYMBOL) func.tag = ir::InstTag.ARG;
+		}
+		committed_uses.free();
 	}
 	return any_changed;
 }
@@ -2220,6 +2865,20 @@ fn usz inline_body_cost(ir::Decl* decl)
 	return (usz)decl.body.len;
 }
 
+fn uint inline_alloca_bytes(ir::Decl* decl)
+{
+	uint total = 0;
+	foreach (ref : decl.body)
+	{
+		if ((usz)ref >= (usz)decl.instructions.len) continue;
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag != ir::InstTag.ALLOC) continue;
+		if (inst.data.alloc.size > uint::max - total) return uint::max;
+		total += inst.data.alloc.size;
+	}
+	return total;
+}
+
 fn bool inline_unsupported_control(ir::Decl* decl)
 {
 	foreach (inst : decl.instructions)
@@ -2230,13 +2889,9 @@ fn bool inline_unsupported_control(ir::Decl* decl)
 		if (inst.tag == ir::InstTag.DYN_ALLOC || inst.tag == ir::InstTag.STACK_SAVE) return true;
 		// va_start refers to the callee's variadic argument state and cannot move into a caller.
 		if (inst.tag == ir::InstTag.VA_START) return true;
+		// Unlike LLVM's isInlineViable, C3 has no returns_twice/setjmp model; the run test
+		// covers the current behavior when a helper longjmps into the inlined frame.
 	}
-	return false;
-}
-
-fn bool inline_body_contains(ir::Decl* decl, ir::Ref ref)
-{
-	foreach (body_ref : decl.body) if (body_ref == ref) return true;
 	return false;
 }
 
@@ -2293,23 +2948,39 @@ fn bool inline_is_block_terminator(ir::Decl* decl, Cfg* cfg, ir::Ref ref, sz bod
 	return block_terminator_position(decl, &cfg.blocks[(sz)block_index]) == body_pos;
 }
 
-fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, Allocator allocator)
+<* Operand-use counts and CALL_HI presence per ref, over placed instructions. *>
+struct InlineUseInfo
 {
-	if ((usz)call_ref >= (usz)caller.instructions.len || !inline_body_contains(caller, call_ref)) return false;
+	uint[] count;
+	bool[] has_call_hi;
+}
+
+fn void InlineUseInfo.compute(&self, ir::Decl* caller)
+{
+	usz len = (usz)self.count.len;
+	for (usz i = 0; i < len; i++) { self.count[i] = 0; self.has_call_hi[i] = false; }
+	foreach (user_ref : caller.body)
+	{
+		if ((usz)user_ref >= (usz)caller.instructions.len) continue;
+		ir::Inst* inst = &caller.instructions[(sz)user_ref];
+		@each_value_operand(inst; ir::Ref* slot)
+		{
+			if (*slot != ir::NONE && (usz)*slot < len) self.count[(sz)*slot]++;
+		};
+		if (inst.tag == ir::InstTag.CALL_HI && (usz)inst.data.ref < len) self.has_call_hi[(sz)inst.data.ref] = true;
+	}
+}
+
+<* `call_ref` must be placed in `caller`'s body; `uses` must describe the
+   caller's current body. A CALL_HI of the call, adjacent or not, is rejected
+   through `uses` below. *>
+fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::Ref call_ref, InlineUseInfo* uses, Allocator allocator)
+{
+	if ((usz)call_ref >= (usz)caller.instructions.len || (usz)call_ref >= (usz)uses.count.len) return false;
 	ir::Inst* call = &caller.instructions[(sz)call_ref];
 	if (call.tag != ir::InstTag.CALL || (usz)call.data.call.func >= (usz)caller.instructions.len) return false;
+	// LLVM materializes a byval copy here; C3 keeps MEMORY-class by-value calls out of inlining.
 	foreach (copy_bytes : call.data.call.memory_copy_bytes) if (copy_bytes != 0) return false;
-	for (usz pos = 0; pos + 1 < (usz)caller.body.len; pos++)
-	{
-		if (caller.body[(sz)pos] != call_ref) continue;
-		ir::Ref next = caller.body[(sz)(pos + 1)];
-		if ((usz)next < (usz)caller.instructions.len)
-		{
-			ir::Inst next_inst = caller.instructions[(sz)next];
-			if (next_inst.tag == ir::InstTag.CALL_HI && next_inst.data.ref == call_ref) return false;
-		}
-		break;
-	}
 	ir::Ref call_func_ref = call.data.call.func;
 	if (caller.instructions[(sz)call_func_ref].tag != ir::InstTag.SYMBOL) return false;
 	usz callee_arg_count = inline_arg_count(callee);
@@ -2320,19 +2991,8 @@ fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::R
 
 	// Do not construct an invalid continuation PHI for malformed or unused
 	// value-return behavior. Normal C functions have consistent return types.
-	Uses uses = compute_uses(caller, allocator);
-	bool call_is_used = uses.users[(sz)call_ref].len() != 0;
-	bool has_call_hi_user = false;
-	foreach (user_ref : uses.users[(sz)call_ref])
-	{
-		if ((usz)user_ref < (usz)caller.instructions.len && caller.instructions[(sz)user_ref].tag == ir::InstTag.CALL_HI)
-		{
-			has_call_hi_user = true;
-			break;
-		}
-	}
-	uses.free();
-	if (has_call_hi_user) return false;
+	bool call_is_used = uses.count[(sz)call_ref] != 0;
+	if (uses.has_call_hi[(sz)call_ref]) return false;
 	usz return_count = 0;
 	bool returns_value = false;
 	bool returns_void = false;
@@ -2353,6 +3013,21 @@ fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::R
 	}
 	if (returns_value && returns_void) return false;
 	if (call_is_used && (!returns_value || return_count == 0)) return false;
+	// Reject malformed IR where the call's declared result differs from its returns.
+	if (call_is_used)
+	{
+		foreach (block : callee_cfg.blocks)
+		{
+			sz term_pos = block_terminator_position(callee, &block);
+			if (term_pos >= block.end) continue;
+			ir::Ref term_ref = callee.body[term_pos];
+			if ((usz)term_ref >= (usz)callee.instructions.len) continue;
+			ir::Inst* term = &callee.instructions[(sz)term_ref];
+			if (term.tag != ir::InstTag.RET || term.data.ref == ir::NONE) continue;
+			if ((usz)term.data.ref >= (usz)callee.instructions.len ||
+				callee.instructions[(sz)term.data.ref].ty != call.ty) return false;
+		}
+	}
 
 	sz call_pos = -1;
 	for (sz i = 0; i < caller.body.len; i++) if (caller.body[i] == call_ref)
@@ -2526,7 +3201,7 @@ fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::R
 	}
 
 	ir::Ref result_phi = ir::NONE;
-	if (returns_value && return_inputs.len() > 1)
+	if (call_is_used && returns_value && return_inputs.len() > 1)
 	{
 		ir::PhiInput[] inputs = alloc::new_array(allocator, ir::PhiInput, return_inputs.len());
 		defer alloc::free(allocator, inputs.ptr);
@@ -2537,7 +3212,7 @@ fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::R
 		}
 		);
 	}
-	else if (returns_value && return_inputs.len() == 1)
+	else if (call_is_used && returns_value && return_inputs.len() == 1)
 	{
 		result_phi = return_inputs.entries[0].value;
 	}
@@ -2558,7 +3233,7 @@ fn bool inline_one_call(ir::Ir* graph, ir::Decl* caller, ir::Decl* callee, ir::R
 	new_body.push(caller_jump);
 	new_body.push_all(cloned_body.array_view());
 	new_body.push(continuation_label);
-	if (returns_value && return_inputs.len() > 1) new_body.push(result_phi);
+	if (call_is_used && returns_value && return_inputs.len() > 1) new_body.push(result_phi);
 	for (sz i = call_pos + 1; i < editor.body.len(); i++) new_body.push(editor.body.entries[i]);
 	editor.body.free();
 	editor.body = new_body;
@@ -2603,15 +3278,36 @@ fn bool inline_calls(ir::Ir* graph, OptOptions opts, Allocator allocator)
 	{
 		ir::Decl* caller = &graph.decls.entries[(sz)decl_index];
 		if (caller.kind != ir::DeclKind.FUNCTION || caller.body.len == 0) continue;
+		// This inline pass avoids recursive expansion by treating a whole SCC as one unit.
+		bool recursive_caller = false;
+		foreach (callee_index : calls.edges[(sz)decl_index])
+		{
+			if (calls.scc[(sz)callee_index] == calls.scc[(sz)decl_index]) recursive_caller = true;
+		}
 		list::List{ir::Ref} worklist;
 		worklist.init(allocator);
 		foreach (ref : caller.body)
 		{
 			if ((usz)ref < (usz)caller.instructions.len && caller.instructions[(sz)ref].tag == ir::InstTag.CALL) worklist.push(ref);
 		}
+		if (!worklist.len())
+		{
+			worklist.free();
+			continue;
+		}
+		// Only inlining removes a worklist call from the body, and it removes just
+		// that call. Its uses are recomputed after each successful inline.
+		usz original_count = (usz)caller.instructions.len;
+		bool[] inlined = alloc::new_array(allocator, bool, (sz)original_count);
+		for (usz i = 0; i < original_count; i++) inlined[i] = false;
+		InlineUseInfo uses = {
+			.count = alloc::new_array(allocator, uint, (sz)original_count),
+			.has_call_hi = alloc::new_array(allocator, bool, (sz)original_count),
+		};
+		bool uses_valid = false;
 		foreach (call_ref : worklist)
 		{
-			if ((usz)call_ref >= (usz)caller.instructions.len || !inline_body_contains(caller, call_ref)) continue;
+			if ((usz)call_ref >= (usz)caller.instructions.len || inlined[(sz)call_ref]) continue;
 			ir::Inst* call = &caller.instructions[(sz)call_ref];
 			if (call.tag != ir::InstTag.CALL || (usz)call.data.call.func >= (usz)caller.instructions.len) continue;
 			ir::Inst* func = &caller.instructions[(sz)call.data.call.func];
@@ -2619,15 +3315,39 @@ fn bool inline_calls(ir::Ir* graph, OptOptions opts, Allocator allocator)
 			// Calls to external symbols (including C99 external `inline` definitions,
 			// which gen_ir does not emit) stay unresolved SYMBOLs.
 			uint callee_index = inline_decl_index(&calls.decl_indices, func.data.label);
+			// LLVM rejects self-recursive callees; C3 also skips every same-SCC call,
+			// which keeps mutual recursion bounded without CGSCC inline history.
 			if (callee_index == NONE_BLOCK || calls.scc[(sz)callee_index] == calls.scc[(sz)decl_index]) continue;
 			ir::Decl* callee = &graph.decls.entries[(sz)callee_index];
 			if (callee.kind != ir::DeclKind.FUNCTION || callee.body.len == 0 || inline_unsupported_control(callee)) continue;
+			// Never inline a weak body: the linker may pick another definition.
+			if (callee.inline_hint == ir::InlineHint.NEVER || callee.is_weak) continue;
 			if (inline_arg_count(callee) != (usz)call.data.call.args.len) continue;
+			// Recursive callers get a modest stack-growth cap for inlined fixed allocas.
+			// always_inline does not override it (nor the SCC and control checks above),
+			// mirroring LLVM, which reports such always_inline calls as not inlinable.
+			if (recursive_caller && inline_alloca_bytes(callee) > 1024) continue;
 			usz cost = inline_body_cost(callee);
+			// Unlike LLVM's hasOneLiveUse bonus, this count ignores address-taken uses.
 			bool one_call_internal = callee.linkage == ir::Linkage.INTERNAL && calls.call_count[(sz)callee_index] == 1;
-			if (cost > threshold && !one_call_internal) continue;
-			changed = inline_one_call(graph, caller, callee, call_ref, allocator) || changed;
+			// always_inline skips only the cost threshold. There is no inliner below
+			// O2, so the attribute has no effect at O0/O1 (GCC inlines it at O0).
+			if (cost > threshold && !one_call_internal && callee.inline_hint != ir::InlineHint.ALWAYS) continue;
+			if (!uses_valid)
+			{
+				uses.compute(caller);
+				uses_valid = true;
+			}
+			if (inline_one_call(graph, caller, callee, call_ref, &uses, allocator))
+			{
+				changed = true;
+				inlined[(sz)call_ref] = true;
+				uses_valid = false;
+			}
 		}
+		alloc::free(allocator, uses.count.ptr);
+		alloc::free(allocator, uses.has_call_hi.ptr);
+		alloc::free(allocator, inlined.ptr);
 		worklist.free();
 	}
 	return changed;
@@ -2658,7 +3378,8 @@ fn bool verify_decl(ir::Decl* decl, Allocator allocator, ir::ErrorList* errors)
 	{
 		ir::Ref ref = decl.body[i];
 		if (!valid_ref(decl, ref)) return verify_error(errors, decl.name, "body contains an invalid instruction ref");
-		if (placed[(sz)ref]) return verify_error(errors, decl.name, "body places an instruction more than once");
+		if (placed[(sz)ref]) return verify_error(errors, decl.name,
+			string::format(allocator, "body places instruction %d (%s) more than once", ref, decl.instructions[(sz)ref].tag.name));
 		placed[(sz)ref] = true;
 		body_position[(sz)ref] = (uint)i;
 	}
@@ -2918,6 +3639,14 @@ fn bool verify(ir::Ir* graph, ir::ErrorList* errors)
 fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 {
 	if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+	// Relocation-owning globals can disappear at declaration DCE, before the
+	// later O2 global pass. Keep their target names alive for the whole pipeline.
+	HashMap{String, bool} relocation_escapes;
+	relocation_escapes.init(graph.allocator);
+	defer relocation_escapes.free();
+	DynamicArenaAllocator relocation_escape_arena;
+	relocation_escape_arena.init(graph.allocator, 1024);
+	defer relocation_escape_arena.free();
 	switch (opts.level)
 	{
 		case code_gen_options::OptimizationLevel.O0: return;
@@ -2928,9 +3657,21 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 		case code_gen_options::OptimizationLevel.FAST:
 		case code_gen_options::OptimizationLevel.G:
 		case code_gen_options::OptimizationLevel.Z:
+			// Inspect global relocations before declaration DCE can discard an
+			// otherwise-unused pointer global. Its target still has to be treated
+			// as escaped by the global optimizer's conservative memory analysis.
+			if (opts.level == code_gen_options::OptimizationLevel.O2 ||
+				opts.level == code_gen_options::OptimizationLevel.O3 ||
+				opts.level == code_gen_options::OptimizationLevel.FAST)
+			{
+				global_opt(graph, opts, graph.allocator, &relocation_escapes, &relocation_escape_arena);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			}
 			eliminate_dead_declarations(graph, opts.whole_program, opts.keep_external_definitions);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) remove_unreachable_blocks(decl, graph.allocator);
+			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			foreach (&decl : graph.decls) sroa(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) mem2reg(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
@@ -2938,29 +3679,46 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) early_cse(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			foreach (&decl : graph.decls) mem_opt(graph, decl, graph.allocator);
+			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) const_prop(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			// SCCP leaves dead blocks for this immediately following CFG cleanup pass.
 			foreach (&decl : graph.decls) remove_unreachable_blocks(decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) simplify_cfg(decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 			foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
-			foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator);
+			foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator, graph);
 			if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+			// Declaration DCE ran before instruction DCE. LLVM pipelines may rerun
+			// GlobalDCE here; C3 keeps definitions made unused at O1 and reruns only at O2+.
 			if (opts.level == code_gen_options::OptimizationLevel.O2 ||
 				opts.level == code_gen_options::OptimizationLevel.O3 ||
 				opts.level == code_gen_options::OptimizationLevel.FAST)
 			{
 				inline_calls(graph, opts, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				ipsccp(graph, opts, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				dead_arg_elim(graph, opts, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				global_opt(graph, opts, graph.allocator, &relocation_escapes, &relocation_escape_arena);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				infer_function_attrs(graph, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) remove_unreachable_blocks(decl, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				foreach (&decl : graph.decls) sroa(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) mem2reg(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) early_cse(graph, decl, graph.allocator);
+				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
+				foreach (&decl : graph.decls) mem_opt(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) const_prop(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
@@ -2970,7 +3728,7 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				foreach (&decl : graph.decls) integer_simplify(graph, decl, graph.allocator);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
-				foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator);
+				foreach (&decl : graph.decls) dead_instruction_elim(decl, graph.allocator, graph);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;
 				dead_function_elim(graph, opts.whole_program, opts.keep_external_definitions);
 				if (opts.verify && !verify(graph, errors)) return VERIFY_FAIL~;

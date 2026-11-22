@@ -913,8 +913,8 @@ fn void TypeStore.set(&self, Type ty, uint index)
 		{
 			repr.data[1] = (uint)self.funcs.len();
 			self.funcs.push(
-			{
-				.params = copy_slice(self.gpa, func.params), .attrs = attr
+				{
+					.params = copy_slice(self.gpa, func.params), .attrs = attr
 			}
 			);
 			switch (func.kind)
@@ -992,8 +992,8 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.tag = is_union ? UNION : STRUCT;
 			repr.data[1] = (uint)self.records.len();
 			self.records.push(
-			{
-				.decl_node = r.decl_node, .layout = r.layout, .fields = copy_slice(self.gpa, r.fields)
+				{
+					.decl_node = r.decl_node, .layout = r.layout, .fields = copy_slice(self.gpa, r.fields)
 			}
 			);
 		case ENUM:
@@ -1023,8 +1023,8 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.data[0] = (uint)e.tag;
 			repr.data[1] = (uint)self.enums.len();
 			self.enums.push(
-			{
-				.name = e.name, .decl_node = e.decl_node, .fields = copy_slice(self.gpa, e.fields)
+				{
+					.name = e.name, .decl_node = e.decl_node, .fields = copy_slice(self.gpa, e.fields)
 			}
 			);
 		case TYPEOF:

@@ -48,9 +48,10 @@ fn void tag_counts() @test
 	// NodeKind + NodeForm bits here.)
 	check(NodeKind::len, 118);
 	check(CastKind::len, 31);
-	// Attribute.zig: 104 Args tags; 35 upstream map tags plus two storage-order tags.
+	// Attribute.zig: 104 Args tags; 35 upstream map tags plus two storage-order tags,
+	// plus C3-only NOINLINE, USED, CONSTRUCTOR and DESTRUCTOR (lowered into IR).
 	check(AttributeTag::len, 104);
-	check(AttrReprTag::len, 37);
+	check(AttrReprTag::len, 41);
 	check(AttrGnu::len, 98);
 	check(AttrClang::len, 25);
 	check(AttrKeyword::len, 25);

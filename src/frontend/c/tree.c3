@@ -1132,6 +1132,26 @@ fn NodeIndex Tree.add_node(&self, Node node)
 }
 
 <*
+ Wrap `operand` in an implicit CAST node of type `qt` and return the new node.
+ Unlike Zig Result.implicitCast this does not mutate a parser Result; callers
+ assign the returned node (and update their qt) themselves.
+*>
+fn NodeIndex Tree.implicit_cast(&self, NodeIndex operand, QualType qt, CastKind kind)
+{
+	return self.add_node(
+		{
+			.kind = NodeKind.CAST, .cast = {
+				.l_paren = operand.tok(self),
+				.kind = kind,
+				.operand = operand,
+				.qt = qt,
+				.implicit = true,
+			}
+		}
+	);
+}
+
+<*
  Zig `setNode`: encode `node` into `nodes[index]`, picking the compact
  storage tag and appending to `extra` as needed. Dispatches on
  `node.kind.family`: DECL -> `encode_decl` (tree_decl.c3), STMT/EXPR ->

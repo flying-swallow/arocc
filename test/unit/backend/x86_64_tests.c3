@@ -5,6 +5,10 @@ import aro::primitive_value;
 import std, aro::backend::elf, aro::backend::ir, aro::backend::object, aro::backend::x86_64, aro::target, aro::value_interner;
 import std::core::mem::allocators;
 
+// Integer type refs encode width only; signedness comes from the operation.
+const value_interner::InternerRef REF_U8 = value_interner::REF_I8;
+const value_interner::InternerRef REF_U16 = value_interner::REF_I16;
+
 fn Entry entry_for(Mnemonic m, Operand[] ops) => x86_64::find(m, ops)!!;
 
 fn Encoded assert_encoded(Mnemonic mnemonic, Operand[] ops, char[] expected)
@@ -55,12 +59,27 @@ fn void encode_zi_and_immediate_modrm_rows() @test
 	assert_encoded(CMP, { x86_64::reg_op(AL), x86_64::imm_op(7) }, (char[]){ 0x3c, 0x07 });
 	// add rax, 5
 	assert_encoded(ADD, { x86_64::reg_op(RAX), x86_64::imm_op(5) }, (char[]){ 0x48, 0x83, 0xc0, 0x05 });
+	// imul rax, 5 (two-operand immediate form)
+	assert_encoded(IMUL, { x86_64::reg_op(RAX), x86_64::imm_op(5) }, (char[]){ 0x48, 0x6b, 0xc0, 0x05 });
 	// sub rsp, 32
 	assert_encoded(SUB, { x86_64::reg_op(RSP), x86_64::imm_op(32) }, (char[]){ 0x48, 0x83, 0xec, 0x20 });
 	// and ecx, 100000
 	assert_encoded(AND, { x86_64::reg_op(ECX), x86_64::imm_op(100000) }, (char[]){ 0x81, 0xe1, 0xa0, 0x86, 0x01, 0 });
 	// mov rax, -1
 	assert_encoded(MOV, { x86_64::reg_op(RAX), x86_64::imm_op(-1) }, (char[]){ 0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff });
+}
+
+fn void encodes_u32_magic_immediate() @test
+{
+	assert_encoded(MOV, { x86_64::reg_op(ECX), x86_64::imm_op(0xaaaa_aaab) },
+		(char[]){ 0xb9, 0xab, 0xaa, 0xaa, 0xaa });
+}
+
+fn void encodes_u64_magic_immediate() @test
+{
+	// The u64 /3 magic, cast to long, uses the 64-bit immediate encoding.
+	assert_encoded(MOV, { x86_64::reg_op(RCX), x86_64::imm_op(-6148914691236517205L) },
+		(char[]){ 0x48, 0xb9, 0xab, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa });
 }
 
 fn void encode_mr_rm_and_sib_rows() @test
@@ -91,6 +110,8 @@ fn void encode_opcode_register_and_zero_operand_rows() @test
 {
 	// mov eax, 100000
 	assert_encoded(MOV, { x86_64::reg_op(EAX), x86_64::imm_op(100000) }, (char[]){ 0xb8, 0xa0, 0x86, 0x01, 0 });
+	// mov ecx, 0xaaaaaaab
+	assert_encoded(MOV, { x86_64::reg_op(ECX), x86_64::imm_op(0xaaaa_aaab) }, (char[]){ 0xb9, 0xab, 0xaa, 0xaa, 0xaa });
 	// mov r9d, 1
 	assert_encoded(MOV, { x86_64::reg_op(R9D), x86_64::imm_op(1) }, (char[]){ 0x41, 0xb9, 1, 0, 0, 0 });
 	// mov rax, 1099511627776
@@ -392,6 +413,346 @@ fn void build_signed_division_fixture(Fixture* f)
 	f.builder.finish_fn("quot");
 }
 
+fn void build_odd_bitint_division_fixture(Fixture* f)
+{
+	f.builder.start_fn();
+	value_interner::InternerRef ty = f.interner.put({ .tag = primitive_value::PrimitiveType.INT_TY, .ty_bits = 17 });
+	ir::Ref value = f.builder.add_arg(ty);
+	value_interner::InternerRef constant = f.interner.put(primitive_value::int_key(3));
+	ir::Ref divisor = f.builder.add_constant(constant, ty);
+	ir::Ref quotient = f.builder.add_inst(UDIV, { .bin = { .lhs = value, .rhs = divisor } }, ty);
+	f.builder.add_return(quotient);
+	f.builder.finish_fn("udiv_bitint_seventeen");
+}
+
+fn void build_constant_division_fixture(Fixture* f, ir::InstTag tag, value_interner::InternerRef ty,
+		int128 divisor, bool unsigned_divisor, String name)
+{
+	f.builder.start_fn();
+	ir::Ref value = f.builder.add_arg(ty);
+	value_interner::InternerRef constant = unsigned_divisor
+		? f.interner.put(primitive_value::uint_key((uint128)divisor))
+		: f.interner.put(primitive_value::int_key(divisor));
+	ir::Ref divisor_ref = f.builder.add_constant(constant, ty);
+	ir::Ref quotient = f.builder.add_inst(tag, { .bin = { .lhs = value, .rhs = divisor_ref } }, ty);
+	f.builder.add_return(quotient);
+	f.builder.finish_fn(name);
+}
+
+fn void lowers_i32_signed_division_by_seven_with_multiply() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_constant_division_fixture(&f, SDIV, value_interner::REF_I32, 7, false, "sdiv_seven");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("sdiv_seven:"), "signed division fixture is emitted");
+	assert(text.contains("\tmul ecx"), "signed division by seven uses the unsigned magic multiply");
+	assert(!text.contains("\tidiv "), "signed division by seven avoids IDIV");
+}
+
+fn void lowers_u64_unsigned_division_by_ten_with_multiply() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_constant_division_fixture(&f, UDIV, value_interner::REF_I64, 10, true, "udiv_u64_ten");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("udiv_u64_ten:"), "u64 division fixture is emitted");
+	assert(text.contains("\tmul rcx"), "u64 division by ten multiplies by RCX");
+	assert(!text.contains("\tidiv "), "u64 division by ten avoids IDIV");
+}
+
+fn void lowers_i32_signed_division_by_eight_with_shifts() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_constant_division_fixture(&f, SDIV, value_interner::REF_I32, 8, false, "sdiv_eight");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("sdiv_eight:"), "power-of-two division fixture is emitted");
+	assert(text.contains("\tshr ") || text.contains("\tsar "), "division by eight uses shifts");
+	assert(!text.contains("\timul ") && !text.contains("\tmul "),
+		"division by eight avoids multiplication");
+	assert(!text.contains("\tidiv "), "division by eight avoids IDIV");
+}
+
+fn void lowers_variable_and_zero_division_with_hardware_divide() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_signed_division_fixture(&f);
+	build_constant_division_fixture(&f, UDIV, value_interner::REF_I32, 0, true, "udiv_zero");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tidiv ecx"), "variable signed divisor retains IDIV fallback");
+	assert(text.contains("\tdiv ecx"), "zero unsigned divisor retains DIV fallback");
+}
+
+fn void lowers_odd_width_bitint_division_with_hardware_divide() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_odd_bitint_division_fixture(&f);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("udiv_bitint_seventeen:"), "odd-width BitInt fixture is emitted");
+	assert(text.contains("\tdiv "), "unsupported odd-width BitInt retains DIV fallback");
+}
+
+fn void unsigned_division_magic_table() @test
+{
+	ulong[5] divisors = { 3, 5, 7, 10, 641 };
+	ulong[5] multipliers = { 0xaaaa_aaab, 0xcccc_cccd, 0x2492_4925, 0xcccc_cccd, 0x0066_3d81 };
+	ushort[5] shifts = { 1, 2, 2, 3, 0 };
+	bool[5] adds = { false, false, true, false, false };
+	for (usz i = 0; i < divisors.len; i++)
+	{
+		x86_64::UnsignedMagic magic = x86_64::magic_unsigned(divisors[i], 32);
+		assert(magic.valid, "u32 magic is valid for divisor %d", divisors[i]);
+		assert(magic.multiplier == multipliers[i], "u32 magic multiplier for divisor %d", divisors[i]);
+		assert(magic.shift == shifts[i] && magic.add == adds[i], "u32 magic shift/add for divisor %d", divisors[i]);
+	}
+	x86_64::UnsignedMagic wide = x86_64::magic_unsigned(10, 64);
+	assert(wide.valid && wide.multiplier == 0xcccc_cccc_cccc_cccd && wide.shift == 3 && !wide.add,
+		"u64 division by ten magic constants");
+	assert(!x86_64::magic_unsigned(0, 32).valid && !x86_64::magic_unsigned(1, 32).valid,
+		"unsigned magic rejects zero and unit divisors");
+	// Each non-power-of-two top-bit divisor is lowered through magic, not DIV.
+	x86_64::UnsignedMagic[5] top_bit_magics = {
+		x86_64::magic_unsigned(0x8000_0001, 32),
+		x86_64::magic_unsigned(0xffff_fffe, 32),
+		x86_64::magic_unsigned(0xc000_0001, 32),
+		x86_64::magic_unsigned(0x8000_0000_0000_0001, 64),
+		x86_64::magic_unsigned(0xffff_ffff_ffff_fffe, 64),
+	};
+	foreach (magic : top_bit_magics)
+		assert(magic.valid, "top-bit unsigned divisor has magic and does not bail to DIV");
+}
+
+fn ulong emulate_unsigned_magic(ulong value, ushort width, x86_64::UnsignedMagic magic)
+{
+	uint128 product = (uint128)value * magic.multiplier;
+	ulong quotient = (ulong)(product >> width);
+	if (magic.add) quotient = ((value - quotient) >> 1) + quotient;
+	return quotient >> magic.shift;
+}
+
+fn void unsigned_magic_exhaustive_narrow_widths() @test
+{
+	// Exhaust the complete 8-bit domain and sample 16-bit numerators for the
+	// requested divisor set, including the 0 and 65535 endpoints.
+	ushort width = 8;
+	ulong maximum = ((ulong)1 << width) - 1;
+	for (ulong divisor = 2; divisor <= maximum; divisor++)
+	{
+		x86_64::UnsignedMagic magic = x86_64::magic_unsigned(divisor, width);
+		assert(magic.valid, "unsigned magic for %d-bit divisor %d is valid", width, divisor);
+		for (ulong value = 0; value <= maximum; value++)
+		{
+			assert(emulate_unsigned_magic(value, width, magic) == value / divisor,
+				"unsigned %d-bit magic divides %d by %d", width, value, divisor);
+		}
+	}
+	width = 16;
+	maximum = ((ulong)1 << width) - 1;
+	uint invalid_cases = 0;
+	// Sample numerators on a 257-value stride for divisors 2..300 plus 641 and
+	// 65535 (3 and 7 are already in range); this stride includes 0 and 65535.
+	// Invalid cases are skipped and counted.
+	for (ulong divisor = 2; divisor <= 300; divisor++)
+	{
+		x86_64::UnsignedMagic magic = x86_64::magic_unsigned(divisor, width);
+		if (!magic.valid) { invalid_cases++; continue; }
+		for (ulong value = 0; value <= maximum; value += 257)
+		{
+			assert(emulate_unsigned_magic(value, width, magic) == value / divisor,
+				"unsigned i16 magic divides %d by %d", value, divisor);
+		}
+	}
+	foreach (divisor : (ulong[]){ 641, 65535 })
+	{
+		x86_64::UnsignedMagic magic = x86_64::magic_unsigned(divisor, width);
+		if (!magic.valid) { invalid_cases++; continue; }
+		for (ulong value = 0; value <= maximum; value += 257)
+		{
+			assert(emulate_unsigned_magic(value, width, magic) == value / divisor,
+				"unsigned i16 magic divides %d by %d", value, divisor);
+		}
+	}
+	// This assertion reports the skipped invalid case count; it is zero for the current sample.
+	assert(invalid_cases == 0, "skipped %d invalid i16 magic cases", invalid_cases);
+}
+
+fn int128 signed_width_multiplier(x86_64::SignedMagic magic, ushort width)
+{
+	ulong mask = ((ulong)1 << width) - 1;
+	ulong bits = magic.multiplier & mask;
+	ulong sign = (ulong)1 << (width - 1);
+	return (bits & sign) != 0 ? (int128)bits - ((int128)1 << width) : (int128)bits;
+}
+
+fn long emulate_signed_magic(long value, ushort width, x86_64::SignedMagic magic)
+{
+	if (magic.multiplier == 0)
+	{
+		uint shift = 0;
+		while ((magic.magnitude >> shift) > 1) shift++;
+		int128 magnitude = value < 0 ? -(int128)value : (int128)value;
+		int128 quotient = magnitude >> shift;
+		bool negative = (value < 0) != magic.negative;
+		return (long)(negative ? -quotient : quotient);
+	}
+	int128 multiplier = signed_width_multiplier(magic, width);
+	int128 quotient = ((int128)value * multiplier) >> width;
+	if (magic.signed_correction) { quotient += multiplier < 0 ? (int128)value : -(int128)value; }
+	quotient >>= magic.shift;
+	if (quotient < 0) quotient++;
+	return (long)quotient;
+}
+
+fn void signed_magic_negative_divisors_exhaustive_i8() @test
+{
+	bool saw_add_correction = false;
+	bool saw_subtract_correction = false;
+	for (long divisor = -128; divisor <= 127; divisor++)
+	{
+		if (divisor >= -1 && divisor <= 1) continue;
+		x86_64::SignedMagic magic = x86_64::magic_signed(divisor, 8);
+		assert(magic.valid && magic.negative == (divisor < 0), "i8 magic for divisor %d has expected sign", divisor);
+		if (magic.signed_correction)
+		{
+			if (signed_width_multiplier(magic, 8) < 0) { saw_add_correction = true; }
+			else { saw_subtract_correction = true; }
+		}
+		for (long value = -128; value <= 127; value++)
+		{
+			assert(emulate_signed_magic(value, 8, magic) == value / divisor,
+				"signed i8 magic divides %d by %d", value, divisor);
+		}
+	}
+	assert(saw_add_correction && saw_subtract_correction,
+		"i8 signed magic exercises both add and subtract dividend corrections");
+}
+
+fn void lowers_narrow_signed_division_by_magic() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_constant_division_fixture(&f, SDIV, value_interner::REF_I8, 7, false, "sdiv_i8_seven");
+	build_constant_division_fixture(&f, SDIV, value_interner::REF_I16, 7, false, "sdiv_i16_seven");
+	build_constant_division_fixture(&f, UDIV, REF_U8, 7, true, "udiv_u8_seven");
+	build_constant_division_fixture(&f, UDIV, REF_U16, 7, true, "udiv_u16_seven");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("sdiv_i8_seven:") && text.contains("sdiv_i16_seven:"),
+		"i8 and i16 signed division functions are emitted");
+	assert(count_sequence(text, "\tmul ecx\n") == 4,
+		"signed and unsigned i8/i16 magic divisions use the 32-bit MUL form");
+	assert(text.contains("\tmovsx eax, al\n") && text.contains("\tmovsx eax, ax\n"),
+		"signed narrow divisions sign extend their dividends");
+	assert(text.contains("\tmovzx eax, al\n\tmov r11d, eax\n\tmov ecx, 37\n\tmul ecx\n\tshr eax, 8\n"),
+		"unsigned i8 division zero extends then uses MUL and an 8-bit high-product shift");
+	assert(text.contains("\tmovzx eax, ax\n\tmov r11d, eax\n\tmov ecx, 9363\n\tmul ecx\n\tshr eax, 16\n"),
+		"unsigned i16 division zero extends then uses MUL and a 16-bit high-product shift");
+	assert(!text.contains("\tidiv "), "narrow magic divisions avoid IDIV");
+}
+
+fn void lowers_unsigned_magic_immediates_in_text() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_constant_division_fixture(&f, UDIV, value_interner::REF_I32, 3, true, "udiv_i32_three");
+	build_constant_division_fixture(&f, UDIV, value_interner::REF_I64, 3, true, "udiv_i64_three");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tmov ecx, 2863311531\n\tmul ecx\n"),
+		"u32 magic 0xaaaaaaab remains a positive immediate in emitted text");
+	assert(text.contains("\tmov rcx, -6148914691236517205\n\tmul rcx\n"),
+		"u64 magic 0xaaaaaaaaaaaaaaab is emitted as a negative long immediate");
+}
+
+fn void lowers_i64_minimum_divisor_with_shift() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	build_constant_division_fixture(&f, SDIV, value_interner::REF_I64, long::min, false, "sdiv_i64_min");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tshr rax, 63"), "i64 INT_MIN divisor uses a 63-bit shift");
+	assert(!text.contains("\tmul ") && !text.contains("\tidiv "),
+		"i64 INT_MIN divisor avoids multiply and IDIV");
+}
+
+fn void signed_division_magic_table() @test
+{
+	long[5] divisors = { 3, 5, 7, 10, 641 };
+	ulong[5] multipliers = { 0x5555_5556, 0x6666_6667, 0x9249_2493, 0x6666_6667, 0x0066_3d81 };
+	ushort[5] shifts = { 0, 1, 2, 2, 0 };
+	for (usz i = 0; i < divisors.len; i++)
+	{
+		x86_64::SignedMagic magic = x86_64::magic_signed(divisors[i], 32);
+		assert(magic.valid, "i32 magic is valid for divisor %d", divisors[i]);
+		assert(magic.multiplier == multipliers[i] && magic.shift == shifts[i],
+			"i32 classic signed magic constants for divisor %d", divisors[i]);
+	}
+	x86_64::SignedMagic negative_ten = x86_64::magic_signed(-10, 32);
+	assert(negative_ten.valid && negative_ten.negative && negative_ten.magnitude == 10 &&
+		negative_ten.multiplier == 0x9999_9999 && negative_ten.shift == 2,
+		"i32 division by negative ten negates the classic multiplier");
+	long[4] minimum_powers = { -128, -32768, -2147483648L, long::min };
+	ushort[4] widths = { 8, 16, 32, 64 };
+	for (usz i = 0; i < widths.len; i++)
+	{
+		x86_64::SignedMagic magic = x86_64::magic_signed(minimum_powers[i], widths[i]);
+		assert(magic.valid && magic.magnitude == ((ulong)1 << (widths[i] - 1)) &&
+			magic.negative && magic.multiplier == 0 && magic.shift == 0,
+			"minimum signed power-of-two divisor at width %d", widths[i]);
+	}
+	long[2] powers = { 8, -8 };
+	for (usz i = 0; i < powers.len; i++)
+	{
+		x86_64::SignedMagic magic = x86_64::magic_signed(powers[i], 32);
+		assert(magic.valid && magic.multiplier == 0 && magic.shift == 0 && !magic.add,
+			"power-of-two signed divisor needs no multiply magic");
+	}
+	x86_64::SignedMagic unit = x86_64::magic_signed(1, 32);
+	assert(!x86_64::magic_signed(0, 32).valid && unit.valid && unit.multiplier == 0,
+		"signed magic rejects zero and describes a unit divisor without a multiplier");
+}
+
 fn void build_i32_call_fixture(Fixture* f, uint argument_count, String function_name, String callee_name)
 {
 	f.builder.start_fn();
@@ -479,10 +840,10 @@ fn void lowers_signed_division_in_register_mode() @test
 		"quot:\n"
 		"\tpush rbp\n"
 		"\tmov rbp, rsp\n"
-		"\tsub rsp, 64\n"
-		"\tmov qword ptr [rbp - 40], rbx\n"
-		"\tmov qword ptr [rbp - 48], r12\n"
-		"\tmov qword ptr [rbp - 56], r13\n"
+		"\tsub rsp, 32\n"
+		"\tmov qword ptr [rbp - 8], rbx\n"
+		"\tmov qword ptr [rbp - 16], r12\n"
+		"\tmov qword ptr [rbp - 24], r13\n"
 		"\tmov ebx, edi\n"
 		"\tmov r12d, esi\n"
 		".Lquot.entry.0:\n"
@@ -492,9 +853,9 @@ fn void lowers_signed_division_in_register_mode() @test
 		"\tidiv ecx\n"
 		"\tmov r13d, eax\n"
 		"\tmov eax, r13d\n"
-		"\tmov rbx, qword ptr [rbp - 40]\n"
-		"\tmov r12, qword ptr [rbp - 48]\n"
-		"\tmov r13, qword ptr [rbp - 56]\n"
+		"\tmov rbx, qword ptr [rbp - 8]\n"
+		"\tmov r12, qword ptr [rbp - 16]\n"
+		"\tmov r13, qword ptr [rbp - 24]\n"
 		"\tleave\n"
 		"\tret\n"
 		"\t.size quot, .-quot\n\n"
@@ -530,7 +891,8 @@ fn void lowers_seven_live_builder_values_in_register_mode() @test
 	String text = render(&f, &errors)!!;
 	defer alloc::free(&f.ta, text.ptr);
 	assert(text.contains("sum_seven_live:"), "seven simultaneously live Builder values lower successfully");
-	assert(text.contains("\tmov dword ptr [rbp - 56], eax"),
+	// Only spilled values get frame slots: two stack-resident ARGs, then this one.
+	assert(text.contains("\tmov dword ptr [rbp - 24], eax"),
 		"a non-ARG value spills to its existing frame slot under register pressure");
 }
 
@@ -621,6 +983,56 @@ fn void lowers_explicit_narrow_extensions_as_i32_sysv_call_arguments() @test
 	assert(text.contains("\tcall consume_widened_narrow_values@PLT\n"),
 		"the eight widened values are passed to the callee");
 }
+
+fn void lowers_signed_i1_predicates_after_boolean_sign_interpretation() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref false_value = f.builder.add_constant(f.interner.put(primitive_value::int_key(0)), value_interner::REF_I1);
+	ir::Ref true_value = f.builder.add_constant(f.interner.put(primitive_value::int_key(1)), value_interner::REF_I1);
+	ir::InstTag[4] predicates = { CMP_SLT, CMP_SLTE, CMP_SGT, CMP_SGTE };
+	ir::Ref result = ir::NONE;
+	for (uint pair_index = 0; pair_index < 4; pair_index++)
+	{
+		ir::Ref lhs = pair_index >= 2 ? true_value : false_value;
+		ir::Ref rhs = pair_index % 2 == 1 ? true_value : false_value;
+		foreach (predicate : predicates)
+		{
+			result = f.builder.add_inst(predicate, { .bin = { lhs, rhs } }, value_interner::REF_I1);
+		}
+	}
+	f.builder.add_return(result);
+	f.builder.finish_fn("signed_i1_predicates");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+
+	String[4] conditions = { "\tseta al\n", "\tsetae al\n", "\tsetb al\n", "\tsetbe al\n" };
+	String[48] expected_sequence = {};
+	uint expected_index = 0;
+	for (uint pair_index = 0; pair_index < 4; pair_index++)
+	{
+		foreach (condition : conditions)
+		{
+			expected_sequence[expected_index++] = "\tcmp al, cl\n";
+			expected_sequence[expected_index++] = condition;
+			expected_sequence[expected_index++] = "\tmov byte ptr [rbp -";
+		}
+	}
+	assert_text_lines_in_order(text, expected_sequence[:expected_index],
+		"signed i1 predicates reverse their condition and store each result");
+	assert(count_sequence(text, "\tcmp al, cl\n") == 16 &&
+		count_sequence(text, "\tseta al\n") == 4 && count_sequence(text, "\tsetae al\n") == 4 &&
+		count_sequence(text, "\tsetb al\n") == 4 && count_sequence(text, "\tsetbe al\n") == 4 &&
+		count_sequence(text, "\tmov byte ptr [rbp -") >= 16,
+		"all four inverted unsigned predicates store one result for each boolean input pair");
+}
+
 
 fn void lowers_seven_i32_call_with_sixteen_byte_stack_padding() @test
 {
@@ -954,7 +1366,7 @@ fn void object_emits_quot_text_and_global_function_symbol() @test
 	defer { obj.deinit(); graph.free(); }
 	elf::Elf* e = (elf::Elf*)obj.implementation;
 	elf::SectionData* text = elf_section(e, "text");
-	char[8] prologue = { 0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x40 };
+	char[8] prologue = { 0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x20 };
 	assert(text.bytes.len() >= prologue.len, "quot text contains the expected prologue");
 	for (usz i = 0; i < prologue.len; i++)
 	{
@@ -1667,21 +2079,282 @@ fn void select_lowers_to_conditional_assembly() @test
 		"\tsub rsp, 16\n"
 		"\tmov byte ptr [rbp - 8], dil\n"
 		".Lchoose_with_select.entry.0:\n"
-		"\tmov al, byte ptr [rbp - 8]\n"
-		"\ttest al, al\n"
-		"\tje .Lchoose_with_select.edge.0\n"
 		"\tmov eax, 1\n"
+		"\tmov ecx, 29\n"
+		"\tmov dl, byte ptr [rbp - 8]\n"
+		"\ttest dl, dl\n"
+		"\tcmove eax, ecx\n"
 		"\tmov dword ptr [rbp - 16], eax\n"
-		"\tjmp .Lchoose_with_select.edge.1\n"
-		".Lchoose_with_select.edge.0:\n"
-		"\tmov eax, 29\n"
-		"\tmov dword ptr [rbp - 16], eax\n"
-		".Lchoose_with_select.edge.1:\n"
 		"\tmov eax, dword ptr [rbp - 16]\n"
 		"\tleave\n"
 		"\tret\n"
 		"\t.size choose_with_select, .-choose_with_select\n\n"
 		"\t.section .note.GNU-stack,\"\",@progbits\n");
+}
+
+fn void select_lowers_i64_with_cmov_and_keeps_float_branch() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
+	ir::Ref yes = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref no = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref selected = f.builder.add_select(cond, yes, no, value_interner::REF_I64);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_i64");
+	f.builder.start_fn();
+	cond = f.builder.add_arg(value_interner::REF_I1);
+	yes = f.builder.add_arg(value_interner::REF_F32);
+	no = f.builder.add_arg(value_interner::REF_F32);
+	selected = f.builder.add_select(cond, yes, no, value_interner::REF_F32);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_f32");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tcmove rax, rcx\n"),
+		"i64 select loads both arms and uses 64-bit CMOVE");
+	assert(text.contains(".Lchoose_f32.entry.0:\n\tmov al, byte ptr [rbp - 8]\n\ttest al, al\n\tje .Lchoose_f32.edge."),
+		"F32 select retains its branch path");
+}
+
+fn void select_lowers_narrow_widths_with_32bit_cmov() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	value_interner::InternerRef i17 = f.interner.put({ .tag = primitive_value::PrimitiveType.INT_TY, .ty_bits = 17 });
+	value_interner::InternerRef[4] types = { value_interner::REF_I1, value_interner::REF_I8, value_interner::REF_I16, i17 };
+	String[4] names = { "choose_i1", "choose_i8", "choose_i16", "choose_i17" };
+	foreach (i, ty : types)
+	{
+		f.builder.start_fn();
+		ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
+		ir::Ref yes = f.builder.add_arg(ty);
+		ir::Ref no = f.builder.add_arg(ty);
+		ir::Ref selected = f.builder.add_select(cond, yes, no, ty);
+		f.builder.add_return(selected);
+		f.builder.finish_fn(names[i]);
+	}
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(count_sequence(text, "\tcmove eax, ecx\n") == (uint)types.len,
+		"i1, i8, i16, and i17 SELECT arms are promoted to 32-bit CMOVE");
+	assert(count_sequence(text, "\ttest dl, dl\n") == (uint)types.len,
+		"every narrow SELECT tests its i1 condition after loading the arms");
+}
+
+fn void select_loads_null_arm_before_test() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
+	ir::Ref pointer = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref null_pointer = f.builder.add_constant(value_interner::REF_NULL, value_interner::REF_PTR);
+	ir::Ref selected = f.builder.add_select(cond, pointer, null_pointer, value_interner::REF_PTR);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_pointer_or_null");
+
+	f.builder.start_fn();
+	cond = f.builder.add_arg(value_interner::REF_I1);
+	ir::Ref wide = f.builder.add_arg(value_interner::REF_I128);
+	ir::Ref zero_wide = f.builder.add_constant(value_interner::REF_ZERO, value_interner::REF_I128);
+	selected = f.builder.add_select(cond, wide, zero_wide, value_interner::REF_I128);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_wide_or_zero");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\txor ecx, ecx\n", "\tmov dl, byte ptr", "\ttest dl, dl\n", "\tcmove rax, rcx\n"
+	}, "NULL arm flag clobber precedes the narrow SELECT test");
+	// The i128 zero constant's load_pair uses MOV immediates, so it does not
+	// clobber flags; make sure both halves are ready before TEST and paired CMOVs.
+	assert_text_lines_in_order(text, {
+		"\tmov rcx, 0\n", "\tmov r11, 0\n", "\tmov r8b, byte ptr", "\ttest r8b, r8b\n",
+		"\tcmove rax, rcx\n", "\tcmove rdx, r11\n"
+	}, "wide zero arms are loaded before TEST and paired CMOV");
+}
+
+fn void select_register_mode_keeps_callee_saved_values() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
+	ir::Ref yes = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref no = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref selected = f.builder.add_select(cond, yes, no, value_interner::REF_I64);
+	// Keep the true arm live after SELECT so the allocator cannot reuse its
+	// register for the result before its last use.
+	// Linear scan currently releases registers only when end < current.start, so
+	// arm/result register aliasing at SELECT is unreachable; retest if this policy changes.
+	ir::Ref result = f.builder.add_inst(ADD, { .bin = { .lhs = selected, .rhs = yes } }, value_interner::REF_I64);
+	f.builder.add_return(result);
+	f.builder.finish_fn("select_register_values");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tmov rax, r12\n", "\tmov rcx, r13\n", "\tmov dl, bl\n", "\ttest dl, dl\n",
+		"\tcmove rax, rcx\n", "\tmov r14, rax\n", "\tmov rax, r14\n"
+	}, "register-mode SELECT copies live callee-saved operands through scratch registers");
+}
+
+fn void select_float_f64_and_f80_keep_branch() @test
+{
+	Fixture f64;
+	f64.init();
+	defer { f64.builder.free(); f64.interner.free(); f64.ta.free(); }
+	f64.builder.start_fn();
+	ir::Ref cond = f64.builder.add_arg(value_interner::REF_I1);
+	ir::Ref yes = f64.builder.add_arg(value_interner::REF_F64);
+	ir::Ref no = f64.builder.add_arg(value_interner::REF_F64);
+	ir::Ref selected = f64.builder.add_select(cond, yes, no, value_interner::REF_F64);
+	f64.builder.add_return(selected);
+	f64.builder.finish_fn("choose_f64");
+	ir::ErrorList errors64;
+	errors64.init(&f64.ta);
+	defer errors64.free();
+	String text64 = render(&f64, &errors64, true)!!;
+	defer alloc::free(&f64.ta, text64.ptr);
+	assert(text64.contains("\tje .Lchoose_f64.edge.") && text64.contains("\tmovsd xmm0,") &&
+		text64.contains("\tjmp .Lchoose_f64.edge."), "F64 SELECT keeps the branch and bit-copy path");
+	assert(!text64.contains("cmove"), "floating SELECT does not use integer CMOV");
+
+	Fixture f80;
+	f80.init();
+	defer { f80.builder.free(); f80.interner.free(); f80.ta.free(); }
+	f80.builder.start_fn();
+	cond = f80.builder.add_arg(value_interner::REF_I1);
+	yes = f80.builder.add_arg(value_interner::REF_F80);
+	no = f80.builder.add_arg(value_interner::REF_F80);
+	selected = f80.builder.add_select(cond, yes, no, value_interner::REF_F80);
+	f80.builder.add_return(selected);
+	f80.builder.finish_fn("choose_f80");
+	ir::ErrorList errors80;
+	errors80.init(&f80.ta);
+	defer errors80.free();
+	String text80 = render(&f80, &errors80, true)!!;
+	defer alloc::free(&f80.ta, text80.ptr);
+	assert(text80.contains("\tfld tbyte ptr") && text80.contains("\tfstp tbyte ptr"),
+		"F80 SELECT copies through the x87 stack");
+	assert(!text80.contains("xmm"), "F80 SELECT does not use XMM registers");
+}
+
+fn void select_pointer_symbol_and_alloc_arms() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
+	ir::Ref local = f.builder.add_alloc(8, 8);
+	ir::Ref global = f.builder.add_symbol("external_global", value_interner::REF_PTR);
+	ir::Ref selected = f.builder.add_select(cond, local, global, value_interner::REF_PTR);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_pointer_symbols");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tlea rax, [rbp -", "\tmov rcx, qword ptr [rip + external_global@GOTPCREL]",
+		"\tmov dl, byte ptr", "\ttest dl, dl\n", "\tcmove rax, rcx\n"
+	}, "ALLOC and external SYMBOL pointer arms are materialized before CMOVE");
+}
+
+fn void select_constant_condition() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref cond = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I1);
+	ir::Ref yes = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32);
+	ir::Ref no = f.builder.add_constant(f.interner.put(primitive_value::int_key(2)), value_interner::REF_I32);
+	ir::Ref selected = f.builder.add_select(cond, yes, no, value_interner::REF_I32);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_constant_condition");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tmov eax, 1\n", "\tmov ecx, 2\n", "\tmov dl, 1\n", "\ttest dl, dl\n", "\tcmove eax, ecx\n"
+	}, "constant i1 condition reaches SELECT lowering safely");
+	sz test_offset = text.index_of("\ttest dl, dl\n")!!;
+	assert(!text[(sz)(test_offset + "\ttest dl, dl\n".len)..].contains("xor"),
+		"constant-condition SELECT has no flag-clobbering XOR after TEST");
+}
+
+fn void select_i128_uses_paired_cmov() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref cond = f.builder.add_arg(value_interner::REF_I1);
+	ir::Ref yes = f.builder.add_arg(value_interner::REF_I128);
+	ir::Ref no = f.builder.add_arg(value_interner::REF_I128);
+	ir::Ref selected = f.builder.add_select(cond, yes, no, value_interner::REF_I128);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_i128");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\ttest r8b, r8b\n", "\tcmove rax, rcx\n", "\tcmove rdx, r11\n"
+	}, "i128 SELECT applies the same condition to both halves");
+}
+
+fn void trunc_to_i1_masks_low_bit_before_select_test() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref input = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref truth = f.builder.add_inst(TRUNC, { .ref = input }, value_interner::REF_I1);
+	ir::Ref yes = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref no = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref selected = f.builder.add_select(truth, yes, no, value_interner::REF_I32);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("choose_truncated_bool");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tand al, 1\n", "\tmov dl, byte ptr", "\ttest dl, dl\n", "\tcmove eax, ecx\n"
+	}, "TRUNC to i1 keeps its low bit before SELECT tests the byte");
 }
 
 fn void build_dynamic_alloc_fixture(Fixture* f)
@@ -1754,4 +2427,32 @@ fn void encode_wide_integer_atomic_and_bit_scan_rows() @test
 	assert_encoded(MFENCE, {}, (char[]){ 0x0f, 0xae, 0xf0 });
 	assert_encoded(XCHG, { x86_64::mem_op(RCX, 0, 64), x86_64::reg_op(RAX) }, (char[]){ 0x48, 0x87, 0x01 });
 	assert_encoded(XCHG, { x86_64::mem_op(RCX, 0, 32), x86_64::reg_op(EAX) }, (char[]){ 0x87, 0x01 });
+}
+
+fn EvexEntry? evex_row(EvexMnemonic mnemonic, VectorLength vl, EvexOp rm)
+{
+	foreach (entry : x86_64::EVEX_ENCODINGS)
+	{
+		if (entry.mnemonic == mnemonic && entry.vl == vl && (entry.ops[1] == rm || entry.ops[2] == rm)) return entry;
+	}
+	return NOT_FOUND~;
+}
+
+fn void evex_table_rows_and_disp8_scaling() @test
+{
+	EvexEntry vaddpd = evex_row(VADDPD, L512, EvexOp.ZMM_M512)!!;
+	assert(vaddpd.map == MAP0F && vaddpd.prefix == P66 && vaddpd.opcode == 0x58 && vaddpd.w == W1);
+	assert(vaddpd.flags.mask && vaddpd.flags.zeroing && vaddpd.flags.bcst && vaddpd.flags.er);
+	assert(vaddpd.disp8_n(false) == 64);
+	assert(vaddpd.disp8_n(true) == 8, "a {1to8} broadcast scales by the element");
+	EvexEntry vaddpd128 = evex_row(VADDPD, L128, EvexOp.XMM_M128)!!;
+	assert(vaddpd128.disp8_n(false) == 16);
+	assert(!vaddpd128.flags.er, "embedded rounding implies 512-bit length");
+	EvexEntry vaddsd = evex_row(VADDSD, LIG, EvexOp.XMM_M64)!!;
+	assert(vaddsd.tuple == TUPLE1_SCALAR && vaddsd.disp8_n(false) == 8);
+	EvexEntry vpmovzxbw = evex_row(VPMOVZXBW, L512, EvexOp.YMM_M256)!!;
+	assert(vpmovzxbw.tuple == HALF_MEM && vpmovzxbw.disp8_n(false) == 32);
+	EvexEntry gather = evex_row(VGATHERDPS, L512, EvexOp.VSIB_ZMM)!!;
+	assert(gather.flags.mask_required && gather.disp8_n(false) == 4);
+	assert(EvexMap.MAP0F38.mmm == 2 && (char)EvexPrefix.PF2.ordinal == 3);
 }

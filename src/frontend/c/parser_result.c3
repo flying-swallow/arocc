@@ -182,23 +182,6 @@ fn bool Result.check_invalid_un(&self, parser::Parser* p, tree::NodeKind kind, t
 	return true;
 }
 
-<* Add an implicit cast node and update the result type, matching Result.implicitCast. *>
-fn void Result.implicit_cast(&self, parser::Parser* p, tree::CastKind kind)
-{
-	tokens::TokenIndex tok = self.node.tok(&p.tree);
-	self.node = p.tree.add_node(
-		{
-			.kind = tree::NodeKind.CAST, .cast = {
-				.l_paren = tok,
-				.kind = kind,
-				.operand = self.node,
-				.qt = self.qt,
-				.implicit = true,
-			}
-		}
-	);
-}
-
 <* Get the pointer constant carried by array/function decay when the node supports it. *>
 fn value::Value pointer_value(parser::Parser* p, type_store::NodeIndex node, value::Value offset)
 {
@@ -365,18 +348,18 @@ fn void Result.lval_conversion(&self, parser::Parser* p)
 		// folds can disagree with the runtime value. Kept as-is for Zig parity.
 		self.val = pointer_value(p, self.node, value::ZERO);
 		self.qt = self.qt.decay(p.comp);
-		self.implicit_cast(p, tree::CastKind.FUNCTION_TO_POINTER);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.FUNCTION_TO_POINTER);
 	}
 	else if (self.qt.is(p.comp, type_store::TypeTag.ARRAY))
 	{
 		self.val = pointer_value(p, self.node, value::ZERO);
 		self.qt = self.qt.decay(p.comp);
-		self.implicit_cast(p, tree::CastKind.ARRAY_TO_POINTER);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.ARRAY_TO_POINTER);
 	}
 	else if (p.tree.is_lval(self.node))
 	{
 		self.qt = self.qt.unqualified();
-		self.implicit_cast(p, tree::CastKind.LVAL_TO_RVAL);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.LVAL_TO_RVAL);
 		self.atomic_to_non_atomic(p);
 	}
 }
@@ -393,7 +376,7 @@ fn void Result.atomic_to_non_atomic(&self, parser::Parser* p)
 	if (try inner = self.qt.get(p.comp, type_store::TypeTag.ATOMIC))
 	{
 		self.qt = inner.atomic.unqualified();
-		self.implicit_cast(p, tree::CastKind.ATOMIC_TO_NON_ATOMIC);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.ATOMIC_TO_NON_ATOMIC);
 	}
 }
 
@@ -488,11 +471,11 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 	if (src == type_store::ScalarKind.BOOL)
 	{
 		self.qt = dest.to_real(p.comp);
-		self.implicit_cast(p, tree::CastKind.BOOL_TO_INT);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.BOOL_TO_INT);
 		if (!dst.is_real)
 		{
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_INT);
 		}
 	}
 	else if (self.qt.is_float(p.comp))
@@ -505,19 +488,19 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			saturate_float_to_int(&self.val, real_dest, change_kind, p.comp);
 			self.float_to_int_diagnostic(p, tok, original, dest, real_dest, old_val, change_kind, implicit)!;
 			self.qt = real_dest;
-			self.implicit_cast(p, tree::CastKind.FLOAT_TO_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.FLOAT_TO_INT);
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_INT);
 		}
 		else if (!src.is_real && dst.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
-			self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
 			value::FloatToIntChangeKind change_kind = self.val.float_to_int(dest, p.comp);
 			saturate_float_to_int(&self.val, dest, change_kind, p.comp);
 			self.float_to_int_diagnostic(p, tok, original, dest, dest, old_val, change_kind, implicit)!;
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.FLOAT_TO_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.FLOAT_TO_INT);
 		}
 		else
 		{
@@ -525,7 +508,7 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			saturate_float_to_int(&self.val, dest, change_kind, p.comp);
 			self.float_to_int_diagnostic(p, tok, original, dest, dest, old_val, change_kind, implicit)!;
 			self.qt = dest;
-			self.implicit_cast(p, src.is_real ? tree::CastKind.FLOAT_TO_INT : tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, src.is_real ? tree::CastKind.FLOAT_TO_INT : tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT);
 		}
 	}
 	else if (src.is_pointer)
@@ -538,11 +521,11 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 			Diagnostic.IMPLICIT_PTR_TO_INT.@emit(p, tok, p.fmt_qt(original), p.fmt_qt(dest))!;
 		}
 		self.qt = dest.to_real(p.comp);
-		self.implicit_cast(p, tree::CastKind.POINTER_TO_INT);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.POINTER_TO_INT);
 		if (!dst.is_real)
 		{
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_INT);
 		}
 	}
 	else
@@ -555,21 +538,21 @@ fn void? Result.cast_to_int(&self, parser::Parser* p, type_store::QualType dest,
 		{
 			type_store::QualType real_dest = dest.to_real(p.comp);
 			self.qt = real_dest;
-			self.implicit_cast(p, tree::CastKind.INT_CAST);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.INT_CAST);
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_INT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_INT);
 		}
 		else if (!src.is_real && dst.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
-			self.implicit_cast(p, tree::CastKind.COMPLEX_INT_TO_REAL);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.COMPLEX_INT_TO_REAL);
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.INT_CAST);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.INT_CAST);
 		}
 		else
 		{
 			self.qt = dest;
-			self.implicit_cast(p, src.is_real ? tree::CastKind.INT_CAST : tree::CastKind.COMPLEX_INT_CAST);
+			self.node = p.tree.implicit_cast(self.node, self.qt, src.is_real ? tree::CastKind.INT_CAST : tree::CastKind.COMPLEX_INT_CAST);
 		}
 	}
 }
@@ -584,11 +567,11 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 		type_store::QualType real_dest = dest.to_real(p.comp);
 		self.val.int_to_float(real_dest, p.comp);
 		self.qt = real_dest;
-		self.implicit_cast(p, tree::CastKind.BOOL_TO_FLOAT);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.BOOL_TO_FLOAT);
 		if (!dst.is_real)
 		{
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
 		}
 	}
 	else if (src.is_int)
@@ -598,15 +581,15 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 			type_store::QualType real_dest = dest.to_real(p.comp);
 			self.val.int_to_float(real_dest, p.comp);
 			self.qt = real_dest;
-			self.implicit_cast(p, tree::CastKind.INT_TO_FLOAT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.INT_TO_FLOAT);
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
 		}
 		else
 		{
 			self.val.int_to_float(dest, p.comp);
 			self.qt = dest;
-			self.implicit_cast(p, !src.is_real && dst.is_real ? tree::CastKind.COMPLEX_INT_TO_REAL :
+			self.node = p.tree.implicit_cast(self.node, self.qt, !src.is_real && dst.is_real ? tree::CastKind.COMPLEX_INT_TO_REAL :
 				(!src.is_real ? tree::CastKind.COMPLEX_INT_TO_COMPLEX_FLOAT : tree::CastKind.INT_TO_FLOAT));
 		}
 	}
@@ -617,30 +600,30 @@ fn void? Result.cast_to_float(&self, parser::Parser* p, type_store::QualType des
 		{
 			self.val.float_cast(real_dest, p.comp);
 			self.qt = real_dest;
-			self.implicit_cast(p, tree::CastKind.FLOAT_CAST);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.FLOAT_CAST);
 		}
 		self.val.float_cast(dest, p.comp);
 		self.qt = dest;
-		self.implicit_cast(p, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.REAL_TO_COMPLEX_FLOAT);
 	}
 	else if (!src.is_real && dst.is_real)
 	{
 		type_store::QualType real_src = self.qt.to_real(p.comp);
 		self.qt = real_src;
 		self.val = self.val.real_part(p.comp);
-		self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
 		if (self.qt.float_rank(p.comp) != dest.float_rank(p.comp))
 		{
 			self.val.float_cast(dest, p.comp);
 			self.qt = dest;
-			self.implicit_cast(p, tree::CastKind.FLOAT_CAST);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.FLOAT_CAST);
 		}
 	}
 	else
 	{
 		self.val.float_cast(dest, p.comp);
 		self.qt = dest;
-		self.implicit_cast(p, !src.is_real ? tree::CastKind.COMPLEX_FLOAT_CAST : tree::CastKind.FLOAT_CAST);
+		self.node = p.tree.implicit_cast(self.node, self.qt, !src.is_real ? tree::CastKind.COMPLEX_FLOAT_CAST : tree::CastKind.FLOAT_CAST);
 	}
 }
 
@@ -745,7 +728,7 @@ fn void Result.null_to_pointer(&self, parser::Parser* p, type_store::QualType de
 	if (!self.qt.is(p.comp, type_store::TypeTag.NULLPTR_T) && !self.val.is_zero(p.comp)) return;
 	self.val = value::NULL;
 	self.qt = dest;
-	self.implicit_cast(p, tree::CastKind.NULL_TO_POINTER);
+	self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.NULL_TO_POINTER);
 }
 
 <* Convert a scalar integer, bool, nullptr or pointer to a pointer type. *>
@@ -756,7 +739,7 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 	if (src == type_store::ScalarKind.BOOL)
 	{
 		self.qt = dest;
-		self.implicit_cast(p, tree::CastKind.BOOL_TO_POINTER);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.BOOL_TO_POINTER);
 	}
 	else if (src.is_int && self.val.is_zero(p.comp) && is_integer_constant_expr(p, self.node))
 	{
@@ -775,7 +758,7 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 		// its representation depends on the target.
 		self.save_value(p);
 		self.qt = dest;
-		self.implicit_cast(p, tree::CastKind.INT_TO_POINTER);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.INT_TO_POINTER);
 	}
 	else if (src == type_store::ScalarKind.NULLPTR_T)
 	{
@@ -854,7 +837,7 @@ fn void? Result.cast_to_pointer(&self, parser::Parser* p, type_store::QualType d
 		bool adds_qualifiers = (!from_child.is_const || to_child.is_const) &&
 		(!from_child.is_volatile || to_child.is_volatile) &&
 		(!from_child.is_restrict || to_child.is_restrict);
-		self.implicit_cast(p, from_child.eql(to_child, p.comp) && adds_qualifiers ? tree::CastKind.NO_OP : tree::CastKind.BITCAST);
+		self.node = p.tree.implicit_cast(self.node, self.qt, from_child.eql(to_child, p.comp) && adds_qualifiers ? tree::CastKind.NO_OP : tree::CastKind.BITCAST);
 	}
 }
 
@@ -867,7 +850,7 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 	{
 		self.val.bool_cast(p.comp);
 		self.qt = type_store::BOOL;
-		self.implicit_cast(p, tree::CastKind.POINTER_TO_BOOL);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.POINTER_TO_BOOL);
 	}
 	else if (src.is_int)
 	{
@@ -875,10 +858,10 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 		if (!src.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
-			self.implicit_cast(p, tree::CastKind.COMPLEX_INT_TO_REAL);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.COMPLEX_INT_TO_REAL);
 		}
 		self.qt = type_store::BOOL;
-		self.implicit_cast(p, tree::CastKind.INT_TO_BOOL);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.INT_TO_BOOL);
 	}
 	else if (src.is_float)
 	{
@@ -897,10 +880,10 @@ fn void? Result.cast_to_bool(&self, parser::Parser* p, tokens::TokenIndex tok = 
 		if (!src.is_real)
 		{
 			self.qt = self.qt.to_real(p.comp);
-			self.implicit_cast(p, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
+			self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.COMPLEX_FLOAT_TO_REAL);
 		}
 		self.qt = type_store::BOOL;
-		self.implicit_cast(p, tree::CastKind.FLOAT_TO_BOOL);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.FLOAT_TO_BOOL);
 	}
 }
 
@@ -928,7 +911,7 @@ fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType des
 			if (dest.size_compare(self.qt, p.comp) == type_store::TypeSizeOrder.EQ)
 			{
 				self.qt = dest;
-				self.implicit_cast(p, tree::CastKind.BITCAST);
+				self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.BITCAST);
 				return true;
 			}
 			return false;
@@ -937,7 +920,7 @@ fn bool? Result.coerce_scalar(&self, parser::Parser* p, type_store::QualType des
 		if (!(self.coerce_scalar(p, elem, tok, context)!)) return false;
 		self.save_value(p);
 		self.qt = dest.unqualified();
-		self.implicit_cast(p, tree::CastKind.VECTOR_SPLAT);
+		self.node = p.tree.implicit_cast(self.node, self.qt, tree::CastKind.VECTOR_SPLAT);
 		return true;
 	}
 	type_store::ScalarKind dst = dest.scalar_kind(p.comp);
@@ -1108,7 +1091,7 @@ fn void? Result.usual_arithmetic_conversion(&self, Result* rhs, parser::Parser* 
 			if (self.qt.size_compare(rhs.qt, p.comp) == type_store::TypeSizeOrder.EQ)
 			{
 				rhs.qt = self.qt;
-				rhs.implicit_cast(p, tree::CastKind.BITCAST);
+				rhs.node = p.tree.implicit_cast(rhs.node, rhs.qt, tree::CastKind.BITCAST);
 				return;
 			}
 			self.qt = type_store::INVALID;

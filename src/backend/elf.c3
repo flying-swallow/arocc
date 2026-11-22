@@ -37,6 +37,8 @@ struct Elf
 const String DEFAULT_STRTAB = "\0.strtab\0.symtab\0";
 const uint SHT_PROGBITS = 1;
 const uint SHT_NOBITS = 8;
+const uint SHT_INIT_ARRAY = 14;
+const uint SHT_FINI_ARRAY = 15;
 
 fn Elf* create(Allocator a, target::Target t)
 {
@@ -96,6 +98,12 @@ fn List{char} * get_section(Elf* e, object::Section section)
 		case object::SectionKind.DATA: s.flags = 3;
 		case object::SectionKind.BSS: s.flags = 3; s.sh_type = SHT_NOBITS;
 		case object::SectionKind.UNDEFINED: unreachable("undefined section");
+	}
+	if (section.kind == object::SectionKind.CUSTOM)
+	{
+		// Pointer arrays the C runtime walks before main and at exit.
+		if (name.starts_with("init_array")) { s.sh_type = SHT_INIT_ARRAY; s.flags = 3; }
+		if (name.starts_with("fini_array")) { s.sh_type = SHT_FINI_ARRAY; s.flags = 3; }
 	}
 	e.sections.push(s);
 	e.strtab_len += name.len + 2;

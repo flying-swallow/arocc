@@ -1,0 +1,22 @@
+// #kind: run
+// #exit: 0
+/* Constructors run before main in priority order (unprioritized last),
+   destructors run at exit, and `used` internal symbols survive DCE. */
+int puts(const char *);
+static int order[4];
+static int count;
+static int used_global __attribute__((used)) = 42;
+static void __attribute__((used)) used_fn(void) {}
+static void __attribute__((constructor(200))) early(void) { order[count++] = 1; }
+static void __attribute__((constructor)) late(void) { order[count++] = 2; }
+void __attribute__((constructor(300))) middle(void) { order[count++] = 3; }
+static void __attribute__((destructor)) bye(void) { puts("bye"); }
+int main(void)
+{
+	if (count != 3 || order[0] != 1 || order[1] != 3 || order[2] != 2) return 1;
+	puts("main");
+	return 0;
+}
+// #expect: stdout
+main
+bye

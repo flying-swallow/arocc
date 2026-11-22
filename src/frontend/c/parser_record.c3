@@ -4,6 +4,7 @@
 module aro::frontend::c::parser;
 import aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::diagnostics;
 import aro::frontend::c::pragmas::pack;
+import aro::frontend::c::attribute_wip, aro::frontend::c::parser_declaration;
 
 excuse ENUM_UNDERLYING_NO_DECL_SPEC;
 
@@ -21,14 +22,36 @@ struct TagHeader
 	type_store::QualType fixed_qt;
 }
 
-enum TagAttributeStage : char
+<* Tag attributes parsed around the tag name and after `}` (before layout), plus
+   the declaration grammar that parses them and the enum fixed underlying type. *>
+struct TagAttributes
 {
-	PARSE_HEADER, APPLY_HEADER, PARSE_BODY_END, APPLY_BODY_END
+	parser_declaration::DeclarationParser* decls;
+	attribute_wip::Wip* wip;
+	// The specifier begins a struct/union member, so `enum E : width` may be a bit-field.
+	bool record_member;
 }
 
-<* The declaration grammar owns attribute parsing and application. Header stages
-   run around the tag name; body-end stages run after `}` but before layout. *>
-alias TagAttributeCallback = fn void?(void* context, Parser* p, TagHeader header, TagAttributeStage stage);
+fn void? TagAttributes.parse(&self, Parser* p)
+{
+	self.decls.append_attributes(p, self.wip)!;
+}
+
+fn void? TagAttributes.apply(&self, Parser* p, type_store::QualType qt, type_store::NodeIndex decl_node)
+{
+	type_store::QualType type_qt = self.wip.apply_type_attrs(p, qt)!;
+	assert(type_qt.eql(qt, p.comp), "type attributes on a tag must preserve its qualified type");
+	self.wip.apply_decl_attrs_extra(p, decl_node, qt, decl_node.pack())!;
+	self.wip.top = (uint)self.wip.attrs.len();
+}
+
+<* Attributes after the closing brace: `struct S { ... } __attribute__((packed))`. *>
+fn void? TagAttributes.apply_body_end(&self, Parser* p, type_store::QualType qt, type_store::NodeIndex decl_node)
+{
+	self.wip.top = (uint)self.wip.attrs.len();
+	self.parse(p)!;
+	self.apply(p, qt, decl_node)!;
+}
 
 struct ContainerBodySeed
 {
@@ -42,20 +65,8 @@ struct ContainerBodySeed
 	bool has_fixed;
 	type_store::QualType fixed_qt;
 	pack::PackValue pack_value;
-	TagAttributeCallback tag_attributes;
-	void* tag_attribute_context;
+	TagAttributes* tags;
 }
-
-<* Called just after the opening brace. The declaration grammar must consume
-   through the matching closing brace, construct the declaration node, and
-   update the incomplete tag's TypeStore entry while preserving seed.qt. *>
-alias ContainerBodyCallback = fn type_store::QualType?(void* context, Parser* p, ContainerBodySeed seed);
-
-<* Parses the declaration-specifier list after an enum's ':'. Returns INVALID when
-   no type specifier starts at the current token, and emits no diagnostic then.
-   The implementer rejects storage-class specifiers. Returns PARSING_FAILED on a
-   hard parse error. *>
-alias FixedUnderlyingCallback = fn type_store::QualType?(void* context, Parser* p);
 
 fn string_interner::StringId Parser.anonymous_container_name(&self, tokens::TokenIndex keyword_tok, bool is_union, bool is_enum)
 {
@@ -124,8 +135,8 @@ fn void? Parser.check_enum_fixed_ty(&self, bool has_fixed, type_store::QualType 
 	}
 }
 
-fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback parse_fixed, void* fixed_context,
-	TagAttributeCallback tag_attributes, void* tag_attribute_context)
+<* `tags` is null when no declaration grammar is available (`record_spec`). *>
+fn TagHeader? Parser.record_header(&self, bool is_enum, TagAttributes* tags)
 {
 	if (self.at_eof()) return PARSING_FAILED~;
 	tokens::TokenIndex keyword_tok = self.tok_i;
@@ -140,7 +151,7 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 	}
 	self.advance();
 	bool is_union = keyword == tokenizer::TokenId.KEYWORD_UNION;
-	if (tag_attributes) tag_attributes(tag_attribute_context, self, {}, TagAttributeStage.PARSE_HEADER)!;
+	if (tags) tags.parse(self)!;
 
 	tokens::TokenIndex name_tok = 0;
 	string_interner::StringId name = string_interner::EMPTY;
@@ -158,13 +169,13 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 	{
 		tokens::TokenIndex colon_tok = self.tok_i;
 		self.advance();
-		if (parse_fixed == null)
+		if (!tags)
 		{
 			self.grammar_unavailable()!;
 			return PARSING_FAILED~;
 		}
 		tokens::TokenIndex ty_start = self.tok_i;
-		type_store::QualType? maybe_parsed_fixed = parse_fixed(fixed_context, self);
+		type_store::QualType? maybe_parsed_fixed = tags.decls.parse_enum_underlying(self, tags.record_member);
 		fault fixed_fault = @catch(maybe_parsed_fixed);
 		if (fixed_fault == ENUM_UNDERLYING_NO_DECL_SPEC)
 		{
@@ -183,7 +194,7 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 			has_fixed = true;
 		}
 	}
-	if (tag_attributes) tag_attributes(tag_attribute_context, self, {}, TagAttributeStage.PARSE_HEADER)!;
+	if (tags) tags.parse(self)!;
 
 	bool is_definition = self.is_at(tokenizer::TokenId.L_BRACE);
 	if (name_tok != 0 && !is_definition)
@@ -200,7 +211,7 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 			TagHeader header = { .qt = prev.qt, .name = name, .keyword_tok = keyword_tok, .name_tok = name_tok,
 			.decl_node = prev.node, .is_union = is_union, .is_enum = is_enum, .is_definition = false,
 			.has_fixed = has_fixed, .fixed_qt = fixed_qt };
-			if (tag_attributes) tag_attributes(tag_attribute_context, self, header, TagAttributeStage.APPLY_HEADER)!;
+			if (tags) tags.apply(self, header.qt, header.decl_node)!;
 			return header;
 		}
 	}
@@ -305,13 +316,13 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, FixedUnderlyingCallback 
 	TagHeader header = { .qt = qt, .name = name, .keyword_tok = keyword_tok, .name_tok = name_tok,
 	.decl_node = node, .is_union = is_union, .is_enum = is_enum, .is_definition = is_definition,
 	.has_fixed = has_fixed, .fixed_qt = fixed_qt };
-	if (tag_attributes) tag_attributes(tag_attribute_context, self, header, TagAttributeStage.APPLY_HEADER)!;
+	if (tags) tags.apply(self, header.qt, header.decl_node)!;
 	return header;
 }
 
-<* Parse a struct/union/enum tag reference or incomplete declaration. Use the
-   body callback variants when the declaration grammar is available. *>
-fn type_store::QualType? Parser.record_spec(&self, bool is_enum = false, FixedUnderlyingCallback parse_fixed = null, void* fixed_context = null)
+<* Parse a struct/union/enum tag reference or incomplete declaration. Use
+   record_spec_with_body when the declaration grammar is available. *>
+fn type_store::QualType? Parser.record_spec(&self, bool is_enum = false)
 {
 	// Do not mutate the tag table until a body parser has been supplied.
 	tokens::TokenIndex start = self.tok_i;
@@ -330,48 +341,55 @@ fn type_store::QualType? Parser.record_spec(&self, bool is_enum = false, FixedUn
 			}
 		}
 	}
-	TagHeader? parsed = self.record_header(is_enum, parse_fixed, fixed_context, null, null);
+	TagHeader? parsed = self.record_header(is_enum, null);
 	if (catch parsed) return PARSING_FAILED~;
 	TagHeader header = parsed;
 	assert(!header.is_definition && self.tok_i >= start);
 	return header.qt;
 }
 
-<* Parse a struct/union definition using the declaration grammar callback. The
-   callback receives the incomplete tag and opening brace, and returns the
-   completed type handle (which must preserve the original handle). *>
-fn type_store::QualType? Parser.record_spec_with_body(&self, ContainerBodyCallback parse_body, void* context, bool is_enum = false, FixedUnderlyingCallback parse_fixed = null, void* fixed_context = null,
-	TagAttributeCallback tag_attributes = null, void* tag_attribute_context = null)
+<* Parse a struct/union/enum specifier with its body. Attributes around the tag
+   name and after `}` are parsed into `wip` and applied to the tag; the tag's
+   declaration node is reported through `tag_decl_node_out`. The declaration
+   grammar parses members/enumerators and the fixed enum underlying type, and
+   must return a completed type preserving the original tag handle. *>
+fn type_store::QualType? Parser.record_spec_with_body(&self, parser_declaration::DeclarationParser* decls, bool is_enum,
+	attribute_wip::Wip* wip, type_store::NodeIndex* tag_decl_node_out, bool* has_tag_decl_node_out, bool record_member)
 {
+	*has_tag_decl_node_out = false;
+	// Zig recordSpec/enumSpec: `state(true)` so attributes parsed before the
+	// tag keyword (e.g. `__declspec(align(8)) typedef enum {...} A;`) belong
+	// to the declaration, not the tag.
+	attribute_wip::State tag_state = wip.state(true);
+	defer wip.restore(tag_state);
+	TagAttributes tags = { .decls = decls, .wip = wip, .record_member = record_member };
+
 	pack::PackValue pack_value = {};
 	if (try pack_handler = self.comp.pragmas.get("pack"))
 	{
 		pack::PackState* pack_state = (pack::PackState*)pack_handler.ptr;
 		pack_value = pack_state.current_value();
 	}
-	TagHeader? parsed = self.record_header(is_enum, parse_fixed, fixed_context, tag_attributes, tag_attribute_context);
+	TagHeader? parsed = self.record_header(is_enum, &tags);
 	if (catch parsed) return PARSING_FAILED~;
 	TagHeader header = parsed;
+	*tag_decl_node_out = header.decl_node;
+	*has_tag_decl_node_out = true;
 	if (!header.is_definition) return header.qt;
 	self.advance();  // opening brace
-	type_store::QualType completed = parse_body(context, self, {
+	type_store::QualType completed = decls.parse_container_body(self, {
 			.qt = header.qt, .name = header.name, .keyword_tok = header.keyword_tok,
 			.name_tok = header.name_tok, .decl_node = header.decl_node,
 			.is_union = header.is_union, .is_enum = header.is_enum,
 			.has_fixed = header.has_fixed, .fixed_qt = header.fixed_qt,
 			.pack_value = pack_value,
-			.tag_attributes = tag_attributes, .tag_attribute_context = tag_attribute_context,
+			.tags = &tags,
 		})!;
-	assert(completed.unqualified() == header.qt.unqualified(), "container body callback must preserve tag identity");
+	assert(completed.unqualified() == header.qt.unqualified(), "container body must preserve tag identity");
 	return completed;
 }
 
-fn type_store::QualType? Parser.enum_spec(&self, FixedUnderlyingCallback parse_fixed = null, void* fixed_context = null)
+fn type_store::QualType? Parser.enum_spec(&self)
 {
-	return self.record_spec(true, parse_fixed, fixed_context);
-}
-
-fn type_store::QualType? Parser.enum_spec_with_body(&self, ContainerBodyCallback parse_body, void* context, FixedUnderlyingCallback parse_fixed = null, void* fixed_context = null)
-{
-	return self.record_spec_with_body(parse_body, context, true, parse_fixed, fixed_context);
+	return self.record_spec(true);
 }

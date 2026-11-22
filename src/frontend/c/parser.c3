@@ -58,8 +58,6 @@ interface IParserTestProbe @feat(TESTING)
 	fn void? handle_translation_unit_end(Parser* p) @optional;
 	<* Classify grammar faults that the translation-unit loop may recover from. *>
 	fn bool? is_recoverable_parse_fault(Parser* p, fault parse_fault) @optional;
-	<* Required before SymbolStack can combine a tentative declaration with a definition. *>
-	fn void handle_tentative_decl_definition(Parser* p, type_store::NodeIndex declaration, type_store::NodeIndex definition) @optional;
 	<* Compound statement inside a GNU statement expression. *>
 	fn type_store::NodeIndex? handle_statement_expression_body(Parser* p, bool eval) @optional;
 }

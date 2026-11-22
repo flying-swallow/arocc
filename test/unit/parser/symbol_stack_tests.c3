@@ -22,21 +22,6 @@ struct SymbolFixture
 	Compilation comp;
 	Preprocessor pp;
 	Parser p;
-	TentativeRecorder tentative;
-}
-
-struct TentativeRecorder (IParserTestProbe)
-{
-	NodeIndex[8] decl;
-	NodeIndex[8] def;
-	usz len;
-}
-
-fn void TentativeRecorder.handle_tentative_decl_definition(&self, Parser* p, NodeIndex decl, NodeIndex definition) @dynamic
-{
-	self.decl[self.len] = decl;
-	self.def[self.len] = definition;
-	self.len++;
 }
 
 struct RejectWriter (OutStream) { char unused; }
@@ -58,7 +43,6 @@ fn void SymbolFixture.init(&self, Allocator a, OutStream writer = null)
 	}
 	self.pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 	self.p.init(&self.pp);
-	self.p.test_probe = &self.tentative;
 	self.p.bind_finalized_tokens();
 }
 
@@ -179,7 +163,7 @@ fn void typedef_and_tag_lookup() @test
 	check(ta.allocation_count(), 0);
 }
 
-fn void redeclarations_and_tentative_links() @test
+fn void typedef_redeclarations() @test
 {
 	TrackingAllocator ta;
 	ta.init(mem);
@@ -204,13 +188,6 @@ fn void redeclarations_and_tentative_links() @test
 		check(f.d.messages.len(), 2);
 		f.expect(0, "typedef redefinition with different types ('int *' vs 'int')", 22);
 		f.expect(1, "previous definition is here", 21);
-
-		StringId obj = comp.intern_string("object");
-		stack.declare_symbol(p, obj, type_store::INT, 30, (NodeIndex)300)!!;
-		NodeOptIndex old = stack.define_symbol(p, obj, type_store::INT, 31, (NodeIndex)301, value::NONE, false)!!;
-		assert(!old.is_null() && old.unwrap() == (NodeIndex)300);
-		check(f.tentative.len, 1);
-		assert(f.tentative.decl[0] == (NodeIndex)300 && f.tentative.def[0] == (NodeIndex)301);
 
 		stack.pop_scope();
 		stack.free();

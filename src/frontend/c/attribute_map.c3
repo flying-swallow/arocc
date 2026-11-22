@@ -65,6 +65,10 @@ enum AttrReprTag : char
 	NORETURN,
 	CLEANUP,
 	ALWAYS_INLINE,
+	NOINLINE,
+	USED,
+	CONSTRUCTOR,
+	DESTRUCTOR,
 	GNU_INLINE,
 	SECTION,
 	WEAK,
@@ -121,7 +125,7 @@ fn void AttributeMap.free(&self)
 <*
  Zig `put`: store `attribute` compactly (see the module comment) and return
  its ref. Void-payload tags PACKED, HOT, COLD, CONST, TRANSPARENT_UNION,
- DESIGNATED_INIT, FALLTHROUGH, NORETURN, ALWAYS_INLINE, GNU_INLINE, WEAK,
+ DESIGNATED_INIT, FALLTHROUGH, NORETURN, ALWAYS_INLINE, NOINLINE, USED, GNU_INLINE, WEAK,
  SELECTANY, INTERNAL_LINKAGE, UNSEQUENCED, REPRODUCIBLE, UNUSED map to the
  same-named repr tag; ALIGNMENT null -> ALIGNMENT_NULL; DEPRECATED with
  replacement (requires msg) -> DEPRECATED_REPLACEMENT, with msg only ->
@@ -148,6 +152,10 @@ fn AttrRef AttributeMap.put(&self, Attribute attribute)
 		case FALLTHROUGH: repr.tag = FALLTHROUGH;
 		case NORETURN: repr.tag = NORETURN;
 		case ALWAYS_INLINE: repr.tag = ALWAYS_INLINE;
+		case NOINLINE: repr.tag = NOINLINE;
+		case USED: repr.tag = USED;
+		case CONSTRUCTOR: repr.tag = CONSTRUCTOR; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.extra.push(args.constructor.priority);
+		case DESTRUCTOR: repr.tag = DESTRUCTOR; repr.data = (uint)self.extra.len(); self.extra.push(attribute.tok); self.extra.push(args.constructor.priority);
 		case GNU_INLINE: repr.tag = GNU_INLINE;
 		case WEAK: repr.tag = WEAK;
 		case SELECTANY: repr.tag = SELECTANY;
@@ -245,6 +253,10 @@ fn Attribute AttributeMap.get(&self, AttrRef ref)
 		case FALLTHROUGH: result.args.tag = FALLTHROUGH;
 		case NORETURN: result.args.tag = NORETURN;
 		case ALWAYS_INLINE: result.args.tag = ALWAYS_INLINE;
+		case NOINLINE: result.args.tag = NOINLINE;
+		case USED: result.args.tag = USED;
+		case CONSTRUCTOR: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = CONSTRUCTOR; result.args.constructor = { .priority = (ushort)self.extra[(usz)r.data + 1] };
+		case DESTRUCTOR: result.tok = (tokens::TokenIndex)self.extra[r.data]; result.args.tag = DESTRUCTOR; result.args.constructor = { .priority = (ushort)self.extra[(usz)r.data + 1] };
 		case GNU_INLINE: result.args.tag = GNU_INLINE;
 		case WEAK: result.args.tag = WEAK;
 		case SELECTANY: result.args.tag = SELECTANY;

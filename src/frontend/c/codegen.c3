@@ -2,7 +2,7 @@
 // AST node dispatch is implemented in the companion codegen_nodes.c3 file.
 module aro::frontend::c::codegen;
 import aro::backend::ir, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor;
-import aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::string_interner;
+import aro::frontend::c::attribute, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::string_interner;
 import std::collections::list, std::collections::map;
 import std::core::dstring;
 
@@ -297,7 +297,11 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 				// Zig skips every inline body. `static inline` definitions are ordinary
 				// internal functions and must be emitted; C99 external inline
 				// definitions (plain `inline`) still produce no symbol.
-				if (decl.function.body.is_null()) continue;
+				if (decl.function.body.is_null())
+				{
+					c.declare_weak_function(decl_index, decl.function);
+					continue;
+				}
 				if (decl.function.is_inline && !c.has_internal_linkage(decl_index)) continue;
 				if (keep_going)
 				{
@@ -340,7 +344,9 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 				unreachable("unexpected top-level node in CodeGen.gen_ir");
 		}
 	}
-	return c.builder.finish();
+	ir::Ir graph = c.builder.finish();
+	graph.big_endian = c.comp.target.cpu.arch.big;
+	return graph;
 }
 
 <* Set a useful report name while lowering a file-scope variable. *>
@@ -469,6 +475,48 @@ fn void CodeGen.add_linkage_flag(&self, type_store::NodeIndex index, char bit)
 fn char CodeGen.linkage_flag(&self, type_store::NodeIndex index)
 {
 	return self.linkage_flags.get((uint)index) ?? 0;
+}
+
+<* `noinline` wins over `always_inline`, as in GCC. A prototype's inlining
+   attributes reach the definition through attribute inheritance (Wip). *>
+fn ir::InlineHint CodeGen.inline_hint(&self, type_store::NodeIndex declaration)
+{
+	type_store::NodeOptIndex node = (type_store::NodeOptIndex)declaration;
+	if (self.tree.attr_map.has_attribute(node, attribute::AttributeTag.NOINLINE)) return ir::InlineHint.NEVER;
+	if (self.tree.attr_map.has_attribute(node, attribute::AttributeTag.ALWAYS_INLINE)) return ir::InlineHint.ALWAYS;
+	return ir::InlineHint.NONE;
+}
+
+<* `__attribute__((weak))` on an externally visible declaration (inherited from
+   earlier declarations through Wip). Internal symbols cannot be weak. *>
+fn bool CodeGen.is_weak(&self, type_store::NodeIndex declaration, ir::Linkage linkage)
+{
+	return linkage == ir::Linkage.EXTERNAL &&
+		self.tree.attr_map.has_attribute((type_store::NodeOptIndex)declaration, attribute::AttributeTag.WEAK);
+}
+
+<* Copy `used` / `constructor` / `destructor` onto the merged IR decl `name`. *>
+fn void CodeGen.apply_retention(&self, String name, type_store::NodeIndex declaration)
+{
+	ir::Decl* decl = self.builder.find_decl(name);
+	if (!decl) return;
+	type_store::NodeOptIndex node = (type_store::NodeOptIndex)declaration;
+	if (self.tree.attr_map.has_attribute(node, attribute::AttributeTag.USED)) decl.retain = true;
+	if (decl.kind != ir::DeclKind.FUNCTION) return;
+	foreach (ref : self.tree.attr_map.attrs(node))
+	{
+		attribute::Attribute attr = self.tree.attr_map.get(ref);
+		if (attr.args.tag == attribute::AttributeTag.CONSTRUCTOR)
+		{
+			decl.static_init = ir::StaticInit.CONSTRUCTOR;
+			decl.init_priority = attr.args.constructor.priority;
+		}
+		else if (attr.args.tag == attribute::AttributeTag.DESTRUCTOR)
+		{
+			decl.static_init = ir::StaticInit.DESTRUCTOR;
+			decl.init_priority = attr.args.destructor.priority;
+		}
+	}
 }
 
 <* Whether a declaration has internal linkage, following parser redeclaration links. *>
@@ -627,6 +675,15 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 	}
 }
 
+<* A weak function prototype becomes an undefined weak symbol, carried in IR as
+   an EXTERN global placeholder; a definition in this unit replaces it on merge. *>
+fn void CodeGen.declare_weak_function(&self, type_store::NodeIndex declaration, tree::NodeFunction function)
+{
+	if (self.has_internal_linkage(declaration) || !self.is_weak(declaration, ir::Linkage.EXTERNAL)) return;
+	String name = self.symbol_name(self.tree.tok_slice(function.name_tok), false);
+	self.builder.add_global(name, ir::Linkage.EXTERNAL, { .section = ir::DataSection.EXTERN, .align = 1 }, true);
+}
+
 <* Lower one function definition and assemble its return block. *>
 fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunction function)
 {
@@ -653,8 +710,8 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		self.aggregate_return_size = func_type.return_type.sizeof(self.comp);
 	}
 	self.ret_nodes.clear();
-	// C3 deviation: Zig never clears `symbols`, so a name could resolve to an
-	// earlier function's ALLOC. Locals are per function.
+	// Clear function-local symbols between functions; reusing Zig's persistent
+	// symbol stack here could resolve a name to an earlier function's ALLOC.
 	self.symbols.clear();
 	self.vla_sizes.clear();
 	self.vla_scopes.clear();
@@ -678,7 +735,8 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	if (self.aggregate_return && self.aggregate_return_class == AggClass.INTEGER)
 	{
 		uint padded_size = (uint)((self.aggregate_return_size + 7) / 8 * 8);
-		self.aggregate_return_slot = self.builder.add_alloc(padded_size, 8);
+		self.aggregate_return_slot = self.builder.add_alloc(padded_size, 8,
+			self.type_contains_volatile(func_type.return_type));
 		self.gen_zero_fill(self.aggregate_return_slot, padded_size)!;
 	}
 	foreach (param : func_type.params)
@@ -701,7 +759,7 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 			uint words = class.kind == AggClass.INTEGER ? (uint)class.eightbyte_count : 0;
 			uint allocation_size = size;
 			if (class.kind == AggClass.INTEGER && words * 8 > allocation_size) allocation_size = words * 8;
-			alloc = self.builder.add_alloc(allocation_size, alignment, param.qt.is_volatile);
+			alloc = self.builder.add_alloc(allocation_size, alignment, self.type_contains_volatile(param.qt));
 			if (class.kind == AggClass.INTEGER)
 			{
 				bool in_registers = gp_index + words <= 6;
@@ -763,7 +821,7 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 				if (gp_index + 2 > 6) self.fail("TODO: __int128 parameter passed on the stack\n")!;
 				ir::Ref low = self.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
 				ir::Ref high = self.builder.add_arg_at(value_interner::REF_I64, ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
-				alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
+				alloc = self.builder.add_alloc(size, alignment, self.type_contains_volatile(param.qt));
 				self.builder.add_store(alloc, low);
 				self.builder.add_store(self.ptr_at(alloc, 8), high);
 				self.symbols.push({ .name = param.name, .value = alloc });
@@ -778,7 +836,7 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 				arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.STACK, stack_offset, 8);
 				stack_offset += 8;
 			}
-			alloc = self.builder.add_alloc(size, alignment, param.qt.is_volatile);
+			alloc = self.builder.add_alloc(size, alignment, self.type_contains_volatile(param.qt));
 			self.builder.add_store(alloc, arg);
 		}
 		self.symbols.push(
@@ -790,9 +848,8 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 
 	self.return_label = self.builder.make_label("return");
 	self.gen_stmt(function.body.unwrap())!;
-	// C3 deviations from Zig genFn: a void RET carries NONE (not ref 0), `return;`
-	// jumps reach a placed `return` block, and the single-return shortcut only
-	// replaces the body's final jump when that jump really is the return jump.
+	// Keep `return;` as RET(NONE), route early returns through the placed return
+	// block, and only fold the final jump when it targets that block.
 	if (self.aggregate_return)
 	{
 		if (!self.builder.block_terminated()) self.builder.add_jump(self.return_label);
@@ -837,7 +894,8 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	}
 	self.emit_pending_gotos();
 	ir::Linkage linkage = self.has_internal_linkage(declaration) ? ir::Linkage.INTERNAL : ir::Linkage.EXTERNAL;
-	self.builder.finish_fn(name, linkage);
+	self.builder.finish_fn(name, linkage, self.inline_hint(declaration), self.is_weak(declaration, linkage));
+	self.apply_retention(name, declaration);
 }
 
 <* A 128-bit integer (`__int128`, `_BitInt(128)`), passed in two GPRs and returned in RDX:RAX. *>

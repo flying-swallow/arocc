@@ -17,6 +17,7 @@ fn bool scalar_constant_bits(ir::Ir* graph, ir::Inst[] insts, ir::Ref ref, ulong
 
 fn ir::Ref scalar_constant(ir::Ir* graph, DeclEditor* editor, ushort width, ulong bits, value_interner::InternerRef ty)
 {
+	if (width == 1) return bits == 0 ? editor.add_constant(value_interner::REF_ZERO, ty) : editor.add_constant(value_interner::REF_ONE, ty);
 	return editor.add_constant(graph.interner.put(primitive_value::int_key(const_prop_signed(bits, width))), ty);
 }
 
@@ -33,6 +34,28 @@ fn bool scalar_commutative(ir::InstTag tag)
 		case CMP_NE: return true;
 		default: return false;
 	}
+}
+
+<* The boolean compare combiner can invert one comparison through another. Avoid
+   feeding it a directly or mutually recursive value graph, which has no stable
+   SSA interpretation and can make its worklist oscillate. *>
+fn bool scalar_has_short_value_cycle(ir::Inst[] insts, ir::Ref ref)
+{
+	if ((usz)ref >= (usz)insts.len) return true;
+	bool cycle = false;
+	@each_value_operand(&insts[(sz)ref]; ir::Ref* slot)
+	{
+		if ((usz)*slot >= (usz)insts.len) { cycle = true; }
+		else if (*slot == ref) { cycle = true; }
+		else
+		{
+			@each_value_operand(&insts[(sz)*slot]; ir::Ref* nested)
+			{
+				if (*nested == ref) cycle = true;
+			};
+		}
+	};
+	return cycle;
 }
 
 fn ir::Ref simplify_integer_inst(ir::Ir* graph, DeclEditor* editor, ir::Ref ref)
@@ -54,13 +77,16 @@ fn ir::Ref simplify_integer_inst(ir::Ir* graph, DeclEditor* editor, ir::Ref ref)
 		case TRUNC:
 		case ZEXT:
 		case SEXT:
+			if ((usz)inst.data.ref >= (usz)editor.insts.len()) return ir::NONE;
 			ir::Inst operand = editor.insts.entries[(sz)inst.data.ref];
 			if (operand.ty == inst.ty) return inst.data.ref;
 			if (inst.tag == ir::InstTag.TRUNC && (operand.tag == ir::InstTag.ZEXT || operand.tag == ir::InstTag.SEXT) &&
+				(usz)operand.data.ref < (usz)editor.insts.len() &&
 				editor.insts.entries[(sz)operand.data.ref].ty == inst.ty) return operand.data.ref;
 			return ir::NONE;
 		case BIT_NOT:
 		case NEGATE:
+			if ((usz)inst.data.ref >= (usz)editor.insts.len()) return ir::NONE;
 			ir::Inst unary = editor.insts.entries[(sz)inst.data.ref];
 			if (unary.tag == inst.tag && unary.ty == inst.ty) return unary.data.ref;
 			return ir::NONE;
@@ -91,6 +117,7 @@ fn ir::Ref simplify_integer_inst(ir::Ir* graph, DeclEditor* editor, ir::Ref ref)
 	}
 	ir::Ref lhs = inst.data.bin.lhs;
 	ir::Ref rhs = inst.data.bin.rhs;
+	if ((usz)lhs >= (usz)editor.insts.len() || (usz)rhs >= (usz)editor.insts.len()) return ir::NONE;
 	ushort operand_width;
 	if (!const_prop_int_width(graph, editor.insts.entries[(sz)lhs].ty, &operand_width) ||
 		editor.insts.entries[(sz)lhs].ty != editor.insts.entries[(sz)rhs].ty) return ir::NONE;
@@ -196,7 +223,24 @@ fn bool integer_simplify(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
 		ir::Inst before = editor.insts.entries[(sz)ref];
 		ir::Ref replacement;
 		if (before.tag == ir::InstTag.PHI) { replacement = simplify_phi(before, ref); }
-		else { replacement = simplify_integer_inst(graph, &editor, ref); }
+		else
+		{
+			replacement = simplify_integer_inst(graph, &editor, ref);
+			if (replacement == ir::NONE && !scalar_has_short_value_cycle(editor.insts.array_view(), ref) &&
+				instcombine_inst(graph, &editor, ref, &replacement))
+			{
+				changed = true;
+				@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
+				{
+					if ((usz)*slot < (usz)uses.users.len) uses.users[(sz)*slot].push(ref);
+				};
+				if (!queued[(sz)ref]) { worklist.push(ref); queued[(sz)ref] = true; }
+				foreach (user_ref : uses.users[(sz)ref])
+				{
+					if (!queued[(sz)user_ref]) { worklist.push(user_ref); queued[(sz)user_ref] = true; }
+				}
+			}
+		}
 		if (scalar_commutative(before.tag) && before.data.bin.lhs != editor.insts.entries[(sz)ref].data.bin.lhs)
 		{
 			changed = true;

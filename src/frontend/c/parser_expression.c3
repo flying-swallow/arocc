@@ -75,7 +75,7 @@ fn void? adjust_vector_operands(parser::Parser* p, parser_result::Result* a, par
 			if (a.qt.size_compare(b.qt, p.comp) == type_store::TypeSizeOrder.EQ)
 			{
 				b.qt = a.qt;
-				b.implicit_cast(p, tree::CastKind.BITCAST);
+				b.node = p.tree.implicit_cast(b.node, b.qt, tree::CastKind.BITCAST);
 				return;
 			}
 			Diagnostic.INCOMPATIBLE_VEC_TYPES.@emit(p, tok, p.fmt_qt(a.qt), p.fmt_qt(b.qt))!;
@@ -90,7 +90,7 @@ fn void? adjust_vector_operands(parser::Parser* p, parser_result::Result* a, par
 		}
 		b.save_value(p);
 		b.qt = a.qt;
-		b.implicit_cast(p, tree::CastKind.VECTOR_SPLAT);
+		b.node = p.tree.implicit_cast(b.node, b.qt, tree::CastKind.VECTOR_SPLAT);
 		return;
 	}
 	type_store::Type bv = b_vec!!;
@@ -100,7 +100,7 @@ fn void? adjust_vector_operands(parser::Parser* p, parser_result::Result* a, par
 	}
 	a.save_value(p);
 	a.qt = b.qt;
-	a.implicit_cast(p, tree::CastKind.VECTOR_SPLAT);
+	a.node = p.tree.implicit_cast(a.node, a.qt, tree::CastKind.VECTOR_SPLAT);
 }
 
 <* Zig Result.boolRes for vectors: comparisons yield a generic vector of signed
@@ -863,14 +863,14 @@ fn parser_result::Result? Parser.parse_conditional(&self, parser_result::Result 
 			{
 				then_expr.val = value::NULL;
 				then_expr.qt = else_expr.qt;
-				then_expr.implicit_cast(p, tree::CastKind.BITCAST);
+				then_expr.node = p.tree.implicit_cast(then_expr.node, then_expr.qt, tree::CastKind.BITCAST);
 			}
 		}
 		else if (!else_expr.qt.eql(then_expr.qt, p.comp))
 		{
 			else_expr.val = value::NULL;
 			else_expr.qt = then_expr.qt;
-			else_expr.implicit_cast(p, tree::CastKind.BITCAST);
+			else_expr.node = p.tree.implicit_cast(else_expr.node, else_expr.qt, tree::CastKind.BITCAST);
 		}
 	}
 	else if (then_expr.qt.is_pointer(p.comp) && else_expr.qt.is_pointer(p.comp))
@@ -897,9 +897,9 @@ fn parser_result::Result? Parser.parse_conditional(&self, parser_result::Result 
 		if (!compatible_children && !has_void_pointer_branch)
 		{
 			then_expr.qt = common_pointer;
-			then_expr.implicit_cast(p, tree::CastKind.BITCAST);
+			then_expr.node = p.tree.implicit_cast(then_expr.node, then_expr.qt, tree::CastKind.BITCAST);
 			else_expr.qt = common_pointer;
-			else_expr.implicit_cast(p, tree::CastKind.BITCAST);
+			else_expr.node = p.tree.implicit_cast(else_expr.node, else_expr.qt, tree::CastKind.BITCAST);
 		}
 		else
 		{

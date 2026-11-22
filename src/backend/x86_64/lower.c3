@@ -2,8 +2,8 @@
 // backend/Ir/x86/Renderer.zig is a stub that fails every function).
 //
 // Shape follows the Zig compiler's x86_64 backend: lowering produces a list of
-// (mnemonic, operands) instructions that are checked against the ported
-// `encodings.zon` table (`find`) and then emitted; see emit_text.c3. The same
+// (mnemonic, operands) instructions that are checked against the
+// XED-generated encoding table (`find`) and then emitted; see emit_text.c3. The same
 // lowered rows are encoded into object bytes and relocations by emit_object.c3.
 //
 // Strategy (first milestone, correctness over speed):
@@ -533,6 +533,10 @@ fn void? Lowering.layout(&self)
 			default: break;
 		}
 		if (is_void_type(inst.ty)) continue;
+		// Constants and symbols are rematerialized by load(); register-allocated
+		// values never read or write their slot. Neither needs frame space.
+		if (inst.tag == CONSTANT || inst.tag == SYMBOL) continue;
+		if (!self.spill_all && self.value_in_reg[(sz)ref]) continue;
 		if (self.value_slot_bytes(inst.ty) == 16)
 		{
 			offset = (offset + 15) / 16 * 16 + 16;
@@ -1092,7 +1096,12 @@ fn void Lowering.allocate(&self)
 			self.value_regs[(sz)current.ref] = SYSV_CALLEE_PRESERVED_REGS[victim];
 		}
 	}
+}
 
+<* Reserve save slots for the callee-preserved registers `allocate` used, after `layout`. *>
+fn void Lowering.assign_callee_save_slots(&self)
+{
+	usz count = self.decl.instructions.len;
 	int offset = self.frame;
 	for (usz reg = 0; reg < SYSV_CALLEE_PRESERVED_REGS.len; reg++)
 	{
@@ -1241,6 +1250,7 @@ fn ushort? Lowering.load_extended(&self, ir::Ref ref, Register reg, bool signed)
 
 fn void? Lowering.divide(&self, ir::Ref ref, bool signed, bool remainder)
 {
+	if (self.divide_constant(ref, signed, remainder)!) return;
 	ir::Inst inst = self.inst(ref);
 	ushort w = self.load_extended(inst.data.bin.lhs, RAX, signed)!;
 	self.load_extended(inst.data.bin.rhs, RCX, signed)!;
@@ -1269,6 +1279,20 @@ fn void? Lowering.shift(&self, ir::Ref ref, Mnemonic mnemonic, bool signed)
 fn void? Lowering.compare(&self, ir::Ref ref, Condition cc)
 {
 	ir::Inst inst = self.inst(ref);
+	primitive_value::PrimitiveValue lhs_type = self.ir.interner.get(self.inst(inst.data.bin.lhs).ty);
+	if (lhs_type.tag == primitive_value::PrimitiveType.INT_TY && lhs_type.ty_bits == 1)
+	{
+		// i1 is stored as 0/1, but signed interpretation is 0/-1. Reverse
+		// only the signed ordering condition to compare the stored bits.
+		switch (inst.tag)
+		{
+			case CMP_SLT: cc = A;
+			case CMP_SLTE: cc = AE;
+			case CMP_SGT: cc = B;
+			case CMP_SGTE: cc = BE;
+			default: break;
+		}
+	}
 	ushort w = self.load(inst.data.bin.lhs, RAX)!;
 	self.load(inst.data.bin.rhs, RCX)!;
 	self.emit(CMP, reg_op(Register.RAX.to_bits(w)), reg_op(Register.RCX.to_bits(w)));
@@ -1852,6 +1876,7 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 fn void? Lowering.branch(&self, ir::Ref ref)
 {
 	ir::BranchData b = self.inst(ref).data.branch;
+	// i1 values are represented as 0/1 in their byte, so testing the byte is enough.
 	self.load(b.cond, RAX)!;
 	self.emit(TEST, reg_op(AL), reg_op(AL));
 	String else_edge = self.new_edge_label();
@@ -1864,6 +1889,20 @@ fn void? Lowering.branch(&self, ir::Ref ref)
 fn void? Lowering.select(&self, ir::Ref ref)
 {
 	ir::BranchData select = self.inst(ref).data.branch;
+	if (!self.is_float_type(self.inst(ref).ty))
+	{
+		// i1 values are represented as 0/1 in their byte, so testing the byte is enough.
+		// Both arms are already-materialized SSA values; the CMOV does not speculate arm effects.
+		ushort width = self.bits(self.inst(ref).ty)! <= 32 ? 32 : 64;
+		self.load(select.then_label, Register.RAX.to_bits(width))!;
+		self.load(select.else_label, Register.RCX.to_bits(width))!;
+		self.load(select.cond, RDX)!;
+		self.emit(TEST, reg_op(DL), reg_op(DL));
+		self.emit(CMOVE, reg_op(Register.RAX.to_bits(width)), reg_op(Register.RCX.to_bits(width)));
+		self.store(ref, RAX)!;
+		return;
+	}
+	// Keep floating-point selects as branches. Moving the bits preserves signed zero and NaN payloads.
 	self.load(select.cond, RAX)!;
 	self.emit(TEST, reg_op(AL), reg_op(AL));
 	String else_label = self.new_edge_label();
@@ -2097,6 +2136,7 @@ fn bool? Lowering.lower_wide_int(&self, ir::Ref ref)
 				return true;
 			}
 			self.load_pair(inst.data.ref, RAX, RDX)!;
+			if (inst.ty == value_interner::REF_I1) self.emit(AND, reg_op(AL), imm_op(1));
 			self.store(ref, RAX)!;
 			return true;
 		case ATOMIC_STORE:
@@ -2190,16 +2230,12 @@ fn bool? Lowering.lower_wide_int(&self, ir::Ref ref)
 			self.store_pair(ref, RAX, RDX)!;
 		case SELECT:
 			ir::BranchData select = inst.data.branch;
-			self.load(select.cond, RAX)!;
-			self.emit(TEST, reg_op(AL), reg_op(AL));
-			String else_label = self.new_edge_label();
-			String done_label = self.new_edge_label();
-			self.emit(JE, target_op(else_label));
 			self.load_pair(select.then_label, RAX, RDX)!;
-			self.emit(JMP, target_op(done_label));
-			self.emit_label(else_label);
-			self.load_pair(select.else_label, RAX, RDX)!;
-			self.emit_label(done_label);
+			self.load_pair(select.else_label, RCX, R11)!;
+			self.load(select.cond, R8)!;
+			self.emit(TEST, reg_op(R8B), reg_op(R8B));
+			self.emit(CMOVE, reg_op(RAX), reg_op(RCX));
+			self.emit(CMOVE, reg_op(RDX), reg_op(R11));
 			self.store_pair(ref, RAX, RDX)!;
 		case CALL:
 		case PHI:
@@ -2544,13 +2580,14 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		case FPTRUNC: self.float_convert(ref, false)!;
 		case TRUNC:
 			self.load(inst.data.ref, RAX)!;
+			if (inst.ty == value_interner::REF_I1) self.emit(AND, reg_op(AL), imm_op(1));
 			self.store(ref, RAX)!;
 		case ZEXT: self.extend(ref, false)!;
 		case SEXT: self.extend(ref, true)!;
 		case SELECT: self.select(ref)!;
 		case DYN_ALLOC:
-			// Every frame slot is rbp-relative and the epilogue is `leave`, so rsp may
-			// move at runtime. Round to 16 bytes to keep calls aligned.
+			// C3 VLAs lower through DYN_ALLOC. Frame slots stay rbp-relative and
+			// `leave` restores the frame, so round this runtime stack move for calls.
 			long align = inst.data.dyn_alloc.align > 16 ? (long)inst.data.dyn_alloc.align : 16;
 			self.load(inst.data.dyn_alloc.size, RAX)!;
 			self.emit(ADD, reg_op(RAX), imm_op(align - 1));
@@ -2578,8 +2615,10 @@ fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 	self.edge_count = 0;
 	self.current_label = ir::NONE;
 	self.block_terminated = false;
-	self.layout()!;
+	// Allocate first so layout gives stack slots only to values that need memory.
 	self.allocate();
+	self.layout()!;
+	self.assign_callee_save_slots();
 	self.emit(PUSH, reg_op(RBP));
 	self.emit(MOV, reg_op(RBP), reg_op(RSP));
 	if (self.frame > 0) self.emit(SUB, reg_op(RSP), imm_op(self.frame));

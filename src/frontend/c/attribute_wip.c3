@@ -530,7 +530,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 			attribute::Attribute prior = p.tree.attr_map.get(ref);
 			switch (prior.args.tag)
 			{
-				case PACKED: case HOT: case COLD: case CONST: case DEPRECATED: case UNAVAILABLE: case ERROR: case WARNING: case VISIBILITY: case NORETURN: case CLEANUP: case ALWAYS_INLINE: case GNU_INLINE:
+				case PACKED: case HOT: case COLD: case CONST: case DEPRECATED: case UNAVAILABLE: case ERROR: case WARNING: case VISIBILITY: case NORETURN: case CLEANUP: case ALWAYS_INLINE: case NOINLINE: case GNU_INLINE: case WEAK: case USED: case CONSTRUCTOR: case DESTRUCTOR:
 					self.applied.push(ref);
 				case ALIGNMENT:
 					self.add_alignment_to_type_map(p, decl.get(&p.tree), qt, prior.args.alignment.has_alignment, prior.args.alignment.alignment);
@@ -626,6 +626,25 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case SECTION: self.apply_section(p, attr, decl, qt)!; continue;
 					case VISIBILITY: self.apply_visibility(p, attr, decl, qt)!; continue;
 					case ALWAYS_INLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
+					case NOINLINE: self.apply_noinline(p, attr, decl, qt)!; continue;
+					case USED:
+						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE })!) continue;
+						value.tag = attribute::AttributeTag.USED; apply = !self.arg_count(p, attr, 0)!;
+					case CONSTRUCTOR: case DESTRUCTOR:
+						{
+							if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
+							if (self.arg_count_min_max(p, attr, 0, 1)!) continue;
+							uint priority = attribute::DEFAULT_PRIORITY;
+							if (self.parsed_args(attr).len == 1 && !self.arg_u32(p, attr, 0, &priority)!) continue;
+							if (priority > attribute::DEFAULT_PRIORITY)
+							{
+								self.emit_at(p, attr, argument_token(p, attr, self.parsed_args(attr)[0]), Diagnostic.ARG_INT_OUT_OF_RANGE, int_value_text(p, self.parsed_args(attr)[0]))!;
+								continue;
+							}
+							value.tag = attr.name.gnu == attribute::AttrGnu.CONSTRUCTOR ? attribute::AttributeTag.CONSTRUCTOR : attribute::AttributeTag.DESTRUCTOR;
+							value.constructor = { .priority = (ushort)priority };
+							apply = true;
+						}
 					case GNU_INLINE: self.apply_gnu_inline(p, attr, decl, qt)!; continue;
 					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 				}
@@ -650,6 +669,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						if (self.arg_count(p, attr, 0)!) continue;
 						qt = self.apply_calling_convention(p, i, qt, true)!;
 					case ALWAYS_INLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
+					case NOINLINE: self.apply_noinline(p, attr, decl, qt)!; continue;
 					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 				}
 			case DECLSPEC:
@@ -659,6 +679,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case DEPRECATED: self.apply_deprecated(p, attr)!; continue;
 					case NORETURN: self.apply_noreturn(p, attr, decl, qt)!; continue;
 					case ALLOCATE: self.apply_section(p, attr, decl, qt)!; continue;
+					case NOINLINE: self.apply_noinline(p, attr, decl, qt)!; continue;
 					case SELECTANY:
 						value.tag = attribute::AttributeTag.SELECTANY; apply = !self.arg_count(p, attr, 0)!;
 					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
@@ -882,6 +903,18 @@ fn void? Wip.apply_always_inline(&self, parser::Parser* p, Parsed attr, type_sto
 		if (prev.args.tag == attribute::AttributeTag.ALWAYS_INLINE) return;
 	}
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.ALWAYS_INLINE });
+}
+
+<* `noinline`: a function-only marker; the IR inliner never inlines the function. *>
+fn void? Wip.apply_noinline(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
+{
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
+	if (self.arg_count(p, attr, 0)!) return;
+	foreach (ref : self.applied.array_view())
+	{
+		if (p.tree.attr_map.get(ref).args.tag == attribute::AttributeTag.NOINLINE) return;
+	}
+	self.add_applied(p, attr, { .tag = attribute::AttributeTag.NOINLINE });
 }
 
 fn void? Wip.apply_gnu_inline(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)

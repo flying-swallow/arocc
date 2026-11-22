@@ -9,8 +9,8 @@
 //   regBitSize/memBitSize/immBitSize, isSigned, toReg) are enum associated
 //   values. `exact` stands for Zig's `toReg() != .none` (the operand names one
 //   specific register, so only that register matches).
-// - x86_64 baseline rows plus approved legacy SSE/SSE2 and selected x87 rows
-//   are generated; the "shortest encoding" choice uses `Entry.estimate_len`.
+// - The rows are generated from Intel XED (tools/gen_x86_encodings) for the
+//   mnemonics lowering uses: x86_64 baseline, legacy SSE/SSE2 and x87; the "shortest encoding" choice uses `Entry.estimate_len`.
 // - Operands also carry symbol and label references; those classify as `rel32`
 //   (branch/call targets) or rip-relative memory, which an assembler or a later
 //   machine-code emitter turns into relocations.
@@ -120,7 +120,7 @@ fn bool Op.is_subset(self, Op target)
 	return false;
 }
 
-<* One row of `encodings.zon`. *>
+<* One row of the generated ENCODINGS table (encoding_table.c3). *>
 struct Entry
 {
 	Mnemonic mnemonic;

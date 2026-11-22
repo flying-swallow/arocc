@@ -1,6 +1,6 @@
 // Emit lowered x86_64 instructions as GNU assembler text in Intel syntax
 // (the operand order of the Zig encoding table). Every instruction is checked
-// against the ported `encodings.zon` rows first. emit_object.c3 encodes the
+// against the XED-generated encoding rows first. emit_object.c3 encodes the
 // same lowered rows into object bytes and resolves their fixups.
 module aro::backend::x86_64;
 import aro::backend::ir, std::collections::list, std::core::dstring, std::io;
@@ -81,11 +81,11 @@ fn String asm_symbol(String name) => is_intel_reserved(name) ? string::tformat("
 
 fn void write_symbol(DString* out, String name) => out.append_string(asm_symbol(name));
 
-fn void write_linkage(DString* out, ir::Linkage linkage, String name)
+fn void write_linkage(DString* out, ir::Linkage linkage, String name, bool is_weak = false)
 {
 	switch (linkage)
 	{
-		case EXTERNAL: out.appendf("\t.globl %s\n", asm_symbol(name));
+		case EXTERNAL: out.appendf(is_weak ? "\t.weak %s\n" : "\t.globl %s\n", asm_symbol(name));
 		case INTERNAL: out.appendf("\t.local %s\n", asm_symbol(name));
 	}
 }
@@ -158,7 +158,12 @@ fn void write_global_section(DString* out, ir::Decl* decl)
 fn void write_global_text(DString* out, ir::Decl* decl)
 {
 	ir::GlobalData* global = &decl.global;
-	if (!decl.is_definition()) return;
+	if (!decl.is_definition())
+	{
+		// An undefined weak reference must be declared so it may resolve to 0.
+		if (decl.is_weak) out.appendf("\t.weak %s\n\n", asm_symbol(decl.name));
+		return;
+	}
 	if (global.section == ir::DataSection.COMMON)
 	{
 		if (decl.linkage == ir::Linkage.INTERNAL) write_linkage(out, decl.linkage, decl.name);
@@ -166,7 +171,7 @@ fn void write_global_text(DString* out, ir::Decl* decl)
 		out.appendf("\t.comm %s, %d, %d\n\n", asm_symbol(decl.name), global.size, align);
 		return;
 	}
-	write_linkage(out, decl.linkage, decl.name);
+	write_linkage(out, decl.linkage, decl.name, decl.is_weak);
 	write_global_section(out, decl);
 	out.appendf("\t.type %s, @object\n\t.size %s, %d\n", asm_symbol(decl.name), asm_symbol(decl.name), global.size);
 	uint align = global.align > 0 ? global.align : 1;
@@ -182,7 +187,7 @@ fn void? Lowering.write_text(&self, DString* out)
 {
 	ir::Decl* decl = self.decl;
 	out.append_string("\t.text\n");
-	write_linkage(out, decl.linkage, decl.name);
+	write_linkage(out, decl.linkage, decl.name, decl.is_weak);
 	out.appendf("\t.p2align 4\n\t.type %s, @function\n%s:\n", asm_symbol(decl.name), asm_symbol(decl.name));
 	foreach (&line : self.lines)
 	{
@@ -260,6 +265,11 @@ fn String? render_asm(ir::Ir* ir, Allocator allocator, ir::ErrorList* errors, bo
 			}
 		}
 	};
+	foreach (&decl : ir.decls)
+	{
+		if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0 || decl.static_init == ir::StaticInit.NONE) continue;
+		out.appendf("\t.section .%s,\"aw\"\n\t.p2align 3\n\t.quad %s\n", decl.static_init_section(tmem), asm_symbol(decl.name));
+	}
 	out.append_string("\t.section .note.GNU-stack,\"\",@progbits\n");
 	defer out.free();
 	if (errors.len() != 0) return ir::LOWER_FAIL~;

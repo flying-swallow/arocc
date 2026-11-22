@@ -27,6 +27,8 @@ struct MemberBase
 	ir::Ref ptr;
 	type_store::RecordField field;
 	ulong record_size;
+	<* The member access names a volatile object (volatile field or base). *>
+	bool is_volatile;
 }
 
 struct BitfieldLval
@@ -38,6 +40,7 @@ struct BitfieldLval
 	uint shift;
 	uint width;
 	type_store::QualType field_qt;
+	bool is_volatile;
 }
 
 <* Parentheses do not change whether a member designates a bitfield. *>
@@ -90,8 +93,8 @@ fn MemberBase? CodeGen.gen_member_base(&self, type_store::NodeIndex node_index)
 	else if (self.tree.is_lval(node.member_access.base))
 	{
 		// The parser keeps `p` in `p->f` as an lvalue: load the pointer.
-		base_ptr = self.builder.add_inst(ir::InstTag.LOAD,
-			{ .ref = self.gen_lval(node.member_access.base)! }, value_interner::REF_PTR);
+		base_ptr = self.builder.add_load(self.gen_lval(node.member_access.base)!, value_interner::REF_PTR,
+			self.access_is_volatile(node.member_access.base.qt(self.tree)));
 	}
 	else
 	{
@@ -102,6 +105,8 @@ fn MemberBase? CodeGen.gen_member_base(&self, type_store::NodeIndex node_index)
 		.ptr = base_ptr,
 		.field = record.fields[node.member_access.member_index],
 		.record_size = base_qt.sizeof(self.comp),
+		.is_volatile = self.access_is_volatile(base_qt) || self.access_is_volatile(node_index.qt(self.tree)) ||
+			self.access_is_volatile(record.fields[node.member_access.member_index].qt),
 	};
 }
 
@@ -118,7 +123,7 @@ fn value_interner::InternerRef CodeGen.bitfield_window_type(&self, uint byte_cou
 }
 
 <* Resolve a bitfield to one typed storage unit, staying within its record. *>
-fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::RecordField field, ulong record_size)
+fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::RecordField field, ulong record_size, bool is_volatile = false)
 {
 	assert(field.bit_width != type_store::BIT_WIDTH_NULL && field.bit_width != 0);
 	assert(field.layout.offset_bits != type_store::FIELD_LAYOUT_INVALID);
@@ -148,6 +153,7 @@ fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::Re
 				.shift = field.reverse_storage ? unit_bits - (uint)(offset_bits - unit_start_bits) - field.bit_width : (uint)(offset_bits - unit_start_bits),
 				.width = field.bit_width,
 				.field_qt = field.qt,
+				.is_volatile = is_volatile,
 			};
 		}
 	}
@@ -174,6 +180,7 @@ fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::Re
 			.shift = field.reverse_storage ? window_bits - shift - field.bit_width : shift,
 			.width = field.bit_width,
 			.field_qt = field.qt,
+			.is_volatile = is_volatile,
 		};
 	}
 	self.fail("TODO lower struct bitfields")!;
@@ -262,7 +269,7 @@ fn ir::Ref CodeGen.reverse_bitfield_unit(&self, ir::Ref operand, BitfieldLval lv
 <* Load and extract a bitfield using its typed storage unit. *>
 fn ir::Ref? CodeGen.load_bitfield(&self, BitfieldLval lval)
 {
-	ir::Ref unit = self.reverse_bitfield_unit(self.builder.add_inst(ir::InstTag.LOAD, { .ref = lval.unit_ptr }, lval.unit_ty), lval);
+	ir::Ref unit = self.reverse_bitfield_unit(self.builder.add_load(lval.unit_ptr, lval.unit_ty, lval.is_volatile), lval);
 	if (lval.field_qt.is(self.comp, type_store::TypeTag.BOOL))
 	{
 		if (lval.shift != 0)
@@ -331,7 +338,7 @@ fn ir::Ref? CodeGen.store_bitfield(&self, BitfieldLval lval, ir::Ref value)
 	ulong shifted_mask = field_mask << lval.shift;
 	ir::Ref field_mask_ref = self.unit_constant(shifted_mask, lval.unit_ty);
 	ir::Ref outside_mask = self.builder.add_inst(ir::InstTag.BIT_NOT, { .ref = field_mask_ref }, lval.unit_ty);
-	ir::Ref old_unit = self.reverse_bitfield_unit(self.builder.add_inst(ir::InstTag.LOAD, { .ref = lval.unit_ptr }, lval.unit_ty), lval);
+	ir::Ref old_unit = self.reverse_bitfield_unit(self.builder.add_load(lval.unit_ptr, lval.unit_ty, lval.is_volatile), lval);
 	ir::Ref outside = self.builder.add_inst(ir::InstTag.BIT_AND,
 		{ .bin = { .lhs = old_unit, .rhs = outside_mask } }, lval.unit_ty);
 	if (lval.shift != 0)
@@ -342,7 +349,7 @@ fn ir::Ref? CodeGen.store_bitfield(&self, BitfieldLval lval, ir::Ref value)
 	}
 	ir::Ref merged = self.builder.add_inst(ir::InstTag.BIT_OR,
 		{ .bin = { .lhs = outside, .rhs = field_value } }, lval.unit_ty);
-	self.builder.add_store(lval.unit_ptr, self.reverse_bitfield_unit(merged, lval));
+	self.builder.add_store(lval.unit_ptr, self.reverse_bitfield_unit(merged, lval), lval.is_volatile);
 	return self.bitfield_store_result(normalized_value, lval);
 }
 
@@ -378,8 +385,8 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 	tree::Node node = node_index.get(self.tree);
 	if (node.kind == tree::NodeKind.CAST && !node.cast.implicit) self.gen_runtime_type(node.cast.qt)!;
 
-	// A record lvalue already has the representation used for every record
-	// expression: its address. Never load an IR RECORD_TY from object memory.
+	// C3 represents record expressions by address, including lvalues, so field
+	// access and copies never require an unsupported IR RECORD_TY load.
 	if (self.is_record_value(node_index.qt(self.tree)) && self.tree.is_lval(node_index))
 	{
 		return self.gen_lval(node_index);
@@ -486,11 +493,11 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 			if (self.is_bitfield_lvalue(node.binary.lhs))
 			{
 				MemberBase member = self.gen_member_base(node.binary.lhs)!;
-				BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size)!;
+				BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size, member.is_volatile)!;
 				return self.store_bitfield(lval, rhs);
 			}
 			ir::Ref lhs = self.gen_lval(node.binary.lhs)!;
-			self.builder.add_store(lhs, rhs);
+			self.builder.add_store(lhs, rhs, self.access_is_volatile(node.binary.lhs.qt(self.tree)));
 			return rhs;
 		case MUL_ASSIGN_EXPR:
 		case DIV_ASSIGN_EXPR:
@@ -622,12 +629,12 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 			MemberBase member = self.gen_member_base(node_index)!;
 			if (member.field.bit_width != type_store::BIT_WIDTH_NULL)
 			{
-				BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size)!;
+				BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size, member.is_volatile)!;
 				return self.load_bitfield(lval);
 			}
 			ir::Ref member_address = self.ptr_at(member.ptr, member.field.layout.offset_bits / 8);
 			if (self.is_record_value(node_index.qt(self.tree))) return member_address;
-			return self.builder.add_inst(ir::InstTag.LOAD, { .ref = member_address }, self.value_type(node_index.qt(self.tree))!);
+			return self.builder.add_load(member_address, self.value_type(node_index.qt(self.tree))!, member.is_volatile);
 		case CODEGEN_DIAGNOSTIC:
 			return self.gen_codegen_diagnostic(node_index, node);
 		default:
@@ -678,7 +685,8 @@ fn ir::Ref? CodeGen.gen_variable(&self, type_store::NodeIndex node_index, tree::
 	}
 	else
 	{
-		alloc = self.builder.add_alloc((uint)self.object_size(node.variable.qt), alignment, node.variable.qt.is_volatile);
+		alloc = self.builder.add_alloc((uint)self.object_size(node.variable.qt), alignment,
+			self.type_contains_volatile(node.variable.qt));
 	}
 	string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(node.variable.name_tok));
 	self.symbols.push(
@@ -1050,14 +1058,15 @@ fn ir::Ref? CodeGen.gen_deref_expr(&self, type_store::NodeIndex node_index, tree
 		return self.gen_expr(node.unary.operand);
 	}
 	if (self.is_record_value(node.unary.qt)) return self.gen_lval(node_index);
-	return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.unary.operand)!, node.unary.qt);
+	return self.builder.add_load(self.gen_lval(node.unary.operand)!, self.gen_type(node.unary.qt)!,
+		self.access_is_volatile(node.unary.qt));
 }
 
 <* `gen_expr` case BOOL_NOT_EXPR. *>
 fn ir::Ref? CodeGen.gen_bool_not_expr(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
 {
-	// C3 deviation: Zig emits `cmp_ne 0, x` typed int, which inverts the result.
-	// `!x` is `x == 0` as an i1, widened to the int result.
+	// Keep logical-not as an i1 equality comparison; Zig's `cmp_ne 0, x` form
+	// has the wrong operand order for this IR and inverts the result.
 	ir::Ref operand = self.gen_expr(node.unary.operand)!;
 	type_store::QualType operand_type = node.unary.operand.qt(self.tree);
 	if (operand_type.is(self.comp, type_store::TypeTag.FLOAT)) self.ensure_scalar_float_width(operand_type)!;
@@ -1073,7 +1082,7 @@ fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tr
 	if (self.is_bitfield_lvalue(node.unary.operand))
 	{
 		MemberBase member = self.gen_member_base(node.unary.operand)!;
-		BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size)!;
+		BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size, member.is_volatile)!;
 		ir::Ref old_value = self.load_bitfield(lval)!;
 		ir::Ref one = self.builder.add_constant(value::ONE.ref(), self.gen_type(node.unary.qt)!);
 		bool decrement = node.kind == tree::NodeKind.PRE_DEC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
@@ -1084,7 +1093,8 @@ fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tr
 	bool is_float = node.unary.qt.is(self.comp, type_store::TypeTag.FLOAT);
 	if (is_float) self.ensure_scalar_float_width(node.unary.qt)!;
 	ir::Ref addr = self.gen_lval(node.unary.operand)!;
-	ir::Ref val = self.add_un(ir::InstTag.LOAD, addr, node.unary.qt)!;
+	bool access_volatile = self.access_is_volatile(node.unary.operand.qt(self.tree));
+	ir::Ref val = self.builder.add_load(addr, self.gen_type(node.unary.qt)!, access_volatile);
 	bool decrement = node.kind == tree::NodeKind.PRE_DEC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
 	bool is_post = node.kind == tree::NodeKind.POST_INC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
 	if (node.unary.qt.is_pointer(self.comp))
@@ -1092,14 +1102,14 @@ fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tr
 		// Pointer step is one element, not one byte.
 		ir::Ref step = self.builder.add_constant(value::ONE.ref(), value_interner::REF_I64);
 		ir::Ref moved = self.gen_ptr_arithmetic(val, step, type_store::LONG, node.unary.qt, decrement)!;
-		self.builder.add_store(addr, moved);
+		self.builder.add_store(addr, moved, access_volatile);
 		return is_post ? val : moved;
 	}
 	ir::Ref one = self.builder.add_constant(value::ONE.ref(), self.gen_type(node.unary.qt)!);
 	ir::InstTag update = is_float ? (decrement ? ir::InstTag.FSUB : ir::InstTag.FADD) :
 		(decrement ? ir::InstTag.SUB : ir::InstTag.ADD);
 	ir::Ref updated = self.add_bin(update, val, one, node.unary.qt)!;
-	self.builder.add_store(addr, updated);
+	self.builder.add_store(addr, updated, access_volatile);
 	return is_post ? val : updated;
 }
 
@@ -1123,7 +1133,8 @@ fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node
 			if (self.is_record_value(node.cast.qt)) return self.gen_expr(node.cast.operand);
 			if (self.is_bitfield_compound_dummy(node.cast.operand)) return self.compound_assign_dummy;
 			if (self.is_bitfield_lvalue(node.cast.operand)) return self.gen_expr(node.cast.operand);
-			return self.add_un(ir::InstTag.LOAD, self.gen_lval(node.cast.operand)!, node.cast.qt);
+			return self.builder.add_load(self.gen_lval(node.cast.operand)!, self.gen_type(node.cast.qt)!,
+				self.access_is_volatile(node.cast.operand.qt(self.tree)));
 		case FUNCTION_TO_POINTER:
 		case ARRAY_TO_POINTER: return self.gen_lval(node.cast.operand);
 		case INT_CAST:
@@ -1421,7 +1432,7 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 			if (!@ok(literal_qt.sizeof_or_null(self.comp))) literal_qt = node.compound_literal.initializer.qt(self.tree);
 			uint size = (uint)self.object_size(literal_qt);
 			uint alignment = (uint)literal_qt.alignof(self.comp);
-			ir::Ref alloc = self.builder.add_alloc(size, alignment, literal_qt.is_volatile);
+			ir::Ref alloc = self.builder.add_alloc(size, alignment, self.type_contains_volatile(literal_qt));
 			self.gen_initializer(alloc, literal_qt, node.compound_literal.initializer)!;
 			return alloc;
 		case BUILTIN_CHOOSE_EXPR:
@@ -2006,7 +2017,8 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 		self.gen_type(call.qt)!;
 		result_size = call.qt.sizeof(self.comp);
 		uint slot_size = (uint)((result_size + 7) / 8 * 8);
-		result_slot = self.builder.add_alloc(slot_size, call.qt.alignof(self.comp), call.qt.is_volatile);
+		result_slot = self.builder.add_alloc(slot_size, call.qt.alignof(self.comp),
+			self.type_contains_volatile(call.qt));
 	}
 
 	// An aggregate contributes at most two INTEGER words, one MEMORY copy, or
@@ -2167,7 +2179,7 @@ fn ir::Ref? CodeGen.gen_compound_assign(&self, tree::NodeBinary bin)
 	if (self.is_bitfield_lvalue(bin.lhs))
 	{
 		MemberBase member = self.gen_member_base(bin.lhs)!;
-		BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size)!;
+		BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size, member.is_volatile)!;
 		ir::Ref old_value = self.load_bitfield(lval)!;
 		bool old_has_dummy = self.has_compound_assign_dummy;
 		ir::Ref old_dummy = self.compound_assign_dummy;
@@ -2191,7 +2203,7 @@ fn ir::Ref? CodeGen.gen_compound_assign(&self, tree::NodeBinary bin)
 	self.has_compound_assign_dummy = true;
 	self.compound_assign_dummy = lhs;
 	ir::Ref rhs = self.gen_expr(bin.rhs)!;
-	self.builder.add_store(lhs, rhs);
+	self.builder.add_store(lhs, rhs, self.access_is_volatile(bin.lhs.qt(self.tree)));
 	return rhs;
 }
 
@@ -2552,6 +2564,46 @@ fn void? CodeGen.gen_field_init(&self, ir::Ref ptr, type_store::RecordField fiel
 	return self.gen_init_elements(self.ptr_at(ptr, field.layout.offset_bits / 8), field.qt, item);
 }
 
+<* A scalar access through an lvalue of type `qt` is volatile: `volatile` on the
+   type or on any typedef/typeof layer naming it. *>
+fn bool CodeGen.access_is_volatile(&self, type_store::QualType qt)
+{
+	type_store::QualType cur = qt;
+	while (true)
+	{
+		if (cur.is_volatile) return true;
+		type_store::Type ty = cur.get_type(self.comp);
+		switch (ty.tag)
+		{
+			case TYPEOF: cur = ty.type_of.base;
+			case TYPEDEF: cur = ty.type_def.base;
+			default: return false;
+		}
+	}
+}
+
+<* Whether an object or one of its by-value aggregate members is volatile or atomic. *>
+fn bool CodeGen.type_contains_volatile(&self, type_store::QualType qt)
+{
+	if (qt.is_volatile) return true;
+	type_store::Type ty = qt.base(self.comp).ty;
+	switch (ty.tag)
+	{
+		// Marking atomics volatile also prevents ordinary aggregate memory
+		// promotion; scalar atomics still use dedicated atomic IR operations.
+		case ATOMIC: return true;
+		case ARRAY: return self.type_contains_volatile(ty.array.elem);
+		case STRUCT:
+		case UNION:
+			foreach (field : ty.record.fields)
+			{
+				if (self.type_contains_volatile(field.qt)) return true;
+			}
+		default: return false;
+	}
+	return false;
+}
+
 fn void? CodeGen.gen_var(&self, tree::NodeVariable decl, type_store::NodeIndex declaration = type_store::NODE_NULL)
 {
 	if (decl.thread_local) return self.fail("TODO CodeGen.genVar thread_local\n");
@@ -2660,11 +2712,13 @@ fn void? CodeGen.gen_var(&self, tree::NodeVariable decl, type_store::NodeIndex d
 		.section = section,
 		.tentative = tentative,
 		.own_section = self.comp.code_gen_options.data_sections,
+		.is_volatile = self.type_contains_volatile(decl.qt),
 	};
 	ir::Linkage linkage = (block_static || implicit_var ||
 		(has_declaration && self.has_internal_linkage(declaration))) ?
 	ir::Linkage.INTERNAL : ir::Linkage.EXTERNAL;
-	self.builder.add_global(name, linkage, global);
+	self.builder.add_global(name, linkage, global, has_declaration && self.is_weak(declaration, linkage));
+	if (has_declaration) self.apply_retention(name, declaration);
 
 	if (block_static || block_extern)
 	{
@@ -2793,6 +2847,7 @@ fn String? CodeGen.string_global(&self, type_store::NodeIndex node)
 		.section = ir::DataSection.RODATA,
 		.tentative = false,
 		.own_section = false,
+		.is_volatile = false,
 	};
 	self.builder.add_global(name, ir::Linkage.INTERNAL, global);
 	self.emitted_strings.push(
