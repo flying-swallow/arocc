@@ -952,8 +952,16 @@ fn void? CodeGen.branch_to(&self, ir::Ref cond, BoolTarget on_true, BoolTarget o
 	bool false_ends = on_false.label == self.bool_end_label;
 	if (true_ends && false_ends)
 	{
-		// Both edges merge: the condition itself is the phi input.
-		if (on_true.value == on_false.value) return self.add_bool_phi(on_true.value);
+		// Both edges merge: the condition itself is the phi input. Jump to the
+		// exit explicitly: this block is not always followed by the exit (e.g.
+		// the then-arm of `c ? x : y` is followed by the else block, and
+		// start_block would otherwise fall through into it).
+		if (on_true.value == on_false.value)
+		{
+			self.add_bool_phi(on_true.value)!;
+			self.builder.add_jump(on_true.label);
+			return;
+		}
 		ir::Ref value = cond;
 		if (!on_true.value)
 		{
@@ -961,6 +969,7 @@ fn void? CodeGen.branch_to(&self, ir::Ref cond, BoolTarget on_true, BoolTarget o
 			value = self.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { .lhs = cond, .rhs = zero } }, value_interner::REF_I1);
 		}
 		self.phi_nodes.push({ .label = self.builder.current_label, .value = value });
+		self.builder.add_jump(on_true.label);
 		return;
 	}
 	if (true_ends) self.add_bool_phi(on_true.value)!;

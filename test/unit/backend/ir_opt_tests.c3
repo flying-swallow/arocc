@@ -131,7 +131,7 @@ fn void OptFixture.run_o2(&self)
 
 fn void OptFixture.run_mem2reg(&self)
 {
-	foreach (&decl : self.graph.decls) ir_opt::mem2reg(&self.graph, decl, &self.ta);
+	foreach (&decl : self.graph.decls) ir_opt::mem2reg(&self.graph, decl);
 	self.verify_graph();
 }
 
@@ -139,8 +139,8 @@ fn void OptFixture.run_sroa_mem2reg(&self)
 {
 	foreach (&decl : self.graph.decls)
 	{
-		ir_opt::sroa(&self.graph, decl, &self.ta);
-		ir_opt::mem2reg(&self.graph, decl, &self.ta);
+		ir_opt::sroa(&self.graph, decl);
+		ir_opt::mem2reg(&self.graph, decl);
 	}
 	self.verify_graph();
 }
@@ -724,7 +724,7 @@ fn void o1_preserves_switch_fallthrough_and_if_without_else() @test
 	f.init();
 	f.lower(
 		"int switch_fallthrough(int n) { switch (n) { case 1: n++; case 2: return n; default: return 0; } }\n"
-		"int if_without_else(int c, int x) { if (c) x += 1; return x; }\n");
+		"int if_without_else(int c, int x, int *out) { if (c) { *out = x; x += 1; } return x; }\n");
 	f.run_o1();
 	f.verify_graph();
 
@@ -840,7 +840,7 @@ fn void cfg_computed_goto_reaches_every_address_taken_block() @test
 	assert(has_uint_index(cfg.blocks[1].preds.array_view(), 0) && has_uint_index(cfg.blocks[1].preds.array_view(), 2),
 		"the PHI block's predecessors are the indirect jump and the direct jump");
 	cfg.free();
-	assert(ir_opt::remove_unreachable_blocks(decl, &f.ta), "the dead block is removed");
+	assert(ir_opt::remove_unreachable_blocks(decl), "the dead block is removed");
 	assert(count_body_tag(decl, ir::InstTag.LABEL) == 3 && count_body_tag(decl, ir::InstTag.LABEL_ADDR) == 2,
 		"possible indirect targets and their addresses survive cleanup");
 	errors.free();
@@ -857,7 +857,7 @@ fn void cfg_unreachable_address_taken_block_nulls_its_address() @test
 	f.init();
 	build_computed_goto_fixture(&f, false);
 	ir::Decl* decl = &f.graph.decls[0];
-	assert(ir_opt::remove_unreachable_blocks(decl, &f.ta), "blocks with no computed goto are unreachable");
+	assert(ir_opt::remove_unreachable_blocks(decl), "blocks with no computed goto are unreachable");
 	assert(count_body_tag(decl, ir::InstTag.LABEL_ADDR) == 0 && count_body_tag(decl, ir::InstTag.LABEL) == 1,
 		"with no computed goto every taken block is removed and its address becomes null");
 	ir::ErrorList errors;
@@ -956,7 +956,7 @@ fn void HandIrFixture.run_o2(&self)
 fn void HandIrFixture.run_mem2reg(&self)
 {
 	self.finish();
-	foreach (&decl : self.graph.decls) ir_opt::mem2reg(&self.graph, decl, &self.ta);
+	foreach (&decl : self.graph.decls) ir_opt::mem2reg(&self.graph, decl);
 	ir::ErrorList errors;
 	errors.init(&self.ta);
 	bool valid = ir_opt::verify(&self.graph, &errors);
@@ -968,7 +968,7 @@ fn void HandIrFixture.run_mem2reg(&self)
 fn void HandIrFixture.run_mem_opt(&self)
 {
 	self.finish();
-	foreach (&decl : self.graph.decls) ir_opt::mem_opt(&self.graph, decl, &self.ta);
+	foreach (&decl : self.graph.decls) ir_opt::mem_opt(&self.graph, decl);
 	ir::ErrorList errors;
 	errors.init(&self.ta);
 	bool valid = ir_opt::verify(&self.graph, &errors);
@@ -977,10 +977,77 @@ fn void HandIrFixture.run_mem_opt(&self)
 	errors.free();
 }
 
+fn void HandIrFixture.run_gvn(&self)
+{
+	if (!self.has_graph) self.finish();
+	foreach (&decl : self.graph.decls) ir_opt::gvn(&self.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&self.ta);
+	bool valid = ir_opt::verify(&self.graph, &errors);
+	assert(valid, "gvn produced invalid IR: %s", errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid IR reported verifier errors after gvn");
+	errors.free();
+}
+
+fn void HandIrFixture.run_cfg_hoist_sink(&self)
+{
+	self.finish();
+	foreach (&decl : self.graph.decls)
+	{
+		ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &self.ta);
+		ir_opt::cfg_hoist_sink(&self.graph, decl, &cfg);
+		cfg.free();
+	}
+	ir::ErrorList errors;
+	errors.init(&self.ta);
+	bool valid = ir_opt::verify(&self.graph, &errors);
+	assert(valid, "cfg_hoist_sink produced invalid IR: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid IR reported verifier errors after cfg_hoist_sink");
+	errors.free();
+}
+
 fn Ref HandIrFixture.add_int_constant(&self, long value, value_interner::InternerRef ty)
 {
 	value_interner::InternerRef constant = self.interner.put(primitive_value::int_key(value));
 	return self.builder.add_constant(constant, ty);
+}
+
+fn Ref HandIrFixture.add_f64_constant(&self, ulong bits)
+{
+	value_interner::InternerRef constant = self.interner.put(primitive_value::f64_value(bits));
+	return self.builder.add_constant(constant, value_interner::REF_F64);
+}
+
+fn bool is_f64_constant(ir::Decl* decl, ir::Ref ref, value_interner::Interner* interner, ulong bits)
+{
+	if ((usz)ref >= (usz)decl.instructions.len) return false;
+	ir::Inst* value = &decl.instructions[(sz)ref];
+	if (value.tag != ir::InstTag.CONSTANT || value.ty != value_interner::REF_F64) return false;
+	value_interner::InternerRef expected = interner.put(primitive_value::f64_value(bits));
+	return value.data.constant == expected;
+}
+
+fn Ref HandIrFixture.add_f32_constant(&self, uint bits)
+{
+	value_interner::InternerRef constant = self.interner.put(primitive_value::f32_value(bits));
+	return self.builder.add_constant(constant, value_interner::REF_F32);
+}
+
+fn bool is_f32_constant(ir::Decl* decl, ir::Ref ref, value_interner::Interner* interner, uint bits)
+{
+	if ((usz)ref >= (usz)decl.instructions.len) return false;
+	ir::Inst* value = &decl.instructions[(sz)ref];
+	if (value.tag != ir::InstTag.CONSTANT || value.ty != value_interner::REF_F32) return false;
+	value_interner::InternerRef expected = interner.put(primitive_value::f32_value(bits));
+	return value.data.constant == expected;
+}
+
+fn bool is_bool_constant(ir::Decl* decl, ir::Ref ref, value_interner::InternerRef expected)
+{
+	return (usz)ref < (usz)decl.instructions.len &&
+		decl.instructions[(sz)ref].tag == ir::InstTag.CONSTANT &&
+		decl.instructions[(sz)ref].data.constant == expected;
 }
 
 fn void o1_removes_unreachable_block_and_collapses_phi() @test
@@ -1068,7 +1135,7 @@ fn void remove_unreachable_blocks_multi_input_trim() @test
 	f.builder.add_return(kept_value);
 	f.builder.finish_fn("multi_input_unreachable_phi");
 	f.finish();
-	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0], &f.ta),
+	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0]),
 		"the pass should remove dead blocks and trim their PHI edges");
 	assert(!has_index(f.graph.decls[0].body, phi), "the single remaining PHI input should collapse");
 	assert(return_value(&f.graph.decls[0]) == kept_value, "the join should return the surviving incoming value");
@@ -1100,7 +1167,7 @@ fn void remove_unreachable_blocks_collapses_phi_chain() @test
 	f.builder.add_return(second_phi);
 	f.builder.finish_fn("single_phi_chain");
 	f.finish();
-	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0], &f.ta), "the pass should collapse single-input PHIs");
+	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0]), "the pass should collapse single-input PHIs");
 	assert(!has_index(f.graph.decls[0].body, first_phi) && !has_index(f.graph.decls[0].body, second_phi),
 		"both PHIs in consecutive blocks should collapse in one pass call");
 	assert(return_value(&f.graph.decls[0]) == input, "the PHI chain should forward its original input");
@@ -1123,7 +1190,7 @@ fn void remove_unreachable_blocks_drops_unreachable_cycle() @test
 	Ref backedge = f.builder.add_inst(ir::InstTag.JMP, { .ref = dead_loop }, value_interner::REF_NORETURN);
 	f.builder.finish_fn("dead_cycle");
 	f.finish();
-	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0], &f.ta), "an unreachable self-cycle should be removed");
+	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0]), "an unreachable self-cycle should be removed");
 	assert(!has_index(f.graph.decls[0].body, dead_loop) && !has_index(f.graph.decls[0].body, backedge),
 		"all placements in the unreachable cycle should disappear");
 	ir::ErrorList errors;
@@ -1158,7 +1225,7 @@ fn void remove_unreachable_blocks_drops_unplaced_phi_label() @test
 	assert(!ir_opt::verify(&f.graph, &errors), "an unplaced PHI predecessor label must be rejected before cleanup");
 	errors.free();
 	errors.init(&f.ta);
-	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0], &f.ta), "the cleanup should discard the unplaced label input");
+	assert(ir_opt::remove_unreachable_blocks(&f.graph.decls[0]), "the cleanup should discard the unplaced label input");
 	assert(!has_index(f.graph.decls[0].body, phi), "the repaired one-input PHI should collapse");
 	assert(return_value(&f.graph.decls[0]) == input, "the return should use the remaining input");
 	assert(ir_opt::verify(&f.graph, &errors), "IR after dropping the unplaced PHI label should verify: %s",
@@ -1225,7 +1292,7 @@ fn void dead_instruction_elim_keeps_unknown_and_arity_mismatched_calls() @test
 	}
 	assert(callee != null && caller != null, "the call fixture should contain caller and known callee");
 	callee.attrs = { .computed = true, .readnone = true, .will_return = true };
-	assert(!ir_opt::dead_instruction_elim(caller, &f.ta, &f.graph),
+	assert(!ir_opt::dead_instruction_elim(caller, &f.graph),
 		"neither an unknown external call nor a mismatched call may be considered removable");
 	assert(has_index(caller.body, mismatch) && has_index(caller.body, external_call),
 		"DIE must preserve both the mismatched and declaration-only calls");
@@ -1248,7 +1315,7 @@ fn void dead_instruction_elim_division_policy() @test
 	f.builder.finish_fn("division_policy");
 	f.finish();
 	ir::Decl* decl = &f.graph.decls[0];
-	assert(ir_opt::dead_instruction_elim(decl, &f.ta), "constant nonzero division should be removed");
+	assert(ir_opt::dead_instruction_elim(decl), "constant nonzero division should be removed");
 	assert(has_index(decl.body, variable_div), "division by a variable divisor remains conservatively live");
 	assert(!has_index(decl.body, const_div), "division by a constant nonzero divisor is removable");
 	assert(has_index(decl.body, zero_mod), "remainder by zero remains conservatively live");
@@ -1264,7 +1331,7 @@ fn void dead_instruction_elim_keeps_atomics_and_fence() @test
 		"__atomic_store_n(p, 1, 5); __atomic_thread_fence(5); "
 		"(void)__builtin_clz(value); return 0; }\n");
 	ir::Decl* decl = find_function(&f.graph, "f");
-	assert(ir_opt::dead_instruction_elim(decl, &f.ta, &f.graph),
+	assert(ir_opt::dead_instruction_elim(decl, &f.graph),
 		"DIE should remove the unused pure CLZ");
 	assert(count_body_tag(decl, ir::InstTag.ATOMIC_LOAD) == 1 &&
 		count_body_tag(decl, ir::InstTag.ATOMIC_STORE) == 1 &&
@@ -1298,7 +1365,7 @@ fn void dead_instruction_elim_keeps_volatile_global_load() @test
 	f.builder.finish_fn("volatile_load");
 	f.finish();
 	ir::Decl* decl = find_function(&f.graph, "volatile_load");
-	ir_opt::dead_instruction_elim(decl, &f.ta, &f.graph);
+	ir_opt::dead_instruction_elim(decl, &f.graph);
 	assert(has_index(decl.body, load), "an unused volatile global load must remain observable");
 	assert(f.graph.decls[0].kind == ir::DeclKind.GLOBAL && f.graph.decls[0].global.is_volatile,
 		"the referenced global should carry its volatile marker");
@@ -1323,7 +1390,7 @@ fn void dead_instruction_elim_keeps_volatile_member_store() @test
 	}
 	assert(alloc_ref != ir::NONE && decl.instructions[(sz)alloc_ref].data.alloc.is_volatile,
 		"codegen must mark an allocation volatile when a member is volatile");
-	assert(!ir_opt::dead_instruction_elim(decl, &f.ta, &f.graph),
+	assert(!ir_opt::dead_instruction_elim(decl, &f.graph),
 		"DIE must preserve the unused volatile-member store and its allocation");
 	assert(count_body_tag(decl, ir::InstTag.ALLOC) == 1 && count_body_tag(decl, ir::InstTag.STORE) == 1,
 		"the volatile-member allocation and store must remain after DIE");
@@ -1483,6 +1550,281 @@ fn uint count_body_tag(ir::Decl* decl, ir::InstTag tag)
 	return count;
 }
 
+fn void HandIrFixture.run_if_convert(&self)
+{
+	self.run_o1();
+}
+
+fn void if_convert_converts_diamond_phi_to_select() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref yes = f.add_int_constant(11, value_interner::REF_I32);
+	Ref no = f.add_int_constant(29, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = { { .label = left, .value = yes }, { .label = right, .value = no } };
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("if_convert_diamond", ir::Linkage.EXTERNAL);
+	f.run_if_convert();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 1 && count_body_tag(decl, ir::InstTag.PHI) == 0,
+		"a diamond with one join PHI should become one SELECT and lose its PHI");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) == 0,
+		"the converted diamond should not retain its conditional branch");
+	f.free();
+}
+
+fn void if_convert_accepts_non_builtin_integer_width() @test
+{
+	HandIrFixture f;
+	f.init();
+	value_interner::InternerRef i24 = f.interner.put({ .tag = primitive_value::PrimitiveType.INT_TY, .ty_bits = 24 });
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref yes = f.add_int_constant(11, i24);
+	Ref no = f.add_int_constant(29, i24);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = { { .label = left, .value = yes }, { .label = right, .value = no } };
+	Ref result = f.builder.add_phi(inputs[..], i24);
+	f.builder.add_return(result);
+	f.builder.finish_fn("if_convert_i24_diamond", ir::Linkage.EXTERNAL);
+	f.run_if_convert();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 1 && count_body_tag(decl, ir::InstTag.PHI) == 0,
+		"a 24-bit integer diamond should become one SELECT and lose its PHI");
+	f.free();
+}
+
+fn void if_convert_converts_triangle_with_one_fallthrough_arm() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref value = f.builder.add_arg(value_interner::REF_I32);
+	Ref fallback = f.add_int_constant(7, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref then_block = f.builder.make_label("then");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, then_block, join);
+	f.builder.start_block(then_block);
+	Ref incremented = f.builder.add_inst(ir::InstTag.ADD,
+		{ .bin = { value, fallback } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = then_block, .value = incremented },
+		{ .label = entry, .value = fallback },
+	};
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("if_convert_triangle", ir::Linkage.EXTERNAL);
+	f.run_if_convert();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 1 && count_body_tag(decl, ir::InstTag.PHI) == 0,
+		"a one-arm triangle should become a SELECT without a join PHI");
+	f.free();
+}
+
+fn void if_convert_rejects_more_than_four_join_phis() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref[10] values;
+	for (sz i = 0; i < values.len; i++) values[i] = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	Ref[5] phis;
+	for (sz i = 0; i < phis.len; i++)
+	{
+		ir::PhiInput[2] inputs = {
+			{ .label = left, .value = values[i * 2] },
+			{ .label = right, .value = values[i * 2 + 1] },
+		};
+		phis[i] = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	}
+	Ref sum = phis[0];
+	for (sz i = 1; i < phis.len; i++)
+	{
+		sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { sum, phis[i] } }, value_interner::REF_I32);
+	}
+	f.builder.add_return(sum);
+	f.builder.finish_fn("if_convert_many_phis", ir::Linkage.EXTERNAL);
+	f.run_if_convert();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 0 && count_body_tag(decl, ir::InstTag.PHI) == 5,
+		"a join with more than four PHIs should remain a branch diamond");
+	f.free();
+}
+
+fn void if_convert_rejects_unsafe_op(ir::InstTag tag)
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref dividend = f.builder.add_arg(value_interner::REF_I32);
+	Ref divisor = f.builder.add_arg(value_interner::REF_I32);
+	Ref pointer = f.builder.add_arg(value_interner::REF_PTR);
+	Ref callee = f.builder.add_symbol("side_effect", value_interner::REF_FUNC);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref left_value;
+	switch (tag)
+	{
+		case CALL: left_value = f.builder.add_call(callee, {}, value_interner::REF_I32);
+		case LOAD: left_value = f.builder.add_load(pointer, value_interner::REF_I32);
+		case SDIV: left_value = f.builder.add_inst(tag,
+			{ .bin = { dividend, divisor } }, value_interner::REF_I32);
+		default: unreachable("unexpected unsafe operation");
+	}
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	Ref right_value;
+	switch (tag)
+	{
+		case CALL: right_value = f.builder.add_call(callee, {}, value_interner::REF_I32);
+		case LOAD: right_value = f.builder.add_load(pointer, value_interner::REF_I32);
+		case SDIV: right_value = f.builder.add_inst(tag,
+			{ .bin = { dividend, divisor } }, value_interner::REF_I32);
+		default: unreachable("unexpected unsafe operation");
+	}
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = { { .label = left, .value = left_value }, { .label = right, .value = right_value } };
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("if_convert_unsafe", ir::Linkage.EXTERNAL);
+	f.run_if_convert();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 0 && count_body_tag(decl, ir::InstTag.BRANCH) == 1,
+		"calls, loads, and potentially trapping divisions must prevent if-conversion");
+	assert(count_body_tag(decl, tag) == 2, "unsafe operation instances must remain in their original arms");
+	f.free();
+}
+
+fn void if_convert_rejects_calls_loads_and_sdiv() @test
+{
+	if_convert_rejects_unsafe_op(ir::InstTag.CALL);
+	if_convert_rejects_unsafe_op(ir::InstTag.LOAD);
+	if_convert_rejects_unsafe_op(ir::InstTag.SDIV);
+}
+
+fn void if_convert_rejects_arms_over_instruction_limit() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref value = f.builder.add_arg(value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref l1 = f.builder.add_inst(ir::InstTag.ADD, { .bin = { value, one } }, value_interner::REF_I32);
+	Ref l2 = f.builder.add_inst(ir::InstTag.ADD, { .bin = { l1, one } }, value_interner::REF_I32);
+	Ref l3 = f.builder.add_inst(ir::InstTag.ADD, { .bin = { l2, one } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	Ref r1 = f.builder.add_inst(ir::InstTag.SUB, { .bin = { value, one } }, value_interner::REF_I32);
+	Ref r2 = f.builder.add_inst(ir::InstTag.SUB, { .bin = { r1, one } }, value_interner::REF_I32);
+	Ref r3 = f.builder.add_inst(ir::InstTag.SUB, { .bin = { r2, one } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = { { .label = left, .value = l3 }, { .label = right, .value = r3 } };
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("if_convert_large_arms", ir::Linkage.EXTERNAL);
+	f.run_if_convert();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 0 && count_body_tag(decl, ir::InstTag.PHI) == 1,
+		"arms exceeding the conversion size limit should retain their join PHI");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"the oversized arm diamond should retain its conditional control flow");
+	f.free();
+}
+
+fn void if_convert_diamond_of_constants_to_select() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int if_convert_diamond_of_constants(int condition) { return condition ? 11 : 29; }");
+	f.run_o1();
+	ir::Decl* decl = find_function(&f.graph, "if_convert_diamond_of_constants");
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 1,
+		"O1 should lower a constant-valued conditional diamond to a SELECT");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) == 0 && count_body_tag(decl, ir::InstTag.PHI) == 0,
+		"the O1 constant diamond should no longer contain a branch or PHI");
+	f.free();
+}
+
+fn void if_convert_triangle_with_add() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int if_convert_triangle_with_add(int condition, int value) { if (condition) value = value + 3; return value; }");
+	f.run_o1();
+	ir::Decl* decl = find_function(&f.graph, "if_convert_triangle_with_add");
+	assert(count_body_tag(decl, ir::InstTag.SELECT) == 1,
+		"O1 should lower the one-arm addition triangle to a SELECT");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) == 0 && count_body_tag(decl, ir::InstTag.PHI) == 0,
+		"the O1 addition triangle should no longer contain a branch or PHI");
+	f.free();
+}
+
+fn void if_convert_keeps_guarded_division_conditional() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int if_convert_guarded_division(int d) { return d != 0 ? 100 / d : 0; }");
+	f.run_o1();
+	ir::Decl* decl = find_function(&f.graph, "if_convert_guarded_division");
+	assert(count_body_tag(decl, ir::InstTag.SDIV) == 1,
+		"O1 should retain the guarded potentially trapping signed division");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"the zero check must remain conditional instead of speculating the division");
+	f.free();
+}
+
+fn Ref first_body_tag(ir::Decl* decl, ir::InstTag tag)
+{
+	foreach (ref : decl.body) if (decl.instructions[(sz)ref].tag == tag) return ref;
+	return ir::NONE;
+}
+
 fn ir::Ref return_value(ir::Decl* decl)
 {
 	foreach (ref : decl.body)
@@ -1491,6 +1833,536 @@ fn ir::Ref return_value(ir::Decl* decl)
 		if (inst.tag == ir::InstTag.RET) return inst.data.ref;
 	}
 	return ir::NONE;
+}
+
+fn void cfg_hoist_sink_merges_identical_adds_from_diamond_arms() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref lhs = f.builder.add_arg(value_interner::REF_I32);
+	Ref rhs = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref left_add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { lhs, rhs } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	Ref right_add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { lhs, rhs } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = left, .value = left_add },
+		{ .label = right, .value = right_add },
+	};
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("cfg_hoist_identical_add");
+	f.run_cfg_hoist_sink();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 1,
+		"identical ADDs in both diamond arms should be hoisted and merged");
+	Ref merged_add = first_body_tag(decl, ir::InstTag.ADD);
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(cfg.block_of_ref[(sz)merged_add] == block_for_label(&cfg, entry),
+		"the merged ADD should be placed in the common predecessor block");
+	cfg.free();
+	f.free();
+}
+
+fn void cfg_hoist_sink_does_not_hoist_sdiv_or_load() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref dividend = f.builder.add_arg(value_interner::REF_I32);
+	Ref divisor = f.builder.add_arg(value_interner::REF_I32);
+	Ref pointer = f.builder.add_arg(value_interner::REF_PTR);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref left_div = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { dividend, divisor } }, value_interner::REF_I32);
+	Ref left_load = f.builder.add_load(pointer, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	Ref right_div = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { dividend, divisor } }, value_interner::REF_I32);
+	Ref right_load = f.builder.add_load(pointer, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] div_inputs = {
+		{ .label = left, .value = left_div },
+		{ .label = right, .value = right_div },
+	};
+	ir::PhiInput[2] load_inputs = {
+		{ .label = left, .value = left_load },
+		{ .label = right, .value = right_load },
+	};
+	Ref div_result = f.builder.add_phi(div_inputs[..], value_interner::REF_I32);
+	f.builder.add_phi(load_inputs[..], value_interner::REF_I32);
+	f.builder.add_return(div_result);
+	f.builder.finish_fn("cfg_hoist_sdiv");
+	f.run_cfg_hoist_sink();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.SDIV) == 2 && has_index(decl.body, left_div) &&
+		has_index(decl.body, right_div), "potentially trapping SDIVs must remain in their original arms");
+	assert(count_body_tag(decl, ir::InstTag.LOAD) == 2 && has_index(decl.body, left_load) &&
+		has_index(decl.body, right_load), "LOADs must remain in their original arms");
+	f.free();
+}
+
+fn void cfg_hoist_sink_hoists_trailing_adds_through_phi() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref left_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref right_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref left_add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { left_value, one } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	Ref right_add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { right_value, one } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = left, .value = left_add },
+		{ .label = right, .value = right_add },
+	};
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("cfg_sink_add");
+	f.run_cfg_hoist_sink();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 1,
+		"the trailing ADDs should be hoisted and merged at the join");
+	Ref merged_add = first_body_tag(decl, ir::InstTag.ADD);
+	ir::Inst add = decl.instructions[(sz)merged_add];
+	Ref phi_operand = decl.instructions[(sz)add.data.bin.lhs].tag == ir::InstTag.PHI ? add.data.bin.lhs : add.data.bin.rhs;
+	assert(decl.instructions[(sz)phi_operand].tag == ir::InstTag.PHI,
+		"the single merged ADD should use a PHI operand for the differing arm values");
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(cfg.block_of_ref[(sz)merged_add] == block_for_label(&cfg, join) &&
+		cfg.block_of_ref[(sz)phi_operand] == block_for_label(&cfg, join) &&
+		cfg.block_of_ref[(sz)phi_operand] != block_for_label(&cfg, entry),
+		"the merged ADD and operand PHI should live at the join");
+	cfg.free();
+	f.free();
+}
+
+fn void cfg_hoist_sink_keeps_add_with_an_extra_use_at_join() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref left_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref right_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref left_add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { left_value, one } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	Ref right_add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { right_value, one } }, value_interner::REF_I32);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = left, .value = left_add },
+		{ .label = right, .value = right_add },
+	};
+	Ref result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	Ref extra_result = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	Ref combined = f.builder.add_inst(ir::InstTag.ADD, { .bin = { result, extra_result } }, value_interner::REF_I32);
+	f.builder.add_return(combined);
+	f.builder.finish_fn("cfg_keep_add_extra_use");
+	f.run_cfg_hoist_sink();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 3 && has_index(decl.body, left_add) && has_index(decl.body, right_add),
+		"arm ADDs with an additional PHI use must remain in their original blocks");
+	f.free();
+}
+
+fn void gvn_numbers_scalar_expressions_with_exact_float_order() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref a = f.builder.add_arg(value_interner::REF_I32);
+	Ref b = f.builder.add_arg(value_interner::REF_I32);
+	Ref pointer = f.builder.add_arg(value_interner::REF_PTR);
+	Ref fa = f.builder.add_arg(value_interner::REF_F64);
+	Ref fb = f.builder.add_arg(value_interner::REF_F64);
+	Ref eight = f.add_int_constant(8, value_interner::REF_I64);
+	f.builder.start_fn();
+	Ref sum_ab = f.builder.add_inst(ir::InstTag.ADD, { .bin = { a, b } }, value_interner::REF_I32);
+	Ref sum_ba = f.builder.add_inst(ir::InstTag.ADD, { .bin = { b, a } }, value_interner::REF_I32);
+	Ref ptr_a = f.builder.add_inst(ir::InstTag.ADD, { .bin = { pointer, eight } }, value_interner::REF_PTR);
+	Ref ptr_b = f.builder.add_inst(ir::InstTag.ADD, { .bin = { pointer, eight } }, value_interner::REF_PTR);
+	Ref pointer_equal = f.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { ptr_a, ptr_b } }, value_interner::REF_I1);
+	Ref greater = f.builder.add_inst(ir::InstTag.CMP_SGT, { .bin = { a, b } }, value_interner::REF_I1);
+	Ref inverse_less = f.builder.add_inst(ir::InstTag.CMP_SLT, { .bin = { b, a } }, value_interner::REF_I1);
+	Ref equal_ab = f.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { a, b } }, value_interner::REF_I1);
+	Ref equal_ab_again = f.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { a, b } }, value_interner::REF_I1);
+	Ref float_ab = f.builder.add_inst(ir::InstTag.FADD, { .bin = { fa, fb } }, value_interner::REF_F64);
+	Ref float_ab_again = f.builder.add_inst(ir::InstTag.FADD, { .bin = { fa, fb } }, value_interner::REF_F64);
+	Ref float_ba = f.builder.add_inst(ir::InstTag.FADD, { .bin = { fb, fa } }, value_interner::REF_F64);
+	Ref float_same = f.builder.add_inst(ir::InstTag.FCMP_OEQ, { .bin = { float_ab, float_ab_again } }, value_interner::REF_I1);
+	Ref float_swapped = f.builder.add_inst(ir::InstTag.FCMP_OLT, { .bin = { float_ab, float_ba } }, value_interner::REF_I1);
+	Ref compare = f.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { greater, inverse_less } }, value_interner::REF_I1);
+	Ref result = f.builder.add_inst(ir::InstTag.BIT_XOR, { .bin = { pointer_equal, compare } }, value_interner::REF_I1);
+	result = f.builder.add_inst(ir::InstTag.BIT_XOR, { .bin = { result, float_same } }, value_interner::REF_I1);
+	result = f.builder.add_inst(ir::InstTag.BIT_XOR, { .bin = { result, float_swapped } }, value_interner::REF_I1);
+	result = f.builder.add_inst(ir::InstTag.BIT_XOR, { .bin = { result, equal_ab } }, value_interner::REF_I1);
+	result = f.builder.add_inst(ir::InstTag.BIT_XOR, { .bin = { result, equal_ab_again } }, value_interner::REF_I1);
+	f.builder.add_return(result);
+	f.builder.finish_fn("gvn_scalar_exactness");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 2,
+		"GVN should merge commuted integer ADD and duplicate pointer ADD expressions");
+	assert(has_index(decl.body, sum_ab) && !has_index(decl.body, sum_ba),
+		"commuted ADDs in one dominating block should share a value number");
+	assert(count_body_tag(decl, ir::InstTag.CMP_SGT) + count_body_tag(decl, ir::InstTag.CMP_SLT) == 1,
+		"swapping operands and predicate should canonicalize signed greater-than and less-than");
+	assert(count_body_tag(decl, ir::InstTag.CMP_EQ) == 3 && has_index(decl.body, equal_ab) &&
+		!has_index(decl.body, equal_ab_again), "identical comparisons should share a value number");
+	assert(count_body_tag(decl, ir::InstTag.FADD) == 2,
+		"same-order FADD should merge while reversed operands remain distinct");
+	assert(has_index(decl.body, float_ba), "reversed FADD must remain available as a distinct result");
+	f.free();
+}
+
+fn void gvn_merges_congruent_phis_in_one_block() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref a = f.builder.add_arg(value_interner::REF_I32);
+	Ref b = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(right);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = left, .value = a },
+		{ .label = right, .value = b },
+	};
+	Ref first_phi = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	Ref second_phi = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	Ref difference = f.builder.add_inst(ir::InstTag.SUB, { .bin = { first_phi, second_phi } }, value_interner::REF_I32);
+	f.builder.add_return(difference);
+	f.builder.finish_fn("gvn_parallel_phis");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.PHI) == 1, "equivalent PHIs in one block should share a value number");
+	Ref result = return_value(decl);
+	assert(result != ir::NONE && decl.instructions[(sz)result].tag == ir::InstTag.SUB &&
+		decl.instructions[(sz)result].data.bin.lhs == decl.instructions[(sz)result].data.bin.rhs,
+		"uses of the removed congruent PHI should be rewritten to the surviving PHI");
+	f.free();
+}
+
+fn void gvn_keeps_sibling_diamond_phis_without_a_dominating_leader() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref a = f.builder.add_arg(value_interner::REF_I32);
+	Ref b = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	Ref left_sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { b, a } }, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(right);
+	Ref right_sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { a, b } }, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = left, .value = left_sum },
+		{ .label = right, .value = right_sum },
+	};
+	Ref merged = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	Ref recomputed = f.builder.add_inst(ir::InstTag.ADD, { .bin = { a, b } }, value_interner::REF_I32);
+	Ref result = f.builder.add_inst(ir::InstTag.SUB, { .bin = { merged, recomputed } }, value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("gvn_diamond");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 2 && count_body_tag(decl, ir::InstTag.PHI) == 1,
+		"sibling ADDs need a join PHI because neither ADD dominates the join");
+	assert(has_index(decl.body, left_sum) && has_index(decl.body, right_sum) &&
+		has_index(decl.body, merged) && !has_index(decl.body, recomputed),
+		"the edge-specific PHI stays while the post-join recomputation reuses its value");
+	ir::Inst phi = decl.instructions[(sz)merged];
+	assert(phi.tag == ir::InstTag.PHI && phi.data.phi[0].label == left &&
+		phi.data.phi[0].value == left_sum && phi.data.phi[1].label == right &&
+		phi.data.phi[1].value == right_sum,
+		"the surviving PHI must preserve the value selected on each incoming edge");
+	Ref returned = return_value(decl);
+	assert(returned == result && decl.instructions[(sz)result].tag == ir::InstTag.SUB &&
+		decl.instructions[(sz)result].data.bin.lhs == merged &&
+		decl.instructions[(sz)result].data.bin.rhs == merged,
+		"uses of the join recomputation should resolve to the dominating PHI");
+	f.free();
+}
+
+fn void gvn_tracks_only_safe_loads_across_joins() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref external_pointer = f.builder.add_arg(value_interner::REF_PTR);
+	f.builder.start_fn();
+	Ref slot = f.builder.add_alloc(4, 4);
+	Ref before = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(right);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref after_join = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref external_a = f.builder.add_load(external_pointer, value_interner::REF_I32);
+	Ref external_b = f.builder.add_load(external_pointer, value_interner::REF_I32);
+	Ref sum0 = f.builder.add_inst(ir::InstTag.ADD, { .bin = { before, after_join } }, value_interner::REF_I32);
+	Ref sum1 = f.builder.add_inst(ir::InstTag.ADD, { .bin = { external_a, external_b } }, value_interner::REF_I32);
+	Ref result = f.builder.add_inst(ir::InstTag.ADD, { .bin = { sum0, sum1 } }, value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("gvn_load_join");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.LOAD) == 3,
+		"a safe alloca load should be CSE'd at the join while ARG pointer loads remain distinct");
+	assert(return_value(decl) == result && decl.instructions[(sz)result].tag == ir::InstTag.ADD,
+		"load CSE should rewrite operands without removing the returned expression");
+	f.free();
+}
+
+fn void gvn_forwards_loads_from_the_current_store_version() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref first_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref last_value = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref slot = f.builder.add_alloc(4, 4);
+	f.builder.add_store(slot, first_value);
+	Ref first_load = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref second_load = f.builder.add_load(slot, value_interner::REF_I32);
+	f.builder.add_store(slot, last_value);
+	Ref after_store = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref first_sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { first_load, second_load } }, value_interner::REF_I32);
+	Ref result = f.builder.add_inst(ir::InstTag.ADD, { .bin = { first_sum, after_store } }, value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("gvn_store_versions");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.LOAD) == 0,
+		"loads should forward from the latest store to their tracked alloca");
+	assert(decl.instructions[(sz)first_sum].data.bin.lhs == first_value &&
+		decl.instructions[(sz)first_sum].data.bin.rhs == first_value,
+		"repeated loads before a store should share the first stored value");
+	assert(decl.instructions[(sz)result].data.bin.rhs == last_value,
+		"a later store must give following loads a distinct memory version");
+	f.free();
+}
+
+fn void gvn_preserves_loads_after_a_conflicting_store_and_volatile_accesses() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref first = f.builder.add_arg(value_interner::REF_I32);
+	Ref second = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref slot = f.builder.add_alloc(8, 8);
+	Ref before = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_store(slot, first);
+	Ref left_div = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { first, second } }, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(right);
+	Ref right_div = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { first, second } }, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	ir::PhiInput[2] div_inputs = {
+		{ .label = left, .value = left_div },
+		{ .label = right, .value = right_div },
+	};
+	Ref div_phi = f.builder.add_phi(div_inputs[..], value_interner::REF_I32);
+	Ref joined = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref wrong_type = f.builder.add_load(slot, value_interner::REF_I64);
+	Ref sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { before, joined } }, value_interner::REF_I32);
+	Ref result = f.builder.add_inst(ir::InstTag.ADD, { .bin = { sum, div_phi } }, value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("gvn_load_conflicting_store");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(has_index(decl.body, before) && has_index(decl.body, joined) && has_index(decl.body, wrong_type),
+		"a join memory phi and a type-mismatched load must not be replaced by an earlier load");
+	assert(count_body_tag(decl, ir::InstTag.LOAD) == 3, "conflicting and type-mismatched loads must remain");
+	assert(count_body_tag(decl, ir::InstTag.SDIV) == 2,
+		"identical divisions in sibling arms must not merge without a dominating leader");
+	f.free();
+
+	HandIrFixture g;
+	g.init();
+	Ref volatile_value = g.builder.add_arg(value_interner::REF_I32);
+	g.builder.start_fn();
+	Ref volatile_slot = g.builder.add_alloc(4, 4, true);
+	g.builder.add_store(volatile_slot, volatile_value);
+	Ref volatile_a = g.builder.add_load(volatile_slot, value_interner::REF_I32, true);
+	Ref volatile_b = g.builder.add_load(volatile_slot, value_interner::REF_I32, true);
+	Ref volatile_sum = g.builder.add_inst(ir::InstTag.ADD, { .bin = { volatile_a, volatile_b } }, value_interner::REF_I32);
+	g.builder.add_return(volatile_sum);
+	g.builder.finish_fn("gvn_volatile_load");
+	g.run_gvn();
+	assert(count_body_tag(&g.graph.decls[0], ir::InstTag.LOAD) == 2,
+		"volatile allocation accesses must not enter load value numbering");
+	g.free();
+}
+
+fn void gvn_invalidates_load_facts_for_summarized_call_effects() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"static int read_pointer(const int *p) { return *p; }\n"
+		"static void write_pointer(int *p) { *p = 9; }\n"
+		"int reader_call(int seed) { int value = seed; int before = value; "
+		"(void)read_pointer(&value); int after = value; return before + after; }\n"
+		"int writer_call(int seed) { int value = seed; int before = value; "
+		"write_pointer(&value); int after = value; return before + after; }\n");
+	f.run_mem2reg();
+	ir_opt::infer_function_attrs(&f.graph);
+	ir::Decl* reader = find_function(&f.graph, "read_pointer");
+	ir::Decl* writer = find_function(&f.graph, "write_pointer");
+	assert((reader.attrs.arg_nocapture & 1) != 0 && (reader.attrs.arg_noread & 1) == 0 &&
+		(reader.attrs.arg_nowrite & 1) != 0,
+		"the reader call must expose a noncapturing read effect for its argument");
+	assert((writer.attrs.arg_nocapture & 1) != 0 && (writer.attrs.arg_noread & 1) != 0 &&
+		(writer.attrs.arg_nowrite & 1) == 0,
+		"the writer call must expose a noncapturing write effect for its argument");
+	foreach (&decl : f.graph.decls) ir_opt::gvn(&f.graph, decl);
+	f.verify_graph();
+	ir::Decl* reader_caller = find_function(&f.graph, "reader_call");
+	ir::Decl* writer_caller = find_function(&f.graph, "writer_call");
+	assert(count_body_tag(reader_caller, ir::InstTag.LOAD) == 1,
+		"a summarized read effect must invalidate the passed root's earlier load fact");
+	assert(count_body_tag(writer_caller, ir::InstTag.LOAD) == 1,
+		"a summarized write effect must invalidate the passed root's earlier load fact");
+	f.free();
+}
+
+fn void gvn_merges_congruent_loop_induction_phis() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref header = f.builder.make_label("header");
+	Ref body = f.builder.make_label("body");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = header }, value_interner::REF_NORETURN);
+	f.builder.start_block(header);
+	ir::PhiInput[2] i_inputs = {
+		{ .label = entry, .value = zero },
+		{ .label = body, .value = zero },
+	};
+	ir::PhiInput[2] j_inputs = {
+		{ .label = entry, .value = zero },
+		{ .label = body, .value = zero },
+	};
+	Ref i_phi = f.builder.add_phi(i_inputs[..], value_interner::REF_I32);
+	Ref j_phi = f.builder.add_phi(j_inputs[..], value_interner::REF_I32);
+	f.builder.add_branch(condition, body, exit);
+	f.builder.start_block(body);
+	Ref i_next = f.builder.add_inst(ir::InstTag.ADD, { .bin = { i_phi, one } }, value_interner::REF_I32);
+	Ref j_next = f.builder.add_inst(ir::InstTag.ADD, { .bin = { j_phi, one } }, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = header }, value_interner::REF_NORETURN);
+	f.builder.start_block(exit);
+	Ref result = f.builder.add_inst(ir::InstTag.ADD, { .bin = { i_phi, j_phi } }, value_interner::REF_I32);
+	f.builder.add_return(result);
+	f.builder.finish_fn("gvn_loop_inductions");
+	f.finish();
+	ir_opt::DeclEditor editor;
+	editor.begin(&f.graph.decls[0]);
+	editor.insts.entries[(sz)i_phi].data.phi[1].value = i_next;
+	editor.insts.entries[(sz)j_phi].data.phi[1].value = j_next;
+	editor.commit();
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.PHI) == 1,
+		"congruent induction PHIs should converge to one value number across RPO iterations");
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 2,
+		"the two induction updates should share one ADD while the exit sum remains");
+	f.free();
+}
+
+fn void gvn_reuses_loads_through_a_loop_without_stores() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref slot = f.builder.add_alloc(4, 4);
+	Ref before = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref entry = f.builder.current_label;
+	Ref header = f.builder.make_label("header");
+	Ref body = f.builder.make_label("body");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = header }, value_interner::REF_NORETURN);
+	f.builder.start_block(header);
+	f.builder.add_branch(condition, body, exit);
+	f.builder.start_block(body);
+	Ref inside = f.builder.add_load(slot, value_interner::REF_I32);
+	Ref use = f.builder.add_inst(ir::InstTag.ADD, { .bin = { before, inside } }, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = header }, value_interner::REF_NORETURN);
+	f.builder.start_block(exit);
+	f.builder.add_return(before);
+	f.builder.finish_fn("gvn_loop_load");
+	f.run_gvn();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.LOAD) == 1 && !has_index(decl.body, inside),
+		"a loop with no store to the tracked alloca should reuse the dominating load");
+	assert(has_index(decl.body, use), "the loop's load consumer should remain after operand rewriting");
+	f.free();
 }
 
 fn void mem_opt_forwards_stores_cses_loads_and_removes_dead_accesses() @test
@@ -2132,8 +3004,8 @@ fn void o2_inlines_multi_return_callee_with_valid_join_phi() @test
 	OptFixture f;
 	f.init();
 	f.lower(
-		"static int choose(int condition) { if (condition) return 11; return 13; }\n"
-		"int caller(int condition) { return choose(condition); }\n");
+		"static int choose(int condition, int *out) { if (condition) { *out = 1; return 11; } return 13; }\n"
+		"int caller(int condition, int *out) { return choose(condition, out); }\n");
 	f.run_o2();
 	f.verify_graph();
 	ir::Decl* caller = find_function(&f.graph, "caller");
@@ -2197,7 +3069,7 @@ fn void o2_inlines_unused_multi_return_void_typed_call_without_void_phi() @test
 	f.builder.finish_fn("unused_void_call");
 	f.finish();
 
-	assert(ir_opt::inline_calls(&f.graph, { .level = code_gen_options::OptimizationLevel.O2 }, &f.ta),
+	assert(ir_opt::inline_calls(&f.graph, { .level = code_gen_options::OptimizationLevel.O2 }),
 		"the eligible pointer-return call should inline");
 	ir::Decl* caller = find_function(&f.graph, "unused_void_call");
 	assert(!has_index(caller.body, call), "inlined call should be removed");
@@ -2247,7 +3119,7 @@ fn void o2_keeps_used_i32_call_to_i64_multi_return_callee() @test
 		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
 	assert(errors.len() == 0, "valid hand-built graph should not report verifier errors");
 	errors.free();
-	assert(!ir_opt::inline_calls(&f.graph, { .level = code_gen_options::OptimizationLevel.O2 }, &f.ta),
+	assert(!ir_opt::inline_calls(&f.graph, { .level = code_gen_options::OptimizationLevel.O2 }),
 		"type-mismatched used call should remain uninlined");
 	assert(count_calls_to(find_function(&f.graph, "used_i32_call"), "i64_multi_return") == 1,
 		"used i32 call to an i64 callee should remain in the caller");
@@ -2270,7 +3142,7 @@ fn void o2_leaves_call_when_callee_return_type_disagrees() @test
 	f.builder.add_return(call);
 	f.builder.finish_fn("caller");
 	f.finish();
-	assert(!ir_opt::inline_calls(&f.graph, { .level = code_gen_options::OptimizationLevel.O2 }, &f.ta),
+	assert(!ir_opt::inline_calls(&f.graph, { .level = code_gen_options::OptimizationLevel.O2 }),
 		"a call with a mismatched declared result type should remain uninlined");
 	assert(count_calls_to(find_function(&f.graph, "caller"), "callee") == 1,
 		"type mismatch guard should preserve the original call");
@@ -2434,20 +3306,199 @@ fn void o2_inlined_volatile_stores_survive() @test
 	f.free();
 }
 
-fn void o2_leaves_recursive_call_intact() @test
+fn void o2_converts_gcd_tail_recursion_to_loop() @test
 {
 	OptFixture f;
 	f.init();
 	f.lower(
-		"int recursive(int value) { if (value <= 0) return 0; return recursive(value - 1); }\n");
+		"int gcd(int a, int b) { if (b == 0) return a; return gcd(b, a % b); }\n");
+	f.run_o2();
+	f.verify_graph();
+	ir::Decl* gcd = find_function(&f.graph, "gcd");
+	assert(count_calls_to(gcd, "gcd") == 0, "tail-recursive gcd call should be converted to a loop");
+	assert(count_body_tag(gcd, ir::InstTag.PHI) != 0 && count_body_tag(gcd, ir::InstTag.BRANCH) != 0,
+		"the converted gcd should have loop-carried PHIs and a header branch");
+	ir_opt::Cfg cfg = ir_opt::build_cfg(gcd, &f.ta);
+	assert(cfg.blocks.len > 1, "tail-call conversion should create a distinct loop header");
+	assert(ir_opt::block_terminator_position(gcd, &cfg.blocks[0]) < cfg.blocks[0].end &&
+		gcd.instructions[(sz)gcd.body[ir_opt::block_terminator_position(gcd, &cfg.blocks[0])]].tag == ir::InstTag.JMP,
+		"the entry preheader should jump to the loop header");
+	bool phi_in_loop_header = false;
+	foreach (bi, block : cfg.blocks)
+	{
+		if (bi == 0) continue;
+		for (sz pos = block.start + 1; pos < block.end; pos++)
+		{
+			if (gcd.instructions[(sz)gcd.body[pos]].tag == ir::InstTag.PHI) phi_in_loop_header = true;
+		}
+	}
+	assert(phi_in_loop_header, "a non-entry block should contain the loop-carried PHIs");
+	cfg.free();
+	String output = f.dump();
+	assert(!output.contains("call ptr_ty @gcd"), "optimized dump should not retain the tail call");
+	assert(output.contains("@gcd") && output.contains("loop"), "the converted function should retain its loop header");
+	alloc::free(&f.ta, output.ptr);
+	f.free();
+}
+
+fn void o2_converts_void_tail_recursion_to_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("void count(volatile int *p, int n) { if (n <= 0) return; *p += 1; count(p, n - 1); }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "count"), "count") == 0,
+		"void tail recursion should be converted to a loop");
+	f.free();
+}
+
+fn void o2_converts_narrow_tail_recursion_with_truncation() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("unsigned char narrow(unsigned char n) { if (n == 0) return 0; return narrow(n - 1); }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "narrow"), "narrow") == 0,
+		"narrow recursive arguments with TRUNC should still form a loop");
+	assert(count_body_tag(find_function(&f.graph, "narrow"), ir::InstTag.TRUNC) != 0,
+		"the converted backedge should narrow its integer argument with TRUNC");
+	f.free();
+}
+
+fn void o2_inlines_tail_recursive_loop_into_caller_and_eliminates_helper() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"static int sum_to(int n, int acc) { return n <= 0 ? acc : sum_to(n - 1, acc + n); }\n"
+		"int caller(int n) { return sum_to(n, 0); }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(!has_function(&f.graph, "sum_to"),
+		"the inlined internal recursive helper should be removed by DFE");
+	ir::Decl* caller = find_function(&f.graph, "caller");
+	assert(caller != null && count_calls_to(caller, "sum_to") == 0 && count_body_tag(caller, ir::InstTag.BRANCH) != 0,
+		"the caller should contain the inlined loop control flow");
+	ir_opt::Cfg caller_cfg = ir_opt::build_cfg(caller, &f.ta);
+	assert(cfg_has_back_edge(&caller_cfg), "the inlined recursive helper should create a loop in its caller");
+	caller_cfg.free();
+	f.free();
+}
+
+fn void o2_converts_accumulator_tail_recursion_to_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int recursive(int value, int total) { if (value <= 0) return total; return recursive(value - 1, total + value); }\n");
+	f.run_o2();
+	f.verify_graph();
+	ir::Decl* recursive = find_function(&f.graph, "recursive");
+	assert(count_calls_to(recursive, "recursive") == 0 && count_body_tag(recursive, ir::InstTag.PHI) != 0,
+		"accumulator tail recursion should become a loop with carried state");
+	f.free();
+}
+
+fn void o2_leaves_recursive_call_intact() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int recursive(int value) { if (value <= 0) return 0; return 1 + recursive(value - 1); }\n");
 	f.run_o2();
 	f.verify_graph();
 	ir::Decl* recursive = find_function(&f.graph, "recursive");
 	assert(count_calls_to(recursive, "recursive") == 1,
-		"recursive call should remain instead of expanding into itself");
+		"a recursive call with pending addition must remain instead of expanding into itself");
 	String output = f.dump();
-	assert(output.contains("call ptr_ty @recursive"), "optimized dump should retain the recursive call");
+	assert(output.contains("call ptr_ty @recursive"), "optimized dump should retain the non-tail recursive call");
 	alloc::free(&f.ta, output.ptr);
+	f.free();
+}
+
+fn void o2_keeps_non_tail_recursive_call() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int recursive(int value) { if (value <= 0) return 0; return 1 + recursive(value - 1); }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "recursive"), "recursive") == 1,
+		"a recursive call with pending addition after the call must remain non-tail");
+	f.free();
+}
+
+fn void o2_keeps_tail_recursion_with_escaping_alloca() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("extern void capture(int *); int recursive(int n) { int local = n; capture(&local); return n ? recursive(n - 1) : local; }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "recursive"), "recursive") == 1,
+		"escaping stack storage should prevent tail-recursion conversion");
+	f.free();
+}
+
+fn void o2_keeps_variadic_tail_recursion() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int recursive(int n, ...) { __builtin_va_list ap; __builtin_va_start(ap, n); "
+		"return n ? recursive(n - 1, 7) : 0; }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "recursive"), "recursive") == 1,
+		"variadic tail recursion should remain a call");
+	f.free();
+}
+
+fn void o2_keeps_computed_goto_tail_recursion() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref n = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref again = f.builder.make_label("again");
+	Ref target = f.builder.add_inst(ir::InstTag.LABEL_ADDR, { .ref = again }, value_interner::REF_PTR);
+	f.builder.add_inst(ir::InstTag.JMP_VAL, { .ref = target }, value_interner::REF_NORETURN);
+	f.builder.start_block(again);
+	Ref recursive_symbol = f.builder.add_symbol("recursive", value_interner::REF_PTR);
+	ir::Ref[1] args = { n };
+	Ref call = f.builder.add_call(recursive_symbol, args[..], value_interner::REF_I32);
+	f.builder.add_return(call);
+	f.builder.finish_fn("recursive");
+	f.run_o2();
+	assert(count_calls_to(find_function(&f.graph, "recursive"), "recursive") == 1,
+		"computed-goto control flow should prevent tail-recursion conversion");
+	f.free();
+}
+
+fn void o2_keeps_indirect_self_recursive_call() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int recursive(int); int (*next)(int) = recursive; int recursive(int n) { return n ? next(n - 1) : 0; }\n");
+	f.run_o2();
+	f.verify_graph();
+	ir::Decl* recursive = find_function(&f.graph, "recursive");
+	assert(count_body_tag(recursive, ir::InstTag.CALL) == 1,
+		"a function-pointer call is indirect and must remain in the function body");
+	String output = f.dump();
+	assert(output.contains("call"), "the indirect recursive call should remain in the IR");
+	alloc::free(&f.ta, output.ptr);
+	f.free();
+}
+
+fn void o1_leaves_recursive_call_unchanged() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int recursive(int n) { return n ? recursive(n - 1) : 0; }\n");
+	f.run_o1();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "recursive"), "recursive") == 1,
+		"O1 should leave self-recursive calls intact");
 	f.free();
 }
 
@@ -2582,6 +3633,7 @@ fn void o2_relabels_successor_phi_after_inlining_call_block() @test
 	HandIrFixture f;
 	f.init();
 	Ref callee_condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref callee_out = f.builder.add_arg(value_interner::REF_PTR);
 	f.builder.start_fn();
 	Ref callee_then = f.builder.make_label("callee_then");
 	Ref callee_else = f.builder.make_label("callee_else");
@@ -2589,6 +3641,7 @@ fn void o2_relabels_successor_phi_after_inlining_call_block() @test
 	Ref two = f.add_int_constant(2, value_interner::REF_I32);
 	f.builder.add_branch(callee_condition, callee_then, callee_else);
 	f.builder.start_block(callee_then);
+	f.builder.add_store(callee_out, one);
 	f.builder.add_return(one);
 	f.builder.start_block(callee_else);
 	f.builder.add_return(two);
@@ -2596,6 +3649,7 @@ fn void o2_relabels_successor_phi_after_inlining_call_block() @test
 
 	Ref caller_condition = f.builder.add_arg(value_interner::REF_I1);
 	Ref fallback_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref caller_out = f.builder.add_arg(value_interner::REF_PTR);
 	f.builder.start_fn();
 	Ref call_block = f.builder.make_label("call");
 	Ref fallback_block = f.builder.make_label("fallback");
@@ -2603,10 +3657,11 @@ fn void o2_relabels_successor_phi_after_inlining_call_block() @test
 	f.builder.add_branch(caller_condition, call_block, fallback_block);
 	f.builder.start_block(call_block);
 	Ref callee_symbol = f.builder.add_symbol("multi_return", value_interner::REF_PTR);
-	Ref[1] call_args = { caller_condition };
+	Ref[2] call_args = { caller_condition, caller_out };
 	Ref call_result = f.builder.add_call(callee_symbol, call_args[..], value_interner::REF_I32);
 	f.builder.add_jump(join);
 	f.builder.start_block(fallback_block);
+	f.builder.add_store(caller_out, fallback_value);
 	f.builder.add_jump(join);
 	f.builder.start_block(join);
 	ir::PhiInput[2] incoming = {
@@ -2632,8 +3687,8 @@ fn void o2_relabels_successor_phi_after_inlining_call_block() @test
 	assert(successor_phi_ref != ir::NONE, "caller should retain its successor PHI");
 	ir::PhiInput[] successor_inputs = caller.instructions[(sz)successor_phi_ref].data.phi;
 	assert(successor_inputs.len == 2, "successor PHI should retain both incoming values");
-	// simplify_cfg may fold the empty fallback block into entry, so the
-	// fallback edge's label is checked against the join's real predecessors below.
+	// The fallback block stores through caller_out, so it is neither folded nor
+	// if-converted; the fallback edge's label is still checked against the join's real predecessors below.
 	bool saw_fallback = false;
 	bool saw_relabelled_call_edge = false;
 	foreach (input : successor_inputs)
@@ -2720,7 +3775,7 @@ fn void sccp_select_waits_for_late_loop_phi_value() @test
 	f.builder.add_return(selected);
 	f.builder.finish_fn("select_late_condition");
 	f.finish();
-	ir_opt::const_prop(&f.graph, &f.graph.decls[0], &f.ta);
+	ir_opt::const_prop(&f.graph, &f.graph.decls[0]);
 	ir::Decl* decl = &f.graph.decls[0];
 	assert(return_value(decl) == selected,
 		"SELECT must not be replaced using the PHI's initial constant before its back-edge arrives");
@@ -2745,7 +3800,7 @@ fn void sccp_folds_select_with_constant_cmp_ne_condition() @test
 	f.builder.add_return(selected);
 	f.builder.finish_fn("constant_cmp_ne_select");
 	f.finish();
-	assert(ir_opt::const_prop(&f.graph, &f.graph.decls[0], &f.ta),
+	assert(ir_opt::const_prop(&f.graph, &f.graph.decls[0]),
 		"const_prop should fold the constant comparison and SELECT");
 	assert_returns_int(&f.graph.decls[0], &f.interner, 5,
 		"SELECT with cmp_ne i32 1, 0");
@@ -2778,7 +3833,7 @@ fn void sccp_preserves_unknown_branch_and_verifies_cfg() @test
 	f.builder.add_return(f.builder.add_phi(incoming[..], value_interner::REF_I32));
 	f.builder.finish_fn("unknown_branch");
 	f.finish();
-	ir_opt::const_prop(&f.graph, &f.graph.decls[0], &f.ta);
+	ir_opt::const_prop(&f.graph, &f.graph.decls[0]);
 	ir::Decl* decl = &f.graph.decls[0];
 	assert(count_body_tag(decl, ir::InstTag.BRANCH) == 1,
 		"an unknown executable branch condition must remain a BRANCH");
@@ -2854,7 +3909,7 @@ fn void sccp_keeps_additional_undefined_integer_operations_unfolded() @test
 	f.builder.add_return(result);
 	f.builder.finish_fn("additional_undefined_integer_ops");
 	f.finish();
-	ir_opt::const_prop(&f.graph, &f.graph.decls[0], &f.ta);
+	ir_opt::const_prop(&f.graph, &f.graph.decls[0]);
 	ir::Decl* decl = &f.graph.decls[0];
 	assert(has_index(decl.body, sdiv_i64),
 		"i64 INT64_MIN / -1 must remain unevaluated");
@@ -2914,7 +3969,7 @@ fn void sccp_bails_out_on_computed_goto() @test
 	f.builder.add_return(value);
 	f.builder.finish_fn("computed_goto_guard");
 	f.finish();
-	assert(!ir_opt::const_prop(&f.graph, &f.graph.decls[0], &f.ta),
+	assert(!ir_opt::const_prop(&f.graph, &f.graph.decls[0]),
 		"SCCP must bail out because the CFG does not model computed-goto successors");
 	assert(count_body_tag(&f.graph.decls[0], ir::InstTag.JMP_VAL) == 1,
 		"the computed jump should remain intact");
@@ -2948,7 +4003,7 @@ fn void ipsccp_propagates_common_constant_arguments_and_returns() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	ir::Decl* multiply = find_function(&f.graph, "multiply");
 	assert(multiply.body.len >= 2, "multiply should retain both parameter ARGs");
@@ -2956,7 +4011,7 @@ fn void ipsccp_propagates_common_constant_arguments_and_returns() @test
 	assert(multiply.instructions[(sz)factor_arg].tag == ir::InstTag.ARG,
 		"the specialized parameter should remain placed for DeadArgElim");
 	ir_opt::Uses arg_uses = ir_opt::compute_uses(multiply, f.graph.allocator);
-	assert(arg_uses.users[(sz)factor_arg].len() == 0,
+	assert(arg_uses.of(factor_arg).len == 0,
 		"the second ARG should be unused after common constant propagation");
 	arg_uses.free();
 	ir::Inst* product = &multiply.instructions[(sz)return_value(multiply)];
@@ -2990,7 +4045,7 @@ fn void ipsccp_preserves_ineligible_or_conflicting_call_sites() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	assert(returns_argument(find_function(&f.graph, "differing")),
 		"different constants at call sites must not specialize the callee");
@@ -4160,7 +5215,7 @@ fn void inst_combine_covers_sext_unsigned_and_mixed_width_zext_compares() @test
 	f.free();
 }
 
-fn void integer_simplify_reports_changes_directly() @test
+fn void inst_simplify_reports_changes_directly() @test
 {
 	HandIrFixture f;
 	f.init();
@@ -4169,17 +5224,17 @@ fn void integer_simplify_reports_changes_directly() @test
 	f.builder.start_fn();
 	Ref add = f.builder.add_inst(ir::InstTag.ADD, { .bin = { arg, zero } }, value_interner::REF_I32);
 	f.builder.add_return(add);
-	f.builder.finish_fn("integer_simplify_return_value");
+	f.builder.finish_fn("inst_simplify_return_value");
 	f.finish();
-	assert(ir_opt::integer_simplify(&f.graph, &f.graph.decls[0], &f.ta),
-		"integer_simplify should report a changed declaration when it removes an additive zero");
-	assert(return_value(&f.graph.decls[0]) == arg, "direct integer_simplify should replace x + 0 with x");
-	assert(!ir_opt::integer_simplify(&f.graph, &f.graph.decls[0], &f.ta),
-		"integer_simplify should report no change on an already simplified declaration");
+	assert(ir_opt::inst_simplify(&f.graph, &f.graph.decls[0]),
+		"inst_simplify should report a changed declaration when it removes an additive zero");
+	assert(return_value(&f.graph.decls[0]) == arg, "direct inst_simplify should replace x + 0 with x");
+	assert(!ir_opt::inst_simplify(&f.graph, &f.graph.decls[0]),
+		"inst_simplify should report no change on an already simplified declaration");
 	f.free();
 }
 
-fn void integer_simplify_terminates_on_cyclic_values_without_predecessors() @test
+fn void inst_simplify_terminates_on_cyclic_values_without_predecessors() @test
 {
 	HandIrFixture f;
 	f.init();
@@ -4207,10 +5262,10 @@ fn void integer_simplify_terminates_on_cyclic_values_without_predecessors() @tes
 	f.graph.decls[0].instructions[(sz)add_y].data.bin.lhs = add_x;
 	f.graph.decls[1].instructions[(sz)not_a].data.bin.lhs = not_b;
 	f.graph.decls[1].instructions[(sz)not_b].data.bin.lhs = not_a;
-	assert(!ir_opt::integer_simplify(&f.graph, &f.graph.decls[0], &f.ta),
-		"integer_simplify should leave mutually recursive reassociation unchanged");
-	assert(!ir_opt::integer_simplify(&f.graph, &f.graph.decls[1], &f.ta),
-		"integer_simplify should leave mutually recursive boolean negation unchanged");
+	assert(!ir_opt::inst_simplify(&f.graph, &f.graph.decls[0]),
+		"inst_simplify should leave mutually recursive reassociation unchanged");
+	assert(!ir_opt::inst_simplify(&f.graph, &f.graph.decls[1]),
+		"inst_simplify should leave mutually recursive boolean negation unchanged");
 	f.free();
 }
 
@@ -4242,7 +5297,7 @@ fn void ipo_infers_conservative_function_and_argument_attributes() @test
 		"static int pure_helper(void) { return 4; }\n"
 		"int unused_pure_call(void) { pure_helper(); return 0; }\n");
 	f.run_mem2reg();
-	ir_opt::infer_function_attrs(&f.graph, &f.ta);
+	ir_opt::infer_function_attrs(&f.graph);
 	ir::Decl* pure = find_function(&f.graph, "pure_value");
 	assert(pure.attrs.computed && pure.attrs.readnone && pure.attrs.readonly && pure.attrs.will_return,
 		"a straight-line arithmetic function should be readnone and willreturn");
@@ -4289,7 +5344,7 @@ fn void ipo_infers_conservative_function_and_argument_attributes() @test
 	foreach (name : effectful_callers)
 	{
 		ir::Decl* effectful_caller = find_function(&f.graph, name);
-		ir_opt::dead_instruction_elim(effectful_caller, &f.ta, &f.graph);
+		ir_opt::dead_instruction_elim(effectful_caller, &f.graph);
 		assert(count_body_tag(effectful_caller, ir::InstTag.CALL) == 1,
 			"DIE must keep calls with global, volatile, unknown, or non-willreturn effects");
 	}
@@ -4307,7 +5362,7 @@ fn void ipo_infers_conservative_function_and_argument_attributes() @test
 	foreach (i, inst : caller.instructions)
 		if (inst.tag == ir::InstTag.SYMBOL && inst.data.label == "pure_helper") symbol_ref = (ir::Ref)i;
 	assert(call_ref != ir::NONE && symbol_ref != ir::NONE, "test fixture should contain the unused pure call and its symbol");
-	assert(ir_opt::dead_instruction_elim(caller, &f.ta, &f.graph), "DIE should remove the unused pure call");
+	assert(ir_opt::dead_instruction_elim(caller, &f.graph), "DIE should remove the unused pure call");
 	assert(!has_index(caller.body, call_ref) && caller.instructions[(sz)symbol_ref].tag == ir::InstTag.ARG,
 		"DIE should tombstone the unused pure call and its now-unused callee symbol");
 	f.free();
@@ -4485,7 +5540,7 @@ fn void mem2reg_removes_dead_phi_cycles_and_keeps_live_phi_cycles() @test
 	assert(returned != ir::NONE, "function should contain its return instruction");
 
 	ir_opt::DeclEditor editor;
-	editor.begin(&f.graph.decls[0], &f.ta);
+	editor.begin(&f.graph.decls[0]);
 	Ref dead_a = editor.append({ .tag = ir::InstTag.PHI, .ty = value_interner::REF_I32 });
 	Ref dead_b = editor.append({ .tag = ir::InstTag.PHI, .ty = value_interner::REF_I32 });
 	Ref live_a = editor.append({ .tag = ir::InstTag.PHI, .ty = value_interner::REF_I32 });
@@ -4773,9 +5828,9 @@ fn void sroa_keeps_overlapping_hand_built_byte_ranges_in_memory() @test
 	f.builder.finish_fn("overlapping_ranges");
 	f.finish();
 	ir::Decl* decl = &f.graph.decls[0];
-	assert(!ir_opt::sroa(&f.graph, decl, &f.ta),
+	assert(!ir_opt::sroa(&f.graph, decl),
 		"an i64 access at byte 0 overlapping an i32 access at byte 4 must reject SROA");
-	ir_opt::mem2reg(&f.graph, decl, &f.ta);
+	ir_opt::mem2reg(&f.graph, decl);
 	ir::ErrorList errors;
 	errors.init(&f.ta);
 	assert(ir_opt::verify(&f.graph, &errors), "overlapping-range fixture should verify after mem2reg: %s",
@@ -4936,6 +5991,30 @@ fn void mem_opt_invalidates_aliasing_stores_and_unknown_offsets() @test
 	}
 }
 
+fn void mem_opt_preserves_load_fact_across_disjoint_store() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref value = f.builder.add_arg(value_interner::REF_I32);
+	Ref four = f.add_int_constant(4, value_interner::REF_I64);
+	f.builder.start_fn();
+	Ref slot = f.builder.add_alloc(8, 4);
+	Ref adjacent = f.builder.add_inst(ir::InstTag.ADD, { .bin = { slot, four } }, value_interner::REF_PTR);
+	Ref first = f.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, value_interner::REF_I32);
+	f.builder.add_store(adjacent, value);
+	Ref second = f.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, value_interner::REF_I32);
+	Ref sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { first, second } }, value_interner::REF_I32);
+	f.builder.add_return(sum);
+	f.builder.finish_fn("mem_disjoint_store_keeps_load_fact");
+	f.run_mem_opt();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(count_body_tag(decl, ir::InstTag.LOAD) == 1 && count_body_tag(decl, ir::InstTag.STORE) == 1,
+		"a store to a disjoint byte range must preserve the available load and remain observable");
+	assert(decl.instructions[(sz)sum].data.bin.rhs == first,
+		"the repeated load should resolve to the load before the disjoint store");
+	f.free();
+}
+
 fn void mem_opt_dse_removes_overwrites_and_never_loaded_roots() @test
 {
 	{
@@ -4943,11 +6022,13 @@ fn void mem_opt_dse_removes_overwrites_and_never_loaded_roots() @test
 		f.init();
 		Ref first_value = f.builder.add_arg(value_interner::REF_I32);
 		Ref final_value = f.builder.add_arg(value_interner::REF_I32);
+		Ref dynamic_offset = f.builder.add_arg(value_interner::REF_I64);
 		f.builder.start_fn();
 		Ref slot = f.builder.add_alloc(4, 4);
 		f.builder.add_store(slot, first_value);
 		f.builder.add_store(slot, final_value);
-		Ref loaded = f.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, value_interner::REF_I32);
+		Ref dynamic_slot = f.builder.add_inst(ir::InstTag.ADD, { .bin = { slot, dynamic_offset } }, value_interner::REF_PTR);
+		Ref loaded = f.builder.add_inst(ir::InstTag.LOAD, { .ref = dynamic_slot }, value_interner::REF_I32);
 		f.builder.add_return(loaded);
 		f.builder.finish_fn("mem_overwrite_dse");
 		f.run_mem_opt();
@@ -4994,6 +6075,79 @@ fn void mem_opt_dse_removes_overwrites_and_never_loaded_roots() @test
 			"a may-aliasing load must keep an earlier pending store live for DSE");
 		f.free();
 	}
+}
+
+fn void mem_opt_uses_inferred_call_argument_effects() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"static int read_pointer(const int *p) { return *p; }\n"
+		"static void write_pointer(int *p) { *p = 9; }\n"
+		"static int *captured_pointer;\n"
+		"static void capture_pointer(int *p) { captured_pointer = p; }\n"
+		"extern void external_pointer(int *p);\n"
+		"int reader_call(void) { int value; value = 17; return read_pointer(&value) + value; }\n"
+		"int writer_call(void) { int first, second; first = 1; second = 2; "
+		"read_pointer(&second); int before = first + second; write_pointer(&first); "
+		"return before + first + second; }\n"
+		"int capture_call(void) { int value; value = 3; capture_pointer(&value); return value; }\n"
+		"int external_call(void) { int value; value = 4; external_pointer(&value); return value; }\n");
+	f.run_mem2reg();
+	ir_opt::infer_function_attrs(&f.graph);
+	foreach (&decl : f.graph.decls) ir_opt::mem_opt(&f.graph, decl);
+	f.verify_graph();
+
+	ir::Decl* reader = find_function(&f.graph, "read_pointer");
+	assert((reader.attrs.arg_noread & 1) == 0 && (reader.attrs.arg_nowrite & 1) != 0 &&
+		(reader.attrs.arg_nocapture & 1) != 0, "reader helper should only read its pointer argument");
+	ir::Decl* reader_caller = find_function(&f.graph, "reader_call");
+	assert(count_body_tag(reader_caller, ir::InstTag.LOAD) == 0 &&
+		count_body_tag(reader_caller, ir::InstTag.STORE) == 1,
+		"a summarized reader should preserve store-to-load forwarding while making the store observable");
+
+	ir::Decl* writer = find_function(&f.graph, "write_pointer");
+	assert((writer.attrs.arg_noread & 1) != 0 && (writer.attrs.arg_nowrite & 1) == 0 &&
+		(writer.attrs.arg_nocapture & 1) != 0, "writer helper should only write its pointer argument");
+	ir::Decl* writer_caller = find_function(&f.graph, "writer_call");
+	assert(count_body_tag(writer_caller, ir::InstTag.LOAD) == 1,
+		"the writer should invalidate the passed root while the other root's repeated load forwards");
+
+	ir::Decl* capture = find_function(&f.graph, "capture_pointer");
+	assert((capture.attrs.arg_nocapture & 1) == 0,
+		"a helper that stores its pointer globally must not promise nocapture");
+	assert(count_body_tag(find_function(&f.graph, "capture_call"), ir::InstTag.LOAD) == 1,
+		"a captured allocation must remain opaque to memory forwarding");
+	assert(count_body_tag(find_function(&f.graph, "external_call"), ir::InstTag.LOAD) == 1,
+		"an external call without a summary must conservatively clobber an allocation");
+	f.free();
+}
+
+fn void mem_opt_keeps_byval_call_memory_conservative() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"struct LargeMemArg { long a, b, c; };\n"
+		"static long read_large(struct LargeMemArg value) { return value.a; }\n"
+		"long byval_reader_call(void) { struct LargeMemArg value; value.a = 11; "
+		"value.b = 12; value.c = 13; return read_large(value) + value.a; }\n");
+	f.run_mem2reg();
+	ir_opt::infer_function_attrs(&f.graph);
+	foreach (&decl : f.graph.decls) ir_opt::mem_opt(&f.graph, decl);
+	f.verify_graph();
+	ir::Decl* caller = find_function(&f.graph, "byval_reader_call");
+	bool saw_byval_copy = false;
+	foreach (ref : caller.body)
+	{
+		ir::Inst* inst = &caller.instructions[(sz)ref];
+		if (inst.tag != ir::InstTag.CALL) continue;
+		foreach (bytes : inst.data.call.memory_copy_bytes) if (bytes != 0) saw_byval_copy = true;
+	}
+	assert(saw_byval_copy, "the by-value aggregate call should carry copy metadata");
+	assert(count_body_tag(caller, ir::InstTag.ALLOC) != 0 && count_body_tag(caller, ir::InstTag.STORE) != 0,
+		"by-value copy metadata must keep the caller's aggregate storage conservative");
+	f.free();
 }
 
 fn void mem_opt_does_not_inherit_state_across_joins_or_loops() @test
@@ -5478,6 +6632,983 @@ fn void cfg_dominators_diamond_and_loop() @test
 	f.free();
 }
 
+fn void licm_hoists_loop_invariant_expression_to_preheader() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int invariant(int n) { int sum = 0; for (int i = 0; i < 10; i++) sum += n * 7; return sum; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "invariant");
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	f.verify_graph();
+
+	Ref multiply = ir::NONE;
+	foreach (ref : decl.body)
+	{
+		if (decl.instructions[(sz)ref].tag == ir::InstTag.MUL)
+		{
+			assert(multiply == ir::NONE, "fixture should contain only one multiplication");
+			multiply = ref;
+		}
+	}
+	assert(multiply != ir::NONE, "invariant multiplication should remain in the IR");
+
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	uint multiply_block = cfg.block_of_ref[(sz)multiply];
+	assert(multiply_block != ir_opt::NONE_BLOCK, "multiplication should belong to a CFG block");
+	bool checked_loop_header = false;
+	foreach (block_index, block : cfg.blocks)
+	{
+		foreach (successor : block.succs)
+		{
+			if (cfg.dominates(successor, (uint)block_index))
+			{
+				checked_loop_header = true;
+				assert(!cfg.dominates(successor, multiply_block),
+					"the invariant multiplication should be outside the natural loop");
+			}
+		}
+	}
+	assert(checked_loop_header, "fixture should retain a detectable loop back edge");
+	assert(count_body_tag(decl, ir::InstTag.MUL) == 1,
+		"LICM should preserve exactly one multiplication while moving it out of the loop");
+	cfg.free();
+	f.free();
+}
+
+fn void licm_nested_preheader_tails_keep_def_before_use() @test
+{
+	// The innermost preheader tail holds 1-a, a*b, 1-a*b; the b-loop later moves
+	// 1-a outward. The remaining tail entries must keep their dependency order.
+	OptFixture f;
+	f.init();
+	f.lower("int g(int);\n"
+		"int f(int n) { int s = 0; for (int a = 0; a < n; a++) for (int b = 0; b < n; b++) "
+		"for (int c = 0; c < n; c++) s += g(c) + (1 - a) + (1 - a * b); return s; }\n");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "f");
+	assert(ir_opt::loop_invariant_code_motion(&f.graph, decl), "LICM should hoist the invariants");
+	f.verify_graph();
+	sz mul_pos = -1;
+	sz sub_pos = -1;
+	foreach (pos, ref : decl.body)
+	{
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.MUL) mul_pos = (sz)pos;
+		if (inst.tag == ir::InstTag.SUB && decl.instructions[(sz)inst.data.bin.rhs].tag == ir::InstTag.MUL) sub_pos = (sz)pos;
+	}
+	assert(mul_pos >= 0 && sub_pos >= 0, "fixture should keep a*b and 1 - a*b");
+	assert(mul_pos < sub_pos, "a*b must be placed before 1 - a*b");
+	f.free();
+}
+
+fn void licm_keeps_load_from_nocapture_writable_call_argument_in_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"static void write_pointer(int *p) { *p = 9; }\n"
+		"int writable_call_load(int n) { int value = 1; int i = 0; int sum = 0; "
+		"while (i < n) { int observed = value; write_pointer(&value); sum += observed; i++; } "
+		"return sum; }\n");
+	f.run_mem2reg();
+	ir_opt::infer_function_attrs(&f.graph);
+	ir::Decl* writer = find_function(&f.graph, "write_pointer");
+	assert((writer.attrs.arg_nocapture & 1) != 0 && (writer.attrs.arg_nowrite & 1) == 0,
+		"the callee should be summarized as non-capturing but writable through its argument");
+
+	ir::Decl* decl = find_function(&f.graph, "writable_call_load");
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "IR verifier rejected LICM result: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid LICM result reported verifier errors");
+	errors.free();
+
+	Ref writer_call = ir::NONE;
+	foreach (ref : decl.body)
+	{
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.CALL) writer_call = ref;
+	}
+	assert(writer_call != ir::NONE, "writer call should remain in the caller");
+	ir::Inst* call = &decl.instructions[(sz)writer_call];
+	assert(call.data.call.args.len == 1, "writer call should pass exactly one pointer argument");
+	Ref passed_alloca = call.data.call.args[0];
+	Ref observed_load = ir::NONE;
+	foreach (ref : decl.body)
+	{
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.LOAD && inst.data.ref == passed_alloca) observed_load = ref;
+	}
+	assert(observed_load != ir::NONE, "load from the alloca passed to the writer should remain");
+
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	uint load_block = cfg.block_of_ref[(sz)observed_load];
+	assert(load_block != ir_opt::NONE_BLOCK, "load should belong to a CFG block");
+	bool load_is_in_loop = false;
+	foreach (block_index, block : cfg.blocks)
+	{
+		foreach (successor : block.succs)
+		{
+			if (cfg.dominates(successor, (uint)block_index) && cfg.dominates(successor, load_block))
+			{
+				load_is_in_loop = true;
+			}
+		}
+	}
+	assert(load_is_in_loop, "the load must stay in the loop because the call can write through its argument");
+	cfg.free();
+	f.free();
+}
+
+fn void licm_preserves_induction_value_at_loop_exit() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int induction_exit(int limit, int stop) { int i = 0; for (; i < limit; i++) { if (i == stop) break; } return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "induction_exit");
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	f.verify_graph();
+
+	Ref exit_value = return_value(decl);
+	assert(exit_value != ir::NONE && decl.instructions[(sz)exit_value].tag == ir::InstTag.PHI,
+		"the value returned after the loop should remain the loop-carried induction PHI");
+	bool has_increment_input = false;
+	ir::Inst* induction = &decl.instructions[(sz)exit_value];
+	foreach (input : induction.data.phi)
+	{
+		if (decl.instructions[(sz)input.value].tag == ir::InstTag.ADD) has_increment_input = true;
+	}
+	assert(has_increment_input, "the induction PHI should retain its increment as a back-edge input");
+
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(cfg_has_back_edge(&cfg), "the induction loop should retain its back edge after LICM");
+	cfg.free();
+	f.free();
+}
+
+fn void indvar_simplifies_up_counter_exit_without_removing_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int up_lt(void) { int i = 0; while (i < 5) i++; return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "up_lt");
+	assert(ir_opt::indvar_simplify(&f.graph, decl), "the constant up-counter exit should be simplified");
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 5),
+		"the up-counter exit should be the constant bound 5");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"folding the up-counter exit must preserve its loop branch");
+	f.free();
+}
+
+fn void unroll_removes_back_edge_small_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a) { int s = 0; for (int i = 0; i < 4; i++) s += a; return s; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "f");
+	assert(ir_opt::loop_full_unroll(&f.graph, decl, 128), "small constant loop should unroll");
+	f.verify_graph();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(!cfg_has_back_edge(&cfg), "fully unrolled loop should have no back edge");
+	cfg.free();
+	f.free();
+
+	OptFixture optimized;
+	optimized.init();
+	optimized.lower("int f(int a) { int s = 0; for (int i = 0; i < 4; i++) s += a; return s; }");
+	optimized.run_o2();
+	decl = find_function(&optimized.graph, "f");
+	cfg = ir_opt::build_cfg(decl, &optimized.ta);
+	assert(!cfg_has_back_edge(&cfg) && count_body_tag(decl, ir::InstTag.BRANCH) == 0,
+		"O2 should unroll the small loop and leave no back edge or branch");
+	cfg.free();
+	optimized.free();
+}
+
+fn void loop_deletion_removes_unused_counter_and_nested_loops() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"void unused_counter(void) { int i = 0; while (i < 8) i++; }\n"
+		"void unused_nested_counters(void) { int i = 0; while (i < 4) { int j = 0; while (j < 3) j++; i++; } }\n"
+		"int f(void) { int i = 0; while (i < 10) i += 3; return i; }\n");
+	f.run_mem2reg();
+	ir::Decl* stepped = find_function(&f.graph, "f");
+	assert(ir_opt::indvar_simplify(&f.graph, stepped),
+		"the constant stepped exit should be simplified before loop deletion");
+	assert(ir_opt::loop_deletion(&f.graph, stepped),
+		"loop deletion should remove the stepped counter loop");
+	f.verify_graph();
+	ir_opt::Cfg stepped_cfg = ir_opt::build_cfg(stepped, &f.ta);
+	assert(!cfg_has_back_edge(&stepped_cfg), "the stepped counter should have no back edge after deletion");
+	assert(count_body_tag(stepped, ir::InstTag.BRANCH) == 0,
+		"the stepped counter should have no branch after deletion");
+	assert(is_int_constant(stepped, return_value(stepped), f.graph.interner, 12),
+		"the stepped counter should return the constant 12 after deletion");
+	stepped_cfg.free();
+	foreach (name : (String[]){"unused_counter", "unused_nested_counters"})
+	{
+		ir::Decl* decl = find_function(&f.graph, name);
+		if (name == "unused_nested_counters")
+		{
+			ir_opt::indvar_simplify(&f.graph, decl);
+		}
+		assert(ir_opt::loop_deletion(&f.graph, decl),
+			"loop deletion should remove unused counter loop(s) in %s", name);
+		f.verify_graph();
+		ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+		assert(!cfg_has_back_edge(&cfg), "unused counter loop(s) should have no back edge in %s", name);
+		cfg.free();
+	}
+	f.free();
+}
+
+fn void loop_deletion_preserves_effectful_or_unproven_loops() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"void store_through_arg(int *p) { int i = 0; while (i < 8) { *p = i; i++; } }\n"
+		"extern void observe(int); void call_in_loop(void) { int i = 0; while (i < 8) { observe(i); i++; } }\n"
+		"void unknown_bound(int n) { int i = 0; while (i < n) i++; }\n"
+		"int observable_accumulator(void) { int i = 0, sum = 0; while (i < 8) { sum += i; i++; } return sum; }\n"
+		"void variable_division(int divisor) { int i = 1; while (i < 8) { int quotient = i / divisor; i++; } }\n");
+	f.run_mem2reg();
+	foreach (name : (String[]){"store_through_arg", "call_in_loop", "unknown_bound", "observable_accumulator", "variable_division"})
+	{
+		ir::Decl* decl = find_function(&f.graph, name);
+		ir_opt::loop_deletion(&f.graph, decl);
+		f.verify_graph();
+		ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+		assert(cfg_has_back_edge(&cfg), "loop deletion must preserve the loop in %s", name);
+		cfg.free();
+	}
+	f.free();
+}
+
+fn void loop_deletion_is_reached_by_o2_pipeline() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int o2_dead_loop(void) { int i = 0; while (i < 3) i++; return i; }");
+	f.run_o2();
+	ir::Decl* decl = find_function(&f.graph, "o2_dead_loop");
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(!cfg_has_back_edge(&cfg), "O2 should delete an unused constant-bound loop");
+	cfg.free();
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) == 0,
+		"O2 should remove the branch from the deleted loop");
+	assert_returns_int(decl, f.graph.interner, 3, "O2 dead-loop result");
+	f.free();
+}
+
+fn void unroll_do_while_latch_exit() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a) { int i = 0, s = 0; do { s ^= a + i; i++; } while (i < 3); return s; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "f");
+	ir_opt::loop_full_unroll(&f.graph, decl, 128);
+	f.verify_graph();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(!cfg_has_back_edge(&cfg), "do/while loop should have no back edge after unrolling");
+	cfg.free();
+	f.free();
+}
+
+fn void unroll_skips_over_threshold_and_unknown_trip_count() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int large(void) { int i = 0; while (i < 1000) i++; return i; } int unknown(int n) { int i = 0; while (i < n) i++; return i; }");
+	f.run_mem2reg();
+	ir::Decl* large = find_function(&f.graph, "large");
+	ir::Decl* unknown = find_function(&f.graph, "unknown");
+	ir_opt::loop_full_unroll(&f.graph, large, 128);
+	ir_opt::loop_full_unroll(&f.graph, unknown, 128);
+	f.verify_graph();
+	ir_opt::Cfg large_cfg = ir_opt::build_cfg(large, &f.ta);
+	ir_opt::Cfg unknown_cfg = ir_opt::build_cfg(unknown, &f.ta);
+	assert(cfg_has_back_edge(&large_cfg), "large loop should retain its back edge");
+	assert(cfg_has_back_edge(&unknown_cfg), "unknown-trip loop should retain its back edge");
+	large_cfg.free();
+	unknown_cfg.free();
+	f.free();
+}
+
+fn void unroll_body_with_internal_branch() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a) { int s = 0; for (int i = 0; i < 3; i++) { if (a & i) s += i; else s -= a; } return s; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "f");
+	ir_opt::loop_full_unroll(&f.graph, decl, 128);
+	f.verify_graph();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(!cfg_has_back_edge(&cfg), "loop with an internal branch should fully unroll");
+	cfg.free();
+	f.free();
+}
+
+fn void unroll_skips_outer_loop_until_inner_loop_is_gone() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a) { int s = 0; for (int i = 0; i < 3; i++) for (int j = 0; j < 2; j++) s += a + i + j; return s; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "f");
+	ir_opt::loop_full_unroll(&f.graph, decl, 128);
+	f.verify_graph();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	assert(!cfg_has_back_edge(&cfg), "inner then outer counted loops should unroll to a fixpoint");
+	cfg.free();
+	f.free();
+}
+
+fn void indvar_simplifies_down_counter_ge_exit_without_removing_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int down_ge(void) { int i = 10; while (i >= 4) i--; return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "down_ge");
+	assert(ir_opt::indvar_simplify(&f.graph, decl), "the constant down-counter exit should be simplified");
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 3),
+		"the down-counter should exit at 3 after the >= test becomes false");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"folding the down-counter exit must preserve its loop branch");
+	f.free();
+}
+
+fn void indvar_trip_count_down_counter() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int down_counter(void) { int i = 10; for (; i > 0; i--) {} return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "down_counter");
+	assert(ir_opt::indvar_simplify(&f.graph, decl), "the for-loop down-counter exit should be simplified");
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 0),
+		"the down-counter should exit at 0 after the > test becomes false");
+	f.free();
+}
+
+fn void indvar_simplifies_stepped_exit_without_removing_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int step_three(void) { int i = 0; while (i < 10) i += 3; return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "step_three");
+	assert(ir_opt::indvar_simplify(&f.graph, decl), "the constant stepped exit should be simplified");
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 12),
+		"the step-3 loop should exit at the first value not below 10");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"folding the stepped exit must preserve its loop branch");
+	f.free();
+}
+
+fn void indvar_do_while_latch_exit() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int do_while_exit(void) { int i = 0; do { i++; } while (i < 5); return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "do_while_exit");
+	ir_opt::indvar_simplify(&f.graph, decl);
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 5),
+		"the do/while latch exit should be the constant bound 5");
+	f.free();
+}
+
+fn void indvar_unknown_bound_untouched() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int unknown_bound(int bound) { int i = 0; while (i < bound) i++; return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "unknown_bound");
+	ir_opt::indvar_simplify(&f.graph, decl);
+	f.verify_graph();
+	Ref exit_value = return_value(decl);
+	assert(exit_value != ir::NONE && decl.instructions[(sz)exit_value].tag != ir::InstTag.CONSTANT,
+		"the unknown-bound exit must not be replaced with a constant");
+	f.free();
+}
+
+fn void indvar_does_not_fold_unreachable_odd_unsigned_exit() @test
+{
+	OptFixture f;
+	f.init();
+	// This loop never reaches 7; exercise the pass only and never execute this fixture.
+	f.lower("unsigned int unreachable_exit(void) { unsigned int i = 0; while (i != 7) i += 2; return i; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "unreachable_exit");
+	ir_opt::indvar_simplify(&f.graph, decl);
+	f.verify_graph();
+	Ref exit_value = return_value(decl);
+	assert(!is_int_constant(decl, exit_value, f.graph.interner, 7),
+		"the unreachable odd exit value must not be substituted");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"the nonterminating unsigned loop must retain its control branch");
+	f.free();
+}
+
+fn void indvar_simplifies_unsigned_char_for_exit_without_removing_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("unsigned char wrap_cap(void) { unsigned char c = 250; for (; c != 4; c++) {} return c; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "wrap_cap");
+	assert(ir_opt::indvar_simplify(&f.graph, decl), "the unsigned-char exit should be simplified");
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 4),
+		"the unsigned-char loop should exit after wrapping to 4");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"folding the unsigned-char exit must preserve its loop branch");
+	f.free();
+}
+
+fn void indvar_simplifies_signed_char_sext_exit() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("signed char count_up(void) { signed char c = -3; while (c != 2) c++; return c; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "count_up");
+	assert(count_body_tag(decl, ir::InstTag.SEXT) != 0, "the signed-char compare should be promoted with SEXT");
+	assert(ir_opt::indvar_simplify(&f.graph, decl), "the signed-char exit should be simplified");
+	f.verify_graph();
+	assert(is_int_constant(decl, return_value(decl), f.graph.interner, 2),
+		"the signed-char loop should exit at 2");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) != 0,
+		"folding the signed-char exit must preserve its loop branch");
+	f.free();
+}
+
+fn void compact_drops_tombstones_and_keeps_ir_valid() @test
+{
+	// After -O2, passes leave replaced instructions unplaced; compaction drops
+	// them, renumbers operands/labels/PHI edges, and must keep the IR valid.
+	OptFixture f;
+	f.init();
+	f.lower("static int sq(int x) { return x * x; }\n"
+		"int sum(int n, int *p) { int s = 0; for (int i = 0; i < n; i++) { if (p[i] > 3) s += sq(p[i]); else s -= i; } return s; }\n"
+		"int pick(int c) { switch (c) { case 1: return 10; case 2: return 20; default: return sum(c, &c); } }");
+	f.run_o2();
+	usz before = 0;
+	foreach (&decl : f.graph.decls) before += decl.instructions.len;
+	ir_opt::compact(&f.graph);
+	f.verify_graph();
+	usz after = 0;
+	foreach (&decl : f.graph.decls)
+	{
+		after += decl.instructions.len;
+		foreach (ref : decl.body) assert((usz)ref < (usz)decl.instructions.len, "body refs must be renumbered into range");
+	}
+	assert(after < before, "compaction should drop the optimizer's unplaced instructions");
+	f.free();
+}
+
+fn void codegen_dead_return_adds_no_return_phi_input() @test
+{
+	// sqlite numericType: `return f(p); return 0;` must not give the return
+	// PHI a second input from the same, already terminated block.
+	OptFixture f;
+	f.init();
+	f.lower("short g(int *p);\nshort numeric(int *p) { if (*p & 45) return *p & 45; return g(p); return 0; }");
+	f.verify_graph();
+	f.free();
+}
+
+fn void codegen_int_pointer_casts_keep_ir_types() @test
+{
+	// `c ? (void*)(long)i : p` must give the PHI ptr-typed inputs on both arms.
+	OptFixture f;
+	f.init();
+	f.lower("void *pick(int c, int i, void *p) { return c ? (void *)(long)i : p; }\n"
+		"long back(int c, void *p, long v) { return c ? (long)p : v; }");
+	f.verify_graph();
+	f.free();
+}
+
+fn void o1_sink_keeps_differently_typed_extension_operands_apart() @test
+{
+	// sqlite VdbeExec: `x += f8(t)` / `x += f32(t)` on two arms are zext from
+	// i8 and from i32; sinking the zext would build an i8/i32 operand PHI.
+	OptFixture f;
+	f.init();
+	f.lower("unsigned char one(unsigned char);\nunsigned two(unsigned);\n"
+		"unsigned long long add_len(int c, unsigned t, unsigned long long off) { if (c) off += one((unsigned char)t); else off += two(t); return off; }");
+	f.run_o1();
+	f.free();
+}
+
+fn void mem_opt_keeps_write_only_alloc_passed_to_call() @test
+{
+	// sqlite powerOfTen(p, &lo) with lo never read: the alloc is a dead store
+	// target, but the call still needs its address.
+	OptFixture f;
+	f.init();
+	f.lower("__attribute__((noinline)) static unsigned long long power(int p, unsigned *lo) { *lo = (unsigned)p; return (unsigned long long)p * 3; }\n"
+		"unsigned long long use_power(int p) { unsigned lo; return power(p, &lo); }");
+	f.run_o2();
+	ir::Decl* decl = find_function(&f.graph, "use_power");
+	bool saw_call = false;
+	foreach (ref : decl.body)
+	{
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag != ir::InstTag.CALL || inst.data.call.args.len != 2) continue;
+		saw_call = true;
+		ir::Ref lo = inst.data.call.args[1];
+		bool placed = false;
+		foreach (other : decl.body) if (other == lo) placed = true;
+		assert(placed, "the alloc passed to the write-only call argument must stay in the body");
+	}
+	assert(saw_call, "power should stay a call (noinline)");
+	f.free();
+}
+
+fn void codegen_bool_ternary_arm_jumps_to_short_circuit_exit() @test
+{
+	// The then-arm of `b ? a : b` under `!` feeds the && exit directly; it must
+	// jump there instead of falling through into the else block.
+	OptFixture f;
+	f.init();
+	f.lower("int f5(int a, int b) { return a && !(b ? a : b); }");
+	f.verify_graph();
+	f.free();
+}
+
+fn void compute_loops_links_nested_loop_parents() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int nest(int n) { int c = 0; for (int k = 0; k < n; k++) for (int m = 0; m < n; m++) c += m != k; return c; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "nest");
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	ir_opt::LoopInfo loops = ir_opt::compute_loops(&cfg, &f.ta);
+	assert(loops.loops.len() == 2, "fixture should have an outer and an inner loop");
+	ir_opt::Loop* inner = &loops.loops.entries[0];
+	ir_opt::Loop* outer = &loops.loops.entries[1];
+	assert(inner.blocks.len() < outer.blocks.len(), "loops are sorted innermost first");
+	assert(inner.parent == 1 && outer.parent == ir_opt::NONE_BLOCK, "the inner loop's parent must be the outer loop");
+	assert(inner.depth == 2 && outer.depth == 1, "loop depths should follow the nest");
+	assert(outer.contains(&loops, inner.header), "the outer loop contains the inner loop's blocks");
+	loops.free();
+	cfg.free();
+	f.free();
+}
+
+fn void indvar_keeps_outer_iv_used_inside_inner_loop() @test
+{
+	// k's exit value is 4, but the use of k inside the inner loop is still in
+	// k's loop and must not be replaced by it.
+	OptFixture f;
+	f.init();
+	f.lower("int nest(void) { int c = 0; for (int k = 0; k < 4; k++) for (int m = 0; m < 4; m++) { if (m == k) continue; c++; } return c; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "nest");
+	ir_opt::indvar_simplify(&f.graph, decl);
+	f.verify_graph();
+	foreach (ref : decl.body)
+	{
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag != ir::InstTag.CMP_EQ) continue;
+		assert(!is_int_constant(decl, inst.data.bin.lhs, f.graph.interner, 4) &&
+			!is_int_constant(decl, inst.data.bin.rhs, f.graph.interner, 4),
+			"m == k inside the inner loop must keep using k, not its exit value");
+	}
+	f.free();
+}
+
+fn void licm_hoists_to_the_outermost_valid_nested_preheader() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref outer_condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref inner_condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref initial_outer = f.builder.add_arg(value_interner::REF_I32);
+	Ref initial_inner = f.builder.add_arg(value_interner::REF_I32);
+	Ref left = f.builder.add_arg(value_interner::REF_I32);
+	Ref right = f.builder.add_arg(value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref outer_header = f.builder.make_label("outer_header");
+	Ref outer_body = f.builder.make_label("outer_body");
+	Ref inner_header = f.builder.make_label("inner_header");
+	Ref inner_body = f.builder.make_label("inner_body");
+	Ref outer_latch = f.builder.make_label("outer_latch");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(outer_header);
+	f.builder.start_block(outer_header);
+	ir::PhiInput[2] outer_inputs = {
+		{ .label = entry, .value = initial_outer },
+		{ .label = outer_latch, .value = initial_outer },
+	};
+	Ref outer_phi = f.builder.add_phi(outer_inputs[..], value_interner::REF_I32);
+	f.builder.add_branch(outer_condition, outer_body, exit);
+	f.builder.start_block(outer_body);
+	f.builder.add_jump(inner_header);
+	f.builder.start_block(inner_header);
+	ir::PhiInput[2] inner_inputs = {
+		{ .label = outer_body, .value = initial_inner },
+		{ .label = inner_body, .value = initial_inner },
+	};
+	Ref inner_phi = f.builder.add_phi(inner_inputs[..], value_interner::REF_I32);
+	f.builder.add_branch(inner_condition, inner_body, outer_latch);
+	f.builder.start_block(inner_body);
+	Ref args_only = f.builder.add_inst(ir::InstTag.ADD, { .bin = { left, right } }, value_interner::REF_I32);
+	Ref uses_outer_phi = f.builder.add_inst(ir::InstTag.ADD, { .bin = { outer_phi, right } }, value_interner::REF_I32);
+	Ref inner_next = f.builder.add_inst(ir::InstTag.ADD, { .bin = { inner_phi, one } }, value_interner::REF_I32);
+	f.builder.add_jump(inner_header);
+	f.builder.start_block(outer_latch);
+	Ref outer_next = f.builder.add_inst(ir::InstTag.ADD, { .bin = { outer_phi, one } }, value_interner::REF_I32);
+	f.builder.add_jump(outer_header);
+	f.builder.start_block(exit);
+	f.builder.add_return(outer_phi);
+	f.builder.finish_fn("nested_licm_preheaders");
+	f.finish();
+	// Patch each loop-carried PHI to its update after all instruction refs exist.
+	ir_opt::DeclEditor editor;
+	editor.begin(&f.graph.decls[0]);
+	editor.insts.entries[(sz)outer_phi].data.phi[1].value = outer_next;
+	editor.insts.entries[(sz)inner_phi].data.phi[1].value = inner_next;
+	editor.commit();
+	ir::Decl* decl = &f.graph.decls[0];
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "LICM produced invalid nested-loop IR: %s", errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	uint outer_header_block = block_for_label(&cfg, outer_header);
+	uint inner_header_block = block_for_label(&cfg, inner_header);
+	uint args_only_block = ir_opt::NONE_BLOCK;
+	uint uses_outer_phi_block = ir_opt::NONE_BLOCK;
+	foreach (block_index, block : cfg.blocks)
+	{
+		for (sz pos = block.start; pos < block.end; pos++)
+		{
+			if (decl.body[pos] == args_only) args_only_block = (uint)block_index;
+			if (decl.body[pos] == uses_outer_phi) uses_outer_phi_block = (uint)block_index;
+		}
+	}
+	assert(args_only_block != ir_opt::NONE_BLOCK && uses_outer_phi_block != ir_opt::NONE_BLOCK,
+		"both invariant expressions should remain in the CFG");
+	assert(!cfg.dominates(outer_header_block, args_only_block),
+		"an expression of two ARGs should hoist outside both nested loops");
+	assert(cfg.dominates(outer_header_block, uses_outer_phi_block) && !cfg.dominates(inner_header_block, uses_outer_phi_block),
+		"an expression using the outer induction PHI should hoist to the inner preheader inside the outer loop");
+	cfg.free();
+	f.free();
+}
+
+fn void licm_keeps_loop_variant_add_in_loop() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref left = f.builder.add_arg(value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref header = f.builder.make_label("header");
+	Ref body = f.builder.make_label("body");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	ir::PhiInput[2] inputs = {
+		{ .label = entry, .value = left },
+		{ .label = body, .value = left },
+	};
+	Ref phi = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_branch(condition, body, exit);
+	f.builder.start_block(body);
+	Ref variant = f.builder.add_inst(ir::InstTag.ADD, { .bin = { phi, one } }, value_interner::REF_I32);
+	f.builder.add_jump(header);
+	f.builder.start_block(exit);
+	f.builder.add_return(left);
+	f.builder.finish_fn("variant_add");
+	f.finish();
+	ir_opt::DeclEditor editor;
+	editor.begin(&f.graph.decls[0]);
+	editor.insts.entries[(sz)phi].data.phi[1].value = variant;
+	editor.commit();
+	ir::Decl* decl = &f.graph.decls[0];
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "LICM produced invalid IR: %s", errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	uint variant_block = ir_opt::NONE_BLOCK;
+	foreach (block_index, block : cfg.blocks)
+	{
+		for (sz pos = block.start; pos < block.end; pos++)
+		{
+			if (decl.body[pos] == variant) variant_block = (uint)block_index;
+		}
+	}
+	assert(variant_block != ir_opt::NONE_BLOCK && cfg.dominates(block_for_label(&cfg, header), variant_block),
+		"an ADD with loop-variant operands must remain inside the loop");
+	cfg.free();
+	f.free();
+}
+
+fn void licm_only_hoists_division_with_safe_constant_divisor() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref dividend = f.builder.add_arg(value_interner::REF_I32);
+	Ref variable_divisor = f.builder.add_arg(value_interner::REF_I32);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I32);
+	Ref negative_one = f.add_int_constant(-1, value_interner::REF_I32);
+	Ref two = f.add_int_constant(2, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref header = f.builder.make_label("header");
+	Ref body = f.builder.make_label("body");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	f.builder.add_branch(condition, body, exit);
+	f.builder.start_block(body);
+	Ref variable = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { dividend, variable_divisor } }, value_interner::REF_I32);
+	Ref zero_divisor = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { dividend, zero } }, value_interner::REF_I32);
+	Ref negative_one_divisor = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { dividend, negative_one } }, value_interner::REF_I32);
+	Ref safe = f.builder.add_inst(ir::InstTag.SDIV, { .bin = { dividend, two } }, value_interner::REF_I32);
+	f.builder.add_jump(header);
+	f.builder.start_block(exit);
+	f.builder.add_return(dividend);
+	f.builder.finish_fn("division_policy");
+	f.finish();
+	ir::Decl* decl = &f.graph.decls[0];
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "LICM produced invalid IR: %s", errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	uint header_block = block_for_label(&cfg, header);
+	uint variable_block = ir_opt::NONE_BLOCK;
+	uint zero_block = ir_opt::NONE_BLOCK;
+	uint negative_one_block = ir_opt::NONE_BLOCK;
+	uint safe_block = ir_opt::NONE_BLOCK;
+	foreach (block_index, block : cfg.blocks)
+	{
+		for (sz pos = block.start; pos < block.end; pos++)
+		{
+			Ref ref = decl.body[pos];
+			if (ref == variable) variable_block = (uint)block_index;
+			if (ref == zero_divisor) zero_block = (uint)block_index;
+			if (ref == negative_one_divisor) negative_one_block = (uint)block_index;
+			if (ref == safe) safe_block = (uint)block_index;
+		}
+	}
+	assert(cfg.dominates(header_block, variable_block) && cfg.dominates(header_block, zero_block) &&
+		cfg.dominates(header_block, negative_one_block),
+		"variable, zero, and signed negative-one divisors must stay in the loop");
+	assert(!cfg.dominates(header_block, safe_block), "a safe constant divisor should allow the division to hoist");
+	cfg.free();
+	f.free();
+}
+
+fn void check_licm_load_case(uint scenario, bool should_hoist)
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref dynamic_offset = f.builder.add_arg(value_interner::REF_I64);
+	Ref external_pointer = f.builder.add_arg(value_interner::REF_PTR);
+	Ref value = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref slot = f.builder.add_alloc(16, 8, scenario == 5);
+	Ref other_slot = f.builder.add_alloc(16, 8);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I64);
+	Ref sixteen = f.add_int_constant(16, value_interner::REF_I64);
+	Ref load_offset = scenario == 7 ? dynamic_offset : (scenario == 8 ? sixteen : zero);
+	Ref load_pointer = scenario == 6 ? external_pointer :
+		f.builder.add_inst(ir::InstTag.ADD, { .bin = { slot, load_offset } }, value_interner::REF_PTR);
+	Ref header = f.builder.make_label("header");
+	Ref body = f.builder.make_label("body");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	f.builder.add_branch(condition, body, exit);
+	f.builder.start_block(body);
+	if (scenario == 0)
+	{
+		Ref variable_pointer = f.builder.add_inst(ir::InstTag.ADD, { .bin = { other_slot, dynamic_offset } }, value_interner::REF_PTR);
+		f.builder.add_store(variable_pointer, value);
+	}
+	if (scenario == 2 || scenario == 3)
+	{
+		Ref store_offset = scenario == 2 ? zero : dynamic_offset;
+		Ref store_pointer = f.builder.add_inst(ir::InstTag.ADD, { .bin = { slot, store_offset } }, value_interner::REF_PTR);
+		f.builder.add_store(store_pointer, value);
+	}
+	if (scenario == 1 || scenario == 4)
+	{
+		Ref callee = f.builder.add_symbol("external_effect", value_interner::REF_PTR);
+		Ref[1] args = { scenario == 4 ? slot : value };
+		f.builder.add_call(callee, args[..], value_interner::REF_VOID);
+	}
+	Ref load = f.builder.add_load(load_pointer, value_interner::REF_I32);
+	f.builder.add_inst(ir::InstTag.ADD, { .bin = { load, value } }, value_interner::REF_I32);
+	f.builder.add_jump(header);
+	f.builder.start_block(exit);
+	f.builder.add_return(value);
+	f.builder.finish_fn("licm_load_case");
+	f.finish();
+	ir::Decl* decl = &f.graph.decls[0];
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "LICM load fixture produced invalid IR: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid LICM load fixture reported verifier errors");
+	errors.free();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	cfg.compute_dominators();
+	uint header_block = block_for_label(&cfg, header);
+	uint load_block = cfg.block_of_ref[(sz)load];
+	assert(load_block != ir_opt::NONE_BLOCK, "load must remain in the function CFG");
+	if (should_hoist)
+	{
+		assert(!cfg.dominates(header_block, load_block), "safe invariant load should move before the loop header");
+	}
+	else
+	{
+		assert(cfg.dominates(header_block, load_block), "unsafe load must stay inside the loop");
+	}
+	cfg.free();
+	f.free();
+}
+
+fn void licm_hoists_load_across_unrelated_store() @test
+{
+	check_licm_load_case(0, true);
+}
+
+fn void licm_hoists_load_across_call_when_alloca_does_not_escape() @test
+{
+	check_licm_load_case(1, true);
+}
+
+fn void licm_keeps_unsafe_loads_in_loop() @test
+{
+	check_licm_load_case(2, false); // Overlapping store to the same allocation.
+	check_licm_load_case(3, false); // Unknown store offset to the same allocation.
+	check_licm_load_case(4, false); // Passing the allocation to a call makes it escape.
+	check_licm_load_case(5, false); // Volatile allocations are never hoisted.
+	check_licm_load_case(6, false); // An argument pointer may be volatile MMIO.
+	check_licm_load_case(7, false); // Unknown load offset cannot prove dereferenceability.
+	check_licm_load_case(8, false); // Out-of-bounds load cannot be speculated.
+}
+
+fn void licm_preheader_merges_distinct_outside_phi_values() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref first_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref second_value = f.builder.add_arg(value_interner::REF_I32);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref first = f.builder.make_label("first");
+	Ref second = f.builder.make_label("second");
+	Ref header = f.builder.make_label("header");
+	Ref body = f.builder.make_label("body");
+	Ref exit = f.builder.make_label("exit");
+	f.builder.add_branch(condition, first, second);
+	f.builder.start_block(first);
+	f.builder.add_jump(header);
+	f.builder.start_block(second);
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	ir::PhiInput[3] inputs = {
+		{ .label = first, .value = first_value },
+		{ .label = second, .value = second_value },
+		{ .label = body, .value = first_value },
+	};
+	Ref phi = f.builder.add_phi(inputs[..], value_interner::REF_I32);
+	f.builder.add_branch(condition, body, exit);
+	f.builder.start_block(body);
+	Ref updated = f.builder.add_inst(ir::InstTag.ADD, { .bin = { phi, one } }, value_interner::REF_I32);
+	f.builder.add_jump(header);
+	// The back-edge PHI value comes from the loop update.
+	f.builder.start_block(exit);
+	f.builder.add_return(phi);
+	f.builder.finish_fn("distinct_preheader_phi");
+	f.finish();
+	ir_opt::DeclEditor editor;
+	editor.begin(&f.graph.decls[0]);
+	editor.insts.entries[(sz)phi].data.phi[2].value = updated;
+	editor.commit();
+	ir::Decl* decl = &f.graph.decls[0];
+	ir_opt::loop_invariant_code_motion(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "LICM produced invalid IR: %s", errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+	ir_opt::Cfg cfg = ir_opt::build_cfg(decl, &f.ta);
+	uint header_block = block_for_label(&cfg, header);
+	assert(cfg.blocks[(sz)header_block].preds.len() == 2,
+		"the header should have one inserted preheader and its loop back edge");
+	bool has_backedge = false;
+	foreach (pred : cfg.blocks[(sz)header_block].preds)
+		if (cfg.blocks[(sz)pred].label == body) has_backedge = true;
+	assert(has_backedge, "preheader insertion should preserve the loop back edge");
+	Ref preheader_label = cfg.blocks[(sz)cfg.blocks[(sz)header_block].preds[0]].label;
+	Ref backedge_label = cfg.blocks[(sz)cfg.blocks[(sz)header_block].preds[1]].label;
+	if (preheader_label == body) preheader_label = backedge_label;
+	assert(preheader_label != body, "an inserted preheader should replace both outside predecessors");
+	ir::Inst header_phi = decl.instructions[(sz)phi];
+	assert(header_phi.tag == ir::InstTag.PHI && header_phi.data.phi.len == 2,
+		"header PHI should merge the preheader and back-edge inputs");
+	Ref preheader_value = ir::NONE;
+	foreach (input : header_phi.data.phi) if (input.label == preheader_label) preheader_value = input.value;
+	assert(preheader_value != ir::NONE, "header PHI should receive its outside value from the preheader");
+	ir::Inst merged = decl.instructions[(sz)preheader_value];
+	assert(merged.tag == ir::InstTag.PHI && merged.data.phi.len == 2,
+		"distinct outside values should be merged by a PHI in the preheader");
+	bool saw_first = false;
+	bool saw_second = false;
+	foreach (input : merged.data.phi)
+	{
+		if (input.label == first && input.value == first_value) saw_first = true;
+		if (input.label == second && input.value == second_value) saw_second = true;
+	}
+	assert(saw_first && saw_second, "preheader PHI should preserve each outside predecessor's distinct value");
+	cfg.free();
+	f.free();
+}
+
 fn void uses_and_replace_all_uses_cover_select_and_phi() @test
 {
 	HandIrFixture f;
@@ -5507,10 +7638,10 @@ fn void uses_and_replace_all_uses_cover_select_and_phi() @test
 	f.finish();
 	ir::Decl* decl = &f.graph.decls[0];
 	ir_opt::Uses uses = ir_opt::compute_uses(decl, &f.ta);
-	assert(uses.users[(sz)old_value].len() == 2,
+	assert(uses.of(old_value).len == 2,
 		"the SELECT and PHI should both use the old value");
-	assert(has_index(uses.users[(sz)old_value].array_view(), select));
-	assert(has_index(uses.users[(sz)old_value].array_view(), phi));
+	assert(has_index(uses.of(old_value), select));
+	assert(has_index(uses.of(old_value), phi));
 	uses.free();
 
 	ir_opt::replace_all_uses(decl, old_value, replacement);
@@ -5747,6 +7878,1082 @@ fn void o1_preserves_float_addition_of_zero() @test
 	f.free();
 }
 
+fn void o1_folds_constant_float_arithmetic_and_ieee_comparisons() @test
+{
+	HandIrFixture f;
+	f.init();
+	f.builder.start_fn();
+	Ref one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	Ref two_point_two_five = f.add_f64_constant(0x4002_0000_0000_0000);
+	Ref sum = f.builder.add_inst(ir::InstTag.FADD, { .bin = { one_point_five, two_point_two_five } }, value_interner::REF_F64);
+	f.builder.add_return(sum);
+	f.builder.finish_fn("fold_fadd");
+	f.builder.start_fn();
+	Ref five_point_five = f.add_f64_constant(0x4016_0000_0000_0000);
+	Ref two = f.add_f64_constant(0x4000_0000_0000_0000);
+	Ref difference = f.builder.add_inst(ir::InstTag.FSUB, { .bin = { five_point_five, two } }, value_interner::REF_F64);
+	f.builder.add_return(difference);
+	f.builder.finish_fn("fold_fsub");
+	f.builder.start_fn();
+	one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	two = f.add_f64_constant(0x4000_0000_0000_0000);
+	Ref product = f.builder.add_inst(ir::InstTag.FMUL, { .bin = { one_point_five, two } }, value_interner::REF_F64);
+	f.builder.add_return(product);
+	f.builder.finish_fn("fold_fmul");
+	f.builder.start_fn();
+	Ref nine = f.add_f64_constant(0x4022_0000_0000_0000);
+	Ref four = f.add_f64_constant(0x4010_0000_0000_0000);
+	Ref quotient = f.builder.add_inst(ir::InstTag.FDIV, { .bin = { nine, four } }, value_interner::REF_F64);
+	f.builder.add_return(quotient);
+	f.builder.finish_fn("fold_fdiv");
+	f.builder.start_fn();
+	Ref positive_zero = f.add_f64_constant(0);
+	Ref fneg_zero_operand = positive_zero;
+	Ref negated_zero = f.builder.add_inst(ir::InstTag.FNEG, { .ref = fneg_zero_operand }, value_interner::REF_F64);
+	f.builder.add_return(negated_zero);
+	f.builder.finish_fn("fold_fneg_zero");
+	f.builder.start_fn();
+	Ref zero_dividend = f.add_f64_constant(0);
+	Ref zero_divisor = f.add_f64_constant(0);
+	Ref zero_over_zero = f.builder.add_inst(ir::InstTag.FDIV,
+		{ .bin = { zero_dividend, zero_divisor } }, value_interner::REF_F64);
+	f.builder.add_return(zero_over_zero);
+	f.builder.finish_fn("keep_zero_over_zero_fdiv");
+	f.builder.start_fn();
+	Ref positive_infinity = f.add_f64_constant(0x7FF0_0000_0000_0000);
+	Ref infinity_minus_infinity = f.builder.add_inst(ir::InstTag.FSUB,
+		{ .bin = { positive_infinity, positive_infinity } }, value_interner::REF_F64);
+	f.builder.add_return(infinity_minus_infinity);
+	f.builder.finish_fn("keep_infinity_minus_infinity_fsub");
+	f.builder.start_fn();
+	Ref nan = f.add_f64_constant(0x7FF8_0000_0000_0000);
+	Ref nan_eq = f.builder.add_inst(ir::InstTag.FCMP_OEQ, { .bin = { nan, nan } }, value_interner::REF_I1);
+	f.builder.add_return(nan_eq);
+	f.builder.finish_fn("fold_nan_oeq");
+	f.builder.start_fn();
+	nan = f.add_f64_constant(0x7FF8_0000_0000_0000);
+	Ref nan_ne = f.builder.add_inst(ir::InstTag.FCMP_UNE, { .bin = { nan, nan } }, value_interner::REF_I1);
+	f.builder.add_return(nan_ne);
+	f.builder.finish_fn("fold_nan_une");
+	f.builder.start_fn();
+	nan = f.add_f64_constant(0x7FF8_0000_0000_0000);
+	one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	Ref nan_lt = f.builder.add_inst(ir::InstTag.FCMP_OLT, { .bin = { nan, one_point_five } }, value_interner::REF_I1);
+	f.builder.add_return(nan_lt);
+	f.builder.finish_fn("fold_nan_olt");
+	f.builder.start_fn();
+	nan = f.add_f64_constant(0x7FF8_0000_0000_0000);
+	one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	Ref nan_le = f.builder.add_inst(ir::InstTag.FCMP_OLE, { .bin = { nan, one_point_five } }, value_interner::REF_I1);
+	f.builder.add_return(nan_le);
+	f.builder.finish_fn("fold_nan_ole");
+	f.builder.start_fn();
+	nan = f.add_f64_constant(0x7FF8_0000_0000_0000);
+	one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	Ref nan_gt = f.builder.add_inst(ir::InstTag.FCMP_OGT, { .bin = { nan, one_point_five } }, value_interner::REF_I1);
+	f.builder.add_return(nan_gt);
+	f.builder.finish_fn("fold_nan_ogt");
+	f.builder.start_fn();
+	nan = f.add_f64_constant(0x7FF8_0000_0000_0000);
+	one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	Ref nan_ge = f.builder.add_inst(ir::InstTag.FCMP_OGE, { .bin = { nan, one_point_five } }, value_interner::REF_I1);
+	f.builder.add_return(nan_ge);
+	f.builder.finish_fn("fold_nan_oge");
+	f.builder.start_fn();
+	one_point_five = f.add_f64_constant(0x3FF8_0000_0000_0000);
+	Ref finite_une = f.builder.add_inst(ir::InstTag.FCMP_UNE,
+		{ .bin = { one_point_five, one_point_five } }, value_interner::REF_I1);
+	f.builder.add_return(finite_une);
+	f.builder.finish_fn("fold_equal_une");
+	f.builder.start_fn();
+	positive_zero = f.add_f64_constant(0);
+	Ref negative_zero = f.add_f64_constant(0x8000_0000_0000_0000);
+	Ref zero_eq = f.builder.add_inst(ir::InstTag.FCMP_OEQ,
+		{ .bin = { positive_zero, negative_zero } }, value_interner::REF_I1);
+	f.builder.add_return(zero_eq);
+	f.builder.finish_fn("fold_signed_zero_oeq");
+	f.run_o1();
+
+	assert(is_f64_constant(find_function(&f.graph, "fold_fadd"),
+		return_value(find_function(&f.graph, "fold_fadd")), &f.interner, 0x400E_0000_0000_0000),
+		"constant FADD should fold to 3.75");
+	assert(is_f64_constant(find_function(&f.graph, "fold_fsub"),
+		return_value(find_function(&f.graph, "fold_fsub")), &f.interner, 0x400C_0000_0000_0000),
+		"constant FSUB should fold to 3.5");
+	assert(is_f64_constant(find_function(&f.graph, "fold_fmul"),
+		return_value(find_function(&f.graph, "fold_fmul")), &f.interner, 0x4008_0000_0000_0000),
+		"constant FMUL should fold to 3.0");
+	assert(is_f64_constant(find_function(&f.graph, "fold_fdiv"),
+		return_value(find_function(&f.graph, "fold_fdiv")), &f.interner, 0x4002_0000_0000_0000),
+		"constant FDIV should fold to 2.25");
+	ir::Decl* fneg_decl = find_function(&f.graph, "fold_fneg_zero");
+	Ref fneg_result = return_value(fneg_decl);
+	assert((usz)fneg_result < (usz)fneg_decl.instructions.len &&
+		fneg_decl.instructions[(sz)fneg_result].tag == ir::InstTag.FNEG &&
+		fneg_decl.instructions[(sz)fneg_result].data.ref == fneg_zero_operand,
+		"constant FNEG must remain in IR");
+	ir::Decl* zero_division_decl = find_function(&f.graph, "keep_zero_over_zero_fdiv");
+	Ref zero_division_result = return_value(zero_division_decl);
+	assert((usz)zero_division_result < (usz)zero_division_decl.instructions.len &&
+		zero_division_decl.instructions[(sz)zero_division_result].tag == ir::InstTag.FDIV,
+		"0.0 / 0.0 must remain as FDIV");
+	ir::Decl* infinity_subtraction_decl = find_function(&f.graph, "keep_infinity_minus_infinity_fsub");
+	Ref infinity_subtraction_result = return_value(infinity_subtraction_decl);
+	assert((usz)infinity_subtraction_result < (usz)infinity_subtraction_decl.instructions.len &&
+		infinity_subtraction_decl.instructions[(sz)infinity_subtraction_result].tag == ir::InstTag.FSUB,
+		"infinity - infinity must remain as FSUB");
+	assert(is_bool_constant(find_function(&f.graph, "fold_nan_oeq"),
+		return_value(find_function(&f.graph, "fold_nan_oeq")), value_interner::REF_ZERO),
+		"ordered equality of NaN must fold to false");
+	assert(is_bool_constant(find_function(&f.graph, "fold_nan_une"),
+		return_value(find_function(&f.graph, "fold_nan_une")), value_interner::REF_ONE),
+		"unordered inequality of NaN must fold to true");
+	assert(is_bool_constant(find_function(&f.graph, "fold_nan_olt"),
+		return_value(find_function(&f.graph, "fold_nan_olt")), value_interner::REF_ZERO),
+		"ordered less-than with NaN must fold to false");
+	assert(is_bool_constant(find_function(&f.graph, "fold_nan_ole"),
+		return_value(find_function(&f.graph, "fold_nan_ole")), value_interner::REF_ZERO),
+		"ordered less-than-or-equal with NaN must fold to false");
+	assert(is_bool_constant(find_function(&f.graph, "fold_nan_ogt"),
+		return_value(find_function(&f.graph, "fold_nan_ogt")), value_interner::REF_ZERO),
+		"ordered greater-than with NaN must fold to false");
+	assert(is_bool_constant(find_function(&f.graph, "fold_nan_oge"),
+		return_value(find_function(&f.graph, "fold_nan_oge")), value_interner::REF_ZERO),
+		"ordered greater-than-or-equal with NaN must fold to false");
+	assert(is_bool_constant(find_function(&f.graph, "fold_equal_une"),
+		return_value(find_function(&f.graph, "fold_equal_une")), value_interner::REF_ZERO),
+		"unordered inequality must fold to false for equal finite operands");
+	assert(is_bool_constant(find_function(&f.graph, "fold_signed_zero_oeq"),
+		return_value(find_function(&f.graph, "fold_signed_zero_oeq")), value_interner::REF_ONE),
+		"ordered equality must treat positive and negative zero as equal");
+	f.free();
+}
+
+fn void o1_folds_promoted_float_locals_conversions_and_branch_conditions() @test
+{
+	OptFixture source;
+	source.init();
+	source.lower(
+		"float promoted_product(void) { float a = 1.5f; float b = 2.0f; return a * b; }\n"
+		"int float_compare_branch(void) { double n = 1.0 / 0.0; if (n < 0.0) return 1; return 2; }\n");
+	source.run_o1();
+	ir::Decl* product = find_function(&source.graph, "promoted_product");
+	assert(count_body_tag(product, ir::InstTag.ALLOC) == 0 && count_body_tag(product, ir::InstTag.LOAD) == 0 &&
+		count_body_tag(product, ir::InstTag.STORE) == 0, "constant float locals should be promoted before FMUL folding");
+	Ref product_result = return_value(product);
+	assert(is_f32_constant(product, product_result, source.graph.interner, 0x40400000),
+		"promoted-local FMUL should fold to the exact F32 bits for 3.0");
+	ir::Decl* branch = find_function(&source.graph, "float_compare_branch");
+	assert(count_body_tag(branch, ir::InstTag.FCMP_OLT) == 0,
+		"a folded float comparison feeding a branch should be removed");
+	assert(is_bool_constant(branch, return_value(branch), source.comp.interner.put(primitive_value::int_key(2))),
+		"the infinity comparison should select the false branch result");
+	source.free();
+
+	HandIrFixture f;
+	f.init();
+	f.builder.start_fn();
+	Ref negative_seventeen_million = f.add_int_constant(-16777217, value_interner::REF_I32);
+	Ref sitofp = f.builder.add_inst(ir::InstTag.SITOFP, { .ref = negative_seventeen_million }, value_interner::REF_F32);
+	f.builder.add_return(sitofp);
+	f.builder.finish_fn("fold_sitofp");
+	f.builder.start_fn();
+	Ref one_point_five_f32 = f.add_f32_constant(0x3FC00000);
+	Ref fpext = f.builder.add_inst(ir::InstTag.FPEXT, { .ref = one_point_five_f32 }, value_interner::REF_F64);
+	f.builder.add_return(fpext);
+	f.builder.finish_fn("fold_fpext");
+	f.builder.start_fn();
+	Ref one_point_one_f64 = f.add_f64_constant(0x3FF1_9999_9999_999A);
+	Ref fptrunc = f.builder.add_inst(ir::InstTag.FPTRUNC, { .ref = one_point_one_f64 }, value_interner::REF_F32);
+	f.builder.add_return(fptrunc);
+	f.builder.finish_fn("fold_fptrunc");
+	f.builder.start_fn();
+	// The i64 IR operand stores UINT64_MAX as its two's-complement bit pattern.
+	Ref uint64_max = f.builder.add_constant(
+		f.interner.put(primitive_value::int_key(-1)), value_interner::REF_I64);
+	Ref uitofp = f.builder.add_inst(ir::InstTag.UITOFP, { .ref = uint64_max }, value_interner::REF_F64);
+	f.builder.add_return(uitofp);
+	f.builder.finish_fn("fold_uitofp");
+	f.builder.start_fn();
+	Ref minus_123_point_5 = f.add_f32_constant(0xC2F70000);
+	Ref fptosi = f.builder.add_inst(ir::InstTag.FPTOSI, { .ref = minus_123_point_5 }, value_interner::REF_I32);
+	f.builder.add_return(fptosi);
+	f.builder.finish_fn("fold_fptosi");
+	f.builder.start_fn();
+	Ref one = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_F32);
+	Ref half_ulp = f.add_f32_constant(0x33800000);
+	Ref ties_even = f.builder.add_inst(ir::InstTag.FADD, { .bin = { one, half_ulp } }, value_interner::REF_F32);
+	f.builder.add_return(ties_even);
+	f.builder.finish_fn("fold_f32_ties_even");
+	f.builder.start_fn();
+	one = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_F32);
+	Ref two = f.builder.add_inst(ir::InstTag.FADD, { .bin = { one, one } }, value_interner::REF_F32);
+	f.builder.add_return(two);
+	f.builder.finish_fn("fold_ref_one_float");
+	f.builder.start_fn();
+	Ref nan = f.add_f32_constant(0x7FC00001);
+	Ref negative_two = f.add_f32_constant(0xC0000000);
+	Ref nan_sum = f.builder.add_inst(ir::InstTag.FADD, { .bin = { nan, negative_two } }, value_interner::REF_F32);
+	f.builder.add_return(nan_sum);
+	f.builder.finish_fn("fold_negative_nan_arithmetic");
+	f.run_o1();
+	assert(is_f32_constant(&f.graph.decls[0], return_value(find_function(&f.graph, "fold_sitofp")), &f.interner, 0xCB800000),
+		"SITOFP should round an inexact integer conversion to the nearest F32 value");
+	assert(is_f64_constant(find_function(&f.graph, "fold_fpext"),
+		return_value(find_function(&f.graph, "fold_fpext")), &f.interner, 0x3FF8_0000_0000_0000),
+		"FPEXT of F32 1.5 should fold to the exact F64 bits");
+	assert(is_f32_constant(find_function(&f.graph, "fold_fptrunc"),
+		return_value(find_function(&f.graph, "fold_fptrunc")), &f.interner, 0x3F8C_CCCD),
+		"FPTRUNC of F64 1.1 should fold to the exact F32 bits");
+	assert(is_f64_constant(find_function(&f.graph, "fold_uitofp"),
+		return_value(find_function(&f.graph, "fold_uitofp")), &f.interner, 0x43F0_0000_0000_0000),
+		"UITOFP of uint64 max should fold to F64 2^64");
+	assert(is_bool_constant(find_function(&f.graph, "fold_fptosi"), return_value(find_function(&f.graph, "fold_fptosi")),
+		f.interner.put(primitive_value::int_key(-123))), "in-range FPTOSI should truncate toward zero");
+	assert(is_f32_constant(find_function(&f.graph, "fold_f32_ties_even"),
+		return_value(find_function(&f.graph, "fold_f32_ties_even")), &f.interner, 0x3F800000),
+		"hand-built F32 halfway addition should round ties to even");
+	assert(is_f32_constant(find_function(&f.graph, "fold_ref_one_float"),
+		return_value(find_function(&f.graph, "fold_ref_one_float")), &f.interner, 0x40000000),
+		"REF_ONE used as an F32 constant should decode as 1.0");
+	ir::Decl* nan_decl = find_function(&f.graph, "fold_negative_nan_arithmetic");
+	Ref nan_result = return_value(nan_decl);
+	assert((usz)nan_result < (usz)nan_decl.instructions.len && nan_decl.instructions[(sz)nan_result].tag == ir::InstTag.FADD,
+		"FADD with a NaN operand must remain in IR");
+	f.free();
+}
+
+fn void o1_leaves_unsupported_float_casts_and_widths_unfolded() @test
+{
+	HandIrFixture f;
+	f.init();
+	primitive_value::F128Bits f128_one = { .lo = 0, .hi = 0x3FFF000000000000 };
+	primitive_value::F128Bits f128_two = { .lo = 0, .hi = 0x4000000000000000 };
+	f.builder.start_fn();
+	Ref too_large = f.add_f64_constant(0x41E0000000000000); // 2^31
+	Ref out_of_range = f.builder.add_inst(ir::InstTag.FPTOSI, { .ref = too_large }, value_interner::REF_I32);
+	f.builder.add_return(out_of_range);
+	f.builder.finish_fn("keep_out_of_range_fptosi");
+	f.builder.start_fn();
+	Ref negative_one = f.add_f64_constant(0xBFF0000000000000);
+	Ref negative_unsigned = f.builder.add_inst(ir::InstTag.FPTOUI, { .ref = negative_one }, value_interner::REF_I32);
+	f.builder.add_return(negative_unsigned);
+	f.builder.finish_fn("keep_negative_fp_to_unsigned");
+	f.builder.start_fn();
+	Ref negative_half = f.add_f64_constant(0xBFE0000000000000);
+	Ref negative_fraction_unsigned = f.builder.add_inst(ir::InstTag.FPTOUI, { .ref = negative_half }, value_interner::REF_I32);
+	f.builder.add_return(negative_fraction_unsigned);
+	f.builder.finish_fn("fold_negative_fraction_fp_to_unsigned");
+	f.builder.start_fn();
+	Ref f16_a = f.builder.add_constant(f.interner.put(primitive_value::f16_value(0x3C00)), value_interner::REF_F16);
+	Ref f16_b = f.builder.add_constant(f.interner.put(primitive_value::f16_value(0x4000)), value_interner::REF_F16);
+	Ref f16_sum = f.builder.add_inst(ir::InstTag.FADD, { .bin = { f16_a, f16_b } }, value_interner::REF_F16);
+	f.builder.add_return(f16_sum);
+	f.builder.finish_fn("keep_f16_arithmetic");
+	f.builder.start_fn();
+	Ref f128_a = f.builder.add_constant(f.interner.put(primitive_value::f128_value(f128_one)), value_interner::REF_F128);
+	Ref f128_b = f.builder.add_constant(f.interner.put(primitive_value::f128_value(f128_two)), value_interner::REF_F128);
+	Ref f128_sum = f.builder.add_inst(ir::InstTag.FADD, { .bin = { f128_a, f128_b } }, value_interner::REF_F128);
+	f.builder.add_return(f128_sum);
+	f.builder.finish_fn("keep_f128_arithmetic");
+	f.run_o1();
+	assert(count_body_tag(find_function(&f.graph, "keep_out_of_range_fptosi"), ir::InstTag.FPTOSI) == 1,
+		"out-of-range float-to-signed-int conversion should remain in IR");
+	assert(count_body_tag(find_function(&f.graph, "keep_negative_fp_to_unsigned"), ir::InstTag.FPTOUI) == 1,
+		"negative one converted to unsigned should remain in IR");
+	assert(is_bool_constant(find_function(&f.graph, "fold_negative_fraction_fp_to_unsigned"),
+		return_value(find_function(&f.graph, "fold_negative_fraction_fp_to_unsigned")), value_interner::REF_ZERO),
+		"a negative fraction greater than -1 should truncate to unsigned zero");
+	assert(count_body_tag(find_function(&f.graph, "keep_f16_arithmetic"), ir::InstTag.FADD) == 1,
+		"unsupported F16 arithmetic should remain in IR");
+	assert(count_body_tag(find_function(&f.graph, "keep_f128_arithmetic"), ir::InstTag.FADD) == 1,
+		"unsupported F128 arithmetic should remain in IR");
+	f.free();
+}
+
+fn void jump_thread_skips_non_phi_repeated_condition() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"int repeated(int c) { if (c) { if (c) return 7; } return 9; }\n"
+		"int independent(int c, int d) { if (c) { if (d) return 7; } return 9; }\n");
+	f.run_mem2reg();
+	ir::Decl* repeated = find_function(&f.graph, "repeated");
+	ir::Decl* independent = find_function(&f.graph, "independent");
+	uint repeated_branches = count_body_tag(repeated, ir::InstTag.BRANCH);
+	uint independent_branches = count_body_tag(independent, ir::InstTag.BRANCH);
+	assert(repeated_branches > 0 && independent_branches > 0,
+		"the fixtures should lower to conditional branches before jump threading");
+	foreach (&decl : f.graph.decls) ir_opt::jump_thread(&f.graph, decl);
+	f.verify_graph();
+	assert(count_body_tag(repeated, ir::InstTag.BRANCH) == repeated_branches,
+		"a repeated condition without a PHI-fed branch chain is outside this threading pass");
+	assert(count_body_tag(independent, ir::InstTag.BRANCH) == independent_branches,
+		"an independent nested condition must not be guessed from its predecessor edge");
+	f.free();
+}
+
+fn void jump_thread_evaluates_eq_phi_chain_and_if_else_zero() @test
+{
+	// Exercise the integer EQ form emitted by frontend conditions, along with
+	// the common `if (x) return x; else return 0` source shape.
+	OptFixture source;
+	source.init();
+	source.lower(
+		"int eq_phi(int c) { int value = c ? 1 : 0; if (value == 1) return 7; return 0; }\n"
+		"int if_else_zero(int x) { if (x) return x; else return 0; }\n");
+	source.run_o1();
+	source.verify_graph();
+	assert(count_body_tag(find_function(&source.graph, "eq_phi"), ir::InstTag.BRANCH) <= 2,
+		"O1 should fold the EQ-on-constant edge in a frontend conditional");
+	assert(count_body_tag(find_function(&source.graph, "if_else_zero"), ir::InstTag.BRANCH) <= 1,
+		"the if/else-zero idiom should lower without retaining redundant branches");
+	source.free();
+
+	HandIrFixture f;
+	f.init();
+	Ref choose = f.builder.add_arg(value_interner::REF_I1);
+	Ref other_condition = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("pred");
+	Ref other = f.builder.make_label("other");
+	Ref join = f.builder.make_label("join");
+	Ref yes = f.builder.make_label("yes");
+	Ref no = f.builder.make_label("no");
+	f.builder.add_branch(choose, pred, other);
+	f.builder.start_block(pred);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other, .value = other_condition },
+	};
+	Ref condition = f.builder.add_phi(inputs[..], value_interner::REF_I1);
+	Ref eq = f.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { condition, one } }, value_interner::REF_I1);
+	Ref branch = f.builder.add_inst(ir::InstTag.BRANCH, { .branch = { eq, yes, no } }, value_interner::REF_NORETURN);
+	f.builder.start_block(yes);
+	f.builder.add_return(one);
+	f.builder.start_block(no);
+	f.builder.add_return(zero);
+	f.builder.finish_fn("eq_phi_chain");
+	f.finish();
+	assert(ir_opt::jump_thread(&f.graph, &f.graph.decls[0]),
+		"a PHI-fed integer EQ with a constant incoming edge should be threaded");
+	assert(f.graph.decls[0].instructions[(sz)branch].data.branch.then_label == yes,
+		"the EQ true edge should be selected for the predecessor carrying one");
+	f.free();
+}
+
+fn void jump_thread_skips_join_after_branch_and_float_compare() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose = f.builder.add_arg(value_interner::REF_I1);
+	Ref other_condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref joined_value = f.builder.add_arg(value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("pred");
+	Ref other = f.builder.make_label("other");
+	Ref join = f.builder.make_label("join");
+	Ref yes = f.builder.make_label("yes");
+	Ref no = f.builder.make_label("no");
+	f.builder.add_branch(choose, pred, other);
+	f.builder.start_block(pred);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other, .value = other_condition },
+	};
+	Ref condition = f.builder.add_phi(inputs[..], value_interner::REF_I1);
+	Ref eq = f.builder.add_inst(ir::InstTag.CMP_EQ, { .bin = { condition, one } }, value_interner::REF_I1);
+	// A joined value computation between the PHI chain and branch is outside
+	// the bounded branch-threading pattern.
+	f.builder.add_inst(ir::InstTag.ADD, { .bin = { joined_value, joined_value } }, value_interner::REF_I32);
+	f.builder.add_branch(eq, yes, no);
+	f.builder.start_block(yes);
+	f.builder.add_return(one);
+	f.builder.start_block(no);
+	f.builder.add_return(zero);
+	f.builder.finish_fn("join_after_branch");
+
+	Ref float_choose = f.builder.add_arg(value_interner::REF_I1);
+	Ref float_other = f.builder.add_arg(value_interner::REF_F64);
+	f.builder.start_fn();
+	Ref float_pred = f.builder.make_label("float_pred");
+	Ref float_alt = f.builder.make_label("float_alt");
+	Ref float_join = f.builder.make_label("float_join");
+	Ref float_yes = f.builder.make_label("float_yes");
+	Ref float_no = f.builder.make_label("float_no");
+	f.builder.add_branch(float_choose, float_pred, float_alt);
+	f.builder.start_block(float_pred);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = float_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(float_alt);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = float_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(float_join);
+	Ref f_one = f.add_f64_constant(0x3FF0_0000_0000_0000);
+	ir::PhiInput[2] float_inputs = {
+		{ .label = float_pred, .value = f_one },
+		{ .label = float_alt, .value = float_other },
+	};
+	Ref float_phi = f.builder.add_phi(float_inputs[..], value_interner::REF_F64);
+	Ref float_eq = f.builder.add_inst(ir::InstTag.FCMP_OEQ,
+		{ .bin = { float_phi, f_one } }, value_interner::REF_I1);
+	Ref float_branch = f.builder.add_inst(ir::InstTag.BRANCH,
+		{ .branch = { float_eq, float_yes, float_no } }, value_interner::REF_NORETURN);
+	f.builder.start_block(float_yes);
+	f.builder.add_return(one);
+	f.builder.start_block(float_no);
+	f.builder.add_return(zero);
+	f.builder.finish_fn("float_phi_compare");
+	f.finish();
+	assert(!ir_opt::jump_thread(&f.graph, &f.graph.decls[0]),
+		"join-after-branch values must not be threaded through a PHI predecessor");
+	assert(!ir_opt::jump_thread(&f.graph, &f.graph.decls[1]),
+		"floating-point compares must not be evaluated by integer jump threading");
+	f.free();
+}
+
+fn void jump_thread_requires_a_single_predecessor_edge() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose = f.builder.add_arg(value_interner::REF_I1);
+	Ref other_condition = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("pred");
+	Ref other = f.builder.make_label("other");
+	Ref join = f.builder.make_label("join");
+	Ref yes = f.builder.make_label("yes");
+	Ref no = f.builder.make_label("no");
+	// Both CFG edges from pred enter join. The PHI identifies a predecessor
+	// block, not a particular edge, so threading must leave this shape alone.
+	f.builder.add_branch(choose, pred, other);
+	f.builder.start_block(pred);
+	f.builder.add_branch(choose, join, join);
+	f.builder.start_block(other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other, .value = other_condition },
+	};
+	Ref condition = f.builder.add_phi(inputs[..], value_interner::REF_I1);
+	Ref branch = f.builder.add_inst(ir::InstTag.BRANCH,
+		{ .branch = { condition, yes, no } }, value_interner::REF_NORETURN);
+	f.builder.start_block(yes);
+	f.builder.add_return(one);
+	f.builder.start_block(no);
+	f.builder.add_return(zero);
+	f.builder.finish_fn("multiple_predecessor_edges");
+	f.finish();
+	assert(!ir_opt::jump_thread(&f.graph, &f.graph.decls[0]),
+		"jump threading must require a unique incoming edge from the predecessor");
+	assert(f.graph.decls[0].instructions[(sz)branch].tag == ir::InstTag.BRANCH,
+		"the branch with ambiguous predecessor edges should remain unchanged");
+	f.free();
+}
+
+fn void jump_thread_simplifies_frontend_zext_cmp_ne_zero_shape() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a, int b) { int t = a && b; if (t) return 3; return 4; }");
+	f.run_o1();
+	f.verify_graph();
+	ir::Decl* decl = find_function(&f.graph, "f");
+	assert(count_body_tag(decl, ir::InstTag.PHI) == 1,
+		"O1 should remove the short-circuit PHI while preserving the return-value merge");
+	assert(count_body_tag(decl, ir::InstTag.BRANCH) <= 2,
+		"O1 should simplify at least one branch in the zext/cmp_ne-zero frontend shape");
+	f.free();
+}
+
+<* entry: branch(choose, left, right); left/right jump to join, where
+   phi(left: 1, right: c) drives branch(phi, yes, no). *>
+fn void build_constant_phi_diamond(HandIrFixture* f)
+{
+	Ref choose = f.builder.add_arg(value_interner::REF_I1);
+	Ref c = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref right = f.builder.make_label("right");
+	Ref join = f.builder.make_label("join");
+	Ref yes = f.builder.make_label("yes");
+	Ref no = f.builder.make_label("no");
+	f.builder.add_branch(choose, left, right);
+	f.builder.start_block(left);
+	f.builder.add_jump(join);
+	f.builder.start_block(right);
+	f.builder.add_jump(join);
+	f.builder.start_block(join);
+	ir::PhiInput[2] inputs = {
+		{ .label = left, .value = f.add_int_constant(1, value_interner::REF_I1) },
+		{ .label = right, .value = c },
+	};
+	f.builder.add_branch(f.builder.add_phi(inputs[..], value_interner::REF_I1), yes, no);
+	f.builder.start_block(yes);
+	f.builder.add_return(f.add_int_constant(1, value_interner::REF_I32));
+	f.builder.start_block(no);
+	f.builder.add_return(f.add_int_constant(2, value_interner::REF_I32));
+	f.builder.finish_fn("diamond", ir::Linkage.EXTERNAL);
+	f.finish();
+}
+
+fn void jump_thread_is_idempotent_after_convergence() @test
+{
+	HandIrFixture f;
+	f.init();
+	build_constant_phi_diamond(&f);
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(ir_opt::jump_thread(&f.graph, decl), "the constant PHI edge should be threaded");
+	assert(!ir_opt::jump_thread(&f.graph, decl), "a second jump_thread run should find nothing");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "converged jump threading should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+	f.free();
+}
+
+fn void correlated_value_prop_is_idempotent() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int cvp_twice(int x) { if (x == 5) return x * 2; return 0; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "cvp_twice");
+	assert(ir_opt::correlated_value_prop(&f.graph, decl), "x should be replaced by 5 on the equality edge");
+	assert(!ir_opt::correlated_value_prop(&f.graph, decl), "a second CVP run should find nothing");
+	f.verify_graph();
+	f.free();
+}
+
+fn void jump_thread_many_short_circuit_blocks_is_bounded() @test
+{
+	// K sequential phi(i1 const, arg) -> branch diamonds, the shape && / ||
+	// lowering produces, guard the bounded-rebuild driver.
+	const int K = 200;
+	HandIrFixture f;
+	f.init();
+	Ref choose = f.builder.add_arg(value_interner::REF_I1);
+	Ref c = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref head = f.builder.make_label(string::format(&f.builder.arena, "p0"));
+	f.builder.add_jump(head);
+	for (int k = 0; k < K; k++)
+	{
+		Ref left = f.builder.make_label(string::format(&f.builder.arena, "l%d", k));
+		Ref right = f.builder.make_label(string::format(&f.builder.arena, "r%d", k));
+		Ref join = f.builder.make_label(string::format(&f.builder.arena, "j%d", k));
+		Ref side = f.builder.make_label(string::format(&f.builder.arena, "s%d", k));
+		Ref next = f.builder.make_label(string::format(&f.builder.arena, "p%d", k + 1));
+		f.builder.start_block(head);
+		f.builder.add_branch(choose, left, right);
+		f.builder.start_block(left);
+		f.builder.add_jump(join);
+		f.builder.start_block(right);
+		f.builder.add_jump(join);
+		f.builder.start_block(join);
+		ir::PhiInput[2] inputs = { { .label = left, .value = one }, { .label = right, .value = c } };
+		f.builder.add_branch(f.builder.add_phi(inputs[..], value_interner::REF_I1), next, side);
+		f.builder.start_block(side);
+		f.builder.add_jump(next);
+		head = next;
+	}
+	f.builder.start_block(head);
+	f.builder.add_return(f.add_int_constant(0, value_interner::REF_I32));
+	f.builder.finish_fn("short_circuits", ir::Linkage.EXTERNAL);
+	f.finish();
+	ir::Decl* decl = &f.graph.decls[0];
+	ir_opt::jump_thread(&f.graph, decl);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "bounded jump threading should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+	f.free();
+}
+
+fn void jump_thread_threads_constant_phi_edge_and_keeps_destination_phi_valid() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref route_to_join = f.builder.add_arg(value_interner::REF_I1);
+	Ref payload = f.builder.add_arg(value_interner::REF_I32);
+	Ref other_condition = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("pred");
+	Ref other_pred = f.builder.make_label("other_pred");
+	Ref join = f.builder.make_label("join");
+	Ref fallback = f.builder.make_label("fallback");
+	Ref selected = f.builder.make_label("selected");
+	Ref rejected = f.builder.make_label("rejected");
+	f.builder.add_branch(choose_pred, pred, other_pred);
+	f.builder.start_block(pred);
+	Ref pred_branch = f.builder.add_inst(ir::InstTag.BRANCH, { .branch = { route_to_join, join, fallback } }, value_interner::REF_NORETURN);
+	f.builder.start_block(other_pred);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] condition_inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other_pred, .value = other_condition },
+	};
+	Ref condition = f.builder.add_phi(condition_inputs[..], value_interner::REF_I1);
+	Ref other_payload = f.add_int_constant(9, value_interner::REF_I32);
+	ir::PhiInput[2] payload_inputs = {
+		{ .label = pred, .value = payload },
+		{ .label = other_pred, .value = other_payload },
+	};
+	Ref payload_phi = f.builder.add_phi(payload_inputs[..], value_interner::REF_I32);
+	f.builder.add_branch(condition, selected, rejected);
+	f.builder.start_block(selected);
+	Ref result = f.add_int_constant(5, value_interner::REF_I32);
+	ir::PhiInput[1] result_input = { { .label = join, .value = result } };
+	Ref result_phi = f.builder.add_phi(result_input[..], value_interner::REF_I32);
+	ir::PhiInput[1] condition_input = { { .label = join, .value = condition } };
+	Ref condition_phi = f.builder.add_phi(condition_input[..], value_interner::REF_I1);
+	ir::PhiInput[1] payload_input = { { .label = join, .value = payload_phi } };
+	Ref selected_payload_phi = f.builder.add_phi(payload_input[..], value_interner::REF_I32);
+	f.builder.add_return(result_phi);
+	f.builder.start_block(rejected);
+	f.builder.add_return(f.add_int_constant(6, value_interner::REF_I32));
+	f.builder.start_block(fallback);
+	f.builder.add_return(f.add_int_constant(7, value_interner::REF_I32));
+	f.builder.finish_fn("constant_phi_edge", ir::Linkage.EXTERNAL);
+	f.finish();
+
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(ir_opt::jump_thread(&f.graph, decl),
+		"a constant PHI value on pred's edge to join should enable threading");
+	ir::Inst threaded_branch = decl.instructions[(sz)pred_branch];
+	assert(threaded_branch.tag == ir::InstTag.BRANCH && threaded_branch.data.branch.then_label == selected,
+		"the incoming branch should bypass join and select its known PHI destination");
+	ir::Inst threaded_phi = decl.instructions[(sz)result_phi];
+	assert(threaded_phi.tag == ir::InstTag.PHI && threaded_phi.data.phi.len == 2 &&
+		threaded_phi.data.phi[1].label == pred && threaded_phi.data.phi[1].value == result,
+		"threading into a PHI destination should copy the old join-edge value");
+	ir::PhiInput threaded_condition_input = decl.instructions[(sz)condition_phi].data.phi[1];
+	assert(threaded_condition_input.label == pred && threaded_condition_input.value == one,
+		"a destination PHI input from B should map a B PHI to its P input");
+	ir::PhiInput threaded_payload_input = decl.instructions[(sz)selected_payload_phi].data.phi[1];
+	assert(threaded_payload_input.label == pred && threaded_payload_input.value == payload,
+		"a nonconstant, non-driving B PHI input should pass through unchanged");
+	assert(decl.instructions[(sz)condition].data.phi.len == 1 &&
+		decl.instructions[(sz)condition].data.phi[0].label == other_pred &&
+		decl.instructions[(sz)payload_phi].data.phi.len == 1 &&
+		decl.instructions[(sz)payload_phi].data.phi[0].label == other_pred,
+		"threading must remove P from every PHI in B");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "threaded constant-PHI CFG should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid threaded CFG should have no verifier diagnostics");
+	errors.free();
+	f.free();
+}
+
+fn void jump_thread_supports_jmp_and_implicit_fallthrough_predecessors() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose_jmp = f.builder.add_arg(value_interner::REF_I1);
+	Ref unknown_jmp = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref jmp_pred = f.builder.make_label("jmp_pred");
+	Ref jmp_other = f.builder.make_label("jmp_other");
+	Ref jmp_join = f.builder.make_label("jmp_join");
+	Ref jmp_selected = f.builder.make_label("jmp_selected");
+	Ref jmp_rejected = f.builder.make_label("jmp_rejected");
+	f.builder.add_branch(choose_jmp, jmp_pred, jmp_other);
+	f.builder.start_block(jmp_pred);
+	Ref jmp_edge = f.builder.add_inst(ir::InstTag.JMP, { .ref = jmp_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(jmp_other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = jmp_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(jmp_join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] jmp_inputs = {
+		{ .label = jmp_pred, .value = one },
+		{ .label = jmp_other, .value = unknown_jmp },
+	};
+	Ref jmp_condition = f.builder.add_phi(jmp_inputs[..], value_interner::REF_I1);
+	f.builder.add_branch(jmp_condition, jmp_selected, jmp_rejected);
+	f.builder.start_block(jmp_selected);
+	f.builder.add_return(one);
+	f.builder.start_block(jmp_rejected);
+	f.builder.add_return(zero);
+	f.builder.finish_fn("jump_thread_jmp_predecessor");
+
+	Ref choose_fallthrough = f.builder.add_arg(value_interner::REF_I1);
+	Ref unknown_fallthrough = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref fall_pred = f.builder.make_label("fall_pred");
+	Ref fall_other = f.builder.make_label("fall_other");
+	Ref fall_join = f.builder.make_label("fall_join");
+	Ref fall_selected = f.builder.make_label("fall_selected");
+	Ref fall_rejected = f.builder.make_label("fall_rejected");
+	f.builder.add_branch(choose_fallthrough, fall_pred, fall_other);
+	f.builder.start_block(fall_other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = fall_join }, value_interner::REF_NORETURN);
+	// Keep fall_pred immediately before fall_join without Builder inserting a JMP.
+	f.builder.body.push(fall_pred);
+	f.builder.current_label = fall_pred;
+	f.builder.body.push(fall_join);
+	f.builder.current_label = fall_join;
+	Ref fall_one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref fall_zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] fall_inputs = {
+		{ .label = fall_pred, .value = fall_one },
+		{ .label = fall_other, .value = unknown_fallthrough },
+	};
+	Ref fall_condition = f.builder.add_phi(fall_inputs[..], value_interner::REF_I1);
+	f.builder.add_branch(fall_condition, fall_selected, fall_rejected);
+	f.builder.start_block(fall_selected);
+	f.builder.add_return(fall_one);
+	f.builder.start_block(fall_rejected);
+	f.builder.add_return(fall_zero);
+	f.builder.finish_fn("jump_thread_fallthrough_predecessor");
+	f.finish();
+
+	ir::Decl* jmp_decl = &f.graph.decls[0];
+	ir::Decl* fall_decl = &f.graph.decls[1];
+	assert(ir_opt::jump_thread(&f.graph, jmp_decl),
+		"a JMP predecessor with a constant PHI input should be threaded");
+	assert(jmp_decl.instructions[(sz)jmp_edge].data.ref == jmp_selected,
+		"the JMP predecessor should be redirected to the selected successor");
+	assert(jmp_decl.instructions[(sz)jmp_condition].data.phi.len == 1 &&
+		jmp_decl.instructions[(sz)jmp_condition].data.phi[0].label == jmp_other,
+		"threading a JMP predecessor should remove its input from every PHI in B");
+	assert(ir_opt::jump_thread(&f.graph, fall_decl),
+		"an implicit-fallthrough predecessor with a constant PHI input should be threaded");
+	ir_opt::Cfg fall_cfg = ir_opt::build_cfg(fall_decl, &f.ta);
+	uint fall_pred_index = block_for_label(&fall_cfg, fall_pred);
+	uint fall_selected_index = block_for_label(&fall_cfg, fall_selected);
+	uint fall_join_index = block_for_label(&fall_cfg, fall_join);
+	assert(has_uint_index(fall_cfg.blocks[(sz)fall_pred_index].succs.array_view(), fall_selected_index) &&
+		!has_uint_index(fall_cfg.blocks[(sz)fall_pred_index].succs.array_view(), fall_join_index),
+		"an implicit predecessor should receive an explicit jump to the selected successor");
+	fall_cfg.free();
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "threaded JMP/fallthrough CFGs should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid threaded JMP/fallthrough CFGs should have no verifier diagnostics");
+	errors.free();
+	f.free();
+}
+
+fn void jump_thread_skips_switch_shared_edges() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref selector = f.builder.add_arg(value_interner::REF_I32);
+	Ref unknown_other = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("switch_pred");
+	Ref other = f.builder.make_label("switch_other");
+	Ref join = f.builder.make_label("switch_join");
+	Ref selected = f.builder.make_label("switch_selected");
+	Ref rejected = f.builder.make_label("switch_rejected");
+	f.builder.add_branch(choose_pred, pred, other);
+	f.builder.start_block(pred);
+	value_interner::InternerRef[2] case_values = {
+		f.interner.put(primitive_value::int_key(1)),
+		f.interner.put(primitive_value::int_key(2)),
+	};
+	Ref[2] case_labels = { join, join };
+	f.builder.add_switch(selector, case_values[..], case_labels[..], join);
+	f.builder.start_block(other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other, .value = unknown_other },
+	};
+	Ref condition = f.builder.add_phi(inputs[..], value_interner::REF_I1);
+	f.builder.add_branch(condition, selected, rejected);
+	f.builder.start_block(selected);
+	f.builder.add_return(one);
+	f.builder.start_block(rejected);
+	f.builder.add_return(zero);
+	f.builder.finish_fn("jump_thread_switch_shared_edge");
+	f.finish();
+
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(!ir_opt::jump_thread(&f.graph, decl),
+		"a SWITCH predecessor with shared destinations must not be threaded");
+	ir::Ref switch_ref = ir::NONE;
+	foreach (ref : decl.body) if (decl.instructions[(sz)ref].tag == ir::InstTag.SWITCH) switch_ref = ref;
+	assert(switch_ref != ir::NONE, "the shared-edge SWITCH should remain in the body");
+	ir::Inst switch_inst = decl.instructions[(sz)switch_ref];
+	assert(switch_inst.tag == ir::InstTag.SWITCH && switch_inst.data.switch_data.labels.len == 2 &&
+		switch_inst.data.switch_data.labels[0] == join && switch_inst.data.switch_data.labels[1] == join &&
+		switch_inst.data.switch_data.default_label == join,
+		"the SWITCH shared edge should remain unchanged");
+	assert(decl.instructions[(sz)condition].data.phi.len == 2,
+		"the PHI input for the SWITCH predecessor should remain intact");
+	f.free();
+}
+
+fn void jump_thread_evaluates_zext_cmp_ne_zero_phi_chain() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref route_to_join = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("pred");
+	Ref other_pred = f.builder.make_label("other_pred");
+	Ref join = f.builder.make_label("join");
+	Ref fallback = f.builder.make_label("fallback");
+	Ref selected = f.builder.make_label("selected");
+	Ref rejected = f.builder.make_label("rejected");
+	f.builder.add_branch(choose_pred, pred, other_pred);
+	f.builder.start_block(pred);
+	Ref pred_branch = f.builder.add_inst(ir::InstTag.BRANCH, { .branch = { route_to_join, join, fallback } }, value_interner::REF_NORETURN);
+	f.builder.start_block(other_pred);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero_bit = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] condition_inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other_pred, .value = zero_bit },
+	};
+	Ref phi = f.builder.add_phi(condition_inputs[..], value_interner::REF_I1);
+	Ref widened = f.builder.add_inst(ir::InstTag.ZEXT, { .ref = phi }, value_interner::REF_I32);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I32);
+	Ref condition = f.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { widened, zero } }, value_interner::REF_I1);
+	f.builder.add_branch(condition, selected, rejected);
+	f.builder.start_block(selected);
+	ir::PhiInput[1] selected_chain_input = { { .label = join, .value = condition } };
+	Ref selected_chain_phi = f.builder.add_phi(selected_chain_input[..], value_interner::REF_I1);
+	f.builder.add_return(f.add_int_constant(5, value_interner::REF_I32));
+	f.builder.start_block(rejected);
+	f.builder.add_return(f.add_int_constant(6, value_interner::REF_I32));
+	f.builder.start_block(fallback);
+	f.builder.add_return(f.add_int_constant(7, value_interner::REF_I32));
+	f.builder.finish_fn("zext_cmp_ne_zero_chain", ir::Linkage.EXTERNAL);
+	f.finish();
+
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(ir_opt::jump_thread(&f.graph, decl),
+		"zext(phi) compared against zero should be evaluated on the incoming edge");
+	ir::Inst threaded_branch = decl.instructions[(sz)pred_branch];
+	assert(threaded_branch.tag == ir::InstTag.BRANCH && threaded_branch.data.branch.then_label == selected,
+		"the zext/cmp_ne-zero chain should select the known destination");
+	ir::PhiInput threaded_chain_input = decl.instructions[(sz)selected_chain_phi].data.phi[1];
+	assert(threaded_chain_input.label == pred && is_bool_constant(decl, threaded_chain_input.value, value_interner::REF_ONE),
+		"a destination PHI input from B should map a chain value to a new constant");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "threaded zext/cmp CFG should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid zext/cmp threaded CFG should have no verifier diagnostics");
+	errors.free();
+	f.free();
+}
+
+fn void jump_thread_skips_phi_branch_block_with_side_effect() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref route_to_join = f.builder.add_arg(value_interner::REF_I1);
+	Ref callee = f.builder.add_symbol("side_effect", value_interner::REF_PTR);
+	f.builder.start_fn();
+	Ref pred = f.builder.make_label("pred");
+	Ref other_pred = f.builder.make_label("other_pred");
+	Ref join = f.builder.make_label("join");
+	Ref fallback = f.builder.make_label("fallback");
+	Ref selected = f.builder.make_label("selected");
+	Ref rejected = f.builder.make_label("rejected");
+	f.builder.add_branch(choose_pred, pred, other_pred);
+	f.builder.start_block(pred);
+	Ref pred_branch = f.builder.add_inst(ir::InstTag.BRANCH, { .branch = { route_to_join, join, fallback } }, value_interner::REF_NORETURN);
+	f.builder.start_block(other_pred);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] inputs = {
+		{ .label = pred, .value = one },
+		{ .label = other_pred, .value = zero },
+	};
+	Ref condition = f.builder.add_phi(inputs[..], value_interner::REF_I1);
+	Ref call = f.builder.add_call(callee, {}, value_interner::REF_VOID);
+	f.builder.add_branch(condition, selected, rejected);
+	f.builder.start_block(selected);
+	f.builder.add_return(f.add_int_constant(5, value_interner::REF_I32));
+	f.builder.start_block(rejected);
+	f.builder.add_return(f.add_int_constant(6, value_interner::REF_I32));
+	f.builder.start_block(fallback);
+	f.builder.add_return(f.add_int_constant(7, value_interner::REF_I32));
+	f.builder.finish_fn("side_effecting_join", ir::Linkage.EXTERNAL);
+	f.finish();
+
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(!ir_opt::jump_thread(&f.graph, decl),
+		"jump threading must skip a PHI/branch block containing a side-effecting call");
+	assert(has_index(decl.body, call) && decl.instructions[(sz)pred_branch].data.branch.then_label == join,
+		"the call and original edge should remain when the block is skipped");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "unchanged side-effecting CFG should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid side-effecting CFG should have no verifier diagnostics");
+	errors.free();
+	f.free();
+}
+
+fn void jump_thread_skips_phi_or_chain_with_external_use() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref choose_phi_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref route_phi = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref phi_pred = f.builder.make_label("phi_pred");
+	Ref phi_other = f.builder.make_label("phi_other");
+	Ref phi_join = f.builder.make_label("phi_join");
+	Ref phi_fallback = f.builder.make_label("phi_fallback");
+	Ref phi_selected = f.builder.make_label("phi_selected");
+	Ref phi_rejected = f.builder.make_label("phi_rejected");
+	f.builder.add_branch(choose_phi_pred, phi_pred, phi_other);
+	f.builder.start_block(phi_pred);
+	Ref phi_edge = f.builder.add_inst(ir::InstTag.BRANCH, { .branch = { route_phi, phi_join, phi_fallback } }, value_interner::REF_NORETURN);
+	f.builder.start_block(phi_other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = phi_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(phi_join);
+	Ref one = f.add_int_constant(1, value_interner::REF_I32);
+	Ref zero = f.add_int_constant(0, value_interner::REF_I32);
+	ir::PhiInput[2] phi_inputs = {
+		{ .label = phi_pred, .value = one },
+		{ .label = phi_other, .value = zero },
+	};
+	Ref phi = f.builder.add_phi(phi_inputs[..], value_interner::REF_I32);
+	Ref bool_zero = f.add_int_constant(0, value_interner::REF_I32);
+	Ref phi_condition = f.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { phi, bool_zero } }, value_interner::REF_I1);
+	f.builder.add_branch(phi_condition, phi_selected, phi_rejected);
+	f.builder.start_block(phi_selected);
+	Ref phi_use = f.builder.add_inst(ir::InstTag.ADD, { .bin = { phi, bool_zero } }, value_interner::REF_I32);
+	f.builder.add_return(phi_use);
+	f.builder.start_block(phi_rejected);
+	f.builder.add_return(bool_zero);
+	f.builder.start_block(phi_fallback);
+	f.builder.add_return(bool_zero);
+	f.builder.finish_fn("phi_external_use", ir::Linkage.EXTERNAL);
+
+	Ref choose_chain_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref route_chain = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref chain_pred = f.builder.make_label("chain_pred");
+	Ref chain_other = f.builder.make_label("chain_other");
+	Ref chain_join = f.builder.make_label("chain_join");
+	Ref chain_fallback = f.builder.make_label("chain_fallback");
+	Ref chain_selected = f.builder.make_label("chain_selected");
+	Ref chain_rejected = f.builder.make_label("chain_rejected");
+	f.builder.add_branch(choose_chain_pred, chain_pred, chain_other);
+	f.builder.start_block(chain_pred);
+	Ref chain_edge = f.builder.add_inst(ir::InstTag.BRANCH, { .branch = { route_chain, chain_join, chain_fallback } }, value_interner::REF_NORETURN);
+	f.builder.start_block(chain_other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = chain_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(chain_join);
+	Ref bit_one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref bit_zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] chain_inputs = {
+		{ .label = chain_pred, .value = bit_one },
+		{ .label = chain_other, .value = bit_zero },
+	};
+	Ref bit_phi = f.builder.add_phi(chain_inputs[..], value_interner::REF_I1);
+	Ref widened = f.builder.add_inst(ir::InstTag.ZEXT, { .ref = bit_phi }, value_interner::REF_I32);
+	Ref chain_zero = f.add_int_constant(0, value_interner::REF_I32);
+	Ref chain_value = f.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { widened, chain_zero } }, value_interner::REF_I1);
+	f.builder.add_branch(chain_value, chain_selected, chain_rejected);
+	f.builder.start_block(chain_selected);
+	Ref external_use = f.builder.add_inst(ir::InstTag.ZEXT, { .ref = chain_value }, value_interner::REF_I32);
+	f.builder.add_return(external_use);
+	f.builder.start_block(chain_rejected);
+	f.builder.add_return(chain_zero);
+	f.builder.start_block(chain_fallback);
+	f.builder.add_return(chain_zero);
+	f.builder.finish_fn("chain_external_use", ir::Linkage.EXTERNAL);
+
+	Ref choose_dead_chain_pred = f.builder.add_arg(value_interner::REF_I1);
+	Ref route_dead_chain = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref dead_chain_pred = f.builder.make_label("dead_chain_pred");
+	Ref dead_chain_other = f.builder.make_label("dead_chain_other");
+	Ref dead_chain_join = f.builder.make_label("dead_chain_join");
+	Ref dead_chain_fallback = f.builder.make_label("dead_chain_fallback");
+	Ref dead_chain_selected = f.builder.make_label("dead_chain_selected");
+	Ref dead_chain_rejected = f.builder.make_label("dead_chain_rejected");
+	f.builder.add_branch(choose_dead_chain_pred, dead_chain_pred, dead_chain_other);
+	f.builder.start_block(dead_chain_pred);
+	Ref dead_chain_edge = f.builder.add_inst(ir::InstTag.BRANCH,
+		{ .branch = { route_dead_chain, dead_chain_join, dead_chain_fallback } }, value_interner::REF_NORETURN);
+	f.builder.start_block(dead_chain_other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = dead_chain_join }, value_interner::REF_NORETURN);
+	f.builder.start_block(dead_chain_join);
+	Ref dead_one = f.add_int_constant(1, value_interner::REF_I1);
+	Ref dead_zero = f.add_int_constant(0, value_interner::REF_I1);
+	ir::PhiInput[2] dead_inputs = {
+		{ .label = dead_chain_pred, .value = dead_one },
+		{ .label = dead_chain_other, .value = dead_zero },
+	};
+	Ref dead_condition = f.builder.add_phi(dead_inputs[..], value_interner::REF_I1);
+	Ref dead_chain_value = f.builder.add_inst(ir::InstTag.ZEXT, { .ref = dead_condition }, value_interner::REF_I32);
+	f.builder.add_branch(dead_condition, dead_chain_selected, dead_chain_rejected);
+	f.builder.start_block(dead_chain_selected);
+	Ref dead_chain_zero_i32 = f.add_int_constant(0, value_interner::REF_I32);
+	Ref dead_chain_use = f.builder.add_inst(ir::InstTag.ADD, { .bin = { dead_chain_value, dead_chain_zero_i32 } }, value_interner::REF_I32);
+	f.builder.add_return(dead_chain_use);
+	f.builder.start_block(dead_chain_rejected);
+	f.builder.add_return(f.add_int_constant(2, value_interner::REF_I32));
+	f.builder.start_block(dead_chain_fallback);
+	f.builder.add_return(f.add_int_constant(3, value_interner::REF_I32));
+	f.builder.finish_fn("dead_chain_external_use", ir::Linkage.EXTERNAL);
+	f.finish();
+
+	ir::Decl* phi_decl = &f.graph.decls[0];
+	ir::Decl* chain_decl = &f.graph.decls[1];
+	ir::Decl* dead_chain_decl = &f.graph.decls[2];
+	assert(!ir_opt::jump_thread(&f.graph, phi_decl) &&
+		!ir_opt::jump_thread(&f.graph, chain_decl) &&
+		!ir_opt::jump_thread(&f.graph, dead_chain_decl),
+		"a PHI or supported chain value, including a dead chain result, used outside its branch context must prevent threading");
+	assert(phi_decl.instructions[(sz)phi_edge].data.branch.then_label == phi_join &&
+		chain_decl.instructions[(sz)chain_edge].data.branch.then_label == chain_join &&
+		dead_chain_decl.instructions[(sz)dead_chain_edge].data.branch.then_label == dead_chain_join,
+		"candidate incoming edges should remain aimed at their original PHI blocks");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(ir_opt::verify(&f.graph, &errors), "unchanged external-use CFGs should verify: %s",
+		errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	assert(errors.len() == 0, "valid external-use CFGs should have no verifier diagnostics");
+	errors.free();
+	f.free();
+}
+
 fn void lowers_va_start_va_arg_va_end() @test
 {
 	OptFixture f;
@@ -5811,7 +9018,7 @@ fn bool run_dead_arg_elim(OptFixture* f, bool whole_program = false)
 	.level = code_gen_options::OptimizationLevel.O2,
 	.whole_program = whole_program,
 	.verify = true,
-}, &f.ta);
+});
 
 fn void dead_arg_elim_removes_unused_mixed_register_args_for_all_callers() @test
 {
@@ -5852,6 +9059,115 @@ fn void dead_arg_elim_removes_unused_mixed_register_args_for_all_callers() @test
 		}
 	}
 	assert(calls == 2, "both direct callers should be rewritten");
+	f.free();
+}
+
+fn void cvp_eq_five_phi_folds_multiply_to_ten() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int cvp_eq_five(int x) { if (x == 5) return x * 2; return 0; }");
+	f.run_o1();
+	ir::Decl* decl = find_function(&f.graph, "cvp_eq_five");
+	bool returned_ten = false;
+	foreach (ref : decl.body)
+	{
+		ir::Inst* inst = &decl.instructions[(sz)ref];
+		if (inst.tag != ir::InstTag.RET || (usz)inst.data.ref >= (usz)decl.instructions.len) continue;
+		ir::Inst* ret_value = &decl.instructions[(sz)inst.data.ref];
+		if (is_int_constant(decl, inst.data.ref, f.graph.interner, 10)) returned_ten = true;
+		if (ret_value.tag == ir::InstTag.PHI)
+		{
+			foreach (input : ret_value.data.phi)
+			{
+				if (is_int_constant(decl, input.value, f.graph.interner, 10)) returned_ten = true;
+			}
+		}
+	}
+	assert(returned_ten, "the then-arm return should fold to constant 10");
+	assert(count_body_tag(decl, ir::InstTag.MUL) == 0,
+		"the multiplication by two should be folded after CVP resolves x on the equality edge");
+	f.free();
+}
+
+fn void cvp_if_nonzero_removes_add_on_zero_edge() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int cvp_zero_edge(int x) { if (x) return 1; return x + 7; }");
+	f.run_o1();
+	ir::Decl* decl = find_function(&f.graph, "cvp_zero_edge");
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 0,
+		"the false edge of if (x) makes x zero, so x + 7 should fold");
+	f.free();
+}
+
+fn void cvp_keeps_add_at_join_after_branch() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	Ref value = f.builder.add_arg(value_interner::REF_I32);
+	Ref seven = f.add_int_constant(7, value_interner::REF_I32);
+	f.builder.start_fn();
+	Ref left = f.builder.make_label("left");
+	Ref join = f.builder.make_label("join");
+	Ref right = f.builder.make_label("right");
+	f.builder.add_branch(condition, left, right);
+	f.builder.start_block(left);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(right);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = join }, value_interner::REF_NORETURN);
+	f.builder.start_block(join);
+	Ref sum = f.builder.add_inst(ir::InstTag.ADD, { .bin = { value, seven } }, value_interner::REF_I32);
+	f.builder.add_return(sum);
+	f.builder.finish_fn("cvp_join_keeps_add", ir::Linkage.EXTERNAL);
+	f.finish();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(!ir_opt::correlated_value_prop(&f.graph, decl),
+		"CVP should leave an ADD using an unconstrained value unchanged at a join");
+	assert(count_body_tag(decl, ir::InstTag.ADD) == 1,
+		"the join's ADD should remain when neither incoming edge constrains its operand");
+	f.free();
+}
+
+fn void cvp_leaves_float_fcmp_unchanged() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("double cvp_float_compare(double x) { if (x == 0.0) return x; return 1.0; }");
+	f.run_mem2reg();
+	ir::Decl* decl = find_function(&f.graph, "cvp_float_compare");
+	uint before = count_body_tag(decl, ir::InstTag.FCMP_OEQ);
+	assert(before == 1, "the fixture should lower to one floating comparison");
+	assert(!ir_opt::correlated_value_prop(&f.graph, decl),
+		"CVP should not claim a rewrite for a floating comparison");
+	assert(count_body_tag(decl, ir::InstTag.FCMP_OEQ) == before,
+		"CVP must leave FCMP unchanged");
+	f.free();
+}
+
+fn void cvp_does_not_rewrite_branch_at_two_predecessor_target() @test
+{
+	HandIrFixture f;
+	f.init();
+	Ref condition = f.builder.add_arg(value_interner::REF_I1);
+	f.builder.start_fn();
+	Ref entry = f.builder.current_label;
+	Ref other = f.builder.make_label("other");
+	Ref selected = f.builder.make_label("selected");
+	f.builder.add_branch(condition, selected, other);
+	f.builder.start_block(other);
+	f.builder.add_inst(ir::InstTag.JMP, { .ref = selected }, value_interner::REF_NORETURN);
+	f.builder.start_block(selected);
+	f.builder.add_return(condition);
+	f.builder.finish_fn("cvp_two_pred_target", ir::Linkage.EXTERNAL);
+	f.finish();
+	ir::Decl* decl = &f.graph.decls[0];
+	assert(!ir_opt::correlated_value_prop(&f.graph, decl),
+		"a branch edge into a two-predecessor target must not propagate its condition");
+	assert(return_value(decl) == condition,
+		"the target's use should remain unchanged because the branch edge does not dominate it");
 	f.free();
 }
 
@@ -6226,16 +9542,17 @@ fn void dead_arg_elim_keeps_cast_calls_conservative() @test
 	f.free();
 }
 
-fn void o2_dead_arg_elim_handles_recursive_helper() @test
+fn void dead_arg_elim_handles_recursive_helper() @test
 {
 	OptFixture f;
 	f.init();
 	f.lower("static int recurse(int unused, int n) { if (n == 0) return 0; return recurse(9, n - 1); }\n"
 		"int main(void) { return recurse(8, 3); }");
-	f.run_o2();
+	f.run_mem2reg();
+	assert(run_dead_arg_elim(&f), "the unused recursive helper parameter should be removed");
 	f.verify_graph();
 	assert(count_body_tag(find_function(&f.graph, "recurse"), ir::InstTag.ARG) == 1,
-		"O2 should remove the unused recursive helper parameter");
+		"dead-argument elimination should remove the unused recursive helper parameter");
 	ir::Decl* recurse = find_function(&f.graph, "recurse");
 	bool saw_reduced_recursive_call = false;
 	foreach (ref : recurse.body)
@@ -6426,7 +9743,7 @@ fn void dead_arg_elim_preserves_sret_and_removes_explicit_unused_argument() @tes
 	f.free();
 }
 
-fn void o2_dead_arg_elim_reduces_recursive_mixed_int_double_helper() @test
+fn void dead_arg_elim_reduces_recursive_mixed_int_double_helper() @test
 {
 	OptFixture f;
 	f.init();
@@ -6435,11 +9752,12 @@ fn void o2_dead_arg_elim_reduces_recursive_mixed_int_double_helper() @test
 		"  return recurse(n - 1, 0, s * 2, p, 0.0);\n"
 	"}\n"
 		"int main(void) { int value = 2; return (int)recurse(3, 8, 1.5, &value, 4.0); }");
-	f.run_o2();
+	f.run_mem2reg();
+	assert(run_dead_arg_elim(&f), "unused mixed integer and double parameters should be removed");
 	f.verify_graph();
 	ir::Decl* recurse = find_function(&f.graph, "recurse");
 	assert(count_body_tag(recurse, ir::InstTag.ARG) == 3,
-		"O2 should remove the unused integer and double parameters from the mixed helper");
+		"dead-argument elimination should remove the unused integer and double parameters from the mixed helper");
 	bool saw_live_int = false;
 	bool saw_live_double = false;
 	foreach (ref : recurse.body)
@@ -6490,7 +9808,7 @@ fn void ipo_attributes_cover_pointer_provenance_and_local_storage_edges() @test
 		"*p = 3; return value; }\n"
 		"int finite_constant_trip(void) { int n = 0; for (int i = 0; i < 3; i++) n++; return n; }\n");
 	f.run_mem2reg();
-	ir_opt::infer_function_attrs(&f.graph, &f.ta);
+	ir_opt::infer_function_attrs(&f.graph);
 	assert((find_function(&f.graph, "arg_nowrite_cast").attrs.arg_nowrite & 1) == 0,
 		"a store through a pointer cast from the long argument must clear arg_nowrite");
 	assert((find_function(&f.graph, "integer_mask").attrs.arg_nocapture & 1) == 0,
@@ -6530,7 +9848,7 @@ fn void ipo_attributes_keep_calls_without_proven_return_or_memory_safety() @test
 		"static int divide_helper(int n) { return 12 / n; }\n"
 		"int call_ub_division_helper(void) { divide_helper(0); return 0; }\n");
 	f.run_mem2reg();
-	ir_opt::infer_function_attrs(&f.graph, &f.ta);
+	ir_opt::infer_function_attrs(&f.graph);
 	assert(!find_function(&f.graph, "even").attrs.readnone && !find_function(&f.graph, "odd").attrs.readnone,
 		"same-SCC calls are treated conservatively for memory effects");
 	assert(!find_function(&f.graph, "fp_self").attrs.will_return,
@@ -6540,7 +9858,7 @@ fn void ipo_attributes_keep_calls_without_proven_return_or_memory_safety() @test
 	{
 		ir::Decl* caller = find_function(&f.graph, name);
 		// The return value reports changes; nothing else in these callers is dead.
-		ir_opt::dead_instruction_elim(caller, &f.ta, &f.graph);
+		ir_opt::dead_instruction_elim(caller, &f.graph);
 		assert(count_body_tag(caller, ir::InstTag.CALL) == 1,
 			"DIE should keep an unused call without a proven safe return: %s", name);
 	}
@@ -6549,7 +9867,7 @@ fn void ipo_attributes_keep_calls_without_proven_return_or_memory_safety() @test
 		find_function(&f.graph, "divide_helper").attrs.will_return,
 		"a division helper is summarized as pure and returning on defined executions");
 	// LLVM's wouldInstructionBeTriviallyDead also permits deleting this call on its UB invocation.
-	assert(ir_opt::dead_instruction_elim(ub_caller, &f.ta, &f.graph), "DIE should process UB helper caller");
+	assert(ir_opt::dead_instruction_elim(ub_caller, &f.graph), "DIE should process UB helper caller");
 	assert(count_body_tag(ub_caller, ir::InstTag.CALL) == 0,
 		"DIE may remove an unused pure call even when this invocation has undefined behavior");
 	f.free();
@@ -6578,7 +9896,7 @@ fn void ipsccp_rejects_address_taken_functions_across_escape_paths() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	assert(returns_argument(find_function(&f.graph, "global_callback")),
 		"a function address stored in global callback data must prevent argument specialization");
@@ -6613,7 +9931,7 @@ fn void ipsccp_handles_closed_world_variadic_and_recursive_calls() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = true,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	assert_returns_bin_with_constant(find_function(&f.graph, "closed_target"), ir::InstTag.ADD,
 		f.graph.interner, 8, "closed-world externally linked callee");
@@ -6724,7 +10042,7 @@ fn void ipsccp_handles_variadic_agreement_and_stack_abi_constants() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	assert(returns_argument(find_function(&f.graph, "variadic_conflict")),
 		"conflicting same-arity variadic sites without VA_START must block specialization");
@@ -6764,7 +10082,7 @@ fn void ipsccp_rejects_phi_and_select_function_address_escapes() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	assert(returns_argument(find_function(&f.graph, "phi_target")),
 		"a function address merged through a PHI and returned must block specialization");
@@ -6796,7 +10114,7 @@ fn void ipsccp_handles_unreachable_conflicting_return_conservatively() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	ir::ErrorList errors;
 	errors.init(&f.ta);
 	assert(ir_opt::verify(&f.graph, &errors), "hand-built IPSCCP graph should verify: %s",
@@ -6829,7 +10147,7 @@ fn void ipsccp_resets_function_attrs_when_specializing() @test
 		.level = code_gen_options::OptimizationLevel.O2,
 		.whole_program = false,
 		.verify = true,
-	}, f.graph.allocator);
+	});
 	f.verify_graph();
 	assert(!target.attrs.computed && !target.attrs.readnone && !target.attrs.readonly &&
 		!target.attrs.will_return && target.attrs.arg_nocapture == 0 &&

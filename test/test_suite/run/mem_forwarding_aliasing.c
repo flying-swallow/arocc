@@ -12,10 +12,9 @@ int main(void)
 	a[index] = 71;
 	if (a[1] != 71) return 1;
 
-	int joined = 0;
-	if (index) joined = 83;
-	else joined = 97;
-	if (joined != 83) return 2;
+	if (index) a[1] = 83;
+	else a[index] = 97;
+	if (a[1] != 83) return 2;
 
 	volatile int device = 109;
 	if (device != 109) return 3;

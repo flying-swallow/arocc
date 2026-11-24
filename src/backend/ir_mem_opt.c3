@@ -6,6 +6,20 @@ import std::collections::list;
 import std::sort;
 
 struct MemAddr { ir::Ref root; long offset; bool known_offset; }
+
+<* Only trust a direct symbol for a body-bearing function with a complete,
+   computed summary and call ABI metadata matching its arguments. *>
+fn ir::Decl* mem_call_callee(ir::Ir* graph, ir::Decl* caller, ir::Inst* call)
+{
+	if (call.tag != ir::InstTag.CALL || (usz)call.data.call.func >= (usz)caller.instructions.len) return null;
+	ir::Inst* target = &caller.instructions[(sz)call.data.call.func];
+	if (target.tag != ir::InstTag.SYMBOL) return null;
+	ir::Decl* decl = find_decl_by_name(graph, target.data.label);
+	if (!decl || decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0 || !decl.attrs.computed ||
+		inline_arg_count(decl) != (usz)call.data.call.args.len ||
+		(usz)call.data.call.memory_copy_bytes.len != (usz)call.data.call.args.len) return null;
+	return decl;
+}
 <* Byte size for scalar integer, float, and pointer types. *>
 fn bool mem_access_size(ir::Ir* graph, value_interner::InternerRef ty, uint* size)
 {
@@ -257,18 +271,17 @@ macro @sroa_each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 	}
 }
 
-fn bool[] mem_compute_non_escaping(ir::Ir* graph, ir::Decl* decl, Uses* uses, Allocator allocator)
+fn bool[] mem_compute_non_escaping(ir::Ir* graph, ir::Decl* decl, Uses* uses)
 {
 	usz count = (usz)decl.instructions.len;
-	bool[] result = alloc::new_array(allocator, bool, (sz)count);
+	bool[] result = alloc::new_array(mem, bool, (sz)count);
 	for (usz i = 0; i < count; i++) result[i] = false;
 	// seen[ref] == stamp marks refs visited for the current root; no per-root reset.
-	uint[] seen = alloc::new_array(allocator, uint, (sz)count);
-	defer alloc::free(allocator, seen.ptr);
+	uint[] seen = alloc::new_array(tmem, uint, (sz)count);
 	for (usz i = 0; i < count; i++) seen[i] = 0;
 	uint stamp = 0;
 	list::List{ir::Ref} work;
-	work.init(allocator);
+	work.init(mem);
 	defer work.free();
 	foreach (alloc_ref : decl.body)
 	{
@@ -282,8 +295,8 @@ fn bool[] mem_compute_non_escaping(ir::Ir* graph, ir::Decl* decl, Uses* uses, Al
 		while (work.len() && safe)
 		{
 			ir::Ref current = work.pop()!!;
-			if ((usz)current >= (usz)uses.users.len) { safe = false; break; }
-			foreach (user_ref : uses.users[(sz)current])
+			if ((usz)current >= uses.count()) { safe = false; break; }
+			foreach (user_ref : uses.of(current))
 			{
 				if ((usz)user_ref >= count) { safe = false; break; }
 				ir::Inst* user = &decl.instructions[(sz)user_ref];
@@ -302,6 +315,26 @@ fn bool[] mem_compute_non_escaping(ir::Ir* graph, ir::Decl* decl, Uses* uses, Al
 					case ir::InstTag.ADD:
 						allowed = user.ty == value_interner::REF_PTR && user.data.bin.lhs == current && user.data.bin.rhs != current;
 						derived = allowed;
+						break;
+					case ir::InstTag.CALL:
+						// A nocapture argument is not stored, returned, or passed on to
+						// capturing code. After this call no other pointer can reach the
+						// alloca, so mem_may_alias may keep treating roots independently.
+						ir::Decl* callee = mem_call_callee(graph, decl, user);
+						if (callee != null)
+						{
+							allowed = true;
+							bool found_arg = false;
+							if ((usz)user.data.call.memory_copy_bytes.len != (usz)user.data.call.args.len) { allowed = false; break; }
+							foreach (i, arg : user.data.call.args)
+							{
+								if (arg != current) continue;
+								found_arg = true;
+								if (i >= 64 || (callee.attrs.arg_nocapture & ((ulong)1 << i)) == 0 ||
+									user.data.call.memory_copy_bytes[(sz)i] != 0) allowed = false;
+							}
+							if (!found_arg) allowed = false;
+						}
 						break;
 					default: break;
 				}
@@ -334,177 +367,179 @@ struct SroaShared
 	list::List{ulong} users;
 }
 
-fn bool sroa_one(ir::Ir* graph, ir::Decl* decl, ir::Ref alloc_ref, SroaShared* shared, Allocator allocator)
+fn bool sroa_one(ir::Ir* graph, ir::Decl* decl, ir::Ref alloc_ref, SroaShared* shared)
 {
-	if ((usz)alloc_ref >= (usz)shared.non_escaping.len || decl.instructions[(sz)alloc_ref].tag != ir::InstTag.ALLOC) return false;
-	ir::AllocData original = decl.instructions[(sz)alloc_ref].data.alloc;
-	if (original.is_volatile || original.size == 0 || decl.body.len == 0) return false;
-	bool[] non_escaping = shared.non_escaping;
-	if (!non_escaping[(sz)alloc_ref]) return false;
-	usz instruction_count = (usz)decl.instructions.len;
-	usz analysed_count = (usz)shared.non_escaping.len;
-	bool[] visiting = {};
-
-	// A non-escaping root's derived pointers are exactly its pointer-ADD lhs
-	// chain; every instruction that sroa_pointer_offset can match uses one.
-	uint stamp = ++shared.stamp;
-	shared.derived.clear();
-	shared.users.clear();
-	shared.derived.push(alloc_ref);
-	shared.derived_mark[(sz)alloc_ref] = stamp;
-	for (sz i = 0; i < shared.derived.len(); i++)
+	@pool()
 	{
-		ir::Ref current = shared.derived[i];
-		foreach (user_ref : shared.uses.users[(sz)current])
+		if ((usz)alloc_ref >= (usz)shared.non_escaping.len || decl.instructions[(sz)alloc_ref].tag != ir::InstTag.ALLOC) return false;
+		ir::AllocData original = decl.instructions[(sz)alloc_ref].data.alloc;
+		if (original.is_volatile || original.size == 0 || decl.body.len == 0) return false;
+		bool[] non_escaping = shared.non_escaping;
+		if (!non_escaping[(sz)alloc_ref]) return false;
+		usz instruction_count = (usz)decl.instructions.len;
+		usz analysed_count = (usz)shared.non_escaping.len;
+		bool[] visiting = {};
+
+		// A non-escaping root's derived pointers are exactly its pointer-ADD lhs
+		// chain; every instruction that sroa_pointer_offset can match uses one.
+		uint stamp = ++shared.stamp;
+		shared.derived.clear();
+		shared.users.clear();
+		shared.derived.push(alloc_ref);
+		shared.derived_mark[(sz)alloc_ref] = stamp;
+		for (sz i = 0; i < shared.derived.len(); i++)
 		{
-			if ((usz)user_ref >= analysed_count) continue;
+			ir::Ref current = shared.derived[i];
+			foreach (user_ref : shared.uses.of(current))
+			{
+				if ((usz)user_ref >= analysed_count) continue;
+				ir::Inst* user = &decl.instructions[(sz)user_ref];
+				if (user.tag == ir::InstTag.ADD && user.ty == value_interner::REF_PTR && user.data.bin.lhs == current &&
+					shared.derived_mark[(sz)user_ref] != stamp)
+				{
+					shared.derived_mark[(sz)user_ref] = stamp;
+					shared.derived.push(user_ref);
+				}
+				if (shared.user_mark[(sz)user_ref] != stamp && shared.body_position[(sz)user_ref] != uint::max)
+				{
+					shared.user_mark[(sz)user_ref] = stamp;
+					shared.users.push(((ulong)shared.body_position[(sz)user_ref] << 32) | (ulong)(uint)user_ref);
+				}
+			}
+		}
+		// Visit users in body order so slots and accesses match a full body walk.
+		quicksort(shared.users.array_view());
+
+		sz user_count = shared.users.len();
+		SroaSlot[] slots = alloc::new_array(mem, SroaSlot, user_count + 1);
+		defer alloc::free(mem, slots.ptr);
+		SroaAccess[] accesses = alloc::new_array(tmem, SroaAccess, user_count + 1);
+		uint slot_count = 0;
+		uint access_count = 0;
+
+		foreach (key : shared.users)
+		{
+			ir::Ref user_ref = (ir::Ref)(uint)(key & 0xFFFF_FFFF);
 			ir::Inst* user = &decl.instructions[(sz)user_ref];
-			if (user.tag == ir::InstTag.ADD && user.ty == value_interner::REF_PTR && user.data.bin.lhs == current &&
-				shared.derived_mark[(sz)user_ref] != stamp)
+			uint derived_uses = 0;
+			ulong use_offset = 0;
+			@sroa_each_value_operand(user; ir::Ref* operand)
 			{
-				shared.derived_mark[(sz)user_ref] = stamp;
-				shared.derived.push(user_ref);
-			}
-			if (shared.user_mark[(sz)user_ref] != stamp && shared.body_position[(sz)user_ref] != uint::max)
+				ulong operand_offset;
+				if (sroa_pointer_offset(graph, decl, alloc_ref, *operand, visiting, &operand_offset))
+				{
+					derived_uses++;
+					use_offset = operand_offset;
+				}
+			};
+			if (derived_uses == 0) continue;
+			if (derived_uses != 1) { return false; }
+			value_interner::InternerRef access_type = value_interner::REF_VOID;
+			uint access_size = 0;
+			bool memory_access = false;
+			switch (user.tag)
 			{
-				shared.user_mark[(sz)user_ref] = stamp;
-				shared.users.push(((ulong)shared.body_position[(sz)user_ref] << 32) | (ulong)(uint)user_ref);
+				case ir::InstTag.LOAD:
+					if (!sroa_pointer_offset(graph, decl, alloc_ref, user.data.ref, visiting, &use_offset)) { return false; }
+					access_type = user.ty;
+					memory_access = true;
+					if (!mem_access_size(graph, user.ty, &access_size)) { return false; }
+					break;
+				case ir::InstTag.STORE:
+					if (!sroa_pointer_offset(graph, decl, alloc_ref, user.data.bin.lhs, visiting, &use_offset)) { return false; }
+					if ((usz)user.data.bin.rhs >= instruction_count) { return false; }
+					access_type = decl.instructions[(sz)user.data.bin.rhs].ty;
+					memory_access = true;
+					if (!mem_access_size(graph, decl.instructions[(sz)user.data.bin.rhs].ty, &access_size)) { return false; }
+					break;
+				case ir::InstTag.ADD:
+					ulong addend;
+					if (user.ty != value_interner::REF_PTR ||
+						!sroa_pointer_offset(graph, decl, alloc_ref, user.data.bin.lhs, visiting, &use_offset) ||
+						!sroa_constant_offset(graph, decl, user.data.bin.rhs, &addend)) { return false; }
+					break;
+				default: { return false; }
 			}
+			if (!memory_access) continue;
+			if (access_size == 0 || use_offset > original.size || access_size > original.size - (uint)use_offset) { return false; }
+
+			uint slot_index = uint::max;
+			for (uint i = 0; i < slot_count; i++)
+			{
+				if (slots[i].offset == use_offset && slots[i].size == access_size)
+				{
+					slot_index = i;
+					break;
+				}
+				MemAddr existing = { .root = alloc_ref, .offset = (long)slots[i].offset, .known_offset = true };
+				MemAddr candidate = { .root = alloc_ref, .offset = (long)use_offset, .known_offset = true };
+				if (mem_may_alias(existing, slots[i].size, candidate, access_size, non_escaping)) { return false; }
+			}
+			if (slot_index == uint::max)
+			{
+				if (slot_count == 32) return false;
+				uint alignment = original.align == 0 ? 1 : original.align;
+				if (use_offset != 0) alignment = sroa_gcd(alignment, (uint)use_offset);
+				if (alignment == 0) alignment = 1;
+				slot_index = slot_count++;
+				slots[slot_index] = { use_offset, access_size, access_type, alignment };
+			}
+			accesses[access_count++] = { user_ref, slot_index };
 		}
-	}
-	// Visit users in body order so slots and accesses match a full body walk.
-	quicksort(shared.users.array_view());
+		if (access_count == 0) return false;
+		if (slot_count == 1 && slots[0].offset == 0 && slots[0].size == original.size) return false;
 
-	sz user_count = shared.users.len();
-	SroaSlot[] slots = alloc::new_array(allocator, SroaSlot, user_count + 1);
-	defer alloc::free(allocator, slots.ptr);
-	SroaAccess[] accesses = alloc::new_array(allocator, SroaAccess, user_count + 1);
-	defer alloc::free(allocator, accesses.ptr);
-	uint slot_count = 0;
-	uint access_count = 0;
-
-	foreach (key : shared.users)
-	{
-		ir::Ref user_ref = (ir::Ref)(uint)(key & 0xFFFF_FFFF);
-		ir::Inst* user = &decl.instructions[(sz)user_ref];
-		uint derived_uses = 0;
-		ulong use_offset = 0;
-		@sroa_each_value_operand(user; ir::Ref* operand)
-		{
-			ulong operand_offset;
-			if (sroa_pointer_offset(graph, decl, alloc_ref, *operand, visiting, &operand_offset))
-			{
-				derived_uses++;
-				use_offset = operand_offset;
-			}
-		};
-		if (derived_uses == 0) continue;
-		if (derived_uses != 1) { return false; }
-		value_interner::InternerRef access_type = value_interner::REF_VOID;
-		uint access_size = 0;
-		bool memory_access = false;
-		switch (user.tag)
-		{
-			case ir::InstTag.LOAD:
-				if (!sroa_pointer_offset(graph, decl, alloc_ref, user.data.ref, visiting, &use_offset)) { return false; }
-				access_type = user.ty;
-				memory_access = true;
-				if (!mem_access_size(graph, user.ty, &access_size)) { return false; }
-				break;
-			case ir::InstTag.STORE:
-				if (!sroa_pointer_offset(graph, decl, alloc_ref, user.data.bin.lhs, visiting, &use_offset)) { return false; }
-				if ((usz)user.data.bin.rhs >= instruction_count) { return false; }
-				access_type = decl.instructions[(sz)user.data.bin.rhs].ty;
-				memory_access = true;
-				if (!mem_access_size(graph, decl.instructions[(sz)user.data.bin.rhs].ty, &access_size)) { return false; }
-				break;
-			case ir::InstTag.ADD:
-				ulong addend;
-				if (user.ty != value_interner::REF_PTR ||
-					!sroa_pointer_offset(graph, decl, alloc_ref, user.data.bin.lhs, visiting, &use_offset) ||
-					!sroa_constant_offset(graph, decl, user.data.bin.rhs, &addend)) { return false; }
-				break;
-			default: { return false; }
-		}
-		if (!memory_access) continue;
-		if (access_size == 0 || use_offset > original.size || access_size > original.size - (uint)use_offset) { return false; }
-
-		uint slot_index = uint::max;
+		// Append one independent stack object for each disjoint scalar byte range.
+		DeclEditor editor;
+		editor.begin(decl);
 		for (uint i = 0; i < slot_count; i++)
 		{
-			if (slots[i].offset == use_offset && slots[i].size == access_size)
+			editor.insts.push({
+				.tag = ir::InstTag.ALLOC,
+				.data.alloc = { .size = slots[i].size, .align = slots[i].align, .is_volatile = false },
+				.ty = value_interner::REF_PTR,
+			});
+		}
+		for (uint access_index = 0; access_index < access_count; access_index++)
+		{
+			SroaAccess access = accesses[(sz)access_index];
+			ir::Inst* inst = &editor.insts.entries[(sz)access.ref];
+			ir::Ref new_pointer = (ir::Ref)(instruction_count + access.slot);
+			if (inst.tag == ir::InstTag.LOAD)
 			{
-				slot_index = i;
-				break;
+				inst.data.ref = new_pointer;
 			}
-			MemAddr existing = { .root = alloc_ref, .offset = (long)slots[i].offset, .known_offset = true };
-			MemAddr candidate = { .root = alloc_ref, .offset = (long)use_offset, .known_offset = true };
-			if (mem_may_alias(existing, slots[i].size, candidate, access_size, non_escaping)) { return false; }
+			else if (inst.tag == ir::InstTag.STORE)
+			{
+				inst.data.bin.lhs = new_pointer;
+			}
+			else
+			{
+				// The access table must contain only memory operations. Do not write
+				// the bin union arm on another instruction: LABEL stores its name there.
+				editor.free();
+				return false;
+			}
 		}
-		if (slot_index == uint::max)
-		{
-			if (slot_count == 32) return false;
-			uint alignment = original.align == 0 ? 1 : original.align;
-			if (use_offset != 0) alignment = sroa_gcd(alignment, (uint)use_offset);
-			if (alignment == 0) alignment = 1;
-			slot_index = slot_count++;
-			slots[slot_index] = { use_offset, access_size, access_type, alignment };
-		}
-		accesses[access_count++] = { user_ref, slot_index };
-	}
-	if (access_count == 0) return false;
-	if (slot_count == 1 && slots[0].offset == 0 && slots[0].size == original.size) return false;
 
-	// Append one independent stack object for each disjoint scalar byte range.
-	DeclEditor editor;
-	editor.begin(decl, allocator);
-	for (uint i = 0; i < slot_count; i++)
-	{
-		editor.insts.push({
-			.tag = ir::InstTag.ALLOC,
-			.data.alloc = { .size = slots[i].size, .align = slots[i].align, .is_volatile = false },
-			.ty = value_interner::REF_PTR,
-		});
-	}
-	for (uint access_index = 0; access_index < access_count; access_index++)
-	{
-		SroaAccess access = accesses[(sz)access_index];
-		ir::Inst* inst = &editor.insts.entries[(sz)access.ref];
-		ir::Ref new_pointer = (ir::Ref)(instruction_count + access.slot);
-		if (inst.tag == ir::InstTag.LOAD)
+		list::List{ir::Ref} new_body;
+		new_body.init(editor.decl.allocator);  // becomes editor.body, adopted by commit
+		foreach (ref : editor.body)
 		{
-			inst.data.ref = new_pointer;
+			if (ref == alloc_ref) continue;
+			ulong ignored_offset;
+			if ((usz)ref < analysed_count && shared.derived_mark[(sz)ref] == stamp &&
+				decl.instructions[(sz)ref].tag == ir::InstTag.ADD &&
+				sroa_pointer_offset(graph, decl, alloc_ref, ref, visiting, &ignored_offset)) continue;
+			new_body.push(ref);
 		}
-		else if (inst.tag == ir::InstTag.STORE)
-		{
-			inst.data.bin.lhs = new_pointer;
-		}
-		else
-		{
-			// The access table must contain only memory operations. Do not write
-			// the bin union arm on another instruction: LABEL stores its name there.
-			editor.free();
-			return false;
-		}
-	}
-
-	list::List{ir::Ref} new_body;
-	new_body.init(allocator);
-	foreach (ref : editor.body)
-	{
-		if (ref == alloc_ref) continue;
-		ulong ignored_offset;
-		if ((usz)ref < analysed_count && shared.derived_mark[(sz)ref] == stamp &&
-			decl.instructions[(sz)ref].tag == ir::InstTag.ADD &&
-			sroa_pointer_offset(graph, decl, alloc_ref, ref, visiting, &ignored_offset)) continue;
-		new_body.push(ref);
-	}
-	editor.body.free();
-	editor.body = new_body;
-	sz alloc_pos = inline_entry_alloc_position(&editor);
-	for (uint i = 0; i < slot_count; i++) editor.insert_body(alloc_pos++, (ir::Ref)(instruction_count + i));
-	editor.commit();
-	return true;
+		editor.body.free();
+		editor.body = new_body;
+		sz alloc_pos = inline_entry_alloc_position(&editor);
+		for (uint i = 0; i < slot_count; i++) editor.insert_body(alloc_pos++, (ir::Ref)(instruction_count + i));
+		editor.commit();
+		return true;
+	};
 }
 
 <*
@@ -513,49 +548,52 @@ fn bool sroa_one(ir::Ir* graph, ir::Decl* decl, ir::Ref alloc_ref, SroaShared* s
  locals, and volatile locals bail. Small copy chunks that overlap field boundaries
  also bail; splitting those chunks is follow-up work.
 *>
-fn bool sroa(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
+fn bool sroa(ir::Ir* graph, ir::Decl* decl, FunctionAnalyses* cached = null)
 {
-	if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0) return false;
-	list::List{ir::Ref} candidates;
-	candidates.init(allocator);
-	defer candidates.free();
-	foreach (ref : decl.body)
+	@pool()
 	{
-		if ((usz)ref < (usz)decl.instructions.len && decl.instructions[(sz)ref].tag == ir::InstTag.ALLOC)
+		if (decl.kind != ir::DeclKind.FUNCTION || decl.body.len == 0) return false;
+		list::List{ir::Ref} candidates;
+		candidates.init(mem);
+		defer candidates.free();
+		foreach (ref : decl.body)
 		{
-			candidates.push(ref);
+			if ((usz)ref < (usz)decl.instructions.len && decl.instructions[(sz)ref].tag == ir::InstTag.ALLOC)
+			{
+				candidates.push(ref);
+			}
 		}
-	}
-	if (!candidates.len()) return false;
-	usz count = (usz)decl.instructions.len;
-	SroaShared shared = { .uses = compute_uses(decl, allocator) };
-	shared.non_escaping = mem_compute_non_escaping(graph, decl, &shared.uses, allocator);
-	shared.body_position = alloc::new_array(allocator, uint, (sz)count);
-	shared.derived_mark = alloc::new_array(allocator, uint, (sz)count);
-	shared.user_mark = alloc::new_array(allocator, uint, (sz)count);
-	shared.derived.init(allocator);
-	shared.users.init(allocator);
-	defer
-	{
-		shared.uses.free();
-		alloc::free(allocator, shared.non_escaping.ptr);
-		alloc::free(allocator, shared.body_position.ptr);
-		alloc::free(allocator, shared.derived_mark.ptr);
-		alloc::free(allocator, shared.user_mark.ptr);
-		shared.derived.free();
-		shared.users.free();
-	}
-	for (usz i = 0; i < count; i++)
-	{
-		shared.body_position[i] = uint::max; shared.derived_mark[i] = 0; shared.user_mark[i] = 0;
-	}
-	foreach (pos, ref : decl.body)
-	{
-		if ((usz)ref < count) shared.body_position[(sz)ref] = (uint)pos;
-	}
-	bool changed = false;
-	foreach (ref : candidates) changed = sroa_one(graph, decl, ref, &shared, allocator) || changed;
-	return changed;
+		if (!candidates.len()) return false;
+		usz count = (usz)decl.instructions.len;
+		SroaShared shared = { .uses = compute_uses(decl, mem) };
+		shared.non_escaping = mem_compute_non_escaping(graph, decl, &shared.uses);
+		shared.body_position = alloc::new_array(mem, uint, (sz)count);
+		shared.derived_mark = alloc::new_array(mem, uint, (sz)count);
+		shared.user_mark = alloc::new_array(mem, uint, (sz)count);
+		shared.derived.init(mem);
+		shared.users.init(mem);
+		defer
+		{
+			shared.uses.free();
+			alloc::free(mem, shared.non_escaping.ptr);
+			alloc::free(mem, shared.body_position.ptr);
+			alloc::free(mem, shared.derived_mark.ptr);
+			alloc::free(mem, shared.user_mark.ptr);
+			shared.derived.free();
+			shared.users.free();
+		}
+		for (usz i = 0; i < count; i++)
+		{
+			shared.body_position[i] = uint::max; shared.derived_mark[i] = 0; shared.user_mark[i] = 0;
+		}
+		foreach (pos, ref : decl.body)
+		{
+			if ((usz)ref < count) shared.body_position[(sz)ref] = (uint)pos;
+		}
+		bool changed = false;
+		foreach (ref : candidates) changed = sroa_one(graph, decl, ref, &shared) || changed;
+		return changed;
+	};
 }
 
 struct MemFact
@@ -722,7 +760,11 @@ fn ir::Ref mem_clear_root(MemOptContext* context, ir::Inst[] insts, ir::Ref addr
 
 <* Walk the dominator tree with a private memory-fact scope per child.
    Facts and pending stores belong to non-escaping roots, and distinct
-   non-escaping roots never alias, so every query is per root. *>
+   non-escaping roots never alias, so every query is per root. Direct calls
+   with validated argument summaries apply their read/write effects to roots
+   passed without capture; other calls cannot receive such roots. Atomic and
+   VA_START operands are checked defensively in case the IR violates the
+   escape invariant. *>
 fn void mem_opt_block(MemOptContext* context, uint block_index)
 {
 	CfgBlock* block = &context.cfg.blocks[(sz)block_index];
@@ -739,6 +781,26 @@ fn void mem_opt_block(MemOptContext* context, uint block_index)
 			ir::Ref address_ref = inst.tag == ir::InstTag.VA_START ? inst.data.ref : inst.data.atomic.ptr;
 			ir::Ref root = mem_clear_root(context, context.editor.insts.array_view(), address_ref);
 			if (root != ir::NONE) mem_drop_pending_root(context, root);
+			continue;
+		}
+		if (inst.tag == ir::InstTag.CALL)
+		{
+			ir::Decl* callee = mem_call_callee(context.graph, context.decl, inst);
+			foreach (i, arg : inst.data.call.args)
+			{
+				MemAddr arg_address;
+				if (!mem_decompose_address(context.graph, context.editor.insts.array_view(), arg, &arg_address) ||
+					arg_address.root == ir::NONE || (usz)arg_address.root >= (usz)context.non_escaping.len ||
+					!context.non_escaping[(sz)arg_address.root]) continue;
+				bool known_arg = callee != null && i < 64 &&
+					(callee.attrs.arg_nocapture & ((ulong)1 << i)) != 0 &&
+					inst.data.call.memory_copy_bytes[(sz)i] == 0;
+				bool reads = !known_arg || (callee.attrs.arg_noread & ((ulong)1 << i)) == 0;
+				bool writes = !known_arg || (callee.attrs.arg_nowrite & ((ulong)1 << i)) == 0;
+				if (writes) mem_invalidate_root(context, arg_address.root);
+				if (reads) mem_drop_pending_root(context, arg_address.root);
+				if (reads) context.loaded_root[(sz)arg_address.root] = true;
+			}
 			continue;
 		}
 		if (inst.tag != ir::InstTag.LOAD && inst.tag != ir::InstTag.STORE) continue;
@@ -820,9 +882,11 @@ fn void mem_opt_block(MemOptContext* context, uint block_index)
 				}
 			}
 			if (!address.known_offset) continue;
-			// Calls, atomics, fences, and other memory operations do not invalidate
-			// non-escaping alloca facts: escape analysis rejects an alloca passed to
-			// a call/atomic/va_start. Atomics and va_start are also guarded above.
+			// Atomics, fences, VA_START, dynamic allocation, stack save/restore,
+			// and accesses through other pointers cannot reach this non-escaping root:
+			// escape analysis rejects an alloca passed to atomic operation or
+			// VA_START, and derived addresses are only used by direct loads/stores.
+			// Atomic and VA_START operands are guarded above as defense in depth.
 			// Store-to-load forwarding facts remain live until an aliasing write.
 			mem_record_fact(context, ref, current);
 			foreach (old_ref : *pending)
@@ -862,126 +926,159 @@ fn void mem_opt_block(MemOptContext* context, uint block_index)
 }
 
 <* Dominator-scoped load forwarding and conservative dead-store elimination for
-   fixed-size, non-escaping stack objects. *>
-fn bool mem_opt(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
+   fixed-size, non-escaping stack objects. Runs after GVN, which handles loads
+   across joins and loops while this pass adds precise offset forwarding. *>
+fn bool mem_opt(ir::Ir* graph, ir::Decl* decl, FunctionAnalyses* cached = null)
 {
-	if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
-	Uses uses = compute_uses(decl, allocator);
-	defer uses.free();
-	bool[] non_escaping = mem_compute_non_escaping(graph, decl, &uses, allocator);
-	defer alloc::free(allocator, non_escaping.ptr);
-	usz count = decl.instructions.len;
-	bool[] remove = alloc::new_array(allocator, bool, (sz)count);
-	defer alloc::free(allocator, remove.ptr);
-	bool[] loaded_root = alloc::new_array(allocator, bool, (sz)count);
-	defer alloc::free(allocator, loaded_root.ptr);
-	ir::Ref[] replacements = alloc::new_array(allocator, ir::Ref, (sz)count);
-	defer alloc::free(allocator, replacements.ptr);
-	MemFact[] facts = alloc::new_array(allocator, MemFact, (sz)count);
-	defer alloc::free(allocator, facts.ptr);
-	bool[] valid = alloc::new_array(allocator, bool, (sz)count);
-	defer alloc::free(allocator, valid.ptr);
-	for (usz i = 0; i < count; i++)
+	@pool()
 	{
-		remove[i] = false; loaded_root[i] = false; valid[i] = false;
-		replacements[i] = (ir::Ref)i;
-	}
-	Cfg cfg = build_cfg(decl, allocator);
-	defer cfg.free();
-	if (cfg.blocks.len)
-	{
-		cfg.compute_dominators();
-		// Loads outside the executable portion of reachable blocks, and loads
-		// in unreachable blocks, are not visited by CSE. Conservatively keep
-		// their roots live because this pass does not rewrite that code.
-		foreach (block_index, block : cfg.blocks)
-		{
-			sz executable_end = block_executable_end(decl, &block);
-			for (sz pos = block.start + 1; pos < block.end; pos++)
-			{
-				if (cfg.reachable[(sz)block_index] && pos < executable_end) continue;
-				ir::Ref ref = decl.body[(sz)pos];
-				if ((usz)ref >= count || decl.instructions[(sz)ref].tag != ir::InstTag.LOAD) continue;
-				MemAddr address;
-				if (!mem_decompose_address(graph, decl.instructions, decl.instructions[(sz)ref].data.ref, &address)) continue;
-				if (address.root != ir::NONE && (usz)address.root < (usz)non_escaping.len && non_escaping[(sz)address.root])
-				{
-					loaded_root[(sz)address.root] = true;
-				}
-			}
-		}
-		DeclEditor editor;
-		editor.begin(decl, allocator);
-		uint[] seq = alloc::new_array(allocator, uint, (sz)count);
-		defer alloc::free(allocator, seq.ptr);
-		bool[] local_store = alloc::new_array(allocator, bool, (sz)count);
-		defer alloc::free(allocator, local_store.ptr);
-		list::List{ir::Ref}[] root_facts = alloc::new_array(allocator, list::List{ir::Ref}, (sz)count);
-		list::List{ir::Ref}[] root_pending = alloc::new_array(allocator, list::List{ir::Ref}, (sz)count);
+		FunctionAnalyses owned_analyses;
+		FunctionAnalyses* analyses = function_analyses(cached, &owned_analyses, decl);
+		defer owned_analyses.free();
+		if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
+		Uses* uses = analyses.get_uses();
+		bool[] non_escaping = mem_compute_non_escaping(graph, decl, uses);
+		defer alloc::free(mem, non_escaping.ptr);
+		usz count = decl.instructions.len;
+		bool[] remove = alloc::new_array(mem, bool, (sz)count);
+		defer alloc::free(mem, remove.ptr);
+		bool[] loaded_root = alloc::new_array(mem, bool, (sz)count);
+		defer alloc::free(mem, loaded_root.ptr);
+		ir::Ref[] replacements = alloc::new_array(mem, ir::Ref, (sz)count);
+		defer alloc::free(mem, replacements.ptr);
+		MemFact[] facts = alloc::new_array(mem, MemFact, (sz)count);
+		defer alloc::free(mem, facts.ptr);
+		bool[] valid = alloc::new_array(mem, bool, (sz)count);
+		defer alloc::free(mem, valid.ptr);
 		for (usz i = 0; i < count; i++)
 		{
-			seq[i] = 0; local_store[i] = false;
-			root_facts[i].init(allocator, 0);
-			root_pending[i].init(allocator, 0);
+			remove[i] = false; loaded_root[i] = false; valid[i] = false;
+			replacements[i] = (ir::Ref)i;
 		}
-		defer
+		Cfg* cfg = analyses.get_cfg();
+		if (cfg.blocks.len)
 		{
-			for (usz i = 0; i < count; i++) { root_facts[i].free(); root_pending[i].free(); }
-			alloc::free(allocator, root_facts.ptr);
-			alloc::free(allocator, root_pending.ptr);
-		}
-		MemOptContext context = { .graph = graph, .decl = decl, .editor = &editor, .cfg = &cfg,
-			.non_escaping = non_escaping, .remove = remove, .replacements = replacements,
-			.facts = facts, .valid = valid, .seq = seq, .loaded_root = loaded_root,
-			.root_facts = root_facts, .root_pending = root_pending, .local_store = local_store };
-		context.undo.init(allocator);
-		context.pending_roots.init(allocator);
-		defer { context.undo.free(); context.pending_roots.free(); }
-		mem_opt_block(&context, cfg.rpo[0]);
-		// Remove stores and pointer arithmetic for internal roots that no load in
-		// reachable or unreachable code reads. These ADDs only form addresses for
-		// the removed stores, so removing them also makes the ALLOC dead here.
-		foreach (ref : editor.body)
-		{
-			if ((usz)ref >= count) continue;
-			ir::Inst* inst = &editor.insts.entries[(sz)ref];
-			if (inst.tag == ir::InstTag.ALLOC)
+			if (!cfg.idom.len) cfg.compute_dominators();
+			// Loads outside the executable portion of reachable blocks, and loads
+			// in unreachable blocks, are not visited by CSE. Conservatively keep
+			// their roots live because this pass does not rewrite that code.
+			foreach (block_index, block : cfg.blocks)
 			{
-				if ((usz)ref < (usz)non_escaping.len && non_escaping[(sz)ref] && !loaded_root[(sz)ref])
+				sz executable_end = block_executable_end(decl, &block);
+				for (sz pos = block.start + 1; pos < block.end; pos++)
 				{
-					remove[(sz)ref] = true;
+					if (cfg.reachable[(sz)block_index] && pos < executable_end) continue;
+					ir::Ref ref = decl.body[(sz)pos];
+					if ((usz)ref >= count || decl.instructions[(sz)ref].tag != ir::InstTag.LOAD) continue;
+					MemAddr address;
+					if (!mem_decompose_address(graph, decl.instructions, decl.instructions[(sz)ref].data.ref, &address)) continue;
+					if (address.root != ir::NONE && (usz)address.root < (usz)non_escaping.len && non_escaping[(sz)address.root])
+					{
+						loaded_root[(sz)address.root] = true;
+					}
 				}
-				continue;
 			}
-			ir::Ref address_ref;
-			if (inst.tag == ir::InstTag.STORE)
+			DeclEditor editor;
+			editor.begin(decl);
+			uint[] seq = alloc::new_array(mem, uint, (sz)count);
+			defer alloc::free(mem, seq.ptr);
+			bool[] local_store = alloc::new_array(mem, bool, (sz)count);
+			defer alloc::free(mem, local_store.ptr);
+			list::List{ir::Ref}[] root_facts = alloc::new_array(mem, list::List{ir::Ref}, (sz)count);
+			list::List{ir::Ref}[] root_pending = alloc::new_array(mem, list::List{ir::Ref}, (sz)count);
+			for (usz i = 0; i < count; i++)
 			{
-				address_ref = inst.data.bin.lhs;
+				seq[i] = 0; local_store[i] = false;
+				root_facts[i].init(mem, 0);
+				root_pending[i].init(mem, 0);
 			}
-			else if (inst.tag == ir::InstTag.ADD && inst.ty == value_interner::REF_PTR)
+			defer
 			{
-				address_ref = ref;
+				for (usz i = 0; i < count; i++) { root_facts[i].free(); root_pending[i].free(); }
+				alloc::free(mem, root_facts.ptr);
+				alloc::free(mem, root_pending.ptr);
 			}
-			else
+			MemOptContext context = { .graph = graph, .decl = decl, .editor = &editor, .cfg = cfg,
+				.non_escaping = non_escaping, .remove = remove, .replacements = replacements,
+				.facts = facts, .valid = valid, .seq = seq, .loaded_root = loaded_root,
+				.root_facts = root_facts, .root_pending = root_pending, .local_store = local_store };
+			context.undo.init(mem);
+			context.pending_roots.init(mem);
+			defer { context.undo.free(); context.pending_roots.free(); }
+			mem_opt_block(&context, cfg.rpo[0]);
+			// Remove stores and pointer arithmetic for internal roots that no load in
+			// reachable or unreachable code reads. These ADDs only form addresses for
+			// the removed stores, so removing them also makes the ALLOC dead here.
+			foreach (ref : editor.body)
 			{
-				continue;
+				if ((usz)ref >= count) continue;
+				ir::Inst* inst = &editor.insts.entries[(sz)ref];
+				if (inst.tag == ir::InstTag.ALLOC)
+				{
+					if ((usz)ref < (usz)non_escaping.len && non_escaping[(sz)ref] && !loaded_root[(sz)ref])
+					{
+						remove[(sz)ref] = true;
+					}
+					continue;
+				}
+				ir::Ref address_ref;
+				if (inst.tag == ir::InstTag.STORE)
+				{
+					address_ref = inst.data.bin.lhs;
+				}
+				else if (inst.tag == ir::InstTag.ADD && inst.ty == value_interner::REF_PTR)
+				{
+					address_ref = ref;
+				}
+				else
+				{
+					continue;
+				}
+				MemAddr address;
+				if (!mem_decompose_address(graph, editor.insts.array_view(), address_ref, &address)) continue;
+				if (address.root != ir::NONE && (usz)address.root < (usz)non_escaping.len &&
+					non_escaping[(sz)address.root] && !loaded_root[(sz)address.root]) remove[(sz)ref] = true;
 			}
-			MemAddr address;
-			if (!mem_decompose_address(graph, editor.insts.array_view(), address_ref, &address)) continue;
-			if (address.root != ir::NONE && (usz)address.root < (usz)non_escaping.len &&
-				non_escaping[(sz)address.root] && !loaded_root[(sz)address.root]) remove[(sz)ref] = true;
+			// A never-loaded root can still be an operand of a kept instruction: a
+			// call whose summary only writes through that argument (sqlite's
+			// powerOfTen(p, &lo) with lo unused) keeps receiving the address. Keep
+			// such ALLOCs and address ADDs, transitively, so no operand dangles;
+			// the stores into them stay removed.
+			bool kept_more = true;
+			while (kept_more)
+			{
+				kept_more = false;
+				foreach (ref : editor.body)
+				{
+					if ((usz)ref >= count || remove[(sz)ref]) continue;
+					@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
+					{
+						ir::Ref used = mem_resolve(replacements, *slot);
+						if ((usz)used < count && remove[(sz)used])
+						{
+							ir::Inst* used_inst = &editor.insts.entries[(sz)used];
+							if (used_inst.tag == ir::InstTag.ALLOC ||
+								(used_inst.tag == ir::InstTag.ADD && used_inst.ty == value_interner::REF_PTR))
+							{
+								remove[(sz)used] = false;
+								kept_more = true;
+							}
+						}
+					};
+				}
+			}
+			bool changed = false;
+			foreach (ref : editor.body)
+			{
+				if ((usz)ref >= count) continue;
+				changed = changed || remove[(sz)ref];
+				@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot) { *slot = mem_resolve(replacements, *slot); };
+			}
+			BodyRemovalContext removal_context = { .remove = remove };
+			editor.remove_body_where(&body_ref_marked_for_removal, (void*)&removal_context);
+			editor.commit();
+			return changed;
 		}
-		bool changed = false;
-		foreach (ref : editor.body)
-		{
-			if ((usz)ref >= count) continue;
-			changed = changed || remove[(sz)ref];
-			@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot) { *slot = mem_resolve(replacements, *slot); };
-		}
-		BodyRemovalContext removal_context = { .remove = remove };
-		editor.remove_body_where(&body_ref_marked_for_removal, (void*)&removal_context);
-		editor.commit();
-		return changed;
-	}
-	return false;
+		return false;
+	};
 }

@@ -980,15 +980,20 @@ fn ir::Ref? CodeGen.gen_return_stmt(&self, type_store::NodeIndex node_index, tre
 	{
 		case EXPR:
 			ir::Ref result = self.gen_expr(node.return_stmt.expr)!;
-			self.ret_nodes.push(
-				{
-					.value = result, .label = self.builder.current_label
-				}
-			);
+			// Unreachable code after a terminator (`return f(); return 0;`) adds
+			// no edge to the return block, so it must not add a PHI input either.
+			if (!self.builder.block_terminated())
+			{
+				self.ret_nodes.push(
+					{
+						.value = result, .label = self.builder.current_label
+					}
+				);
+			}
 		case NONE:
 			break;
 		case IMPLICIT:
-			if (node.return_stmt.implicit_value)
+			if (node.return_stmt.implicit_value && !self.builder.block_terminated())
 			{
 				ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.return_stmt.return_qt)!);
 				self.ret_nodes.push(
@@ -1160,17 +1165,20 @@ fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node
 			ir::InstTag bool_compare = float_to_bool ? ir::InstTag.FCMP_UNE : ir::InstTag.CMP_NE;
 			return self.builder.add_inst(bool_compare, { .bin = { .lhs = lhs, .rhs = rhs } }, value_interner::REF_I1);
 		case POINTER_TO_INT:
-			// Pointers are 64-bit integers on x86_64: reuse the value, truncating
-			// for narrower targets (`(int)(intptr_t)p`).
+			// Pointers are 64-bit integers on x86_64, but the IR keeps `ptr` and
+			// `i64` distinct (a PHI's inputs must match its type), so a full-width
+			// cast is a same-width ZEXT (a plain move when lowered); narrower
+			// targets truncate (`(int)(intptr_t)p`).
 			ir::Ref pointer = self.gen_expr(node.cast.operand)!;
-			if (node.cast.qt.bit_sizeof(self.comp) >= 64) return pointer;
+			if (node.cast.qt.bit_sizeof(self.comp) >= 64) return self.add_un(ir::InstTag.ZEXT, pointer, node.cast.qt);
 			return self.add_un(ir::InstTag.TRUNC, pointer, node.cast.qt);
 		case INT_TO_POINTER:
+			// The result is `ptr`-typed (see POINTER_TO_INT): extend straight to it.
 			ir::Ref integer = self.gen_expr(node.cast.operand)!;
 			type_store::QualType int_type = node.cast.operand.qt(self.tree);
-			if (int_type.bit_sizeof(self.comp) >= 64) return integer;
-			ir::InstTag widen = int_type.signedness(self.comp) == lang_opts::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT;
-			return self.builder.add_inst(widen, { .ref = integer }, value_interner::REF_I64);
+			ir::InstTag widen = int_type.bit_sizeof(self.comp) >= 64 ||
+				int_type.signedness(self.comp) == lang_opts::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT;
+			return self.builder.add_inst(widen, { .ref = integer }, value_interner::REF_PTR);
 		case NULL_TO_POINTER:
 			if (!node.cast.operand.qt(self.tree).is_pointer(self.comp)) self.gen_expr(node.cast.operand)!;
 			return self.builder.add_constant(value::ZERO.ref(), value_interner::REF_PTR);

@@ -190,87 +190,101 @@ fn ir::Ref simplify_phi(ir::Inst inst, ir::Ref ref)
 	return candidate;
 }
 
-<* Worklist-driven integer identities and trivial PHIs; preserves CFG and effects. *>
-fn bool integer_simplify(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
+<* Worklist-driven peephole pass: integer identities, trivial PHIs, float
+   constant folds and instcombine rewrites share one worklist and use map.
+   Preserves CFG and effects; dead results are left for dead_instruction_elim. *>
+fn bool inst_simplify(ir::Ir* graph, ir::Decl* decl, FunctionAnalyses* cached = null)
 {
-	if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
-	Uses uses = compute_uses(decl, allocator);
-	defer uses.free();
-	DeclEditor editor;
-	editor.begin(decl, allocator);
-	bool[] remove = alloc::new_array(allocator, bool, decl.instructions.len);
-	defer alloc::free(allocator, remove.ptr);
-	bool[] queued = alloc::new_array(allocator, bool, decl.instructions.len);
-	defer alloc::free(allocator, queued.ptr);
-	remove[..] = false;
-	queued[..] = false;
-	List{ir::Ref} worklist;
-	worklist.init(allocator);
-	defer worklist.free();
-	// Seed in reverse order so the first sweep follows the original body.
-	for (sz pos = decl.body.len; pos > 0; pos--)
+	@pool()
 	{
-		ir::Ref ref = decl.body[pos - 1];
-		worklist.push(ref);
-		queued[(sz)ref] = true;
-	}
-	bool changed = false;
-	while (worklist.len())
-	{
-		ir::Ref ref = worklist.pop()!!;
-		queued[(sz)ref] = false;
-		if (remove[(sz)ref]) continue;
-		ir::Inst before = editor.insts.entries[(sz)ref];
-		ir::Ref replacement;
-		if (before.tag == ir::InstTag.PHI) { replacement = simplify_phi(before, ref); }
-		else
+		FunctionAnalyses owned_analyses;
+		FunctionAnalyses* analyses = function_analyses(cached, &owned_analyses, decl);
+		defer owned_analyses.free();
+		if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
+		Uses* uses = analyses.get_uses();
+		UseOverflow extra_uses;
+		extra_uses.init(uses.count(), mem);
+		defer extra_uses.free();
+		DeclEditor editor;
+		editor.begin(decl);
+		bool[] remove = alloc::new_array(mem, bool, decl.instructions.len);
+		defer alloc::free(mem, remove.ptr);
+		bool[] queued = alloc::new_array(tmem, bool, decl.instructions.len);
+		remove[..] = false;
+		queued[..] = false;
+		List{ir::Ref} worklist;
+		worklist.init(mem);
+		defer worklist.free();
+		// Seed in reverse order so the first sweep follows the original body.
+		for (sz pos = decl.body.len; pos > 0; pos--)
 		{
-			replacement = simplify_integer_inst(graph, &editor, ref);
-			if (replacement == ir::NONE && !scalar_has_short_value_cycle(editor.insts.array_view(), ref) &&
-				instcombine_inst(graph, &editor, ref, &replacement))
+			ir::Ref ref = decl.body[pos - 1];
+			worklist.push(ref);
+			queued[(sz)ref] = true;
+		}
+		bool changed = false;
+		while (worklist.len())
+		{
+			ir::Ref ref = worklist.pop()!!;
+			queued[(sz)ref] = false;
+			if (remove[(sz)ref]) continue;
+			ir::Inst before = editor.insts.entries[(sz)ref];
+			ir::Ref replacement;
+			if (before.tag == ir::InstTag.PHI) { replacement = simplify_phi(before, ref); }
+			else
 			{
-				changed = true;
-				@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
+				replacement = simplify_integer_inst(graph, &editor, ref);
+				if (replacement == ir::NONE) replacement = float_fold_value(graph, &editor, editor.insts.entries[(sz)ref]);
+				if (replacement == ir::NONE && !scalar_has_short_value_cycle(editor.insts.array_view(), ref) &&
+					instcombine_inst(graph, &editor, ref, &replacement))
 				{
-					if ((usz)*slot < (usz)uses.users.len) uses.users[(sz)*slot].push(ref);
-				};
-				if (!queued[(sz)ref]) { worklist.push(ref); queued[(sz)ref] = true; }
-				foreach (user_ref : uses.users[(sz)ref])
-				{
-					if (!queued[(sz)user_ref]) { worklist.push(user_ref); queued[(sz)user_ref] = true; }
+					changed = true;
+					@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
+					{
+						extra_uses.push(*slot, ref);
+					};
+					if (!queued[(sz)ref]) { worklist.push(ref); queued[(sz)ref] = true; }
+					@each_user(uses, &extra_uses, ref; ir::Ref user_ref)
+					{
+						if (!queued[(sz)user_ref]) { worklist.push(user_ref); queued[(sz)user_ref] = true; }
+					};
 				}
 			}
-		}
-		if (scalar_commutative(before.tag) && before.data.bin.lhs != editor.insts.entries[(sz)ref].data.bin.lhs)
-		{
-			changed = true;
-		}
-		if (replacement == ir::NONE || replacement == ref) continue;
-		remove[(sz)ref] = true;
-		changed = true;
-		// Update actual users and transfer their use edges to the replacement.
-		// A later simplification of the replacement must revisit these users too.
-		foreach (user_ref : uses.users[(sz)ref])
-		{
-			if (remove[(sz)user_ref]) continue;
-			bool replaced = false;
-			@each_value_operand(&editor.insts.entries[(sz)user_ref]; ir::Ref* slot)
+			if (scalar_commutative(before.tag) && before.data.bin.lhs != editor.insts.entries[(sz)ref].data.bin.lhs)
 			{
-				if (*slot == ref) { *slot = replacement; replaced = true; }
-			};
-			if (!replaced) continue;
-			if ((usz)replacement < (usz)uses.users.len) uses.users[(sz)replacement].push(user_ref);
-			if (!queued[(sz)user_ref])
-			{
-				worklist.push(user_ref);
-				queued[(sz)user_ref] = true;
+				changed = true;
 			}
+			if (replacement == ir::NONE || replacement == ref) continue;
+			remove[(sz)ref] = true;
+			changed = true;
+			// Update actual users and transfer their use edges to the replacement.
+			// A later simplification of the replacement must revisit these users too.
+			@each_user(uses, &extra_uses, ref; ir::Ref user_ref)
+			{
+				bool replaced = false;
+				if (!remove[(sz)user_ref])
+				{
+					@each_value_operand(&editor.insts.entries[(sz)user_ref]; ir::Ref* slot)
+					{
+						if (*slot == ref) { *slot = replacement; replaced = true; }
+					};
+				}
+				if (replaced)
+				{
+					extra_uses.push(replacement, user_ref);
+					if (!queued[(sz)user_ref])
+					{
+						worklist.push(user_ref);
+						queued[(sz)user_ref] = true;
+					}
+				}
+			};
 		}
-	}
-	BodyRemovalContext context = { .remove = remove };
-	editor.remove_body_where(&body_ref_marked_for_removal, &context);
-	editor.commit();
-	return changed;
+		BodyRemovalContext context = { .remove = remove };
+		editor.remove_body_where(&body_ref_marked_for_removal, &context);
+		editor.commit();
+		return changed;
+	};
 }
 
 struct ScalarExpr
@@ -334,96 +348,6 @@ fn bool scalar_expression(ir::Ir* graph, ir::Inst inst, ScalarExpr* key)
 	}
 }
 
-fn ir::Ref scalar_resolve(ir::Ref[] replacements, ir::Ref ref)
-{
-	while (replacements[(sz)ref] != ref) ref = replacements[(sz)ref];
-	return ref;
-}
-
-struct CseContext
-{
-	ir::Ir* graph;
-	DeclEditor* editor;
-	Cfg* cfg;
-	HashMap{ScalarExpr, ir::Ref} available;
-	ir::Ref[] replacements;
-	bool[] remove;
-}
-
-fn void cse_block(CseContext* context, uint block_index)
-{
-	List{ScalarExpr} inserted;
-	inserted.init(context.cfg.allocator);
-	defer inserted.free();
-	CfgBlock* block = &context.cfg.blocks[(sz)block_index];
-	sz end = block_executable_end(context.cfg.decl, block);
-	for (sz pos = block.start + 1; pos < end; pos++)
-	{
-		ir::Ref ref = context.editor.body.entries[pos];
-		ir::Inst* inst = &context.editor.insts.entries[(sz)ref];
-		@each_value_operand(inst; ir::Ref* slot) { *slot = scalar_resolve(context.replacements, *slot); };
-		ScalarExpr key;
-		if (!scalar_expression(context.graph, *inst, &key)) continue;
-		ir::Ref previous = context.available.get(key) ?? ir::NONE;
-		if (previous != ir::NONE)
-		{
-			context.replacements[(sz)ref] = previous;
-			context.remove[(sz)ref] = true;
-		}
-		else
-		{
-			context.available.set(key, ref);
-			inserted.push(key);
-		}
-	}
-	foreach (child : block.dom_children) cse_block(context, child);
-	foreach (key : inserted) context.available.set(key, ir::NONE);
-}
-
-<* Dominator-scoped CSE of integer expressions, excluding loads, calls and division. *>
-fn bool early_cse(ir::Ir* graph, ir::Decl* decl, Allocator allocator)
-{
-	if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
-	Cfg cfg = build_cfg(decl, allocator);
-	defer cfg.free();
-	if (!cfg.blocks.len) return false;
-	cfg.compute_dominators();
-	DeclEditor editor;
-	editor.begin(decl, allocator);
-	CseContext context = { .graph = graph, .editor = &editor, .cfg = &cfg };
-	context.available.init(allocator);
-	defer context.available.free();
-	context.replacements = alloc::new_array(allocator, ir::Ref, decl.instructions.len);
-	defer alloc::free(allocator, context.replacements.ptr);
-	context.remove = alloc::new_array(allocator, bool, decl.instructions.len);
-	defer alloc::free(allocator, context.remove.ptr);
-	context.remove[..] = false;
-	foreach (i, inst : decl.instructions)
-	{
-		context.replacements[i] = (ir::Ref)i;
-		if (inst.tag != ir::InstTag.CONSTANT) continue;
-		ScalarExpr key = { .tag = inst.tag, .ty = inst.ty, .a = (ir::Ref)inst.data.constant };
-		ir::Ref previous = context.available.get(key) ?? ir::NONE;
-		if (previous == ir::NONE) { context.available.set(key, (ir::Ref)i); }
-		else { context.replacements[i] = previous; }
-	}
-	cse_block(&context, 0);
-	bool changed = false;
-	foreach (ref : editor.body)
-	{
-		changed = changed || context.remove[(sz)ref];
-		// Includes backedge PHI operands whose definitions were visited later.
-		@each_value_operand(&editor.insts.entries[(sz)ref]; ir::Ref* slot)
-		{
-			*slot = scalar_resolve(context.replacements, *slot);
-		};
-	}
-	BodyRemovalContext removal = { .remove = context.remove };
-	editor.remove_body_where(&body_ref_marked_for_removal, &removal);
-	editor.commit();
-	return changed;
-}
-
 fn void cfg_redirect_target(ir::Inst* inst, ir::Ref old, ir::Ref replacement)
 {
 	switch (inst.tag)
@@ -439,7 +363,7 @@ fn void cfg_redirect_target(ir::Inst* inst, ir::Ref old, ir::Ref replacement)
 	}
 }
 
-fn bool cfg_bypass_empty(ir::Decl* decl, Cfg* cfg, uint index, Allocator allocator)
+fn bool cfg_bypass_empty(ir::Decl* decl, Cfg* cfg, uint index)
 {
 	CfgBlock* block = &cfg.blocks[(sz)index];
 	if (index == 0 || block.preds.len() == 0 || block.end != block.start + 2) return false;
@@ -465,13 +389,13 @@ fn bool cfg_bypass_empty(ir::Decl* decl, Cfg* cfg, uint index, Allocator allocat
 		}
 	}
 	DeclEditor editor;
-	editor.begin(decl, allocator);
+	editor.begin(decl);
 	for (sz pos = target.start + 1; pos < target.end; pos++)
 	{
 		ir::Inst* phi = &editor.insts.entries[(sz)decl.body[pos]];
 		if (phi.tag != ir::InstTag.PHI) break;
 		List{ir::PhiInput} inputs;
-		inputs.init(allocator);
+		inputs.init(mem);
 		ir::Ref value = ir::NONE;
 		foreach (input : phi.data.phi)
 		{
@@ -511,13 +435,12 @@ fn bool cfg_bypass_empty(ir::Decl* decl, Cfg* cfg, uint index, Allocator allocat
    with 20000 case labels lowers to that many empty blocks. A block qualifies
    when its jump target starts with no PHI, so no incoming edge needs rewriting;
    chains of such blocks resolve to their final non-forwarded target. *>
-fn bool cfg_bypass_empty_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
+fn bool cfg_bypass_empty_phi_free(ir::Decl* decl, Cfg* cfg)
 {
 	sz block_count = cfg.blocks.len;
 	if (block_count < 2) return false;
 	// forward[i]: the block i jumps to when i is removable, else NONE_BLOCK.
-	uint[] forward = alloc::new_array(allocator, uint, block_count);
-	defer alloc::free(allocator, forward.ptr);
+	uint[] forward = alloc::new_array(tmem, uint, block_count);
 	bool found = false;
 	foreach (i, &block : cfg.blocks)
 	{
@@ -536,13 +459,11 @@ fn bool cfg_bypass_empty_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
 	if (!found) return false;
 	// final_target[i]: where control from removed block i lands. A cycle of empty
 	// blocks keeps the block that closes it (it becomes the loop's only block).
-	uint[] final_target = alloc::new_array(allocator, uint, block_count);
-	defer alloc::free(allocator, final_target.ptr);
-	char[] state = alloc::new_array(allocator, char, block_count); // 0 new, 1 walking, 2 done
-	defer alloc::free(allocator, state.ptr);
+	uint[] final_target = alloc::new_array(tmem, uint, block_count);
+	char[] state = alloc::new_array(tmem, char, block_count); // 0 new, 1 walking, 2 done
 	for (sz i = 0; i < block_count; i++) { final_target[i] = (uint)i; state[i] = 0; }
 	list::List{uint} path;
-	path.init(allocator);
+	path.init(mem);
 	defer path.free();
 	for (sz start = 0; start < block_count; start++)
 	{
@@ -573,7 +494,7 @@ fn bool cfg_bypass_empty_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
 	for (sz i = 0; i < block_count; i++) if (forward[i] != NONE_BLOCK) found = true;
 	if (!found) return false;
 	DeclEditor editor;
-	editor.begin(decl, allocator);
+	editor.begin(decl);
 	editor.body.clear();
 	foreach (i, &other : cfg.blocks)
 	{
@@ -612,19 +533,18 @@ fn bool cfg_bypass_empty_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
    itself being removed. *>
 alias PhiInputList = list::List{ir::PhiInput};
 
-fn bool cfg_bypass_empty_into_phis(ir::Decl* decl, Cfg* cfg, Allocator allocator)
+fn bool cfg_bypass_empty_into_phis(ir::Decl* decl, Cfg* cfg)
 {
 	sz block_count = cfg.blocks.len;
 	if (block_count < 2) return false;
 	// forward[i]: the block removed block i jumped to, else NONE_BLOCK.
-	uint[] forward = alloc::new_array(allocator, uint, block_count);
-	defer alloc::free(allocator, forward.ptr);
+	uint[] forward = alloc::new_array(tmem, uint, block_count);
 	for (sz i = 0; i < block_count; i++) forward[i] = NONE_BLOCK;
 	bool found = false;
 	DeclEditor editor;
-	editor.begin(decl, allocator);
+	editor.begin(decl);
 	list::List{PhiInputList} working;
-	working.init(allocator);
+	working.init(mem);
 	defer
 	{
 		foreach (&inputs : working) inputs.free();
@@ -641,7 +561,7 @@ fn bool cfg_bypass_empty_into_phis(ir::Decl* decl, Cfg* cfg, Allocator allocator
 		for (sz k = 0; k < phi_count; k++)
 		{
 			PhiInputList inputs;
-			inputs.init(allocator);
+			inputs.init(mem);
 			inputs.push_all(decl.instructions[(sz)decl.body[target.start + 1 + k]].data.phi);
 			working.push(inputs);
 		}
@@ -736,7 +656,7 @@ fn bool cfg_bypass_empty_into_phis(ir::Decl* decl, Cfg* cfg, Allocator allocator
 	return true;
 }
 
-fn bool cfg_merge_successor(ir::Decl* decl, Cfg* cfg, uint index, Allocator allocator)
+fn bool cfg_merge_successor(ir::Decl* decl, Cfg* cfg, uint index)
 {
 	CfgBlock* block = &cfg.blocks[(sz)index];
 	if (block.succs.len() != 1) return false;
@@ -747,7 +667,7 @@ fn bool cfg_merge_successor(ir::Decl* decl, Cfg* cfg, uint index, Allocator allo
 	sz term = block_terminator_position(decl, block);
 	if (term < block.end && decl.instructions[(sz)decl.body[term]].tag != ir::InstTag.JMP) return false;
 	DeclEditor editor;
-	editor.begin(decl, allocator);
+	editor.begin(decl);
 	sz first = next.start + 1;
 	while (first < next.end)
 	{
@@ -793,14 +713,12 @@ fn bool cfg_merge_successor(ir::Decl* decl, Cfg* cfg, uint index, Allocator allo
    rewrite: B -> S where B has one successor, S has one predecessor and starts
    with no PHI. Reachable chains are acyclic (entry is never absorbed and a
    reachable cycle needs a second predecessor), so each chain has one head. *>
-fn bool cfg_merge_successors_phi_free(ir::Decl* decl, Cfg* cfg, Allocator allocator)
+fn bool cfg_merge_successors_phi_free(ir::Decl* decl, Cfg* cfg)
 {
 	sz block_count = cfg.blocks.len;
 	if (block_count < 2) return false;
-	uint[] next_of = alloc::new_array(allocator, uint, block_count);
-	defer alloc::free(allocator, next_of.ptr);
-	bool[] absorbed = alloc::new_array(allocator, bool, block_count);
-	defer alloc::free(allocator, absorbed.ptr);
+	uint[] next_of = alloc::new_array(tmem, uint, block_count);
+	bool[] absorbed = alloc::new_array(tmem, bool, block_count);
 	for (sz i = 0; i < block_count; i++) { next_of[i] = NONE_BLOCK; absorbed[i] = false; }
 	bool found = false;
 	foreach (i, &block : cfg.blocks)
@@ -819,11 +737,10 @@ fn bool cfg_merge_successors_phi_free(ir::Decl* decl, Cfg* cfg, Allocator alloca
 		found = true;
 	}
 	if (!found) return false;
-	uint[] head_of = alloc::new_array(allocator, uint, block_count);
-	defer alloc::free(allocator, head_of.ptr);
+	uint[] head_of = alloc::new_array(tmem, uint, block_count);
 	for (sz i = 0; i < block_count; i++) head_of[i] = (uint)i;
 	DeclEditor editor;
-	editor.begin(decl, allocator);
+	editor.begin(decl);
 	editor.body.clear();
 	foreach (i, &other : cfg.blocks)
 	{
@@ -897,35 +814,62 @@ fn bool cfg_fold_terminators(ir::Decl* decl)
 	return changed;
 }
 
-<* Delete jump-only blocks and merge single-predecessor successors to a fixpoint. *>
-fn bool simplify_cfg(ir::Decl* decl, Allocator allocator)
+<* Remove unreachable blocks, then delete jump-only blocks and merge
+   single-predecessor successors to a fixpoint. *>
+fn bool simplify_cfg(ir::Ir* graph, ir::Decl* decl, FunctionAnalyses* cached = null)
 {
-	if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
-	// Address-taken labels and computed jumps require an extended CFG model.
-	foreach (inst : decl.instructions)
+	@pool()
 	{
-		if (inst.tag == ir::InstTag.LABEL_ADDR || inst.tag == ir::InstTag.JMP_VAL) return false;
-	}
-	bool changed = false;
-	while (true)
-	{
-		changed = cfg_fold_terminators(decl) || changed;
-		Cfg cfg = build_cfg(decl, allocator);
-		bool edited = cfg_bypass_empty_phi_free(decl, &cfg, allocator) ||
-			cfg_bypass_empty_into_phis(decl, &cfg, allocator) ||
-			cfg_merge_successors_phi_free(decl, &cfg, allocator);
-		if (!edited) foreach (i, block : cfg.blocks)
+		FunctionAnalyses owned_analyses;
+		FunctionAnalyses* analyses = function_analyses(cached, &owned_analyses, decl);
+		defer owned_analyses.free();
+		if (decl.kind != ir::DeclKind.FUNCTION || !decl.body.len) return false;
+		// Unreachable-block removal models computed gotos itself, so it runs
+		// before the bail-out below.
+		bool changed = false;
+		if (remove_unreachable_blocks(decl, analyses))
 		{
-			if (!cfg.reachable[i]) continue;
-			if (cfg_bypass_empty(decl, &cfg, (uint)i, allocator) || cfg_merge_successor(decl, &cfg, (uint)i, allocator))
-			{
-				edited = true;
-				break;
-			}
+			changed = true;
+			analyses.mark_dirty();
 		}
-		cfg.free();
-		if (!edited) break;
-		changed = true;
-	}
-	return changed;
+		// Address-taken labels and computed jumps require an extended CFG model.
+		foreach (inst : decl.instructions)
+		{
+			if (inst.tag == ir::InstTag.LABEL_ADDR || inst.tag == ir::InstTag.JMP_VAL) return changed;
+		}
+		uint cfg_motion_count = 0;
+		while (true)
+		{
+			if (cfg_fold_terminators(decl))
+			{
+				changed = true;
+				analyses.mark_dirty();
+				// Folded branches are what leave blocks unreachable.
+				if (remove_unreachable_blocks(decl, analyses)) analyses.mark_dirty();
+			}
+			Cfg* cfg = analyses.get_cfg();
+			bool edited = cfg_bypass_empty_phi_free(decl, cfg) ||
+				cfg_bypass_empty_into_phis(decl, cfg) ||
+				cfg_merge_successors_phi_free(decl, cfg);
+			if (!edited && cfg_motion_count < 8)
+			{
+				edited = cfg_hoist_sink(graph, decl, cfg, analyses);
+				if (edited) cfg_motion_count++;
+			}
+			if (!edited) foreach (i, block : cfg.blocks)
+			{
+				if (!cfg.reachable[i]) continue;
+				if (cfg_bypass_empty(decl, cfg, (uint)i) || cfg_merge_successor(decl, cfg, (uint)i))
+				{
+					edited = true;
+					break;
+				}
+			}
+			if (!edited) edited = cfg_if_convert(graph, decl, cfg, analyses);
+			if (!edited) break;
+			analyses.mark_dirty();
+			changed = true;
+		}
+		return changed;
+	};
 }

@@ -163,7 +163,10 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 	{
 		Lowering lowering = { .ir = ir, .errors = errors, .spill_all = spill_all };
 		lowering.strings.init(tmem);
-		lowering.lines.init(tmem);
+		lowering.lines.init(mem);
+		defer lowering.lines.free();
+		lowering.scratch.init(mem, 64 * 1024);
+		defer lowering.scratch.free();
 		List{String} names; names.init(tmem);
 		List{PendingRelocation} relocations; relocations.init(tmem);
 		List{char} encoded; encoded.init(tmem);

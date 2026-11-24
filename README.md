@@ -28,6 +28,26 @@ The new backend will reuse parts of the self-hosted Zig compiler.
 
 [#542](https://github.com/Vexu/arocc/issues/542)
 
+### Optional optimizer in the C3 compiler
+
+The C3 compiler includes IR optimization by default. Build it without the
+transformation passes using:
+
+```sh
+bazel build //:aro_c3 --define=aro_optimizer=false
+```
+
+This build still generates, verifies, and lowers IR. Optimization flags such
+as `-O2` produce one warning per invocation and fall back to `-O0`, including
+the optimization-related predefined macros. Build without the define to
+include the optimizer again. `--verify-ir` works in either build, also at `-O0`.
+
+The driver calls the same `ir_opt::run` interface in both builds; the build
+selects either the transformation implementation or a stub. CFG analysis and
+verification live in `aro::backend::ir_support`. Source distributions contain
+the implementation selected when the archive was built. When assembling
+sources manually, include exactly one optimizer implementation.
+
 ## Using aro as a module
 
 The following assumes that your package has a `build.zig.zon` file.

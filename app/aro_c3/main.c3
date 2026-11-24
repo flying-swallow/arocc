@@ -129,7 +129,23 @@ fn void stack_limit_increase(ulong pref)
 <* GCC uses 64 MiB (128 MiB under ASan). *>
 const ulong STACK_LIMIT = 64 * 1024 * 1024;
 
+<* Initial size of the thread's top-level temp allocator. The optimizer and
+   x86 lowering open nested `@pool`s per pass and per function; the stdlib
+   default (256 KiB) overflows on large functions, and every overflowing pool
+   then mallocs and frees its own chunk. *>
+const usz TEMP_ALLOCATOR_SIZE = 8 * 1024 * 1024;
+
 fn int main(String[] args)
+{
+	int result;
+	@pool_init(mem, TEMP_ALLOCATOR_SIZE)
+	{
+		result = aro_main(args);
+	};
+	return result;
+}
+
+fn int aro_main(String[] args)
 {
 	stack_limit_increase(STACK_LIMIT);
 	Diagnostics diagnostics;

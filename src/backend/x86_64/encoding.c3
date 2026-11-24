@@ -148,6 +148,9 @@ struct Memory
 {
 	MemBase base_kind;
 	Register base;
+	Register index;
+	char scale;
+	bool has_index;
 	int disp;
 	String name;
 	ushort bits;
@@ -180,6 +183,7 @@ struct Operand
 fn Operand reg_op(Register reg) => { .kind = REG, .reg = reg };
 fn Operand imm_op(long value) => { .kind = IMM, .imm = value };
 fn Operand mem_op(Register base, int disp, ushort bits) => { .kind = MEM, .mem = { .base_kind = REG, .base = base, .disp = disp, .bits = bits } };
+fn Operand sib_mem_op(Register base, Register index, char scale, int disp, ushort bits) => { .kind = MEM, .mem = { .base_kind = REG, .base = base, .index = index, .scale = scale, .has_index = true, .disp = disp, .bits = bits } };
 fn Operand symbol_mem_op(String name, ushort bits = 0) => { .kind = MEM, .mem = { .base_kind = SYMBOL, .base = RIP, .name = name, .bits = bits } };
 fn Operand got_symbol_mem_op(String name, ushort bits = 64) => { .kind = MEM, .mem = { .base_kind = SYMBOL, .base = RIP, .name = name, .bits = bits, .gotpc = true } };
 fn Operand label_mem_op(String name, ushort bits = 0) => { .kind = MEM, .mem = { .base_kind = LABEL, .base = RIP, .name = name, .bits = bits } };
@@ -264,6 +268,15 @@ fn usz Entry.estimate_len(&self)
 	return len;
 }
 
+<* `imul r, imm` is an assembler alias of `imul r, r, imm` with no table row of
+   its own; expand it into `buf` so lookup and encoding see the RMI form. *>
+fn Operand[] expand_imul_alias(Mnemonic mnemonic, Operand[] ops, Operand[3]* buf)
+{
+	if (mnemonic != IMUL || ops.len != 2 || ops[0].kind != REG || ops[1].kind != IMM) return ops;
+	*buf = { ops[0], ops[0], ops[1] };
+	return (*buf)[..];
+}
+
 <*
  Zig `Encoding.findByMnemonic`: the shortest table row for `mnemonic` whose
  operand classes accept `ops`, or NO_ENCODING. A row needing a REX prefix is
@@ -271,6 +284,8 @@ fn usz Entry.estimate_len(&self)
 *>
 fn Entry? find(Mnemonic mnemonic, Operand[] ops)
 {
+	Operand[3] alias_buf;
+	ops = expand_imul_alias(mnemonic, ops, &alias_buf);
 	Op[4] input = { Op.NONE, Op.NONE, Op.NONE, Op.NONE };
 	bool rex_required = false;
 	foreach (i, op : ops)

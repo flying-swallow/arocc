@@ -645,6 +645,8 @@ fn void? Preprocessor.init(&self, Compilation* comp, InitOptions options, FilePr
 *>
 fn void Preprocessor.free(&self)
 {
+	// Idempotent: the driver releases the preprocessor early, before its defer runs.
+	if (!self.comp) return;
 	Allocator gpa = self.comp.gpa;
 	self.defines.free();
 	self.tokens.free();

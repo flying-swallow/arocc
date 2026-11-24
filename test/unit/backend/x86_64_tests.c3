@@ -61,6 +61,7 @@ fn void encode_zi_and_immediate_modrm_rows() @test
 	assert_encoded(ADD, { x86_64::reg_op(RAX), x86_64::imm_op(5) }, (char[]){ 0x48, 0x83, 0xc0, 0x05 });
 	// imul rax, 5 (two-operand immediate form)
 	assert_encoded(IMUL, { x86_64::reg_op(RAX), x86_64::imm_op(5) }, (char[]){ 0x48, 0x6b, 0xc0, 0x05 });
+	assert_encoded(IMUL, { x86_64::reg_op(ECX), x86_64::imm_op(1000) }, (char[]){ 0x69, 0xc9, 0xe8, 0x03, 0x00, 0x00 });
 	// sub rsp, 32
 	assert_encoded(SUB, { x86_64::reg_op(RSP), x86_64::imm_op(32) }, (char[]){ 0x48, 0x83, 0xec, 0x20 });
 	// and ecx, 100000
@@ -94,6 +95,12 @@ fn void encode_mr_rm_and_sib_rows() @test
 	assert_encoded(MOV, { x86_64::mem_op(RCX, 0, 8), x86_64::reg_op(AL) }, (char[]){ 0x88, 0x01 });
 	// mov qword ptr [rsp + 8], rax
 	assert_encoded(MOV, { x86_64::mem_op(RSP, 8, 64), x86_64::reg_op(RAX) }, (char[]){ 0x48, 0x89, 0x44, 0x24, 0x08 });
+	// Indexed addressing uses the SIB scale and signed displacement fields.
+	assert_encoded(MOV, { x86_64::sib_mem_op(RAX, RCX, 4, 8, 64), x86_64::reg_op(RDX) },
+		(char[]){ 0x48, 0x89, 0x54, 0x88, 0x08 });
+	// R12 as an index is distinguished from the no-index encoding by REX.X.
+	assert_encoded(MOV, { x86_64::sib_mem_op(RAX, R12, 2, 0, 64), x86_64::reg_op(RDX) },
+		(char[]){ 0x4a, 0x89, 0x14, 0x60 });
 	// mov eax, dword ptr [rbp - 8]
 	assert_encoded(MOV, { x86_64::reg_op(EAX), x86_64::mem_op(RBP, -8, 32) }, (char[]){ 0x8b, 0x45, 0xf8 });
 	// mov rax, qword ptr [r13]
@@ -104,6 +111,15 @@ fn void encode_mr_rm_and_sib_rows() @test
 	assert_encoded(IMUL, { x86_64::reg_op(EAX), x86_64::reg_op(ECX) }, (char[]){ 0x0f, 0xaf, 0xc1 });
 	// lea rax, [rbp - 16]
 	assert_encoded(LEA, { x86_64::reg_op(RAX), x86_64::mem_op(RBP, -16, 0) }, (char[]){ 0x48, 0x8d, 0x45, 0xf0 });
+}
+
+fn void emits_indexed_memory_in_intel_syntax() @test
+{
+	DString text;
+	text.init(tmem);
+	defer text.free();
+	x86_64::write_operand(&text, x86_64::sib_mem_op(RSP, R9, 8, -16, 64));
+	assert(text.str_view() == "qword ptr [rsp + r9*8 - 16]");
 }
 
 fn void encode_opcode_register_and_zero_operand_rows() @test
@@ -260,6 +276,235 @@ fn void registers_and_conditions_follow_bits_zig() @test
 	foreach (cc : Condition::values) assert(cc.negated.negated == cc, "%s", cc);
 	assert(Condition.L.negated == GE && Condition.B.set == SETB && Condition.A.jump == JA);
 	assert(Condition.P.negated == NP && Condition.NP.set == SETNP && Condition.P.jump == JP);
+}
+
+fn void lowers_indexed_loads_with_x86_scales() @test
+{
+	// Keep the pointer arithmetic in hand-built IR so this exercises address
+	// selection directly, independent of the C frontend's array lowering.
+	foreach (uint scale : { 1, 2, 4, 8 })
+	{
+		Fixture f;
+		f.init();
+		defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+		f.builder.start_fn();
+		ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+		ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+		ir::Ref scaled = index;
+		if (scale != 1)
+		{
+			ir::Ref factor = f.builder.add_constant(f.interner.put(primitive_value::int_key((long)scale)), value_interner::REF_I64);
+			scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = factor } }, value_interner::REF_I64);
+		}
+		ir::Ref address = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+		ir::Ref value = f.builder.add_load(address, value_interner::REF_I32);
+		f.builder.add_return(value);
+		f.builder.finish_fn("indexed_load");
+
+		ir::ErrorList errors;
+		errors.init(&f.ta);
+		defer errors.free();
+		String text = render(&f, &errors, true)!!;
+		defer alloc::free(&f.ta, text.ptr);
+		if (scale == 1)
+		{
+			assert(text.contains("dword ptr [") && text.contains(" + ") && !text.contains("imul") && !text.contains("lea "),
+				"plain pointer-plus-index uses a scale-one indexed memory operand directly");
+		}
+		else
+		{
+			String scaled_address = string::tformat("*%d]", scale);
+			assert(text.contains(scaled_address), "scale %d is represented in the indexed memory address", scale);
+		}
+	}
+}
+
+fn void lowers_indexed_store_and_materializes_address_with_lea() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = eight } }, value_interner::REF_I64);
+	ir::Ref offset = f.builder.add_constant(f.interner.put(primitive_value::int_key(12)), value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	address = f.builder.add_inst(ADD, { .bin = { .lhs = address, .rhs = offset } }, value_interner::REF_PTR);
+	ir::Ref value = f.builder.add_arg(value_interner::REF_I64);
+	// The store can use the indexed memory operand directly, while returning the
+	// same pointer requires its value to be materialized with LEA.
+	f.builder.add_store(address, value);
+	f.builder.add_return(address);
+	f.builder.finish_fn("indexed_store_and_address");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("mov qword ptr [") && text.contains("lea "),
+		"indexed STORE uses a memory operand and pointer return emits LEA");
+	assert(count_sequence(text, (char[]){ '*', '8', ' ', '+', ' ', '1', '2', ']' }) == 2,
+		"both the STORE memory operand and LEA use index scale eight and displacement twelve");
+}
+
+fn void indexed_address_rejects_unsupported_scale() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref three = f.builder.add_constant(f.interner.put(primitive_value::int_key(3)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = three } }, value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	ir::Ref loaded = f.builder.add_load(address, value_interner::REF_I32);
+	f.builder.add_return(loaded);
+	f.builder.finish_fn("indexed_unsupported_scale");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("imul") && !text.contains("*3]"),
+		"unsupported scale three stays as explicit multiplication and pointer arithmetic");
+}
+
+fn void indexed_address_folding_preserves_displacement_and_shared_values() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref four = f.builder.add_constant(f.interner.put(primitive_value::int_key(4)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = four } }, value_interner::REF_I64);
+	ir::Ref indexed = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	ir::Ref field = f.builder.add_constant(f.interner.put(primitive_value::int_key(12)), value_interner::REF_I64);
+	ir::Ref member = f.builder.add_inst(ADD, { .bin = { .lhs = indexed, .rhs = field } }, value_interner::REF_PTR);
+	ir::Ref loaded = f.builder.add_load(member, value_interner::REF_I64);
+	// A second use means the scaled value must remain available as an ordinary
+	// value, even if the load's address can use an indexed memory operand.
+	ir::Ref also_scaled = f.builder.add_inst(ADD, { .bin = { .lhs = scaled, .rhs = field } }, value_interner::REF_I64);
+	ir::Ref result = f.builder.add_inst(ADD, { .bin = { .lhs = loaded, .rhs = also_scaled } }, value_interner::REF_I64);
+	f.builder.add_return(result);
+	f.builder.finish_fn("indexed_shared_value");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("*4 + 12]"), "the struct-member byte offset remains a displacement after index scaling");
+	assert(text.contains("imul"), "a scaled index with another use remains available as a value");
+}
+
+fn void indexed_address_folding_handles_large_displacement_fallback() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = eight } }, value_interner::REF_I64);
+	ir::Ref indexed = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	ir::Ref large = f.builder.add_constant(f.interner.put(primitive_value::int_key(40000)), value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { .lhs = indexed, .rhs = large } }, value_interner::REF_PTR);
+	ir::Ref loaded = f.builder.add_load(address, value_interner::REF_I64);
+	f.builder.add_return(loaded);
+	f.builder.finish_fn("indexed_large_displacement");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("*8 + 40000]"), "large offsets are retained as a 32-bit memory displacement");
+}
+
+fn void indexed_address_folding_remains_correct_with_spill_all() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = eight } }, value_interner::REF_I64);
+	ir::Ref indexed = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	ir::Ref loaded = f.builder.add_load(indexed, value_interner::REF_I64);
+	f.builder.add_return(loaded);
+	f.builder.finish_fn("indexed_spill_all");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("*8]"), "spill-all lowering retains the indexed memory address");
+	assert(text.contains("mov rax, qword ptr"), "spill-all lowering still performs the indexed load");
+}
+
+fn void atomic_load_does_not_fold_indexed_pointer_into_memory_operand() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = eight } }, value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	ir::Ref value = f.builder.add_atomic_load(address, ir::AtomicOrder.ACQUIRE, value_interner::REF_I64);
+	f.builder.add_return(value);
+	f.builder.finish_fn("atomic_indexed_load");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("lea rax, [") && text.contains("*8]"),
+		"the ADD+MUL address is materialized with LEA before the atomic load");
+	assert(text.contains("mov rax, qword ptr [rcx]"),
+		"the atomic load dereferences its materialized pointer instead of folding the address into memory");
+}
+
+fn void indexed_address_folding_falls_back_above_signed_disp32() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { .lhs = index, .rhs = eight } }, value_interner::REF_I64);
+	ir::Ref indexed = f.builder.add_inst(ADD, { .bin = { .lhs = base, .rhs = scaled } }, value_interner::REF_PTR);
+	// This is hand-built IR only: the address is never dereferenced at runtime.
+	ir::Ref large = f.builder.add_constant(f.interner.put(primitive_value::int_key(2147483648L)), value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { .lhs = indexed, .rhs = large } }, value_interner::REF_PTR);
+	ir::Ref loaded = f.builder.add_load(address, value_interner::REF_I64);
+	f.builder.add_return(loaded);
+	f.builder.finish_fn("indexed_disp32_fallback");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(!text.contains("*8 + 2147483648]"), "out-of-range offset is not encoded as a signed disp32");
+	assert(text.contains("2147483648"), "fallback lowering materializes the full 64-bit displacement");
+	assert(text.contains("imul") && text.contains("add"), "fallback lowering computes the index and pointer addition explicitly");
 }
 
 struct Fixture
@@ -1033,6 +1278,45 @@ fn void lowers_signed_i1_predicates_after_boolean_sign_interpretation() @test
 		"all four inverted unsigned predicates store one result for each boolean input pair");
 }
 
+
+fn String render_signed_compare(Fixture* f, ir::ErrorList* errors, value_interner::InternerRef ty)
+{
+	ir::Ref a = f.builder.add_arg(ty);
+	ir::Ref b = f.builder.add_arg(ty);
+	f.builder.start_fn();
+	f.builder.add_return(f.builder.add_inst(CMP_SLT, { .bin = { a, b } }, value_interner::REF_I1));
+	f.builder.finish_fn("signed_compare");
+	return render(f, errors, true)!!;
+}
+
+fn void signed_compare_sign_extends_odd_widths_only() @test
+{
+	value_interner::InternerRef[3] types;
+	bool[3] expect_sar = { true, false, false };
+	for (usz i = 0; i < 3; i++)
+	{
+		Fixture f;
+		f.init();
+		defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+		types = { f.interner.put({ .tag = primitive_value::PrimitiveType.INT_TY, .ty_bits = 17 }), value_interner::REF_I8, value_interner::REF_I32 };
+		ir::ErrorList errors;
+		errors.init(&f.ta);
+		defer errors.free();
+		String text = render_signed_compare(&f, &errors, types[i]);
+		defer alloc::free(&f.ta, text.ptr);
+		sz sar_at = text.index_of("\tsar ") ?? -1;
+		sz cmp_at = text.index_of("\tcmp ") ?? -1;
+		assert(cmp_at >= 0, "signed compare should emit cmp");
+		if (expect_sar[i])
+		{
+			assert(sar_at >= 0 && sar_at < cmp_at, "an i17 signed compare must sign-extend its operands before cmp");
+		}
+		else
+		{
+			assert(sar_at < 0, "native-width signed compares need no sign extension");
+		}
+	}
+}
 
 fn void lowers_seven_i32_call_with_sixteen_byte_stack_padding() @test
 {

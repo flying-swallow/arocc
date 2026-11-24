@@ -12,7 +12,7 @@ const Ref NONE = (Ref)uint::max;
  unsigned tags (IR integer types carry only a bit width), so a target can map
  each tag to one machine instruction.
 *>
-enum InstTag : char (String name)
+enum InstTag : char(String name)
 {
 	CONSTANT { "constant" },
 	ARG { "arg" },
@@ -102,7 +102,7 @@ enum InstTag : char (String name)
 }
 
 <* C11 / GCC `__ATOMIC_*` memory orders, as stored in `AtomicData.order`. *>
-enum AtomicOrder : char (String name)
+enum AtomicOrder : char(String name)
 {
 	RELAXED { "relaxed" },
 	CONSUME { "consume" },
@@ -134,17 +134,57 @@ fn InstTag? inverse_compare(InstTag tag)
 	}
 }
 
-struct BinData { Ref lhs; Ref rhs; }
+struct BinData
+{
+	Ref lhs; Ref rhs;
+}
+
 // Keep existing values stable: SSE_REGISTER is appended after the original ABI locations.
-enum ArgLocationKind : char { ORDINAL, GP_REGISTER, STACK, SSE_REGISTER }
-struct ArgData { ArgLocationKind location_kind; uint location; uint stack_size; bool stack_address; }
-struct AllocData { uint size; uint align; bool is_volatile; }
-struct DynAllocData { Ref size; uint align; }
-struct AtomicData { Ref ptr; Ref val; AtomicOrder order; }
-struct BranchData { Ref cond; Ref then_label; Ref else_label; }
-struct SwitchData { Ref target; value_interner::InternerRef[] values; Ref[] labels; Ref default_label; }
-struct CallData { Ref func; Ref[] args; bool[] stack_only; uint[] memory_copy_bytes; }
-struct PhiInput { Ref label; Ref value; }
+enum ArgLocationKind : char
+{
+	ORDINAL, GP_REGISTER, STACK, SSE_REGISTER
+}
+
+struct ArgData
+{
+	ArgLocationKind location_kind; uint location; uint stack_size; bool stack_address;
+}
+
+struct AllocData
+{
+	uint size; uint align; bool is_volatile;
+}
+
+struct DynAllocData
+{
+	Ref size; uint align;
+}
+
+struct AtomicData
+{
+	Ref ptr; Ref val; AtomicOrder order;
+}
+
+struct BranchData
+{
+	Ref cond; Ref then_label; Ref else_label;
+}
+
+struct SwitchData
+{
+	Ref target; value_interner::InternerRef[] values; Ref[] labels; Ref default_label;
+}
+
+struct CallData
+{
+	Ref func; Ref[] args; bool[] stack_only; uint[] memory_copy_bytes;
+}
+
+struct PhiInput
+{
+	Ref label; 
+	Ref value;
+}
 
 enum DeclKind : char
 {
@@ -163,10 +203,13 @@ enum DeclKind : char
    to `{}` so downstream users stay conservative. *>
 struct FnAttrs
 {
-	bool computed;
-	bool readnone;
-	bool readonly;
-	bool will_return;
+	bitstruct : char
+	{
+		bool computed : 0;
+		bool readnone : 1;
+		bool readonly : 2;
+		bool will_return : 3;
+	}
 	ulong arg_nocapture;
 	ulong arg_noread;
 	ulong arg_nowrite;
@@ -233,7 +276,13 @@ struct InstData
 <* `is_volatile` marks a volatile LOAD/STORE (C volatile-qualified lvalue): the
    access is observable and must not be removed, merged, reordered with other
    volatile accesses, or promoted, whatever its address. Ignored on other tags. *>
-struct Inst { InstTag tag; bool is_volatile; InstData data; value_interner::InternerRef ty; }
+struct Inst
+{
+	InstTag tag; 
+	bool is_volatile; 
+	InstData data; 
+	value_interner::InternerRef ty;
+}
 
 <* A volatile LOAD or STORE. *>
 fn bool Inst.is_volatile_access(&self) => self.is_volatile && (self.tag == InstTag.LOAD || self.tag == InstTag.STORE);
@@ -264,18 +313,21 @@ struct Decl
 	Allocator allocator;
 	DynamicArenaAllocator arena;
 	String name;
-	DeclKind kind;
-	Linkage linkage;
-	<* A weak symbol (C `__attribute__((weak))`): another object may provide the
-	   definition the program uses, so optimizations must not rely on this body.
-	   Only meaningful with EXTERNAL linkage. *>
-	bool is_weak;
-	<* C `used`: referenced from outside the IR (e.g. inline asm), so the symbol is
-	   kept and emitted even when internal and otherwise unreferenced. *>
-	bool retain;
-	StaticInit static_init;
-	ushort init_priority;
-	InlineHint inline_hint;
+	bitstruct : uint
+	{
+		ushort init_priority : 0..15;
+		DeclKind kind : 16..16;
+		Linkage linkage : 17..17;
+		<* A weak symbol (C `__attribute__((weak))`): another object may provide the
+		   definition the program uses, so optimizations must not rely on this body.
+		   Only meaningful with EXTERNAL linkage. *>
+		bool is_weak : 18;
+		<* C `used`: referenced from outside the IR (e.g. inline asm), so the symbol is
+		   kept and emitted even when internal and otherwise unreferenced. *>
+		bool retain : 19;
+		StaticInit static_init : 20..21;
+		InlineHint inline_hint : 22..23;
+	}
 	<* Conservatively inferred properties for a function definition. *>
 	FnAttrs attrs;
 	Inst[] instructions;
@@ -311,6 +363,8 @@ struct Ir
 	List{Decl} decls;
 	<* Byte order of `GlobalData.bytes` (the target's). Hand-built IR defaults to little-endian. *>
 	bool big_endian;
+	<* Optional `ir_opt::DeclLookup*` installed by the optimizer while the decl list is stable. *>
+	void* decl_lookup;
 }
 
 fn void Ir.init(&self, Allocator allocator, value_interner::Interner* interner)
@@ -363,7 +417,12 @@ fn bool Builder.block_terminated(&self)
 	if (self.body.len() == 0) return false;
 	switch (self.instructions[(sz)self.body[self.body.len() - 1]].tag)
 	{
-		case JMP: case BRANCH: case SWITCH: case RET: case RET_PAIR: case JMP_VAL: return true;
+		case JMP:
+		case BRANCH:
+		case SWITCH:
+		case RET:
+		case RET_PAIR:
+		case JMP_VAL: return true;
 		default: return false;
 	}
 }
@@ -412,7 +471,11 @@ fn void Builder.insert_body(&self, sz at, Ref ref)
 
 fn Ref Builder.add_arg(&self, value_interner::InternerRef ty)
 {
-	Ref ref = self.append({ .tag = ARG, .data.arg = { .location_kind = ArgLocationKind.ORDINAL }, .ty = ty });
+	Ref ref = self.append(
+	{
+		.tag = ARG, .data.arg = { .location_kind = ArgLocationKind.ORDINAL }, .ty = ty
+	}
+	);
 	self.insert_body((sz)self.arg_count, ref);
 	self.arg_count++;
 	return ref;
@@ -435,7 +498,11 @@ fn Ref Builder.add_arg_at(&self, value_interner::InternerRef ty, ArgLocationKind
 	assert(location_kind != ArgLocationKind.STACK || stack_size <= (uint)(int::max - 16));
 	assert(location_kind != ArgLocationKind.STACK || location <= (uint)(int::max - 16) - stack_size);
 	assert(!stack_address || location_kind == ArgLocationKind.STACK);
-	Ref ref = self.append({ .tag = ARG, .data.arg = { location_kind, location, stack_size, stack_address }, .ty = ty });
+	Ref ref = self.append(
+	{
+		.tag = ARG, .data.arg = { location_kind, location, stack_size, stack_address }, .ty = ty
+	}
+	);
 	self.insert_body((sz)self.arg_count, ref);
 	self.arg_count++;
 	return ref;
@@ -443,7 +510,11 @@ fn Ref Builder.add_arg_at(&self, value_interner::InternerRef ty, ArgLocationKind
 
 fn Ref Builder.add_alloc(&self, uint size, uint align, bool is_volatile = false)
 {
-	Ref ref = self.append({ .tag = ALLOC, .data.alloc = { .size = size, .align = align, .is_volatile = is_volatile }, .ty = value_interner::REF_PTR });
+	Ref ref = self.append(
+	{
+		.tag = ALLOC, .data.alloc = { .size = size, .align = align, .is_volatile = is_volatile }, .ty = value_interner::REF_PTR
+	}
+	);
 	self.insert_body((sz)(self.arg_count + self.alloc_count + 1), ref);
 	self.alloc_count++;
 	return ref;
@@ -451,10 +522,10 @@ fn Ref Builder.add_alloc(&self, uint size, uint align, bool is_volatile = false)
 
 <* `size` is an i64 byte count; the result is emitted at the current position, not hoisted. *>
 fn Ref Builder.add_dyn_alloc(&self, Ref size, uint align)
-	=> self.add_inst(DYN_ALLOC, { .dyn_alloc = { .size = size, .align = align } }, value_interner::REF_PTR);
+=> self.add_inst(DYN_ALLOC, { .dyn_alloc = { .size = size, .align = align } }, value_interner::REF_PTR);
 
 fn Ref Builder.add_stack_save(&self)
-	=> self.add_inst(STACK_SAVE, { .none = 0 }, value_interner::REF_PTR);
+=> self.add_inst(STACK_SAVE, { .none = 0 }, value_interner::REF_PTR);
 
 fn void Builder.add_stack_restore(&self, Ref saved)
 {
@@ -463,7 +534,7 @@ fn void Builder.add_stack_restore(&self, Ref saved)
 }
 
 fn Ref Builder.add_atomic_load(&self, Ref ptr, AtomicOrder order, value_interner::InternerRef ty)
-	=> self.add_inst(ATOMIC_LOAD, { .atomic = { .ptr = ptr, .val = NONE, .order = order } }, ty);
+=> self.add_inst(ATOMIC_LOAD, { .atomic = { .ptr = ptr, .val = NONE, .order = order } }, ty);
 
 fn void Builder.add_atomic_store(&self, Ref ptr, Ref val, AtomicOrder order)
 {
@@ -479,13 +550,22 @@ fn void Builder.add_fence(&self, AtomicOrder order)
 
 fn Ref Builder.add_inst(&self, InstTag tag, InstData data, value_interner::InternerRef ty)
 {
-	Ref ref = self.append({ .tag = tag, .data = data, .ty = ty });
+	Ref ref = self.append(
+	{
+		.tag = tag, .data = data, .ty = ty
+	}
+	);
 	self.body.push(ref);
 	return ref;
 }
 
 fn Ref Builder.make_label(&self, String name)
-	=> self.append({ .tag = LABEL, .data.label = name, .ty = value_interner::REF_VOID });
+=> self.append(
+{
+	.tag = LABEL, .data.label = name, .ty = value_interner::REF_VOID
+}
+
+);
 
 fn void Builder.start_fn(&self)
 {
@@ -514,22 +594,40 @@ fn void Builder.add_branch(&self, Ref cond, Ref then_label, Ref else_label)
 
 fn void Builder.add_store(&self, Ref ptr, Ref val, bool is_volatile = false)
 {
-	Ref ref = self.append({ .tag = STORE, .is_volatile = is_volatile, .data.bin = { ptr, val }, .ty = value_interner::REF_VOID });
+	Ref ref = self.append(
+	{
+		.tag = STORE, .is_volatile = is_volatile, .data.bin = { ptr, val }, .ty = value_interner::REF_VOID
+	}
+	);
 	self.body.push(ref);
 }
 
 fn Ref Builder.add_load(&self, Ref ptr, value_interner::InternerRef ty, bool is_volatile = false)
 {
-	Ref ref = self.append({ .tag = LOAD, .is_volatile = is_volatile, .data.ref = ptr, .ty = ty });
+	Ref ref = self.append(
+	{
+		.tag = LOAD, .is_volatile = is_volatile, .data.ref = ptr, .ty = ty
+	}
+	);
 	self.body.push(ref);
 	return ref;
 }
 
 fn Ref Builder.add_constant(&self, value_interner::InternerRef val, value_interner::InternerRef ty)
-	=> self.append({ .tag = CONSTANT, .data.constant = val, .ty = ty });
+=> self.append(
+{
+	.tag = CONSTANT, .data.constant = val, .ty = ty
+}
+
+);
 
 fn Ref Builder.add_symbol(&self, String name, value_interner::InternerRef ty)
-	=> self.append({ .tag = SYMBOL, .data.label = name.copy(&self.arena), .ty = ty });
+=> self.append(
+{
+	.tag = SYMBOL, .data.label = name.copy(&self.arena), .ty = ty
+}
+
+);
 
 fn Ref Builder.add_phi(&self, PhiInput[] inputs, value_interner::InternerRef ty)
 {
@@ -542,7 +640,10 @@ fn Ref Builder.add_call(&self, Ref func, Ref[] args, value_interner::InternerRef
 {
 	bool[] stack_only = alloc::new_array(&self.arena, bool, args.len);
 	uint[] memory_copy_bytes = alloc::new_array(&self.arena, uint, args.len);
-	for (usz i = 0; i < args.len; i++) { stack_only[i] = false; memory_copy_bytes[i] = 0; }
+	for (usz i = 0; i < args.len; i++)
+	{
+		stack_only[i] = false; memory_copy_bytes[i] = 0;
+	}
 	return self.add_call_abi(func, args, stack_only, memory_copy_bytes, ty);
 }
 
@@ -566,7 +667,7 @@ fn Ref Builder.add_call_hi(&self, Ref call)
 	assert((usz)call < (usz)self.instructions.len(), "CALL_HI must reference an existing instruction");
 	assert(self.instructions[(sz)call].tag == CALL, "CALL_HI must reference a CALL");
 	assert(self.body.len() != 0 && self.body[(sz)(self.body.len() - 1)] == call,
-		"CALL_HI must be added immediately after its CALL");
+	"CALL_HI must be added immediately after its CALL");
 	return self.add_inst(CALL_HI, { .ref = call }, value_interner::REF_I64);
 }
 
@@ -588,7 +689,7 @@ fn void Builder.add_switch(&self, Ref target, value_interner::InternerRef[] valu
 }
 
 fn Ref Builder.add_select(&self, Ref cond, Ref then_value, Ref else_value, value_interner::InternerRef ty)
-	=> self.add_inst(SELECT, { .branch = { cond, then_value, else_value } }, ty);
+=> self.add_inst(SELECT, { .branch = { cond, then_value, else_value } }, ty);
 
 fn void Builder.add_return(&self, Ref value)
 {
@@ -614,7 +715,7 @@ fn void Builder.merge_global(&self, Decl decl)
 		Decl* existing = &self.decls.entries[(sz)index];
 
 		Linkage merged_linkage = (existing.linkage == Linkage.INTERNAL || decl.linkage == Linkage.INTERNAL) ?
-			Linkage.INTERNAL : Linkage.EXTERNAL;
+		Linkage.INTERNAL : Linkage.EXTERNAL;
 		// Weak on any declaration makes the symbol weak (GCC semantics).
 		bool merged_weak = existing.is_weak || decl.is_weak;
 		bool merged_retain = existing.retain || decl.retain;

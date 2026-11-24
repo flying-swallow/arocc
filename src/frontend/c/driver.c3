@@ -1306,7 +1306,7 @@ fn void? invoke_linker(Compilation* comp, Diagnostics* d, toolchain::Toolchain* 
 
 fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	toolchain::Toolchain* tc, driver_tempfiles::DriverTempFiles* temp_files,
-	List{String} * link_objects, Source source, tree::Tree* ast,
+	List{String} * link_objects, Source source, parser::Parser* parser, tree::Tree* ast,
 	preprocessor::Preprocessor* pp, bool link_mode)
 {
 	if (comp.target.ofmt != target::ObjectFormat.ELF || comp.target.cpu.arch != target::Arch.X86_64)
@@ -1338,6 +1338,13 @@ fn int process_backend_source(Compilation* comp, Diagnostics* d, DriverOptions* 
 	}
 	ir::Ir generated_ir = ir_opt;
 	defer generated_ir.free();
+	// The IR owns copies of everything it needs (names, payloads) and diagnostics
+	// own their text, so the token streams, expansion tables and AST can go now
+	// instead of staying resident through the optimizer and backend. The
+	// caller's deferred frees then see emptied structs.
+	ast.free();
+	parser.free();
+	pp.free();
 	if (opts.codegen_todo_report)
 	{
 		return report_ir_todos(comp, d, opts, link_mode, &generated_ir, &todo_report);
@@ -1411,8 +1418,15 @@ fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	defer errors.free();
 	fault opt_fault = @catch(ir_opt::run(generated_ir,
 			{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
-			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode) },
+			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode),
+			.compact = true },
 		&errors));
+	// Drop optimizer tombstones and dead payloads before the backend runs.
+	if (!opt_fault)
+	{
+		ir_opt::compact(generated_ir);
+		if (opts.verify_ir && !ir_opt::verify(generated_ir, &errors)) opt_fault = ir_opt::VERIFY_FAIL;
+	}
 	if (opt_fault)
 	{
 		String error_value = errors.len() == 0 ? "unknown IR optimization error" : errors.message_at(0);
@@ -1463,8 +1477,15 @@ fn int report_ir_todos(Compilation* comp, Diagnostics* d, DriverOptions* opts, b
 	defer errors.free();
 	fault opt_fault = @catch(ir_opt::run(generated_ir,
 			{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
-			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode) },
+			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode),
+			.compact = true },
 		&errors));
+	// Drop optimizer tombstones and dead payloads before the backend runs.
+	if (!opt_fault)
+	{
+		ir_opt::compact(generated_ir);
+		if (opts.verify_ir && !ir_opt::verify(generated_ir, &errors)) opt_fault = ir_opt::VERIFY_FAIL;
+	}
 	if (opt_fault)
 	{
 		String error_value = errors.len() == 0 ? "unknown IR optimization error" : errors.message_at(0);
@@ -1827,7 +1848,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 	if (d.errors != errors_before) return 1;
 	if (opts.only_syntax) return 0;
 	if (wp != null) return merge_tu(comp, d, wp, &result, &pp, tu_id, main_source);
-	return process_backend_source(comp, d, opts, tc, temp_files, link_objects, main_source, &result, &pp, link_mode);
+	return process_backend_source(comp, d, opts, tc, temp_files, link_objects, main_source, &p, &result, &pp, link_mode);
 }
 
 <* Execute the production CLI. `executable_dir` is the containing directory

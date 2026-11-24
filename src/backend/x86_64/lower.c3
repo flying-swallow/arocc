@@ -52,6 +52,12 @@ struct Lowering
 	uint float_constant_count;
 	// Per-function state:
 	ir::Decl* decl;
+	<* Per-function working arrays, reset when the next function starts lowering
+	   (the caller still encodes or prints this function's lines in between).
+	   Keeping them in the caller's tmem pool kept every function's arrays alive
+	   until the whole object was done. *>
+	DynamicArenaAllocator scratch;
+	<* Heap-backed and cleared per function, so its storage is reused. *>
 	List{Line} lines;
 	<* rbp displacement (positive, meaning `rbp - x`) of each instruction's value slot; 0 = none. *>
 	int[] slots;
@@ -83,6 +89,18 @@ struct Lowering
 	<* Linear-scan allocation, indexed by instruction ref. *>
 	Register[] value_regs;
 	bool[] value_in_reg;
+	<* Live interval [start, end] (body positions) of each allocation candidate. *>
+	uint[] live_start;
+	uint[] live_end;
+	<* F32/F64 values held in XMM_ALLOCATABLE_REGS. All XMM registers are
+	   caller-saved, so these keep their stack slot and are spilled to it
+	   around every CALL their interval spans (see emit). *>
+	List{ir::Ref} xmm_values;
+	<* Body position of the instruction being lowered. *>
+	uint current_pos;
+	AddrMode[] addr_of;
+	bool[] has_addr;
+	bool[] folded_away;
 	<* Fixed frame slots for saving the callee-preserved registers we use. *>
 	int[5] callee_save_slots;
 	bool[5] used_callee_regs;
@@ -200,6 +218,36 @@ fn ushort? Lowering.bits(&self, value_interner::InternerRef ty)
 
 fn void Lowering.emit(&self, Mnemonic mnemonic, Operand a = {}, Operand b = {}, Operand c = {})
 {
+	if (mnemonic == CALL && self.xmm_values.len())
+	{
+		self.save_xmm_values_around_call(a);
+		return;
+	}
+	self.emit_raw(mnemonic, a, b, c);
+}
+
+<* Emit CALL `target`, storing XMM-allocated values live across it to their
+   slots first and reloading them after. *>
+fn void Lowering.save_xmm_values_around_call(&self, Operand target)
+{
+	uint pos = self.current_pos;
+	foreach (ref : self.xmm_values)
+	{
+		if (self.live_start[(sz)ref] >= pos || self.live_end[(sz)ref] <= pos) continue;
+		ushort w = self.ir.interner.get(self.inst(ref).ty).ty_bits == 32 ? 32 : 64;
+		self.emit_raw(self.float_move_mnemonic(w), self.slot(ref, w), reg_op(self.value_regs[(sz)ref]));
+	}
+	self.emit_raw(CALL, target);
+	foreach (ref : self.xmm_values)
+	{
+		if (self.live_start[(sz)ref] >= pos || self.live_end[(sz)ref] <= pos) continue;
+		ushort w = self.ir.interner.get(self.inst(ref).ty).ty_bits == 32 ? 32 : 64;
+		self.emit_raw(self.float_move_mnemonic(w), reg_op(self.value_regs[(sz)ref]), self.slot(ref, w));
+	}
+}
+
+fn void Lowering.emit_raw(&self, Mnemonic mnemonic, Operand a = {}, Operand b = {}, Operand c = {})
+{
 	Line line = { .mnemonic = mnemonic, .ops = { a, b, c } };
 	foreach (op : line.ops)
 	{
@@ -297,7 +345,12 @@ fn void? Lowering.load_float(&self, ir::Ref ref, Register xmm)
 		}
 		return;
 	}
-	if (!self.spill_all && self.value_in_reg[(sz)ref]) self.fail("floating point value was allocated to a GPR")!;
+	if (!self.spill_all && self.value_in_reg[(sz)ref])
+	{
+		Register source = self.value_regs[(sz)ref];
+		if (source.enc != xmm.enc) self.emit(MOVAPS, reg_op(xmm), reg_op(source));
+		return;
+	}
 	if (width == 80)
 	{
 		self.emit(FLD, self.slot(ref, 80));
@@ -319,6 +372,11 @@ fn void? Lowering.load_x87_float(&self, ir::Ref ref)
 	}
 	else
 	{
+		// An XMM-held F32/F64 keeps its slot; refresh it for the x87 load.
+		if (width != 80 && !self.spill_all && self.value_in_reg[(sz)ref])
+		{
+			self.emit(self.float_move_mnemonic(width), self.slot(ref, width), reg_op(self.value_regs[(sz)ref]));
+		}
 		self.emit(FLD, self.slot(ref, width));
 	}
 }
@@ -332,6 +390,11 @@ fn void? Lowering.store_float(&self, ir::Ref ref, Register xmm)
 		int padding = -self.slots[(sz)ref] + 10;
 		self.emit(MOV, mem_op(RBP, padding, 32), imm_op(0));
 		self.emit(MOV, mem_op(RBP, padding + 4, 16), imm_op(0));
+	}
+	else if (!self.spill_all && self.value_in_reg[(sz)ref])
+	{
+		Register target = self.value_regs[(sz)ref];
+		if (target.enc != xmm.enc) self.emit(MOVAPS, reg_op(target), reg_op(xmm));
 	}
 	else
 	{
@@ -465,10 +528,10 @@ fn void? Lowering.store(&self, ir::Ref ref, Register reg)
 fn void? Lowering.layout(&self)
 {
 	sz count = self.decl.instructions.len;
-	self.slots = mem::temp_array(int, count);
-	self.areas = mem::temp_array(int, count);
-	self.labels = mem::temp_array(String, count);
-	self.label_body_next = mem::temp_array(usz, count);
+	self.slots = alloc::new_array(&self.scratch, int, count);
+	self.areas = alloc::new_array(&self.scratch, int, count);
+	self.labels = alloc::new_array(&self.scratch, String, count);
+	self.label_body_next = alloc::new_array(&self.scratch, usz, count);
 	for (sz i = 0; i < count; i++) self.label_body_next[i] = 0;
 	int offset = 0;
 	uint phi_bytes_in_block = 0;
@@ -509,6 +572,11 @@ fn void? Lowering.layout(&self)
 							self.float_width(inst.ty)!;
 							ordinal_sse_count++;
 						}
+						else if (self.is_wide_int(inst.ty))
+						{
+							// SysV: __int128 takes a GP register pair, or goes wholly to memory.
+							if ((usz)explicit_gp_count + ordinal_gp_count + 2 <= SYSV_INT_PARAM_REGS.len) ordinal_gp_count += 2;
+						}
 						else
 						{
 							ordinal_gp_count++;
@@ -536,7 +604,8 @@ fn void? Lowering.layout(&self)
 		// Constants and symbols are rematerialized by load(); register-allocated
 		// values never read or write their slot. Neither needs frame space.
 		if (inst.tag == CONSTANT || inst.tag == SYMBOL) continue;
-		if (!self.spill_all && self.value_in_reg[(sz)ref]) continue;
+		// XMM-held floats keep a slot for call-site spills and x87 transfers.
+		if (!self.spill_all && self.value_in_reg[(sz)ref] && !self.is_float_type(inst.ty)) continue;
 		if (self.value_slot_bytes(inst.ty) == 16)
 		{
 			offset = (offset + 15) / 16 * 16 + 16;
@@ -581,6 +650,18 @@ fn void? Lowering.layout(&self)
 		{
 			if (ordinal_sse_index >= SYSV_SSE_PARAM_REGS.len) overflow_bytes += 8;
 			ordinal_sse_index++;
+		}
+		else if (self.is_wide_int(inst.ty))
+		{
+			if ((usz)ordinal_gp_index + 2 <= SYSV_INT_PARAM_REGS.len)
+			{
+				ordinal_gp_index += 2;
+			}
+			else
+			{
+				overflow_bytes = (overflow_bytes + 15) / 16 * 16;
+				overflow_bytes += 16;
+			}
 		}
 		else
 		{
@@ -868,9 +949,10 @@ fn void Lowering.note_block_phi_edges(&self, uint block, uint block_count,
 fn void Lowering.allocate(&self)
 {
 	usz count = self.decl.instructions.len;
-	self.value_regs = mem::temp_array(Register, (sz)count);
-	self.value_in_reg = mem::temp_array(bool, (sz)count);
+	self.value_regs = alloc::new_array(&self.scratch, Register, (sz)count);
+	self.value_in_reg = alloc::new_array(&self.scratch, bool, (sz)count);
 	for (usz ref = 0; ref < count; ref++) self.value_in_reg[(sz)ref] = false;
+	self.xmm_values.init(&self.scratch, 0);
 	for (usz reg = 0; reg < SYSV_CALLEE_PRESERVED_REGS.len; reg++)
 	{
 		self.used_callee_regs[reg] = false;
@@ -878,10 +960,10 @@ fn void Lowering.allocate(&self)
 	}
 	if (self.spill_all || self.decl.body.len == 0 || count == 0) return;
 
-	bool[] candidates = mem::temp_array(bool, (sz)count);
-	uint[] block_of_ref = mem::temp_array(uint, (sz)count);
-	uint[] starts = mem::temp_array(uint, (sz)count);
-	uint[] ends = mem::temp_array(uint, (sz)count);
+	bool[] candidates = alloc::new_array(&self.scratch, bool, (sz)count);
+	uint[] block_of_ref = alloc::new_array(&self.scratch, uint, (sz)count);
+	uint[] starts = alloc::new_array(&self.scratch, uint, (sz)count);
+	uint[] ends = alloc::new_array(&self.scratch, uint, (sz)count);
 	for (usz ref = 0; ref < count; ref++)
 	{
 		candidates[(sz)ref] = false;
@@ -891,9 +973,9 @@ fn void Lowering.allocate(&self)
 	}
 
 	usz body_len = self.decl.body.len;
-	usz[] block_starts = mem::temp_array(usz, (sz)body_len);
-	usz[] block_ends = mem::temp_array(usz, (sz)body_len);
-	ir::Ref[] block_labels = mem::temp_array(ir::Ref, (sz)body_len);
+	usz[] block_starts = alloc::new_array(&self.scratch, usz, (sz)body_len);
+	usz[] block_ends = alloc::new_array(&self.scratch, usz, (sz)body_len);
+	ir::Ref[] block_labels = alloc::new_array(&self.scratch, ir::Ref, (sz)body_len);
 	uint block_count = 0;
 	bool split_after = false;
 	for (usz pos = 0; pos < body_len; pos++)
@@ -915,7 +997,8 @@ fn void Lowering.allocate(&self)
 		if ((usz)ref < count)
 		{
 			block_of_ref[(sz)ref] = block;
-			candidates[(sz)ref] = is_allocatable_value(inst) && !self.is_float_type(inst.ty) && !self.is_wide_int(inst.ty);
+			candidates[(sz)ref] = is_allocatable_value(inst) && !self.is_wide_int(inst.ty) && !self.folded_away[(sz)ref] &&
+				(!self.is_float_type(inst.ty) || self.is_xmm_float_type(inst.ty));
 		}
 		split_after = is_terminator(inst.tag);
 	}
@@ -925,7 +1008,7 @@ fn void Lowering.allocate(&self)
 	// live across a block boundary; block-local values get no liveness bit.
 	// Indexing bits by all refs made the four block x value matrices quadratic
 	// (100k case labels: ~10 GB, gcc limits-caselabels.c).
-	uint[] live_index = mem::temp_array(uint, (sz)count);
+	uint[] live_index = alloc::new_array(&self.scratch, uint, (sz)count);
 	for (usz ref = 0; ref < count; ref++) live_index[(sz)ref] = uint::max;
 	uint live_count = 0;
 	for (usz pos = 0; pos < body_len; pos++)
@@ -943,7 +1026,7 @@ fn void Lowering.allocate(&self)
 			}
 			continue;
 		}
-		@each_value_use(inst; ir::Ref used)
+		@each_lowered_use(self, inst, ref; ir::Ref used)
 		{
 			if ((usz)used < count && candidates[(sz)used] && live_index[(sz)used] == uint::max &&
 				block_of_ref[(sz)used] != block)
@@ -952,16 +1035,16 @@ fn void Lowering.allocate(&self)
 			}
 		};
 	}
-	ir::Ref[] live_refs = mem::temp_array(ir::Ref, (sz)live_count + 1);
+	ir::Ref[] live_refs = alloc::new_array(&self.scratch, ir::Ref, (sz)live_count + 1);
 	for (usz ref = 0; ref < count; ref++)
 	{
 		if (live_index[(sz)ref] != uint::max) live_refs[(sz)live_index[(sz)ref]] = (ir::Ref)ref;
 	}
 
-	bitset::BitMatrix block_defs = bitset::temp_matrix(block_count, live_count);
-	bitset::BitMatrix block_uses = bitset::temp_matrix(block_count, live_count);
-	bitset::BitMatrix live_in = bitset::temp_matrix(block_count, live_count);
-	bitset::BitMatrix live_out = bitset::temp_matrix(block_count, live_count);
+	bitset::BitMatrix block_defs = bitset::new_matrix(&self.scratch, block_count, live_count);
+	bitset::BitMatrix block_uses = bitset::new_matrix(&self.scratch, block_count, live_count);
+	bitset::BitMatrix live_in = bitset::new_matrix(&self.scratch, block_count, live_count);
+	bitset::BitMatrix live_out = bitset::new_matrix(&self.scratch, block_count, live_count);
 
 	// Build per-block use/def sets and initial interval endpoints.
 	for (usz pos = 0; pos < body_len; pos++)
@@ -971,7 +1054,7 @@ fn void Lowering.allocate(&self)
 		ir::Inst inst = self.inst(ref);
 		uint block = block_of_ref[(sz)ref];
 		uint at = (uint)pos;
-		@each_value_use(inst; ir::Ref used)
+		@each_lowered_use(self, inst, ref; ir::Ref used)
 		{
 			self.mark_use(used, block, at, candidates, live_index, block_defs, block_uses, starts, ends);
 		};
@@ -984,7 +1067,7 @@ fn void Lowering.allocate(&self)
 
 	// Solve live-in/live-out to a fixed point. PHI values are uses on their
 	// matching predecessor edges, not uses in the target block.
-	bitset::BitSet next_out = bitset::temp(live_count);
+	bitset::BitSet next_out = bitset::new(&self.scratch, live_count);
 	bool changed = true;
 	while (changed)
 	{
@@ -1036,10 +1119,10 @@ fn void Lowering.allocate(&self)
 
 	// Bucket by start position and run linear scan in body order. Values evicted
 	// from a register use their pre-existing stack slot for their entire interval.
-	LiveInterval[] intervals = mem::temp_array(LiveInterval, (sz)count);
-	usz[] start_heads = mem::temp_array(usz, (sz)(body_len + 1));
-	usz[] next_interval = mem::temp_array(usz, (sz)count);
-	usz[] sorted_intervals = mem::temp_array(usz, (sz)count);
+	LiveInterval[] intervals = alloc::new_array(&self.scratch, LiveInterval, (sz)count);
+	usz[] start_heads = alloc::new_array(&self.scratch, usz, (sz)(body_len + 1));
+	usz[] next_interval = alloc::new_array(&self.scratch, usz, (sz)count);
+	usz[] sorted_intervals = alloc::new_array(&self.scratch, usz, (sz)count);
 	for (usz pos = 0; pos <= body_len; pos++) start_heads[pos] = usz::max;
 	usz interval_count = 0;
 	for (usz ref = 0; ref < count; ref++)
@@ -1060,31 +1143,57 @@ fn void Lowering.allocate(&self)
 			sorted_intervals[sorted_count++] = index;
 		}
 	}
-	ir::Ref[5] active = { ir::NONE, ir::NONE, ir::NONE, ir::NONE, ir::NONE };
-	for (usz i = 0; i < sorted_count; i++)
+	self.live_start = starts;
+	self.live_end = ends;
+	self.linear_scan(intervals, sorted_intervals[:sorted_count], ends, &SYSV_CALLEE_PRESERVED_REGS, false);
+	self.linear_scan(intervals, sorted_intervals[:sorted_count], ends, &XMM_ALLOCATABLE_REGS, true);
+	for (usz ref = 0; ref < count; ref++)
 	{
-		LiveInterval current = intervals[sorted_intervals[i]];
-		for (usz reg = 0; reg < active.len; reg++)
+		if (self.value_in_reg[ref] && self.is_float_type(self.inst((ir::Ref)ref).ty)) self.xmm_values.push((ir::Ref)ref);
+	}
+}
+
+<* XMM registers handed to F32/F64 values. xmm0-xmm7 stay scratch/argument registers. *>
+const Register[8] XMM_ALLOCATABLE_REGS = { XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15 };
+
+fn bool Lowering.is_xmm_float_type(&self, value_interner::InternerRef ty)
+{
+	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
+	return key.tag == primitive_value::PrimitiveType.FLOAT_TY && (key.ty_bits == 32 || key.ty_bits == 64);
+}
+
+<* Linear scan over the intervals of one register class (floats or not), in start order.
+   Values evicted from a register use their stack slot for their entire interval. *>
+fn void Lowering.linear_scan(&self, LiveInterval[] intervals, usz[] sorted, uint[] ends, Register[] regs, bool floats)
+{
+	ir::Ref[16] active;
+	usz reg_count = regs.len;
+	for (usz reg = 0; reg < reg_count; reg++) active[reg] = ir::NONE;
+	foreach (index : sorted)
+	{
+		LiveInterval current = intervals[index];
+		if (self.is_float_type(self.inst(current.ref).ty) != floats) continue;
+		for (usz reg = 0; reg < reg_count; reg++)
 		{
 			if (active[reg] != ir::NONE && ends[(sz)active[reg]] < current.start) active[reg] = ir::NONE;
 		}
-		usz free_reg = active.len;
-		for (usz reg = 0; reg < active.len; reg++)
+		usz free_reg = reg_count;
+		for (usz reg = 0; reg < reg_count; reg++)
 		{
 			if (active[reg] == ir::NONE)
 			{
 				free_reg = reg; break;
 			}
 		}
-		if (free_reg < active.len)
+		if (free_reg < reg_count)
 		{
 			active[free_reg] = current.ref;
 			self.value_in_reg[(sz)current.ref] = true;
-			self.value_regs[(sz)current.ref] = SYSV_CALLEE_PRESERVED_REGS[free_reg];
+			self.value_regs[(sz)current.ref] = regs[free_reg];
 			continue;
 		}
 		usz victim = 0;
-		for (usz reg = 1; reg < active.len; reg++)
+		for (usz reg = 1; reg < reg_count; reg++)
 		{
 			if (ends[(sz)active[reg]] > ends[(sz)active[victim]]) victim = reg;
 		}
@@ -1093,7 +1202,7 @@ fn void Lowering.allocate(&self)
 			self.value_in_reg[(sz)active[victim]] = false;
 			active[victim] = current.ref;
 			self.value_in_reg[(sz)current.ref] = true;
-			self.value_regs[(sz)current.ref] = SYSV_CALLEE_PRESERVED_REGS[victim];
+			self.value_regs[(sz)current.ref] = regs[victim];
 		}
 	}
 }
@@ -1276,6 +1385,21 @@ fn void? Lowering.shift(&self, ir::Ref ref, Mnemonic mnemonic, bool signed)
 	self.store(ref, RAX)!;
 }
 
+<* Bits of a register above an odd IR integer width (i1, i3, i17, ...) are
+   unspecified: arithmetic runs at the rounded register width (`bits`) and does
+   not mask its result, so an unsigned _BitInt(3) 7 + 1 leaves 8 in the byte.
+   Rewrite `reg` (operated on at width `w`) as the sign or zero extension of the
+   exact width. Native widths, pointers and non-integers are left alone. *>
+fn void? Lowering.normalize_width(&self, Register reg, value_interner::InternerRef ty, ushort w, bool signed)
+{
+	if (ty == value_interner::REF_PTR) return;
+	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
+	if (key.tag != primitive_value::PrimitiveType.INT_TY || key.ty_bits == 0 || key.ty_bits >= w) return;
+	long shift = (long)w - (long)key.ty_bits;
+	self.emit(SHL, reg_op(reg.to_bits(w)), imm_op(shift));
+	self.emit(signed ? SAR : SHR, reg_op(reg.to_bits(w)), imm_op(shift));
+}
+
 fn void? Lowering.compare(&self, ir::Ref ref, Condition cc)
 {
 	ir::Inst inst = self.inst(ref);
@@ -1295,6 +1419,14 @@ fn void? Lowering.compare(&self, ir::Ref ref, Condition cc)
 	}
 	ushort w = self.load(inst.data.bin.lhs, RAX)!;
 	self.load(inst.data.bin.rhs, RCX)!;
+	// i1 is zero-extended and uses the reversed unsigned condition above; other
+	// odd widths are sign-extended for signed predicates, as LLVM's
+	// PromoteSetCCOperands does, and zero-extended otherwise.
+	bool signed_predicate = lhs_type.ty_bits != 1 && (inst.tag == CMP_SLT || inst.tag == CMP_SLTE ||
+		inst.tag == CMP_SGT || inst.tag == CMP_SGTE);
+	value_interner::InternerRef operand_ty = self.inst(inst.data.bin.lhs).ty;
+	self.normalize_width(RAX, operand_ty, w, signed_predicate)!;
+	self.normalize_width(RCX, operand_ty, w, signed_predicate)!;
 	self.emit(CMP, reg_op(Register.RAX.to_bits(w)), reg_op(Register.RCX.to_bits(w)));
 	self.emit(cc.set, reg_op(AL));
 	self.store(ref, RAX)!;
@@ -1629,6 +1761,10 @@ fn void? Lowering.float_convert(&self, ir::Ref ref, bool extend)
 			self.emit(MOV, mem_op(RBP, padding, 32), imm_op(0));
 			self.emit(MOV, mem_op(RBP, padding + 4, 16), imm_op(0));
 		}
+		else if (!self.spill_all && self.value_in_reg[(sz)ref])
+		{
+			self.emit(self.float_move_mnemonic(to), reg_op(self.value_regs[(sz)ref]), self.slot(ref, to));
+		}
 		return;
 	}
 	if (extend && (from != 32 || to != 64)) self.fail("FPEXT expects F32 to F64")!;
@@ -1643,6 +1779,9 @@ fn void? Lowering.extend(&self, ir::Ref ref, bool signed)
 	ir::Inst inst = self.inst(ref);
 	ushort from = self.load(inst.data.ref, RAX)!;
 	ushort to = self.bits(inst.ty)!;
+	// An odd source width must be extended from its exact width first; the
+	// MOVSX/MOVZX below only extends from the rounded register width.
+	self.normalize_width(RAX, self.inst(inst.data.ref).ty, from, signed)!;
 	if (from < to)
 	{
 		if (from == 32)
@@ -2074,6 +2213,7 @@ fn void? Lowering.store_pair(&self, ir::Ref ref, Register lo, Register hi)
 fn void? Lowering.load_extended_64(&self, ir::Ref ref, Register reg, bool signed)
 {
 	ushort from = self.load(ref, reg)!;
+	self.normalize_width(reg, self.inst(ref).ty, from, signed)!;
 	if (from == 64) return;
 	if (from == 32)
 	{
@@ -2107,6 +2247,31 @@ fn bool? Lowering.lower_wide_int(&self, ir::Ref ref)
 	ir::Inst inst = self.inst(ref);
 	switch (inst.tag)
 	{
+		case ARG:
+			if (!self.is_wide_int(inst.ty)) return false;
+			// The C frontend splits __int128 parameters into two i64 GP_REGISTER
+			// args; only hand-built IR passes an unsplit ORDINAL i128.
+			if (inst.data.arg.location_kind != ir::ArgLocationKind.ORDINAL)
+			{
+				self.fail("TODO: unsplit 128-bit ARG")!;
+				return true;
+			}
+			uint index = self.incoming_gp_arg_index;
+			if ((usz)index + 2 <= SYSV_INT_PARAM_REGS.len)
+			{
+				self.store_pair(ref, SYSV_INT_PARAM_REGS[index], SYSV_INT_PARAM_REGS[index + 1])!;
+				self.incoming_gp_arg_index += 2;
+				return true;
+			}
+			// No register pair left: SysV passes the whole value in a 16-byte
+			// aligned memory slot without consuming GP registers.
+			self.incoming_stack_arg_offset = (self.incoming_stack_arg_offset + 15) / 16 * 16;
+			int offset = 16 + (int)self.incoming_stack_arg_offset;
+			self.emit(MOV, reg_op(RAX), mem_op(RBP, offset, 64));
+			self.emit(MOV, reg_op(RDX), mem_op(RBP, offset + 8, 64));
+			self.store_pair(ref, RAX, RDX)!;
+			self.incoming_stack_arg_offset += 16;
+			return true;
 		case CMP_EQ:
 		case CMP_NE:
 		case CMP_SLT:
@@ -2339,6 +2504,7 @@ fn void? Lowering.wide_compare(&self, ir::Ref ref)
 
 fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 {
+	if (self.folded_away[(sz)ref]) return;
 	if (self.lower_wide_int(ref)!) return;
 	ir::Inst inst = self.inst(ref);
 	switch (inst.tag)
@@ -2454,42 +2620,42 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 			if (self.is_float_type(self.inst(inst.data.bin.rhs).ty))
 			{
 				ushort w = self.float_width(self.inst(inst.data.bin.rhs).ty)!;
-				self.load(inst.data.bin.lhs, RCX)!;
+				Operand address = self.address_operand(ref, RCX, RDX, w)!;
 				if (w == 80)
 				{
 					self.load_float(inst.data.bin.rhs, ST0)!;
-					self.emit(FSTP, mem_op(RCX, 0, 80));
+					self.emit(FSTP, address);
 				}
 				else
 				{
 					self.load_float(inst.data.bin.rhs, XMM0)!;
-					self.emit(self.float_move_mnemonic(w), mem_op(RCX, 0, w), reg_op(XMM0));
+					self.emit(self.float_move_mnemonic(w), address, reg_op(XMM0));
 				}
 				break;
 			}
 			ushort w = self.load(inst.data.bin.rhs, RAX)!;
-			self.load(inst.data.bin.lhs, RCX)!;
-			self.emit(MOV, mem_op(RCX, 0, w), reg_op(Register.RAX.to_bits(w)));
+			Operand address = self.address_operand(ref, RCX, RDX, w)!;
+			self.emit(MOV, address, reg_op(Register.RAX.to_bits(w)));
 		case LOAD:
 			if (self.is_float_type(inst.ty))
 			{
 				ushort w = self.float_width(inst.ty)!;
-				self.load(inst.data.ref, RCX)!;
+				Operand address = self.address_operand(ref, RCX, RDX, w)!;
 				if (w == 80)
 				{
-					self.emit(FLD, mem_op(RCX, 0, 80));
+					self.emit(FLD, address);
 					self.store_float(ref, ST0)!;
 				}
 				else
 				{
-					self.emit(self.float_move_mnemonic(w), reg_op(XMM0), mem_op(RCX, 0, w));
+					self.emit(self.float_move_mnemonic(w), reg_op(XMM0), address);
 					self.store_float(ref, XMM0)!;
 				}
 				break;
 			}
 			ushort w = self.bits(inst.ty)!;
-			self.load(inst.data.ref, RCX)!;
-			self.emit(MOV, reg_op(Register.RAX.to_bits(w)), mem_op(RCX, 0, w));
+			Operand address = self.address_operand(ref, RCX, RDX, w)!;
+			self.emit(MOV, reg_op(Register.RAX.to_bits(w)), address);
 			self.store(ref, RAX)!;
 		// x86-64 is TSO: every aligned load is an acquire load and every plain store
 		// a release store, so only seq_cst stores and fences need a full barrier.
@@ -2533,7 +2699,17 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 				self.emit(XOR, reg_op(wide), imm_op((long)operand_bits - 1));
 			}
 			self.store(ref, RAX)!;
-		case ADD: self.alu(ref, ADD)!;
+		case ADD:
+			// compute_address_folds records a mode exactly for the pointer ADDs
+			// worth one LEA (indexed or frame-relative).
+			if (inst.ty == value_interner::REF_PTR && self.has_addr[(sz)ref])
+			{
+				Operand address = self.address_operand(ref, RCX, RDX, 0)!;
+				self.emit(LEA, reg_op(RAX), address);
+				self.store(ref, RAX)!;
+				break;
+			}
+			self.alu(ref, ADD)!;
 		case SUB: self.alu(ref, SUB)!;
 		case MUL: self.alu(ref, IMUL)!;
 		case FADD: self.float_alu(ref, ADDSS, ADDSD)!;
@@ -2611,13 +2787,16 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 {
 	self.decl = decl;
+	self.scratch.reset();
 	self.lines.clear();
 	self.edge_count = 0;
 	self.current_label = ir::NONE;
 	self.block_terminated = false;
 	// Allocate first so layout gives stack slots only to values that need memory.
+	self.compute_address_folds();
 	self.allocate();
 	self.layout()!;
+	self.adjust_address_modes();
 	self.assign_callee_save_slots();
 	self.emit(PUSH, reg_op(RBP));
 	self.emit(MOV, reg_op(RBP), reg_op(RSP));
@@ -2632,6 +2811,7 @@ fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 	self.save_varargs();
 	foreach (usz body_index, ref : decl.body)
 	{
+		self.current_pos = (uint)body_index;
 		ir::Inst inst = self.inst(ref);
 		ir::Ref call_hi_ref = ir::NONE;
 		if (inst.tag == CALL && body_index + 1 < (usz)decl.body.len)

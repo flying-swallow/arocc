@@ -67,6 +67,10 @@ fn bool has_byte_rex(Operand[] ops)
 *>
 fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 {
+	// The RMI row reads ops[1] as r/m and indexes ops against row.ops, so the
+	// two-operand imul alias must be expanded here too, not only in `find`.
+	Operand[3] alias_buf;
+	ops = expand_imul_alias(mnemonic, ops, &alias_buf);
 	Entry entry = find(mnemonic, ops)!;
 	Encoded out = {};
 	Entry row = entry;
@@ -130,6 +134,14 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 	{
 		if (rm_op.kind == REG && rm_op.reg.is_extended()) rex |= 0x01;
 		if (rm_op.kind == MEM && rm_op.mem.base_kind == REG && rm_op.mem.base.is_extended()) rex |= 0x01;
+		if (rm_op.kind == MEM && rm_op.mem.has_index)
+		{
+			Memory memory = rm_op.mem;
+			if (memory.index.class != GENERAL_PURPOSE || memory.index.bits != 64 ||
+				((memory.index.enc & 7) == 4 && !memory.index.is_extended())) return NO_ENCODING~;
+			if (memory.scale != 1 && memory.scale != 2 && memory.scale != 4 && memory.scale != 8) return NO_ENCODING~;
+			if (memory.index.is_extended()) rex |= 0x02;
+		}
 	}
 	bool emit_rex = row.mode == REX || row.mode == REX_SHORT || rex != 0 || has_byte_rex(ops);
 	if (emit_rex && has_high_byte(ops)) return NO_ENCODING~;
@@ -197,11 +209,16 @@ fn Encoded? encode(Mnemonic mnemonic, Operand[] ops)
 		{
 			return NO_ENCODING~;
 		}
+		bool use_sib = memory_rm && memory.base_kind == REG && (memory.has_index || ((uint)memory.base.enc & 7) == 4);
+		if (use_sib) rm_code = 4;
 		push_byte(&out, (char)((mod << 6) | ((reg_code & 7) << 3) | (rm_code & 7)));
-		if (memory_rm && memory.base_kind == REG && ((uint)memory.base.enc & 7) == 4)
+		if (use_sib)
 		{
 			uint base = (uint)memory.base.enc & 7;
-			push_byte(&out, (char)(0x20 | base)); // scale=1, no index, base
+			uint index = memory.has_index ? (uint)memory.index.enc & 7 : 4;
+			uint scale = memory.has_index ? (uint)memory.scale : 1;
+			uint scale_bits = scale == 8 ? 3 : scale == 4 ? 2 : scale == 2 ? 1 : 0;
+			push_byte(&out, (char)((scale_bits << 6) | (index << 3) | base));
 		}
 		if (memory_rm)
 		{

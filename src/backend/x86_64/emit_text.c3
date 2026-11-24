@@ -45,6 +45,11 @@ fn void write_operand(DString* out, Operand op)
 			{
 				case REG:
 					out.appendf("[%s", m.base.name);
+					if (m.has_index)
+					{
+						out.appendf(" + %s", m.index.name);
+						if (m.scale != 1) out.appendf("*%d", m.scale);
+					}
 					if (m.disp > 0) out.appendf(" + %d", m.disp);
 					if (m.disp < 0) out.appendf(" - %d", -(long)m.disp);
 					out.append_char(']');
@@ -228,7 +233,10 @@ fn String? render_asm(ir::Ir* ir, Allocator allocator, ir::ErrorList* errors, bo
 	{
 		Lowering lowering = { .ir = ir, .errors = errors, .spill_all = spill_all };
 		lowering.strings.init(tmem);
-		lowering.lines.init(tmem);
+		lowering.lines.init(mem);
+		defer lowering.lines.free();
+		lowering.scratch.init(mem, 64 * 1024);
+		defer lowering.scratch.free();
 		out.append_string("\t.intel_syntax noprefix\n");
 		foreach (&decl : ir.decls)
 		{
