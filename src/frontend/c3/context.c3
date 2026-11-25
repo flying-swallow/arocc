@@ -3,13 +3,9 @@
 // symbol lookup, path creation, module name mangling), plus `check_module_name`
 // from compiler_internal.h.
 //
-// Not ported yet: context_is_macro (needs SemaContext).
-//
 // Deviations from c3c:
 // - `goto SHADOW_LOCAL / WEAK_LOCAL / SHADOW_MODULE / WEAK_MODULE` in
 //   `decl_register` become helper functions / flags with the same flow.
-// - `unit_register_global_decl`'s `@feat` filtering calls sema
-//   (`sema_retain_conditional_feat`), which is not ported: it aborts.
 // - `error_exit` aborts. DEBUG_LOG calls are dropped. The local `import`
 //   (a C3 keyword) is `imp`.
 // - HTable keys are the interned name pointers (`name.ptr`).
@@ -114,6 +110,12 @@ fn bool check_module_name(ModulePath* path)
 		return false;
 	}
 	return true;
+}
+
+fn bool context_is_macro(SemaContext* context)
+{
+	if (context.current_macro != null) return true;
+	return context.call_env.current_function && context.call_env.current_function.func_decl.in_macro;
 }
 
 fn void weak_visibility_mismatch(Decl* weak_symbol, Decl* other_symbol)
@@ -310,8 +312,17 @@ fn void unit_register_global_decl(CompilationUnit* unit, Decl* decl)
 	assert(!decl.unit || decl.is_templated);
 	if (decl.is_feat_cond)
 	{
-		// c3c: switch (sema_retain_conditional_feat(decl->attributes)) -- sema, not ported yet.
-		unreachable("sema_retain_conditional_feat is not ported yet");
+		switch (sema_retain_conditional_feat(decl.attributes))
+		{
+			case BOOL_FALSE:
+				decl.decl_kind = ERASED;
+				return;
+			case BOOL_ERR:
+				decl.decl_kind = POISONED;
+				return;
+			case BOOL_TRUE:
+				break;
+		}
 	}
 	decl.unit = unit;
 	switch (decl.decl_kind)

@@ -16,5 +16,7 @@ test_suite(
         "//test/unit/c3/ast:all",
         "//test/unit/c3/lexer:all",
         "//test/unit/c3/parser:all",
+        "//test/unit/c3/sema:all",
+        "//test/unit/c3/target:all",
     ],
 )

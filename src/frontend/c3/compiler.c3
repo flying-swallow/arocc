@@ -3,8 +3,8 @@
 // touches, with c3c field names, plus the pieces of c3c compiler.c
 // (global_context_*, compiler_find_or_create_module, linking_add_link,
 // scratch_buffer_interned*), source_file.c (source_file_by_id,
-// source_file_text_load, source_file_generate) and the x86_64 Linux part of
-// target.c `target_setup` that feed them.
+// source_file_text_load, source_file_generate). target.c is ported in
+// target.c3.
 //
 // Deviations from c3c:
 // - Only the fields used so far exist; add more (with the c3c name) as the
@@ -16,8 +16,6 @@
 //   structs (BuildFeatures, BuildWin, PlatformX64).
 // - PlatformTarget `int128` / `float128` / `float16` (type names in C3) are
 //   `int128_supported` / `float128_supported` / `float16_supported`.
-// - `target_setup` is reduced to `target_setup_x64_linux` (the values c3c
-//   computes for x86_64-linux); a target-generic port comes later.
 // - The c3c symtab and the error printer are globals here too:
 //   `global_symtab` (symtab::Symtab) and `global_diagnostics`
 //   (diagnostics::Diagnostics, TO_LIST by default). Every ERROR report bumps
@@ -76,6 +74,22 @@ struct BuildFeatures
 {
 	SafetyLevel safe_mode;
 	PanicLevel panic_level;
+	bool sanitize_address;
+	bool sanitize_memory;
+	bool sanitize_thread;
+	SoftFloat soft_float;
+	StructReturn x86_struct_return;
+	X86VectorCapability x86_vector_capability;
+	RiscvAbi riscv_abi;
+	RiscvCpuSet riscv_cpu_set;
+	Win64Simd pass_win64_simd_as_arrays;
+	X86CpuSet x86_cpu_set;
+}
+
+<* build.h `BuildTarget.linuxpaths` (subset). *>
+struct BuildLinuxPaths
+{
+	LinuxLibc libc;
 }
 
 <* build.h `BuildTarget.win` (subset). *>
@@ -131,6 +145,16 @@ struct BuildTarget
 	String compiler_rt_module;
 	BuildFeatures feature;
 	BuildWin win;
+	<* build.h `script_dir` ($exec). *>
+	String script_dir;
+	<* build.h `feature_list` (--enable-feature / project features). *>
+	String[] feature_list;
+	<* build.h `debug_info == DEBUG_INFO_FULL` (debug info is not ported yet). *>
+	bool debug_info_full;
+	ArchOsTarget arch_os_target;
+	String cpu_flags;
+	RelocModel reloc_model;
+	BuildLinuxPaths linuxpaths;
 }
 
 <* target.h `AlignData` (in bits). *>
@@ -142,43 +166,151 @@ struct AlignData
 
 const usz BITSIZES_COUNT = BitSizes.BITSIZES_LEN.ordinal;
 
-<* target.h `PlatformTarget.x64` (subset; c3c keeps it in a per-arch union). *>
+<* target.h `CpuFeatures`. *>
+struct CpuFeatures
+{
+	ulong[2] bits;
+}
+
+<* target.h `PlatformTarget.x86` (c3c keeps the per-arch structs in a union). *>
+struct PlatformX86
+{
+	bool return_small_struct_in_reg_abi;
+	bool use_soft_float;
+	bool is_mcu_api;
+}
+
+<* target.h `PlatformTarget.x64`. *>
 struct PlatformX64
 {
+	CpuFeatures features;
+	int align_simd_default;
+	bool win64_simd_as_array;
+	bool soft_float;
+	bool is_win64;
+	bool is_mingw64;
 	bool pass_int128_vector_in_mem;
 	int native_vector_size_avx;
 }
 
-<* target.h `PlatformTarget` (subset). *>
+<* target.h `PlatformTarget.mips`. *>
+struct PlatformMips
+{
+	bool is_32_bit;
+}
+
+<* target.h `PlatformTarget.aarch64`. *>
+struct PlatformAarch64
+{
+	bool is_aapcs;
+	bool is_darwin_pcs;
+}
+
+<* target.h `PlatformTarget.arm`. *>
+struct PlatformArm
+{
+	bool is_win32;
+	ArmVariant variant;
+	ArmAbiVariant abi_variant;
+}
+
+<* target.h `PlatformTarget.ppc`. *>
+struct PlatformPpc
+{
+	bool is_softfp;
+}
+
+<* target.h `PlatformTarget.ppc64`. *>
+struct PlatformPpc64
+{
+	bool is_softfp;
+	bool is_elfv2;
+	bool has_qpx;
+}
+
+<* target.h `PlatformTarget.riscv`. *>
+struct PlatformRiscv
+{
+	int xlen;
+	int flen;
+}
+
+<* target.h `PlatformTarget.systemz`. *>
+struct PlatformSystemz
+{
+	bool has_vector;
+}
+
+<* target.h `PlatformTarget` (LLVM-only fields left out; see target.c3). *>
 struct PlatformTarget
 {
+	String target_triple;
+	String cpu;
+	String features;
+	String dylib_suffix;
 	ArchType arch;
 	OsType os;
+	VendorType vendor;
+	EnvironmentType environment_type;
 	ObjectFormatType object_format;
+	int alloca_address_space;
 	Abi abi;
 	AlignData[BITSIZES_COUNT] integers;
 	AlignData[BITSIZES_COUNT] floats;
+	AlignData[BITSIZES_COUNT] floats_pref;
+	RelocModel reloc_model;
+	bool use_dso_local;
+	bool pic_required;
+	bool signed_c_char;
+	FloatAbi float_abi;
+	int default_number_regs_x86;
+	bool use_comdat;
+	bool noredzone;
+	PlatformX86 x86;
+	PlatformX64 x64;
+	PlatformMips mips;
+	PlatformAarch64 aarch64;
+	PlatformArm arm;
+	PlatformPpc ppc;
+	PlatformPpc64 ppc64;
+	PlatformRiscv riscv;
+	PlatformSystemz systemz;
 	bool big_endian;
+	bool emulated_tls;
 	bool tls_supported;
+	bool asm_supported;
 	bool float128_supported;
 	bool float16_supported;
+	bool vec128i;
+	bool vec64i;
+	bool vec128f;
+	bool vec64f;
 	bool int128_supported;
-	bool signed_c_char;
 	AlignData align_pointer;
 	int align_max_vector;
 	int align_max_tls;
+	int align_large_array;
 	int width_pointer;
 	int width_register;
 	int width_c_short;
 	int width_c_int;
 	int width_c_long;
 	int width_c_long_long;
-	PlatformX64 x64;
+	int width_c_long_double;
+	int width_c_wchar;
+	int width_c_wint;
+	int width_large_array_min;
+	int reg_param_max;
+	int sse_reg_param_max;
+	int builtin_ms_valist;
+	int aarch64sve_types;
+	String platform_name;
 	bool asm_initialized;
 	String[] clobber_name_list;
 	AsmRegister[ASM_REGISTER_MAX] registers;
 	AsmInstruction[ASM_INSTRUCTION_MAX] instructions;
 	int register_count;
+	String extra_clobbers;
 }
 
 <* compiler_internal.h `Linking` (subset). *>
@@ -439,44 +571,6 @@ fn SourceFile* source_file_generate(String filename)
 }
 
 // ---------------------------------------------------------------------------
-// target.c (x86_64 Linux only)
-
-<* The PlatformTarget values c3c's `target_setup` computes for x86_64-linux. *>
-fn void target_setup_x64_linux()
-{
-	PlatformTarget* p = &compiler.platform;
-	p.arch = X86_64;
-	p.os = OsType.LINUX;
-	p.object_format = ELF;
-	p.abi = X64;
-	// target.c x64 setup for the generic (SSE2, no AVX) x86-64 cpu on Linux.
-	p.x64.pass_int128_vector_in_mem = true;
-	p.x64.native_vector_size_avx = 16;
-	p.big_endian = false;
-	p.tls_supported = true;
-	p.width_pointer = 64;
-	p.width_register = 64;
-	p.int128_supported = true;
-	p.float128_supported = true;
-	p.float16_supported = true;
-	for (usz i = BitSizes.BITS8.ordinal; i < BITSIZES_COUNT; i++)
-	{
-		int bits = 8 << (i - 1);
-		p.integers[i] = { bits, bits };
-		p.floats[i] = { bits, bits };
-	}
-	p.integers[BitSizes.BIT1.ordinal] = p.integers[BitSizes.BITS8.ordinal];
-	p.align_pointer = { p.width_pointer, p.width_pointer };
-	p.width_c_short = 16;
-	p.width_c_int = 32;
-	p.width_c_long = 64;
-	p.width_c_long_long = 64;
-	p.signed_c_char = true;
-	p.align_max_vector = 0;
-	p.align_max_tls = 0;
-}
-
-// ---------------------------------------------------------------------------
 // Setup / teardown
 
 <* Release all compiler memory (arenas, symtab, report sink, globals). *>
@@ -500,11 +594,15 @@ fn void compiler_free()
 <*
  Fresh compiler for tests: everything freed, then c3c's compiler_init /
  compile setup up to the point where files can be parsed (symtab, module
- tables, core module + unit, x86_64-linux target, builtin types).
+ tables, core module + unit, target, builtin types). `arch_os` is the
+ `--target` (c3c's host default, x86_64-linux, when not given).
 *>
-fn void compiler_reset()
+fn void compiler_reset(ArchOsTarget arch_os = ARCH_OS_TARGET_DEFAULT)
 {
 	compiler_free();
+	build_target_setup_target_defaults(&compiler.build);
+	// builder.c: an unset target becomes `default_target`.
+	compiler.build.arch_os_target = arch_os == ARCH_OS_TARGET_DEFAULT ? default_target : arch_os;
 	global_diagnostics.init_list(mem);
 	global_diagnostics.error_counter = &compiler.context.errors_found;
 	symtab_init(0x10000);
@@ -514,6 +612,7 @@ fn void compiler_reset()
 	decltable_init(&compiler.context.symbols, INITIAL_SYMBOL_MAP);
 	htable_init(&compiler.context.features, 1024);
 	htable_init(&compiler.context.compiler_defines, 16 * 1024);
+	methodtable_init(&compiler.context.method_extensions, 16 * 1024);
 	compiler.context.compiler_rt_path = { .module_name = "compiler_rt", .len = 11 };
 	// Create the core module.
 	ModulePath* core_path = calloc_arena(ModulePath::size);
@@ -524,6 +623,6 @@ fn void compiler_reset()
 	CompilationUnit* unit = unit_create(source_file_generate("core_internal.c3"));
 	unit.mod = compiler.context.core_module;
 	compiler.context.core_unit = unit;
-	target_setup_x64_linux();
-	type_setup(&compiler.platform);
+	// target_setup ends with type_setup, like c3c.
+	target_setup(&compiler.build);
 }

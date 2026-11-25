@@ -4,10 +4,9 @@
 // compiler_internal.h (expr_ok, expr_poison, expr_new_expr, expr_is_const_*,
 // expr_set_loc, expr_rewrite_const_*, ...).
 //
-// Not ported yet (sema): expr_is_zero, expr_is_pure, expr_is_simple,
-// expr_rewrite_to_const_zero, expr_from_const_expr_at_index,
-// expr_rewrite_to_const_initializer_index, the expr_const_* comparisons and
-// expr_rewrite_int_to_bool (needs expr_is_zero).
+// The sema half (expr_is_zero, expr_is_pure, expr_is_simple,
+// expr_rewrite_to_const_zero, expr_from_const_expr_at_index, ...) is at the
+// end of the file; the expr_const_* comparisons are in number.c3.
 //
 // Deviations from c3c:
 // - Integer constants are `Int { uint128 i; TypeKind type; }`: c3c's
@@ -1221,4 +1220,475 @@ fn void expr_rewrite_const_string_from_scratch(Expr* expr_to_rewrite)
 fn void const_init_set_type(ConstInitializer* init, Type* type)
 {
 	init.type = type_flatten(type);
+}
+
+// ---------------------------------------------------------------------------
+// The sema half of expr.c (formerly expr_rest.c3), in c3c order.
+
+// expr.c:134
+fn bool expr_is_zero(Expr* expr)
+{
+	if (!sema_cast_const(expr)) return false;
+	switch (expr.const_expr.const_kind)
+	{
+		case FLOAT:
+			return !expr.const_expr.fxx.f;
+		case INTEGER:
+			return int_is_zero(expr.const_expr.ixx);
+		case BOOL:
+			return !expr.const_expr.b;
+		case ENUM:
+			return !expr.const_expr.enum_val.enum_constant.inner_ordinal;
+		case BYTES:
+		case STRING:
+			usz len = (usz)expr.const_expr.bytes.len;
+			for (usz i = 0; i < len; i++)
+			{
+				if (expr.const_expr.bytes.ptr[i]) return false;
+			}
+			return true;
+		case FAULT:
+			return !expr.const_expr.fault_val;
+		case POINTER:
+			return !expr.const_expr.ptr;
+		case TYPEID:
+			return !expr.const_expr.typeid_type;
+		case SLICE:
+			return const_init_is_zero(expr.const_expr.slice_init);
+		case INITIALIZER:
+			return const_init_is_zero(expr.const_expr.initializer);
+		case UNTYPED_LIST:
+			foreach (e : expr.const_expr.untyped_list)
+			{
+				if (!expr_is_zero(e)) return false;
+			}
+			return true;
+		case REF:
+			return !expr.const_expr.global_ref;
+		case MEMBER:
+		case REFLECTION:
+			return false;
+	}
+	unreachable();
+}
+
+// expr.c:493 (static)
+fn ConstInitializer* initializer_for_index(ConstInitializer* initializer, ArrayIndex index, bool from_back) @inline
+{
+	switch (initializer.kind)
+	{
+		case INIT_ZERO:
+		case INIT_STRUCT:
+		case INIT_UNION:
+		case INIT_VALUE:
+			return initializer;
+		case INIT_ARRAY_FULL:
+			ArrayIndex len = (ArrayIndex)initializer.init_array_full.len;
+			if (from_back)
+			{
+				if (index > len || !index) return null;
+				index = len - index;
+			}
+			return initializer.init_array_full[index];
+		case INIT_ARRAY:
+			if (from_back)
+			{
+				ArrayIndex len = initializer.type.array.len;
+				if (index > len || !index) return null;
+				index = len - index;
+			}
+			foreach (init : initializer.init_array.elements)
+			{
+				assert(init.kind == INIT_ARRAY_VALUE);
+				if (init.init_array_value.index == index) return init.init_array_value.element;
+			}
+			return null;
+		case INIT_ARRAY_VALUE:
+			unreachable();
+	}
+	unreachable();
+}
+
+// expr.c:533
+fn void expr_rewrite_to_const_zero(Expr* expr, Type* type)
+{
+	expr.expr_kind = CONST;
+	Type* canonical = type.canonical;
+	switch (canonical.type_kind)
+	{
+		case POISONED:
+		case VOID:
+		case INFERRED_VECTOR:
+		case WILDCARD:
+			unreachable();
+		case I8..U128:
+			expr_rewrite_const_int(expr, type, 0);
+			return;
+		case F16..F128:
+			expr_rewrite_const_float(expr, type, 0);
+		case BOOL:
+			expr_rewrite_const_bool(expr, type, false);
+			return;
+		case POINTER:
+		case ANY:
+		case INTERFACE:
+		case TYPEID:
+		case FUNC_PTR:
+			expr_rewrite_const_null(expr, type);
+			return;
+		case ANYFAULT:
+			expr.const_expr.const_kind = FAULT;
+			expr.const_expr.fault_val = null;
+			expr.resolve_status = DONE;
+		case CONSTSET:
+			expr_rewrite_to_const_zero(expr, type_flatten(type));
+			cast_no_check(expr, type, false);
+			return;
+		case ENUM:
+			expr.const_expr.const_kind = ENUM;
+			assert(canonical.decl.resolve_status == DONE);
+			expr.const_expr.enum_val = canonical.decl.enums.values[0];
+			expr.resolve_status = DONE;
+		case FUNC_RAW:
+		case ALIAS:
+		case OPTIONAL:
+		case TYPEINFO:
+		case MEMBER:
+		case REFLECTION:
+		case INFERRED_ARRAY:
+		case FLEXIBLE_ARRAY:
+			unreachable();
+		case UNTYPEDLIST:
+			expr.const_expr.const_kind = UNTYPED_LIST;
+			expr.const_expr.untyped_list = {};
+			expr.resolve_status = DONE;
+		case SLICE:
+			expr_rewrite_const_empty_slice(expr, type);
+			return;
+		case STRUCT:
+		case UNION:
+		case BITSTRUCT:
+		case ARRAY:
+		case VECTOR:
+		case SIMD_VECTOR:
+			expr_rewrite_const_initializer(expr, type, const_init_new_zero(type));
+			return;
+		case TYPEDEF:
+			expr_rewrite_to_const_zero(expr, canonical.decl.distinct.type);
+	}
+	expr.type = type;
+}
+
+// expr.c:606
+fn Expr* expr_from_const_expr_at_index(Expr* expr, ArrayIndex index)
+{
+	ExprConst* expr_const = &expr.const_expr;
+	switch (expr_const.const_kind)
+	{
+		case FAULT:
+		case FLOAT:
+		case INTEGER:
+		case BOOL:
+		case ENUM:
+		case POINTER:
+		case TYPEID:
+		case REF:
+		case MEMBER:
+		case REFLECTION:
+			unreachable();
+		case BYTES:
+		case STRING:
+			char c = expr_const.bytes.ptr[index];
+			Type* indexed = type_get_indexed_type(expr.type);
+			return expr_new_const_int(expr.loc, indexed, c);
+		case UNTYPED_LIST:
+			return copy_expr_single(expr_const.untyped_list[index]);
+		case SLICE:
+			Expr* val = expr_new_expr(CONST, expr);
+			if (!expr_rewrite_to_const_initializer_index(expr.type, expr_const.slice_init, val, (int)index, false)) return poisoned_expr;
+			return val;
+		case INITIALIZER:
+			Expr* val = expr_new_expr(CONST, expr);
+			if (!expr_rewrite_to_const_initializer_index(expr.type, expr_const.initializer, val, (int)index, false)) return poisoned_expr;
+			return val;
+	}
+	unreachable();
+}
+
+// expr.c:646
+fn bool expr_rewrite_to_const_initializer_index(Type* list_type, ConstInitializer* list, Expr* result, int index, bool from_back)
+{
+	ConstInitializer* initializer = initializer_for_index(list, index, from_back);
+	ConstInitType kind = initializer ? initializer.kind : INIT_ZERO;
+	switch (kind)
+	{
+		case INIT_ZERO:
+			Type* indexed_type = type_get_indexed_type(list_type);
+			if (!indexed_type) return false;
+			expr_rewrite_to_const_zero(result, indexed_type);
+			return true;
+		case INIT_STRUCT:
+		case INIT_UNION:
+		case INIT_ARRAY:
+		case INIT_ARRAY_FULL:
+		case INIT_ARRAY_VALUE:
+			return false;
+		case INIT_VALUE:
+			// c3c: assert(initializer); -- C assert, compiled out in c3c release builds
+			expr_replace(result, initializer.init_value);
+			return true;
+	}
+	unreachable();
+}
+
+// expr.c:675
+<*
+ Determine if the expression has side effects
+ Note! This is not the same as it being const.
+*>
+fn bool expr_is_pure(Expr* expr)
+{
+	if (!expr) return true;
+	switch (expr.expr_kind)
+	{
+		// UNRESOLVED_EXPRS
+		case TRY_UNRESOLVED:
+		case ACCESS_UNRESOLVED:
+		case CATCH_UNRESOLVED:
+		case UNRESOLVED_IDENTIFIER:
+		case CAST:
+		case TYPEID:
+		case EMBED:
+		case VASPLAT:
+		case OTHER_CONTEXT:
+		case VACOUNT:
+		case VAARG:
+		case IOTA_DECL:
+		case LENGTHOF:
+		case CT_IDENT:
+		case TYPE_PROPERTY:
+		case GENERIC_IDENT:
+		case COMPOUND_LITERAL:
+		case MACRO_BODY:
+		case CT_SUBSCRIPT:
+		case CONTRACT:
+			unreachable();
+		case BUILTIN:
+		case BENCHMARK_HOOK:
+		case TEST_HOOK:
+			return false;
+		case MAKE_SLICE:
+			return expr_is_pure(expr.make_slice_expr.ptr);
+		case MAKE_ANY:
+			return expr_is_pure(expr.make_any_expr.inner) && expr_is_pure(expr.make_any_expr.typeid_expr);
+		case PTR_ACCESS:
+		case VECTOR_TO_ARRAY:
+		case SLICE_TO_VEC_ARRAY:
+		case SCALAR_TO_VECTOR:
+		case ENUM_FROM_ORD:
+		case INT_TO_FLOAT:
+		case INT_TO_PTR:
+		case PTR_TO_INT:
+		case FLOAT_TO_INT:
+		case SLICE_LEN:
+		case DISCARD:
+		case VECTOR_FROM_ARRAY:
+		case RVALUE:
+		case RECAST:
+		case ADDR_CONVERSION:
+		case MAYBE_DEREF:
+			return expr_is_pure(expr.inner_expr);
+		case INT_TO_BOOL:
+			return expr_is_pure(expr.int_to_bool_expr.inner);
+		case EXT_TRUNC:
+			return expr_is_pure(expr.ext_trunc_expr.inner);
+		case SWIZZLE:
+			return exprid_is_pure(expr.swizzle_expr.parent);
+		case BUILTIN_ACCESS:
+			return exprid_is_pure(expr.builtin_access_expr.inner);
+		case POINTER_OFFSET:
+			return exprid_is_pure(expr.pointer_offset_expr.ptr) && exprid_is_pure(expr.pointer_offset_expr.offset);
+		case COMPILER_CONST:
+		case CONST:
+		case TYPECALL:
+		case CT_FEATURE:
+		case CT_DEFINED:
+		case CT_EVAL:
+		case CT_REFLECT:
+		case IDENTIFIER:
+		case LAMBDA:
+		case NOP:
+		case OPERATOR_CHARS:
+		case RETVAL:
+		case STRINGIFY:
+		case TYPEINFO:
+		case LAST_FAULT:
+		case MEMBER_GET:
+		case MEMBER_SET:
+			return true;
+		case TWO:
+			return expr_is_pure(expr.two_expr.first) && expr_is_pure(expr.two_expr.last);
+		case BITASSIGN:
+			return false;
+		case BINARY:
+			// Anything with assignment is impure, otherwise true if sub expr are pure.
+			if (expr.binary_expr.operator >= BinaryOp.ASSIGN) return false;
+			return exprid_is_pure(expr.binary_expr.right) && exprid_is_pure(expr.binary_expr.left);
+		case UNARY:
+			switch (expr.unary_expr.operator)
+			{
+				case INC:
+				case DEC:
+				case TADDR:
+					// ++ -- &&1
+					return false;
+				case ERROR:
+				case DEREF:
+				case ADDR:
+				case NEG:
+				case BITNEG:
+				case NOT:
+				case PLUS:
+					return expr_is_pure(expr.unary_expr.expr);
+			}
+			unreachable();
+		case BITACCESS:
+		case ACCESS_RESOLVED:
+			// All access is pure if the parent is pure.
+			return expr_is_pure(expr.access_resolved_expr.parent);
+		case POISONED:
+			unreachable();
+		case MACRO_BODY_EXPANSION:
+		case CALL:
+		case CATCH:
+		case COND:
+		case DESIGNATOR:
+		case DECL:
+		case OPTIONAL:
+		case RETHROW:
+		case HASH_IDENT:
+		case MACRO_BLOCK:
+		case NAMED_ARGUMENT:
+		case NAMED_EVAL_ARGUMENT:
+		case INITIALIZER_LIST:
+		case DESIGNATED_INITIALIZER_LIST:
+		case POST_UNARY:
+		case SLICE_ASSIGN:
+		case SLICE_COPY:
+		case SPLAT:
+		case TRY:
+		case TRY_UNWRAP_CHAIN:
+		case FORCE_UNWRAP:
+		case SUBSCRIPT_ASSIGN:
+			return false;
+		case EXPRESSION_LIST:
+			foreach (e : expr.expression_list)
+			{
+				if (!expr_is_pure(e)) return false;
+			}
+			return true;
+		case TYPEID_INFO:
+			return exprid_is_pure(expr.typeid_info_expr.parent);
+		case SLICE:
+			if (!exprid_is_pure(expr.slice_expr.expr)) return false;
+			switch (expr.slice_expr.range.range_type)
+			{
+				case SINGLE_ELEMENT:
+					unreachable();
+				case CONST_RANGE:
+					return true;
+				case CONST_END:
+				case CONST_LEN:
+					return exprid_is_pure(expr.slice_expr.range.start);
+				case DYNAMIC:
+					return exprid_is_pure(expr.slice_expr.range.start)
+					       && exprid_is_pure(expr.slice_expr.range.end);
+			}
+			unreachable();
+		case SUBSCRIPT:
+		case SUBSCRIPT_ADDR:
+			return exprid_is_pure(expr.subscript_expr.expr)
+				   && exprid_is_pure(expr.subscript_expr.index.expr);
+		case TERNARY:
+			return exprid_is_pure(expr.ternary_expr.cond)
+				   && exprid_is_pure(expr.ternary_expr.else_expr)
+				   && exprid_is_pure(expr.ternary_expr.then_expr);
+		case ASM:
+			return false;
+		case DEFAULT_ARG:
+			return expr_is_pure(expr.default_arg_expr.inner);
+	}
+	unreachable();
+}
+
+// expr.c:834
+fn bool expr_is_simple(Expr* expr, bool to_float)
+{
+	while (true)
+	{
+		switch (expr.expr_kind)
+		{
+			case TERNARY:
+				return exprid_is_simple(expr.ternary_expr.else_expr, to_float) && exprid_is_simple(expr.ternary_expr.then_expr, to_float);
+			case RETHROW:
+				expr = expr.rethrow_expr.inner;
+				continue;
+			default:
+				return true;
+			case BINARY:
+				switch (expr.binary_expr.operator)
+				{
+					case DIV:
+						if (to_float) return false;
+						nextcase MOD;
+					case MOD:
+					case ELSE:
+					case BIT_AND:
+					case BIT_OR:
+					case BIT_XOR:
+						return exprid_is_simple(expr.binary_expr.left, to_float) && exprid_is_simple(expr.binary_expr.right, to_float);
+					case AND:
+					case OR:
+					case GT:
+					case GE:
+					case LT:
+					case LE:
+					case NE:
+					case EQ:
+					case VEC_GT:
+					case VEC_GE:
+					case VEC_LT:
+					case VEC_LE:
+					case VEC_NE:
+					case VEC_EQ:
+					case ASSIGN:
+					case ADD_ASSIGN:
+					case BIT_AND_ASSIGN:
+					case BIT_OR_ASSIGN:
+					case BIT_XOR_ASSIGN:
+					case DIV_ASSIGN:
+					case MOD_ASSIGN:
+					case MULT_ASSIGN:
+					case SHR_ASSIGN:
+					case SHL_ASSIGN:
+					case SUB_ASSIGN:
+						return true;
+					case SHL:
+					case SHR:
+						return to_float;
+					default:
+						return false;
+				}
+			case UNARY:
+				switch (expr.unary_expr.operator)
+				{
+					case BITNEG:
+						return to_float;
+					case NEG:
+						return false;
+					default:
+						return true;
+				}
+		}
+	}
 }

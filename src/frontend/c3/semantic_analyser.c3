@@ -1,8 +1,11 @@
-// Sema contract stubs for c3c src/compiler/semantic_analyser.c (revision 54bab366a): every function
-// of the C file not ported yet, with its final C3 signature and an
-// `unreachable` body, in c3c order. Port each body in place (see
-// PORTING.md "Sema contract"); the `// file:line` comment points at the
-// c3c definition and marks static functions.
+// Port of c3c src/compiler/semantic_analyser.c (revision 54bab366a): scope
+// and defer helpers, the analysis driver, panic / test / benchmark runner
+// setup and inline-span notes.
+//
+// Deviations from c3c:
+// - `sema_print_inline` spells the ternary note text as two format-checked
+//   @sema_note_prev_at calls.
+// - DEBUG_LOG calls are dropped.
 // `sema_error_at` / `sema_warn_at` are the @sema_error_at / @sema_warn_at
 // macros in diagnostics_inline.c3 (format-checked); no stubs here.
 module aro::frontend::c3::compiler;
@@ -15,43 +18,144 @@ char[256] swizzle = { ['x'] = 0x01, ['y'] = 0x02, ['z'] = 0x03, ['w'] = 0x04,
 // semantic_analyser.c:11
 fn void context_change_scope_with_flags(SemaContext* context, ScopeFlags flags, SourceLocId loc)
 {
-	unreachable("sema stub: context_change_scope_with_flags");
+	int depth = context.active_scope.depth + 1;
+	if (depth > MAX_SCOPE_DEPTH)
+	{
+		@sema_error_at(context, loc, "Resolution failed due to too deeply nested scopes (%d).", depth);
+		exit_compiler(COMPILER_SUCCESS_EXIT);
+	}
+
+	bool scope_is_dead = context.active_scope.is_dead;
+	bool scope_is_poisoned = context.active_scope.is_poisoned;
+	Ast* previous_defer = context.active_scope.in_defer;
+	AstId parent_defer = context.active_scope.defer_last;
+	int last_local = context.active_scope.current_local;
+	// Defer and expression blocks introduce their own return/break/continue
+	// otherwise just merge with the old flags.
+	if (flags & SCOPE_MACRO)
+	{
+		previous_defer = null;
+		parent_defer = 0;
+	}
+	bool new_label_scope = (flags & SCOPE_MACRO) != 0;
+	bool is_macro = (flags & SCOPE_MACRO) != 0;
+	flags = context.active_scope.flags | flags;
+	if (is_macro) flags &= ~(SCOPE_ENSURE | SCOPE_ENSURE_MACRO);
+
+	int label_start = new_label_scope ? last_local : context.active_scope.label_start;
+	DynamicScope new_scope = {
+		.allow_dead_code = false,
+		.is_dead = scope_is_dead,
+		.is_poisoned = scope_is_poisoned,
+		.depth = depth,
+		.current_local = last_local,
+		.label_start = label_start,
+		.in_defer = previous_defer,
+		.defer_last = parent_defer,
+		.defer_start = parent_defer,
+		.flags = flags,
+	};
+	context.active_scope = new_scope;
 }
 
 // semantic_analyser.c:53
 fn String context_filename(SemaContext* context)
 {
-	unreachable("sema stub: context_filename");
+	CompilationUnit* unit = context.unit;
+	if (!unit) return "<unknown unit>";
+	SourceFile* file = unit.file;
+	if (!file || !file.full_path.ptr) return "<unknown file>";
+	return file.full_path;
 }
 
 // semantic_analyser.c:62
 fn void context_change_scope_for_label(SemaContext* context, DeclId label_id, SourceLocId loc)
 {
-	unreachable("sema stub: context_change_scope_for_label");
+	context_change_scope_with_flags(context, SCOPE_NONE, loc);
+
+	if (label_id)
+	{
+		Decl* label = declptr(label_id);
+		label.label.defer_id = context.active_scope.defer_last;
+		sema_add_local(context, label);
+		label.label.scope_defer = context.active_scope.in_defer ? astid(context.active_scope.in_defer) : 0;
+	}
 }
 
 // semantic_analyser.c:76
 fn AstId context_get_defers(SemaContext* context, AstId defer_bottom, bool is_success)
 {
-	unreachable("sema stub: context_get_defers");
+	AstId defer_top = context.active_scope.defer_last;
+	AstId first = 0;
+	AstId* next = &first;
+	while (defer_bottom != defer_top)
+	{
+		Ast* defer_ = astptr(defer_top);
+		if ((is_success && defer_.defer_stmt.is_catch) || (!is_success && defer_.defer_stmt.is_try))
+		{
+			defer_top = defer_.defer_stmt.prev_defer;
+			continue;
+		}
+		Ast* defer_body = copy_ast_defer(astptr(defer_.defer_stmt.body));
+		*next = astid(defer_body);
+		next = &defer_body.next;
+		defer_top = defer_.defer_stmt.prev_defer;
+	}
+	return first;
 }
 
 // semantic_analyser.c:97
 fn void context_pop_defers(SemaContext* context, AstId* next)
 {
-	unreachable("sema stub: context_pop_defers");
+	AstId defer_start = context.active_scope.defer_start;
+	if (next && !context.active_scope.end_jump.active)
+	{
+		AstId defer_current = context.active_scope.defer_last;
+		while (defer_current != defer_start)
+		{
+			Ast* defer_ = astptr(defer_current);
+			if (!defer_.defer_stmt.is_catch)
+			{
+				Ast* defer_body = copy_ast_defer(astptr(defer_.defer_stmt.body));
+				*next = astid(defer_body);
+				next = &defer_body.next;
+			}
+			defer_current = defer_.defer_stmt.prev_defer;
+		}
+	}
+	context.active_scope.defer_last = defer_start;
 }
 
 // semantic_analyser.c:118
 fn void sema_add_methods_to_decl_stack(SemaContext* context, Decl* decl)
 {
-	unreachable("sema stub: sema_add_methods_to_decl_stack");
+	if (!decl.method_table) return;
+	foreach (func : decl.method_table.methods)
+	{
+		switch (func.visibility)
+		{
+			case LOCAL:
+				if (context.unit != func.unit) continue;
+			case PRIVATE:
+				if (context.unit.mod != func.unit.mod) continue;
+			default:
+				break;
+		}
+		sema_decl_stack_push(func);
+	}
 }
 
 // semantic_analyser.c:140
 fn void context_pop_defers_and_replace_ast(SemaContext* context, Ast* ast)
 {
-	unreachable("sema stub: context_pop_defers_and_replace_ast");
+	AstId defer_first = 0;
+	context_pop_defers(context, &defer_first);
+	if (!defer_first) return;
+	assert(ast.ast_kind != COMPOUND_STMT);
+	Ast* replacement = ast_copy(ast);
+	ast.ast_kind = COMPOUND_STMT;
+	ast.compound_stmt = { .first_stmt = astid(replacement), .parent_defer = 0 };
+	replacement.next = defer_first;
 }
 
 // semantic_analyser.c:152 (static), ported
@@ -233,61 +337,199 @@ fn void sema_analyze_to_stage(AnalysisStage stage)
 // semantic_analyser.c:338 (static)
 fn bool setup_main_runner(Decl* run_function)
 {
-	unreachable("sema stub: setup_main_runner");
+	SemaContext context;
+	sema_context_init(&context, run_function.unit);
+	Decl* main = sema_create_runner_main(&context, run_function);
+	if (!decl_ok(main)) return false;
+	if (!sema_analyse_decl(&context, main)) return false;
+	if (!sema_analyse_function_body(&context, main, 0)) return false;
+	sema_context_destroy(&context);
+	compiler.context.main = main;
+	main.unit.main_function = main;
+	main.no_strip = true;
+	return true;
 }
 
 // semantic_analyser.c:352 (static)
 fn Decl* find_panic_decl(String name)
 {
-	unreachable("sema stub: find_panic_decl");
+	ModulePath* path;
+	String ident;
+	if (sema_splitpathref(name, (ArrayIndex)name.len, &path, &ident) != IDENT)
+	{
+		@error_exit("'%s' does not seem to be the name of a valid panic function.", name);
+	}
+	if (!ident.ptr)
+	{
+		@error_exit("The name of the panic function, '%s' does not match any identifier found.", name);
+	}
+	if (!path)
+	{
+		@error_exit("The name of the panic function '%s' seems to missing the full path, something like 'foo::bar::panic' was expected.", name);
+	}
+	Decl* decl = sema_find_decl_in_modules(compiler.context.module_list, path, ident);
+	if (!decl)
+	{
+		@error_exit("Panic function '%s' could not be found.", name);
+	}
+	return decl;
 }
 
 // semantic_analyser.c:376 (static)
 fn void check_panic_signature(Type* type)
 {
-	unreachable("sema stub: check_panic_signature");
+	if (!type_func_match(type, type_void, 6, type_string, type_string, type_string, type_int, type_string, type_get_slice(type_any)))
+	{
+		@error_exit("Expected panic function to have the signature fn void(String, String, String, int, String, any[]).");
+	}
 }
 
 // semantic_analyser.c:384
 fn Decl* sema_panic_fn(SemaContext* context)
 {
-	unreachable("sema stub: sema_panic_fn");
+	if (compiler.context.panic_fn) return compiler.context.panic_fn;
+	String name = compiler.build.panicfn;
+	if (!name.ptr)
+	{
+		if (no_stdlib()) return null;
+		name = "std::core::builtin::default_panic";
+	}
+	Decl* decl = find_panic_decl(name);
+	if (decl.decl_kind != FUNC)
+	{
+		@error_exit("'%s' is not a function.", name);
+	}
+	if (!sema_analyse_decl(context, decl)) return null;
+	check_panic_signature(type_get_func_ptr(decl.type));
+	return compiler.context.panic_fn = decl;
 }
 
 // semantic_analyser.c:403 (static)
 fn bool is_panic_function_name(String name)
 {
-	unreachable("sema stub: is_panic_function_name");
+	foreach (&desc : panic_fn_desc)
+	{
+		if (str_eq(name, desc.name)) return true;
+	}
+	return false;
 }
 
 // semantic_analyser.c:412 (static)
 fn void check_panic_module_names(SemaContext* context, Decl*[] decls)
 {
-	unreachable("sema stub: check_panic_module_names");
+	foreach (decl : decls)
+	{
+		if (decl.visibility == LOCAL || !is_panic_function_name(decl.name)) continue;
+		@sema_error_at(context, decl.loc, "'%s' is reserved in this module, it is the name of a generated panic function.", decl.name);
+	}
 }
 
 // semantic_analyser.c:421 (static)
 fn void check_panic_module()
 {
-	unreachable("sema stub: check_panic_module");
+	foreach (module_ : compiler.context.module_list)
+	{
+		if (!str_eq(module_.name.module_name, PANIC_MODULE_NAME)) continue;
+		foreach (unit : module_.units)
+		{
+			SemaContext context;
+			sema_context_init(&context, unit);
+			check_panic_module_names(&context, unit.functions);
+			check_panic_module_names(&context, unit.vars);
+			sema_context_destroy(&context);
+		}
+	}
 }
 
 // semantic_analyser.c:437 (static)
 fn void assign_panicfn()
 {
-	unreachable("sema stub: assign_panicfn");
+	compiler.context.panic_var = null;
+	if (no_panic()) return;
+	if (no_stdlib())
+	{
+		compiler.context.panic_var = sema_panic_fn(null);
+		return;
+	}
+	Decl* decl = find_panic_decl("std::core::builtin::panic");
+	if (decl.decl_kind != VAR || !type_is_func_ptr(decl.type.canonical))
+	{
+		@error_exit("'std::core::builtin::panic' is not a function pointer.");
+	}
+	check_panic_signature(decl.type.canonical);
+	compiler.context.panic_var = decl;
 }
 
 // semantic_analyser.c:455 (static)
 fn void assign_testfn()
 {
-	unreachable("sema stub: assign_testfn");
+	if (!compiler.build.build_test) return;
+	if (!compiler.build.testfn.ptr && no_stdlib())
+	{
+		@error_exit("No test function could be found.");
+	}
+	String testfn = compiler.build.testfn.ptr ? compiler.build.testfn : "std::core::runtime::default_test_runner";
+	ModulePath* path;
+	String ident;
+	if (sema_splitpathref(testfn, (ArrayIndex)testfn.len, &path, &ident) != IDENT || path == null || !ident.ptr)
+	{
+		@error_exit("'%s' is not a valid test function.", testfn);
+	}
+	Decl* decl = sema_find_decl_in_modules(compiler.context.module_list, path, ident);
+	if (!decl)
+	{
+		@error_exit("Test function '%s::%s' could not be found.", path.module_name, ident);
+	}
+	if (decl.decl_kind != FUNC)
+	{
+		@error_exit("'%s::%s' is not a function.", path.module_name, ident);
+	}
+	if (!type_func_match(type_get_func_ptr(decl.type.canonical), type_bool, 1, type_get_slice(type_string)))
+	{
+		@error_exit("Expected test runner to have the signature fn bool(String[]).");
+	}
+	decl.no_strip = true;
+	if (compiler.build.type != TEST) return;
+
+	if (!setup_main_runner(decl))
+	{
+		@error_exit("Failed to set up test runner.");
+	}
 }
 
 // semantic_analyser.c:491 (static)
 fn void assign_benchfn()
 {
-	unreachable("sema stub: assign_benchfn");
+	if (!compiler.build.build_benchmark) return;
+	if (!compiler.build.benchfn.ptr && no_stdlib())
+	{
+		return;
+	}
+	String testfn = compiler.build.benchfn.ptr ? compiler.build.benchfn : "std::core::runtime::default_benchmark_runner";
+	ModulePath* path;
+	String ident;
+	if (sema_splitpathref(testfn, (ArrayIndex)testfn.len, &path, &ident) != IDENT || path == null || !ident.ptr)
+	{
+		@error_exit("'%s' is not a valid benchmark function.", testfn);
+	}
+	Decl* decl = sema_find_decl_in_modules(compiler.context.module_list, path, ident);
+	if (!decl)
+	{
+		@error_exit("Benchmark function '%s::%s' could not be found.", path.module_name, ident);
+	}
+	if (decl.decl_kind != FUNC)
+	{
+		@error_exit("'%s::%s' is not a function.", path.module_name, ident);
+	}
+	if (!type_func_match(type_get_func_ptr(decl.type.canonical), type_bool, 1, type_get_slice(type_string)))
+	{
+		@error_exit("Expected benchmark function to have the signature fn bool(String[] args).");
+	}
+	decl.no_strip = true;
+	if (!setup_main_runner(decl))
+	{
+		@error_exit("Failed to set up benchmark runner.");
+	}
 }
 
 // semantic_analyser.c:528 ported
@@ -404,7 +646,10 @@ fn Decl*[] global_context_acquire_locals_list()
 {
 	if (!compiler.context.locals_list.len)
 	{
-		return {};
+		// c3c VECNEW(Decl*, 64): a non-null empty vector. Code tests the
+		// pointer (`context->ct_locals` truthiness), so keep `.ptr` non-null.
+		Decl** storage = calloc_arena(64 * usz::size);
+		return storage[:0];
 	}
 	Decl*[] result = @vec_pop(&compiler.context.locals_list);
 	@vec_resize(&result, 0);
@@ -420,17 +665,72 @@ fn void generic_context_release_locals_list(Decl*[] list)
 // semantic_analyser.c:647
 fn SemaContext* context_transform_for_eval(SemaContext* context, SemaContext* temp_context, CompilationUnit* eval_unit)
 {
-	unreachable("sema stub: context_transform_for_eval");
+	if (eval_unit == context.unit)
+	{
+		temp_context.unit = null;
+		return context;
+	}
+	sema_context_init(temp_context, eval_unit);
+	temp_context.compilation_unit = context.compilation_unit;
+	temp_context.call_env = context.call_env;
+	temp_context.current_macro = context.current_macro;
+	temp_context.is_temp = true;
+	return temp_context;
 }
 
 // semantic_analyser.c:663 (static)
 fn bool loc_inside_loc(SourceLoc* inner, SourceLoc* outer)
 {
-	unreachable("sema stub: loc_inside_loc");
+	if (!inner || !outer) return false;
+	if (inner.offset < outer.offset) return false;
+	if (inner.offset + inner.length > outer.offset + outer.length) return false;
+	return true;
 }
 
 // semantic_analyser.c:671
 fn void sema_print_inline(SemaContext* context, SourceLocId original)
 {
-	unreachable("sema stub: sema_print_inline");
+	if (!context) return;
+	InliningSpan* inlined_at = context.inlined_at;
+	SourceLocId last_span = 0;
+	SourceLoc* original_loc = sourcelocptrzero(original);
+	Decl* instance = context.generic_instance;
+	bool instance_in_span = false;
+	while (inlined_at)
+	{
+		// A span for this instance already points at where it is instantiated.
+		if (instance && inlined_at.instance == instance) instance_in_span = true;
+		if (inlined_at.loc != original && inlined_at.loc != last_span)
+		{
+			SourceLoc* inlined_loc = sourcelocptrzero(inlined_at.loc);
+			if (!loc_inside_loc(original_loc, inlined_loc))
+			{
+				if (inlined_at.instance)
+				{
+					@sema_note_prev_at(inlined_at.loc, "Instantiated here.");
+				}
+				else
+				{
+					@sema_note_prev_at(inlined_at.loc, "Inlined from here.");
+				}
+				last_span = inlined_at.loc;
+			}
+		}
+		inlined_at = inlined_at.prev;
+	}
+	if (instance && !instance_in_span && instance.loc != original)
+	{
+		@sema_note_prev_at(instance.loc, "Instantiated here.");
+	}
+	InliningSpan span = context.compilation_unit.mod.inlined_at;
+	if (!span.loc) return;
+	inlined_at = &span;
+	while (inlined_at)
+	{
+		if (inlined_at.loc != original)
+		{
+			@sema_note_prev_at(inlined_at.loc, "Inlined from here.");
+		}
+		inlined_at = inlined_at.prev;
+	}
 }

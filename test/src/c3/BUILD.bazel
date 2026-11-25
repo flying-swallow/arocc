@@ -15,3 +15,12 @@ c3_binary(
     srcs = ["parse_probe.c3"],
     deps = ["//:aro_c3_frontend_lib"],
 )
+
+# `check_probe <file>...` parses and checks files (c3c `--use-stdlib=no -C
+# compile`, check only); errors on stderr. Stops at the first sema stub until
+# sema is ported.
+c3_binary(
+    name = "check_probe",
+    srcs = ["check_probe.c3"],
+    deps = ["//:aro_c3_frontend_lib"],
+)

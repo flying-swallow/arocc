@@ -3,16 +3,19 @@
 // alignments, error-string rendering) plus the Type inline helpers of
 // compiler_internal.h (type_new, type_is_*, type_flatten, ...).
 //
-// Not ported yet (sema): type_find_max_type and friends, the equivalence /
-// pointer-equivalence checks, introspection mangling, type_is_subtype
-// (needs FunctionPrototype), type_get_resolved_prototype, type_func_match,
-// type_is_must_init, type_is_comparable / ordered, type_base_module.
+// The sema half (type_find_max_type and friends, the equivalence checks,
+// introspection mangling, type_is_subtype, ...) is at the end of the file.
 //
 // Deviations from c3c:
 // - `goto RETRY` loops are `while (true)` loops.
 // - TypeKind arithmetic (`kind + (TYPE_U8 - TYPE_I8)`) goes through `.ordinal`.
 // - `str_printf` names use `%d` for c3c's `%llu`.
 // - `types_reset()` (tests) clears the builtin types and caches.
+// - type_func_match takes the arguments as a typed vararg slice; c3c's
+//   function-static `left_types` is the module global
+//   `max_distinct_left_types`.
+// - type_is_pointer_equivalent's FUNC_RAW branch returns c3c's bool as
+//   TYPE_SAME / TYPE_MISMATCH (same values).
 // - Members of c3c's `t` named after C3 types/keywords get a `_` suffix
 //   (`t.usz_`, `t.typeid_`, `t.any_`, ...).
 module aro::frontend::c3::compiler;
@@ -1324,13 +1327,15 @@ fn Type* type_from_token(TokenType type)
 
 fn bool type_may_have_sub_elements(Type* type)
 {
-	switch (type_flatten(type).type_kind)
+	// c3c DECL_TYPE_KIND_REAL: only aliases resolve; a typedef itself has sub elements.
+	switch (type_kind_real(type))
 	{
+		case TYPEDEF:
 		case UNION:
 		case STRUCT:
 		case ENUM:
-		case CONSTSET:
 		case BITSTRUCT:
+		case CONSTSET:
 		case INTERFACE:
 			return true;
 		default:
@@ -2084,3 +2089,1194 @@ fn AlignSize type_min_alignment_size(ByteSize a, AlignSize b)
 fn AlignSize type_max_alignment(AlignSize a, AlignSize b) => a < b ? b : a;
 
 fn BitSize type_bit_size(Type* type) => (BitSize)type_size(type) * 8;
+
+// ---------------------------------------------------------------------------
+// The sema half of types.c (formerly types_rest.c3), in c3c order.
+
+<* The `void (*append_decl_name)(Decl *)` callback of type_mangle_introspect_name_with. *>
+alias DeclAppendFn = fn void(Decl* decl);
+
+// types.c:477
+fn FunctionPrototype* type_get_resolved_prototype(Type* type)
+{
+	assert(type.type_kind == FUNC_RAW);
+	FunctionPrototype* prototype = type.function.prototype;
+	if (!prototype.is_resolved)
+	{
+		c_abi_func_create(type.function.signature, prototype, {} /* no vaargs */);
+	}
+	return prototype;
+}
+
+// types.c:527
+fn Type* type_is_must_init(Type* type)
+{
+	if (!type) return null;
+	while (true)
+	{
+		type = type.canonical;
+		switch (type.type_kind)
+		{
+			case TYPEDEF:
+				if (type.decl.attr_mustinit) return type;
+				return null;
+			case OPTIONAL:
+				type = type.optional;
+				continue;
+			case ARRAY:
+			case FLEXIBLE_ARRAY:
+			case INFERRED_ARRAY:
+			case VECTOR..INFERRED_VECTOR:
+				type = type.array.base;
+				continue;
+			case BITSTRUCT:
+			case STRUCT:
+			case UNION:
+				Decl* decl = type.decl;
+				if (decl.attr_mustinit) return type;
+				foreach (member : decl.strukt.members)
+				{
+					Type* type_inner = type_is_must_init(member.type);
+					if (type_inner) return type_inner;
+				}
+				return null;
+			default:
+				return null;
+		}
+	}
+}
+
+// types.c:564
+fn bool type_is_abi_aggregate(Type* type)
+{
+	return type_is_aggregate(type);
+}
+
+// types.c:570
+fn bool type_is_aggregate(Type* type)
+{
+	while (true)
+	{
+		switch (type.type_kind)
+		{
+			case OPTIONAL:
+				type = type.optional;
+				continue;
+			case TYPEDEF:
+				type = type.decl.distinct.type;
+				continue;
+			case ALIAS:
+				type = type.canonical;
+				continue;
+			case TYPEINFO:
+			case INFERRED_ARRAY:
+			case INFERRED_VECTOR:
+			case POISONED:
+			case MEMBER:
+			case WILDCARD:
+			case REFLECTION:
+			case UNTYPEDLIST:
+			case FLEXIBLE_ARRAY:
+				return false;
+			case BITSTRUCT:
+			case F16..F128:
+			case VOID:
+			case I8..U128:
+			case BOOL:
+			case TYPEID:
+			case POINTER:
+			case ENUM:
+			case CONSTSET:
+			case FUNC_PTR:
+			case FUNC_RAW:
+			case VECTOR:
+			case SIMD_VECTOR:
+			case ANYFAULT:
+				return false;
+			case STRUCT:
+			case UNION:
+			case SLICE:
+			case ARRAY:
+			case ANY:
+			case INTERFACE:
+				return true;
+		}
+		unreachable();
+	}
+}
+
+// types.c:614
+fn Type* type_find_largest_union_element(Type* type)
+{
+	assert(type.type_kind == UNION);
+	TypeSize largest = 0;
+	Type* largest_type = null;
+	foreach (member : type.decl.strukt.members)
+	{
+		Type* member_type = member.type;
+		if (type_size(member_type) > largest)
+		{
+			largest = type_size(member_type);
+			// c3c stores type->canonical (the union), not the member type.
+			largest_type = type.canonical;
+		}
+	}
+	return largest_type;
+}
+
+// types.c:631
+fn bool type_is_ordered(Type* type)
+{
+	while (true)
+	{
+		switch (type.type_kind)
+		{
+			case F16..F128:
+			case I8..U128:
+			case POINTER:
+			case BOOL:
+			case ENUM:
+			case CONSTSET:
+				return true;
+			case ALIAS:
+				type = type.canonical;
+				continue;
+			case TYPEDEF:
+				type = type.decl.distinct.type;
+				continue;
+			default:
+				return false;
+		}
+	}
+}
+
+// types.c:654
+fn bool type_is_comparable(Type* type)
+{
+	while (true)
+	{
+		switch (type.type_kind)
+		{
+			case INFERRED_VECTOR:
+			case INFERRED_ARRAY:
+			case POISONED:
+				unreachable();
+			case VOID:
+			case FLEXIBLE_ARRAY:
+			case OPTIONAL:
+			case TYPEINFO:
+			case MEMBER:
+			case REFLECTION:
+			case UNION:
+			case UNTYPEDLIST:
+			case STRUCT:
+				return false;
+			case BITSTRUCT:
+				type = type.decl.strukt.container_type.type;
+				continue;
+			case ALIAS:
+				type = type.canonical;
+				continue;
+			case SLICE:
+			case ARRAY:
+				// Arrays are comparable if elements are
+				type = type.array.base;
+				continue;
+			case TYPEDEF:
+			case CONSTSET:
+				type = type_inline(type);
+				continue;
+			case BOOL:
+			case I8..U128:
+			case F16..F128:
+			case ANY:
+			case INTERFACE:
+			case ANYFAULT:
+			case TYPEID:
+			case POINTER:
+			case ENUM:
+			case FUNC_PTR:
+			case FUNC_RAW:
+			case VECTOR:
+			case SIMD_VECTOR:
+			case WILDCARD:
+				return true;
+		}
+		unreachable();
+	}
+}
+
+// types.c:704 (static)
+fn void append_extern_decl_name_no_clear(Decl* decl)
+{
+	scratch_buffer_set_extern_decl_name(decl, false);
+}
+
+// types.c:709
+fn void type_mangle_introspect_name_to_buffer(Type* type)
+{
+	type_mangle_introspect_name_with(type, &append_extern_decl_name_no_clear);
+}
+
+// types.c:714
+fn void type_mangle_introspect_name_with(Type* type, DeclAppendFn append_decl_name)
+{
+	switch (type.type_kind)
+	{
+		case TYPEINFO:
+		case INFERRED_ARRAY:
+		case INFERRED_VECTOR:
+		case POISONED:
+		case MEMBER:
+		case WILDCARD:
+		case REFLECTION:
+			unreachable();
+		case UNTYPEDLIST:
+			scratch_buffer_append("ul$");
+			return;
+		case ANY:
+			scratch_buffer_append("any$");
+			return;
+		case VOID:
+		case BOOL:
+		case I8..U128:
+		case F16..F128:
+		case ANYFAULT:
+		case TYPEID:
+			scratch_buffer_append(type.name);
+			return;
+		case POINTER:
+			scratch_buffer_append("p$");
+			type_mangle_introspect_name_with(type.pointer, append_decl_name);
+			return;
+		case SLICE:
+			scratch_buffer_append("sa$");
+			type_mangle_introspect_name_with(type.array.base, append_decl_name);
+			return;
+		case FLEXIBLE_ARRAY:
+			scratch_buffer_append("a0$");
+			type_mangle_introspect_name_with(type.array.base, append_decl_name);
+			return;
+		case OPTIONAL:
+			scratch_buffer_append("f$");
+			type_mangle_introspect_name_with(type.optional, append_decl_name);
+			return;
+		case SIMD_VECTOR:
+			scratch_buffer_append("si");
+			nextcase VECTOR;
+		case VECTOR:
+			scratch_buffer_append_char('v');
+			scratch_buffer_append_unsigned_int((ulong)type.array.len);
+			scratch_buffer_append_char('$');
+			type_mangle_introspect_name_with(type.array.base, append_decl_name);
+			return;
+		case ARRAY:
+			scratch_buffer_append_char('a');
+			scratch_buffer_append_unsigned_int((ulong)type.array.len);
+			scratch_buffer_append_char('$');
+			type_mangle_introspect_name_with(type.array.base, append_decl_name);
+			return;
+		case FUNC_PTR:
+			type = type.pointer;
+			nextcase FUNC_RAW;
+		case FUNC_RAW:
+			type = type.function.prototype.raw_type;
+			if (type.function.decl)
+			{
+				scratch_buffer_append_module(type.function.decl.unit.mod, true);
+				scratch_buffer_append("$");
+				scratch_buffer_append(type.name);
+			}
+			else
+			{
+				foreach (c : type.name)
+				{
+					if (c == 0) break;
+					if (char_is_alphanum_(c))
+					{
+						scratch_buffer_append_char(c);
+						continue;
+					}
+					if (c == '$')
+					{
+						scratch_buffer_append("$$");
+						continue;
+					}
+					else
+					{
+						scratch_buffer_append_char('$');
+					}
+				}
+			}
+			return;
+		case ENUM:
+		case CONSTSET:
+		case STRUCT:
+		case UNION:
+		case BITSTRUCT:
+		case TYPEDEF:
+		case INTERFACE:
+			append_decl_name(type.decl);
+			return;
+		case ALIAS:
+			type_mangle_introspect_name_with(type.canonical, append_decl_name);
+			return;
+	}
+	unreachable();
+}
+
+// types.c:815
+fn bool type_func_match(Type* fn_type, Type* rtype, int arg_count, Type*... arg_types)
+{
+	assert(type_is_func_ptr(fn_type));
+	Signature* sig = fn_type.pointer.function.signature;
+	if (rtype.canonical != typeget(sig.rtype).canonical) return false;
+	if (sig.params.len != arg_count) return false;
+	foreach (i, decl : sig.params)
+	{
+		Type* arg = arg_types[i];
+		if (decl.type.canonical != arg.canonical) return false;
+	}
+	return true;
+}
+
+// types.c:920 (static)
+fn bool _type_contains_padded_union(Type* type, bool in_union_rep)
+{
+	type = type_flatten(type);
+	switch (type.type_kind)
+	{
+		case STRUCT:
+			TypeSize offset = 0;
+			foreach (member : type.decl.strukt.members)
+			{
+				if (in_union_rep && member.offset > offset + member.padding) return true;
+				if (_type_contains_padded_union(member.type, in_union_rep)) return true;
+				offset = member.offset + type_size(member.type);
+			}
+			return in_union_rep && type_size(type) > offset + type.decl.strukt.padding;
+		case UNION:
+			return _type_contains_padded_union(type.decl.strukt.members[type.decl.strukt.union_rep].type, true);
+		case ARRAY:
+			return _type_contains_padded_union(type.array.base, in_union_rep);
+		default:
+			return false;
+	}
+}
+
+// types.c:945
+fn bool type_contains_padded_union(Type* type)
+{
+	return _type_contains_padded_union(type, false);
+}
+
+// types.c:1192 (static)
+fn bool array_structurally_equivalent_to_struct(Type* array, Type* type) @inline
+{
+	assert(array.type_kind == ARRAY);
+
+	ArrayIndex len = (ArrayIndex)array.array.len;
+	if (!len) return type_size(type) == 0;
+
+	Type* base = array.array.base;
+
+	if (len == 1 && type_is_structurally_equivalent(base, type)) return true;
+
+	assert(type.type_kind != UNION, "Does not work on unions");
+
+	if (!type_is_union_or_strukt(type)) return false;
+
+	Decl*[] members = type.decl.strukt.members;
+
+	// For structs / errors, all members must match.
+	ArrayIndex offset = 0;
+	AlignSize align_size = type_abi_alignment(array);
+	Type* array_base = array.array.base;
+	foreach (member : members)
+	{
+		if (!type_is_structurally_equivalent(array_base, member.type)) return false;
+		if (member.offset != offset) return false;
+		offset += align_size;
+	}
+	return true;
+}
+
+// types.c:1222
+fn bool type_is_structurally_equivalent(Type* type1, Type* type2)
+{
+	type1 = type_flatten(type1);
+	type2 = type_flatten(type2);
+
+	if (type1 == type2) return true;
+
+	// If the other type is a union, we check against every member
+	// noting that there is only structural equivalence if it fills out the
+	if (type2.type_kind == UNION)
+	{
+		// If any member is structurally equivalent, then
+		// the cast is valid.
+		foreach (member : type2.decl.strukt.members)
+		{
+			if (type_is_structurally_equivalent(type1, member.type)) return true;
+		}
+		// In this case we can't get a match.
+		return false;
+	}
+
+	if (type1.type_kind == ARRAY)
+	{
+		return array_structurally_equivalent_to_struct(type1, type2);
+	}
+
+	if (type2.type_kind == ARRAY)
+	{
+		return array_structurally_equivalent_to_struct(type2, type1);
+	}
+
+	if (!type_is_union_or_strukt(type1)) return false;
+
+	Decl*[] members = type1.decl.strukt.members;
+	if (type1.type_kind == UNION)
+	{
+		// If any member is structurally equivalent, then
+		// the cast is valid.
+		foreach (member : members)
+		{
+			if (type_is_structurally_equivalent(member.type, type2)) return true;
+		}
+		return false;
+	}
+
+	// The only thing we have left is to check against another structlike.
+	if (!type_is_union_or_strukt(type2)) return false;
+
+	Decl*[] other_members = type2.decl.strukt.members;
+
+	// For structs / errors, all members must match.
+	foreach (i, member : members)
+	{
+		if (!type_is_structurally_equivalent(member.type, other_members[i].type)) return false;
+		if (member.offset != other_members[i].offset) return false;
+	}
+
+	return true;
+}
+
+// types.c:1753
+<*
+ Check if a type is contained in another type.
+ @param type : "canonical type"
+ @param possible_subtype : "is this a subtype of the former, i.e. type is the parent."
+*>
+fn bool type_is_subtype(Type* type, Type* possible_subtype)
+{
+	assert(type == type.canonical);
+	while (possible_subtype)
+	{
+		possible_subtype = possible_subtype.canonical;
+		if (type == possible_subtype) return true;
+		if (type.type_kind == FUNC_PTR && possible_subtype.type_kind == FUNC_PTR)
+		{
+			return type.pointer.function.prototype.raw_type == possible_subtype.pointer.function.prototype.raw_type;
+		}
+		possible_subtype = type_find_parent_type(possible_subtype);
+	}
+	return false;
+}
+
+// types.c:1828 (static)
+fn TypeCmpResult type_array_is_equivalent(SemaContext* context, Type* from, Type* to, bool is_explicit)
+{
+	TypeKind to_kind = to.type_kind;
+	switch (from.type_kind)
+	{
+		case INFERRED_ARRAY:
+			assert(to_kind != INFERRED_ARRAY);
+			if (to_kind != ARRAY) return TYPE_MISMATCH;
+			return type_array_element_is_equivalent(context, from.array.base, to.array.base, is_explicit);
+		case ARRAY:
+			if (to_kind != ARRAY && to_kind != INFERRED_ARRAY) return TYPE_MISMATCH;
+			if (to_kind == ARRAY && from.array.len != to.array.len) return TYPE_MISMATCH;
+			return type_array_element_is_equivalent(context, from.array.base, to.array.base, is_explicit);
+		case INFERRED_VECTOR:
+			assert(to_kind != INFERRED_VECTOR);
+			if (type_kind_is_real_vector(to_kind)) return TYPE_MISMATCH;
+			return type_array_element_is_equivalent(context, from.array.base, to.array.base, is_explicit);
+		case VECTOR:
+		case SIMD_VECTOR:
+			if (!type_kind_is_any_vector(to_kind)) return TYPE_MISMATCH;
+			if (type_kind_is_real_vector(to_kind) && from.array.len != to.array.len) return TYPE_MISMATCH;
+			return type_array_element_is_equivalent(context, from.array.base, to.array.base, is_explicit);
+		default:
+			return TYPE_MISMATCH;
+	}
+}
+
+// types.c:1855
+fn TypeCmpResult type_array_element_is_equivalent(SemaContext* context, Type* element1, Type* element2, bool is_explicit)
+{
+	if (is_explicit)
+	{
+		element1 = type_flatten(element1);
+		element2 = type_flatten(element2);
+	}
+	else
+	{
+		element1 = element1.canonical;
+		element2 = element2.canonical;
+	}
+	if (element1 == element2) return TYPE_SAME;
+	if ((type_is_void(element1) && element2 == type_char) || (element1 == type_char && type_is_void(element2)))
+	{
+		return TYPE_SAME;
+	}
+	switch (element1.type_kind)
+	{
+		case FUNC_PTR:
+			if (element2 == type_voidptr) return TYPE_SAME;
+			if (element2.type_kind != FUNC_PTR) return TYPE_MISMATCH;
+			if (element1.pointer.function.prototype.raw_type == element2.pointer.function.prototype.raw_type) return TYPE_SAME;
+			return TYPE_MISMATCH;
+		case POINTER:
+			if (element2.type_kind == FUNC_PTR && type_voidptr == element1) return TYPE_SAME;
+			if (!type_is_pointer(element2)) return TYPE_MISMATCH;
+			return type_is_pointer_equivalent(context, element1, element2, is_explicit);
+		case STRUCT:
+			if (is_explicit) return type_is_structurally_equivalent(element1, element2) ? TYPE_SAME : TYPE_MISMATCH;
+			return TYPE_MISMATCH;
+		case VECTOR:
+		case SIMD_VECTOR:
+		case ARRAY:
+		case INFERRED_ARRAY:
+		case INFERRED_VECTOR:
+			return type_array_is_equivalent(context, element1, element2, is_explicit);
+		case I8..U128:
+			if (type_is_matching_int(element1, element2)) return TYPE_SAME_INT_SIZE;
+			return TYPE_MISMATCH;
+		default:
+			return TYPE_MISMATCH;
+	}
+}
+
+// types.c:1899
+fn TypeCmpResult type_is_pointer_equivalent(SemaContext* context, Type* to_pointer, Type* from_pointer, bool flatten_distinct)
+{
+	while (true)
+	{
+		if (flatten_distinct)
+		{
+			to_pointer = type_flatten(to_pointer);
+			from_pointer = type_flatten(from_pointer);
+		}
+		// Are they the same?
+		if (to_pointer == from_pointer) return TYPE_SAME;
+
+		// Is one of them a void*?
+		if (to_pointer == type_voidptr || from_pointer == type_voidptr) return TYPE_SAME;
+
+		// Look at the pointees.
+		Type* to_pointee = to_pointer.pointer.canonical;
+		Type* from_pointee = from_pointer.pointer.canonical;
+		if (flatten_distinct)
+		{
+			to_pointee = type_flatten(to_pointee);
+			from_pointee = type_flatten(from_pointee);
+		}
+
+		// Are pointees same after flattening?
+		if (to_pointee == from_pointee) return TYPE_SAME;
+		if (type_is_subtype(to_pointee, from_pointee)) return TYPE_SAME;
+
+		if (type_is_matching_int(to_pointee, from_pointee)) return TYPE_SAME_INT_SIZE;
+
+		if (type_is_any_arraylike(from_pointee))
+		{
+			TypeCmpResult res_current = TYPE_SAME;
+			if (type_abi_alignment(to_pointee) > type_abi_alignment(from_pointee)) res_current = TYPE_ALIGNMENT_INCREASE;
+
+			// Try array equivalence.
+			if (type_is_any_arraylike(to_pointee))
+			{
+				TypeCmpResult res = type_array_is_equivalent(context, from_pointee, to_pointee, flatten_distinct);
+				if (res != TYPE_MISMATCH) return res == TYPE_SAME ? res_current : res;
+				if (to_pointee.array.len == from_pointee.array.len && to_pointee.array.base.canonical == from_pointee.array.base.canonical)
+				{
+					return res_current;
+				}
+			}
+			// A possible int[4]* -> int* decay?
+			TypeCmpResult res = type_is_pointer_equivalent(context, to_pointer, type_get_ptr(from_pointee.array.base), flatten_distinct);
+			if (res == TYPE_SAME) return res_current;
+		}
+
+		if (to_pointee.type_kind != from_pointee.type_kind) return TYPE_MISMATCH;
+
+		if (to_pointee.type_kind == FUNC_RAW && from_pointee.type_kind == FUNC_RAW)
+		{
+			if (!sema_resolve_type_decl(context, to_pointee)) return TYPE_ERROR;
+			if (!sema_resolve_type_decl(context, from_pointee)) return TYPE_ERROR;
+			return to_pointee.function.prototype.raw_type == from_pointee.function.prototype.raw_type ? TYPE_SAME : TYPE_MISMATCH;
+		}
+		if (to_pointee.type_kind == POINTER || to_pointee.type_kind == FUNC_PTR)
+		{
+			to_pointer = to_pointee;
+			from_pointer = from_pointee;
+			continue;
+		}
+		return TYPE_MISMATCH;
+	}
+}
+
+// types.c:1965
+fn bool type_may_have_method(Type* type)
+{
+	TypeKind kind = type.type_kind;
+	if (kind == ALIAS) kind = type.canonical.type_kind;
+	switch (kind)
+	{
+		case TYPEDEF:
+		case UNION:
+		case STRUCT:
+		case ENUM:
+		case CONSTSET:
+		case BITSTRUCT:
+		case F16..F128:
+		case I8..U128:
+		case ANY:
+		case ANYFAULT:
+		case TYPEID:
+		case ARRAY:
+		case SLICE:
+		case VECTOR..INFERRED_VECTOR:
+		case INFERRED_ARRAY:
+		case FLEXIBLE_ARRAY:
+		case BOOL:
+		case INTERFACE:
+			return true;
+		case ALIAS:
+			unreachable();
+		case POINTER:
+			return type == type_voidptr;
+		case POISONED:
+		case VOID:
+		case FUNC_PTR:
+		case FUNC_RAW:
+		case OPTIONAL:
+		case UNTYPEDLIST:
+		case WILDCARD:
+		case TYPEINFO:
+		case MEMBER:
+		case REFLECTION:
+			return false;
+	}
+	unreachable();
+}
+
+// types.c:2024
+fn Type* type_find_max_num_type(Type* num_type, Type* other_num)
+{
+	TypeKind kind = num_type.type_kind;
+	TypeKind other_kind = other_num.type_kind;
+	assert(kind <= other_kind, "Expected ordering");
+	assert(kind != other_kind);
+
+	// If the other is a vector then we always set that one as the max.
+	if (type_kind_is_real_vector(other_kind)) return other_num;
+
+	// 1. The only conversions need to happen if the other type is a number.
+	if (other_kind < TYPE_INTEGER_FIRST || other_kind > TYPE_FLOAT_LAST) return null;
+
+	// 2. First check the float case.
+	if (other_kind >= TYPE_FLOAT_FIRST && other_kind <= TYPE_FLOAT_LAST)
+	{
+		switch (other_kind)
+		{
+			case BF16:
+			case F16:
+			case F32:
+			case F64:
+			case F128:
+				// Pick the biggest, which will be in other_num due to ordering.
+				return other_num;
+			default:
+				unreachable();
+		}
+	}
+
+	// Handle integer <=> integer conversions.
+	assert(type_kind_is_any_integer(other_kind) && type_is_integer(num_type));
+
+	// 4. Check the bit sizes.
+	int other_bit_size = other_num.builtin.bitsize;
+	int bit_size = num_type.builtin.bitsize;
+
+	// 5. The other type is unsigned
+	if (type_kind_is_unsigned(other_kind))
+	{
+		if (type_kind_is_signed(kind))
+		{
+			// 5a. C signed/unsigned promotion rules
+			return bit_size > other_bit_size ? num_type : other_num;
+		}
+		// 5b. Unsigned + Unsigned -> return other_num which is the bigger due to ordering.
+		return other_num;
+	}
+
+	// 6. The other type is signed, then pick other_num which is bigger due to ordering.
+	return other_num;
+}
+
+// types.c:2089 (static)
+<*
+ max(Foo[:], Bar*)  -> max(Foo*, Bar*)
+ max(Foo[], Bar*)   -> max(Foo*, Bar*)
+ max(Foo[n]*, Bar*) -> max(Foo*, Bar*)
+ max(void*, Foo*)   -> void*
+ max(Foo*, Bar*)    -> max(Foo, Bar)*
+ max(other, Foo*)   -> NULL
+ Returns the max pointer type, poison if on-demand resolution fails, or null if none can be found.
+*>
+fn Type* type_find_max_ptr_type(SemaContext* context, Type* type, Type* other) @inline
+{
+	// Slice and vararray can implicitly convert to a pointer.
+	if (other.type_kind == SLICE)
+	{
+		Type* max_type = type_find_max_type(context, type.pointer, other.pointer, null, null);
+		if (!max_type || max_type == poisoned_type) return max_type;
+		return type_get_ptr(max_type);
+	}
+
+	// Neither slice, vararray nor pointer? Then no max
+	if (other.type_kind != POINTER) return null;
+
+	Type* other_pointer_type = other.pointer;
+	Type* pointer_type = type.pointer;
+
+	// Reorder if needed
+	if (other_pointer_type.type_kind < pointer_type.type_kind)
+	{
+		pointer_type = other_pointer_type;
+		other_pointer_type = type.pointer;
+	}
+
+	// void * is always max.
+	if (type_is_void(pointer_type)) return type_voidptr;
+
+	if (pointer_type.type_kind == POINTER && other_pointer_type.type_kind == ARRAY)
+	{
+		// Decay foo[n]* to foo*
+		other_pointer_type = type_get_ptr(other_pointer_type.array.base);
+	}
+	if (type_is_subtype(pointer_type.canonical, other_pointer_type.canonical))
+	{
+		return type;
+	}
+	if (type_is_subtype(other_pointer_type.canonical, pointer_type.canonical))
+	{
+		return other;
+	}
+	Type* max_type = type_find_max_type(context, pointer_type, other_pointer_type, null, null);
+	if (!max_type || max_type == poisoned_type) return max_type;
+	return type_get_ptr(max_type);
+}
+
+// types.c:2134
+fn Type* type_decay_array_pointer(Type* type)
+{
+	assert(type.type_kind == POINTER);
+	Type* ptr = type.pointer;
+	switch (ptr.type_kind)
+	{
+		case ARRAY:
+		case VECTOR:
+		case SIMD_VECTOR:
+			return type_get_ptr(ptr.array.base.canonical);
+		default:
+			return type;
+	}
+}
+
+const int MAX_SEARCH_DEPTH = 512;
+<* The function-static `left_types` of type_find_max_distinct_type. *>
+Type*[MAX_SEARCH_DEPTH] max_distinct_left_types @local;
+
+// types.c:2148 (static)
+fn Type* type_find_max_distinct_type(Type* left, Type* right) @inline
+{
+	assert(left == left.canonical && right == right.canonical);
+	assert(left != right);
+	assert(type_is_distinct_like(left) && type_is_distinct_like(right));
+	int depth = 0;
+	while (depth < MAX_SEARCH_DEPTH)
+	{
+		max_distinct_left_types[depth++] = left;
+		if (!type_is_distinct_like(left) || !left.decl.is_substruct) break;
+		left = type_inline(left);
+		if (left == right) return right;
+	}
+	if (depth == MAX_SEARCH_DEPTH)
+	{
+		@error_exit("Common ancestor search depth %d exceeded.", MAX_SEARCH_DEPTH);
+	}
+	assert(left != right);
+	while (true)
+	{
+		for (int i = 0; i < depth; i++)
+		{
+			if (right == max_distinct_left_types[i]) return right;
+		}
+		if (!type_is_distinct_like(right) || !right.decl.is_substruct) return null;
+		right = type_inline(right);
+		if (left == right) return right;
+	}
+}
+
+// types.c:2180
+fn Type* type_find_max_type(SemaContext* context, Type* type, Type* other, Expr* first, Expr* second)
+{
+	type = type.canonical;
+	other = other.canonical;
+	assert(!type_is_optional(type) && !type_is_optional(other));
+
+	while (true) // RETRY_DISTINCT
+	{
+		// Same type, max is the type
+		if (type == other) return type;
+
+		// One type is wildcard, max is the type which isn't wildcard
+		if (type == type_wildcard) return other;
+		if (other == type_wildcard) return type;
+
+		// Sort types to make it easier
+		if (type.type_kind > other.type_kind)
+		{
+			Type* temp = type;
+			Expr* first_expr = first;
+			type = other;
+			first = second;
+			other = temp;
+			second = first_expr;
+		}
+
+		// The following relies on type kind ordering, with the "lowest" type kind on top, this means the other type kind is
+		// further down in the list
+		switch (type.type_kind)
+		{
+			case POISONED:
+				// Should never get here
+				unreachable();
+			case VOID:
+			case BOOL:
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				return null;
+			case I8..U128:
+				// If Foo + 1, then we allow this if Foo is a distinct type or constset that has
+				// integer or float as the base type.
+				if (first && type_is_distinct_like(other) && type_underlying_is_numeric(other) && expr_is_const(first)) return other;
+				// See if we can flatten it.
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				// Now let's just compare the numerical type, including vectors
+				return type_find_max_num_type(type, other);
+			case F16..F128:
+				// If Foo + 1.0, then we allow this if Foo is a distinct type or constset that has
+				// float as the base type.
+				if (first && type_is_distinct_like(other) && type_underlying_is_numeric(other) && expr_is_const(first)) return other;
+				// See if we can flatten it.
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				// Now let's just compare the numerical type, including vectors
+				return type_find_max_num_type(type, other);
+			case ANY:
+				// any + interface => any
+				if (other == type_voidptr) return other;
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				return other.type_kind == INTERFACE ? type : null;
+			case INTERFACE:
+				// interface + void* => void*
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				return other == type_voidptr ? type_voidptr : null;
+			case POINTER:
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				if (type.pointer.type_kind == ARRAY)
+				{
+					Type* array_base = type.pointer.array.base.canonical;
+					if (other.type_kind == SLICE &&
+						array_base == other.array.base.canonical)
+					{
+						return other;
+					}
+					if (other.type_kind == POINTER)
+					{
+						Type* other_pointer = other.pointer;
+						if (other_pointer.type_kind == ARRAY && other_pointer.array.base.canonical == array_base)
+						{
+							return type_get_slice(array_base);
+						}
+					}
+				}
+				if (type_kind_is_real_vector(type.pointer.type_kind))
+				{
+					Type* vector_base = type.pointer.array.base.canonical;
+					if (other.type_kind == SLICE && vector_base == other.array.base.canonical)
+					{
+						return other;
+					}
+				}
+				// We need to decay the pointer
+				type = type_decay_array_pointer(type);
+				// And possibly the other pointer as well
+				if (other.type_kind == POINTER) other = type_decay_array_pointer(other);
+				return type_find_max_ptr_type(context, type, other);
+			case ANYFAULT:
+			case TYPEID:
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				return type;
+			case FUNC_PTR:
+				if (other == type_voidptr) return other;
+				if (type_has_inline(other))
+				{
+					other = type_flat_distinct_inline(other);
+					continue;
+				}
+				if (other.type_kind != FUNC_PTR) return null;
+				if (!type.pointer.function.prototype && !sema_resolve_type_decl(context, type.pointer)) return poisoned_type;
+				if (!other.pointer.function.prototype && !sema_resolve_type_decl(context, other.pointer)) return poisoned_type;
+				if (other.pointer.function.prototype.raw_type != type.pointer.function.prototype.raw_type) return null;
+				return type;
+			case TYPEDEF:
+			case CONSTSET:
+				if (type_is_distinct_like(other))
+				{
+					return type_find_max_distinct_type(type, other);
+				}
+				// Try matching with its inline type
+				if (type.decl.is_substruct)
+				{
+					type = type_inline(type);
+					continue;
+				}
+				// distinct + any other type => no
+				return null;
+			case ENUM:
+				return null;
+			case FUNC_RAW:
+				unreachable();
+			case UNION:
+			case STRUCT:
+			case BITSTRUCT:
+				// union/struct + anything else => no
+				// even if the struct has an inline type, this should not
+				// be implicit
+				return null;
+			case ALIAS:
+				unreachable(); // Should only handle canonical types
+			case UNTYPEDLIST:
+				if (other.type_kind == ARRAY) return other;
+				if (type_kind_is_real_vector(other.type_kind)) return other;
+				if (other.type_kind == STRUCT) return other;
+				if (other.type_kind == SLICE) return other;
+				return null;
+			case SLICE:
+				// slice + [array, vector of the same type] => yes
+				if (type_is_arraylike(other) && (other.array.base.canonical == type.array.base.canonical))
+				{
+					return type;
+				}
+				// otherwise no
+				return null;
+			case ARRAY:
+				// array + [other array, vector] => no
+				return null;
+			case FLEXIBLE_ARRAY:
+				return null;
+			case INFERRED_ARRAY:
+			case INFERRED_VECTOR:
+				// Already handled
+				unreachable();
+			case OPTIONAL:
+				// Should never be passed here
+				unreachable();
+			case WILDCARD:
+				// Handled above
+				unreachable();
+			case TYPEINFO:
+			case MEMBER:
+			case REFLECTION:
+				return null;
+			case VECTOR:
+				// VECTOR + SIMD -> SIMD if type and length matches.
+				if (other.type_kind == SIMD_VECTOR)
+				{
+					if (other.array.base.canonical == type.array.base.canonical && other.array.len == type.array.len)
+					{
+						return other;
+					}
+				}
+				return null;
+			case SIMD_VECTOR:
+				// No implicit conversion between vectors
+				return null;
+		}
+		unreachable();
+	}
+}
+
+// types.c:2400
+fn int type_get_introspection_kind(TypeKind kind)
+{
+	switch (kind)
+	{
+		case POISONED:
+			return 0;
+		case VOID:
+			return INTROSPECT_TYPE_VOID;
+		case BOOL:
+			return INTROSPECT_TYPE_BOOL;
+		case I8:
+		case I16:
+		case I32:
+		case I64:
+		case I128:
+			return INTROSPECT_TYPE_SIGNED_INT;
+		case U8:
+		case U16:
+		case U32:
+		case U64:
+		case U128:
+			return INTROSPECT_TYPE_UNSIGNED_INT;
+		case F16:
+		case BF16:
+		case F32:
+		case F64:
+		case F128:
+			return INTROSPECT_TYPE_FLOAT;
+		case ANY:
+			return INTROSPECT_TYPE_ANY;
+		case ANYFAULT:
+			return INTROSPECT_TYPE_ANYFAULT;
+		case INTERFACE:
+			return INTROSPECT_TYPE_INTERFACE;
+		case TYPEID:
+			return INTROSPECT_TYPE_TYPEID;
+		case POINTER:
+			return INTROSPECT_TYPE_POINTER;
+		case ENUM:
+			return INTROSPECT_TYPE_ENUM;
+		case CONSTSET:
+			return INTROSPECT_TYPE_CONSTSET;
+		case FUNC_PTR:
+			return INTROSPECT_TYPE_FUNC;
+		case STRUCT:
+			return INTROSPECT_TYPE_STRUCT;
+		case UNION:
+			return INTROSPECT_TYPE_UNION;
+		case BITSTRUCT:
+			return INTROSPECT_TYPE_BITSTRUCT;
+		case FUNC_RAW:
+		case ALIAS:
+			unreachable();
+		case TYPEDEF:
+			return INTROSPECT_TYPE_DISTINCT;
+		case ARRAY:
+		case INFERRED_ARRAY:
+		case FLEXIBLE_ARRAY:
+			return INTROSPECT_TYPE_ARRAY;
+		case SLICE:
+			return INTROSPECT_TYPE_SLICE;
+		case VECTOR..INFERRED_VECTOR:
+			return INTROSPECT_TYPE_VECTOR;
+		case OPTIONAL:
+			return INTROSPECT_TYPE_OPTIONAL;
+		case UNTYPEDLIST:
+			return INTROSPECT_TYPE_UNTYPEDLIST;
+		case TYPEINFO:
+		case MEMBER:
+		case REFLECTION:
+		case WILDCARD:
+			unreachable();
+	}
+	unreachable();
+}
+
+// types.c:2475
+fn Module* type_base_module(Type* type)
+{
+	while (true)
+	{
+		switch (type.type_kind)
+		{
+			case POISONED:
+			case VOID:
+			case I8..U128:
+			case F16..F128:
+			case BOOL:
+			case ANY:
+			case ANYFAULT:
+			case TYPEID:
+			case UNTYPEDLIST:
+			case WILDCARD:
+				return null;
+			case POINTER:
+				type = type.pointer;
+				continue;
+			case FUNC_PTR:
+				type = type.pointer;
+				nextcase FUNC_RAW;
+			case FUNC_RAW:
+				return type.function.decl ? type.function.decl.unit.mod : null;
+			case ENUM:
+			case CONSTSET:
+			case STRUCT:
+			case UNION:
+			case BITSTRUCT:
+			case TYPEDEF:
+			case INTERFACE:
+				return type.decl.unit ? type.decl.unit.mod : null;
+			case ALIAS:
+				type = type.canonical;
+				continue;
+			case SLICE:
+			case VECTOR..INFERRED_VECTOR:
+			case ARRAY:
+			case INFERRED_ARRAY:
+			case FLEXIBLE_ARRAY:
+				type = type.array.base;
+				continue;
+			case OPTIONAL:
+				type = type.optional;
+				continue;
+			case TYPEINFO:
+			case MEMBER:
+			case REFLECTION:
+				unreachable();
+		}
+		unreachable();
+	}
+}

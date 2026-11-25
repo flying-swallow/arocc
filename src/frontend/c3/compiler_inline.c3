@@ -211,3 +211,6 @@ fn int arg_bits_max(AsmArgBits bits, int limit)
 	if (limit >= 5 && (bits & ARG_BITS_5)) return 5;
 	return 0;
 }
+
+<* compiler_internal.h `SWIZZLE_INDEX(c)`: 0-based component index of a swizzle letter. *>
+fn int swizzle_index(char c) @inline => (swizzle[c] - 1) & 0xF;

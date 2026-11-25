@@ -1,11 +1,14 @@
 // The parts of c3c src/compiler/codegen_internal.h, c_abi_internal.h and
-// codegen_general.c that the C ABI port (c_abi.c3, c_abi_x64.c3) needs to
-// build function prototypes during sema: type lowering, the AbiType helpers
-// and type_abi_find_single_struct_element. Owned by the ABI port.
+// codegen_general.c that the C ABI port (c_abi*.c3) needs to build function
+// prototypes during sema: type lowering, the AbiType helpers,
+// type_abi_find_single_struct_element and type_is_homogeneous_aggregate
+// (with its statics). Owned by the ABI port.
 //
 // Deviations from c3c:
 // - c3c's `goto`/`while (1)` lowering loops are `while (true)` + `continue`.
 // - The `ByVal` enum keeps its C member names as BY_VAL / BY_VAL_SKIP.
+// - type_is_homogeneous_aggregate: `goto TYPECHECK` is the shared tail,
+//   repeated in the struct and array cases.
 module aro::frontend::c3::compiler;
 
 <* c_abi_internal.h `ByVal`. *>
@@ -324,4 +327,270 @@ fn Type* type_abi_find_single_struct_element(Type* type, bool in_abi)
 	// If there is some padding? Then ignore.
 	if (found && type_size(type) != type_size(found)) found = null;
 	return found;
+}
+
+// codegen_general.c:45 (static)
+fn bool type_is_homogenous_base_type(Type* type)
+{
+	type = type.canonical;
+	switch (compiler.platform.abi)
+	{
+		case PPC64_SVR4:
+			switch (type.type_kind)
+			{
+				case F128:
+					if (!compiler.platform.float128_supported) return false;
+					nextcase;
+				case F32:
+				case F64:
+					return !compiler.platform.ppc64.is_softfp;
+				case SIMD_VECTOR:
+					return type_size(type) == 128 / 8;
+				default:
+					return false;
+			}
+		case X64:
+		case WIN64:
+		case X86:
+			switch (type.type_kind)
+			{
+				case F64:
+				case F32:
+					return true;
+				case SIMD_VECTOR:
+					switch (type_size(type))
+					{
+						case 16:
+						case 32:
+						case 64:
+							// vec128 256 512 ok
+							return true;
+						default:
+							return false;
+					}
+				default:
+					return false;
+			}
+		case AARCH64:
+			switch (type.type_kind)
+			{
+				case BF16:
+				case F16:
+				case F32:
+				case F64:
+				case F128:
+					return true;
+				case SIMD_VECTOR:
+					switch (type_size(type))
+					{
+						case 8:
+						case 16:
+							// vector 64, 128 => true
+							return true;
+						default:
+							return false;
+					}
+				default:
+					return false;
+			}
+		case ARM:
+			switch (type.type_kind)
+			{
+				case F32:
+				case F64:
+				case F128:
+					return true;
+				case SIMD_VECTOR:
+					switch (type_size(type))
+					{
+						case 8:
+						case 16:
+							return true;
+						default:
+							break;
+					}
+					// c3c: FALLTHROUGH into default.
+					return false;
+				default:
+					return false;
+			}
+		case UNKNOWN:
+		case WASM:
+		case PPC32:
+		case RISCV:
+		case AVR:
+		case XTENSA:
+			return false;
+	}
+}
+
+// codegen_general.c:136 (static)
+fn bool type_homogenous_aggregate_small_enough(Type* type, int members)
+{
+	switch (compiler.platform.abi)
+	{
+		case PPC64_SVR4:
+			if (type.type_kind == F128 && compiler.platform.float128_supported) return members <= 8;
+			if (type.type_kind == SIMD_VECTOR) return members <= 8;
+			// Use max 8 registers.
+			return ((type_size(type) + 7) / 8) * members <= 8;
+		case X64:
+		case WIN64:
+		case X86:
+		case AARCH64:
+		case ARM:
+			return members <= 4;
+		case UNKNOWN:
+		case WASM:
+		case PPC32:
+		case RISCV:
+		case AVR:
+		case XTENSA:
+			return false;
+	}
+}
+
+// codegen_general.c:171
+<*
+ Calculate whether this is a homogeneous aggregate for the ABI.
+ Based on bool ABIInfo::isHomogeneousAggregate in Clang.
+ (c3c's `goto TYPECHECK` is the shared tail repeated in the struct / array
+ cases.)
+ @param type : "the (flattened) type to check."
+ @param base : "the base type of the aggregate"
+ @param elements : "the elements found"
+ @return "true if it is an aggregate, false otherwise."
+*>
+fn bool type_is_homogeneous_aggregate(LoweredType* type, Type** base, int* elements)
+{
+	assert(base && type && elements);
+	*elements = 0;
+	switch (type.type_kind)
+	{
+		case TYPEINFO:
+		case INFERRED_ARRAY:
+		case INFERRED_VECTOR:
+		case POISONED:
+		case MEMBER:
+		case WILDCARD:
+		case REFLECTION:
+		case ENUM:
+		case ALIAS:
+		case TYPEID:
+		case TYPEDEF:
+		case ANYFAULT:
+		case BITSTRUCT:
+		case OPTIONAL:
+		case INTERFACE:
+		case CONSTSET:
+		case UNTYPEDLIST:
+			unreachable();
+		case VECTOR:
+			// Converted in ABI
+			unreachable();
+		case VOID:
+		case FUNC_RAW:
+		case SLICE:
+			return false;
+		case ANY:
+			*base = type_uptr.canonical;
+			*elements = 2;
+			return true;
+		case STRUCT:
+		case UNION:
+			if (type.decl.has_variable_array) return false;
+			*elements = 0;
+			foreach (member : type.decl.strukt.members)
+			{
+				int member_mult = 1;
+				// Flatten the type.
+				LoweredType* member_type = lowered_member_type(member);
+				// Go down deep into  a nester array.
+				while (member_type.type_kind == ARRAY)
+				{
+					assert(member_type.array.len, "Zero length arrays not allowed");
+					member_mult *= (int)member_type.array.len;
+					member_type = member_type.array.base;
+				}
+				int member_members = 0;
+
+				// Check recursively if the field member is homogeneous
+				if (!type_is_homogeneous_aggregate(member_type, base, &member_members)) return false;
+				member_members *= member_mult;
+				// In the case of a union, grab the bigger set of elements.
+				if (type.type_kind == UNION)
+				{
+					*elements = max(*elements, member_members);
+				}
+				else
+				{
+					*elements += member_members;
+				}
+			}
+			assert(base);
+			if (!*base) return false;
+
+			// Ensure no padding
+			if (type_size(*base) * *elements != type_size(type)) return false;
+			// TYPECHECK:
+			if (*elements == 0) return false;
+			return type_homogenous_aggregate_small_enough(type, *elements);
+		case FLEXIBLE_ARRAY:
+			// Same with scaled vectors
+			return false;
+		case ARRAY:
+			// Empty arrays? Not homogeneous.
+			if (type.array.len == 0) return false;
+			// Check the underlying type and multiply by length.
+			if (!type_is_homogeneous_aggregate(lowered_array_element_type(type), base, elements)) return false;
+			*elements *= (int)type.array.len;
+			// TYPECHECK:
+			if (*elements == 0) return false;
+			return type_homogenous_aggregate_small_enough(type, *elements);
+		case BOOL:
+			// Lower bool to unsigned char
+			type = type_char;
+		case I8:
+		case I16:
+		case I32:
+		case I64:
+		case I128:
+			// Lower signed to unsigned
+			type = type_int_unsigned_by_bitsize(type.builtin.bitsize);
+		case U8:
+		case U16:
+		case U32:
+		case U64:
+		case U128:
+		case BF16:
+		case F16:
+		case F32:
+		case F64:
+		case F128:
+		case SIMD_VECTOR:
+			break;
+		case POINTER:
+		case FUNC_PTR:
+			// All pointers are the same.
+			type = type_voidptr;
+	}
+	// The common case:
+	*elements = 1;
+	// Is it a valid base type?
+	if (!type_is_homogenous_base_type(type)) return false;
+	// If we don't have a base type yet, set it.
+	if (!*base)
+	{
+		*base = type;
+		// Special handling of non-power-of-2 vectors (disabled in c3c).
+	}
+	// One is vector - other isn't => failure
+	if (((*base).type_kind == SIMD_VECTOR) != (type.type_kind == SIMD_VECTOR)) return false;
+
+	// Size does not match => failure
+	if (type_size(*base) != type_size(type)) return false;
+
+	// TYPECHECK:
+	if (*elements == 0) return false;
+	return type_homogenous_aggregate_small_enough(type, *elements);
 }

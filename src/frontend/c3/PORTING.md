@@ -132,7 +132,11 @@ Nothing here may reference `aro::frontend::c::*` or `aro::api`
 - Do not run `bazel test //...`; run `bazel test //test/unit/c3:all`.
 - Differential checks against real c3c (`~/projects/c3c/build/c3c`): lexer
   `test/src/c3/lex_diff.sh`; parser: `-P` (parse only) once `parse_probe`
-  exists.
+  exists; sema: `test/src/c3/sema_diff.py` (`KINDS=c3,c3t`, `STDLIB=1`,
+  `PROBE=<check_probe copy>`; .c3t files are split per `// #file:` and run
+  with their `// #target:`).
+- Targets: `compiler_reset(ArchOsTarget)` runs `target_setup` (default
+  linux-x64, c3c's host default); `check_probe --target <name>`.
 
 ## Sema contract
 
@@ -157,28 +161,28 @@ functions between files, so cross-file calls keep compiling.
 | sema_initializers.c | sema_initializers.c3 | 36 |
 | sema_name_resolution.c | sema_name_resolution.c3 | 56 |
 | sema_generics.c | sema_generics.c3 | 6 |
-| sema_passes.c | sema_passes.c3 | 32 |
-| semantic_analyser.c | semantic_analyser.c3 | 20 (+12 ported: the analysis driver, see below) |
+| sema_passes.c | sema_passes.c3 | 32 (ported) |
+| semantic_analyser.c | semantic_analyser.c3 | 32 (ported) |
 | sema_liveness.c | sema_liveness.c3 | 19 |
 | sema_static_analysis.c | sema_static_analysis.c3 | 33 |
 | sema_asm.c (+ asm_target.c) | sema_asm.c3, asm_target.c3 | 20 + 5 |
 | sema_errors.c | sema_errors.c3 | 1 (`sema_shadow_error` lives in diagnostics_inline.c3) |
-| copying.c | copying.c3 | 45 (`copy_type_info_single` / `copy_attributes_single` are shallow stand-ins in parse_expr_support.c3; move them here) |
-| number.c | number.c3 | 14 |
-| methodtable.c | methodtable.c3 | 5 |
+| copying.c | copying.c3 | 45 (ported, incl. `copy_type_info_single` / `copy_attributes_single`) |
+| number.c | number.c3 | 14 (ported) |
+| methodtable.c | methodtable.c3 | 5 (ported) |
 | abi/c_abi.c | c_abi.c3 | 26 |
 | abi/c_abi_x64.c | c_abi_x64.c3 | 24 |
-| abi/c_abi_{win64,x86,aarch64,riscv,wasm}.c | c_abi_other.c3 | 5 entry points |
+| abi/c_abi_{win64,x86,aarch64,riscv,wasm}.c | c_abi_{win64,x86,aarch64,riscv,wasm}.c3 | 0 (ported) |
 | codegen_internal.h / c_abi_internal.h / codegen_general.c (ABI subset) | codegen_internal.c3 | 0 (ported) |
-| types.c (rest) | types_rest.c3 | 27 |
-| expr.c (rest) | expr_rest.c3 | 7 |
-| bigint.c (rest) | bigint_rest.c3 | 69 |
-| symtab.c (rest) | symtab_rest.c3 | 1 |
-| context.c (rest) | context_rest.c3 | 1 |
-| compiler.c (pipeline), source_file.c `source_file_load` | compiler_rest.c3 | 2 ($exec helpers) |
-| utils (file_utils, time, benchmark, StringSlice, a5hash) | utils_rest.c3 | 10 |
+| types.c (rest) | types.c3 (merged) | 0 (ported) |
+| expr.c (rest) | expr.c3 (merged) | 0 (ported) |
+| bigint.c (rest) | bigint.c3 (merged) | 0 (ported) |
+| symtab.c (rest) | symtab_rest.c3 | 0 (ported) |
+| context.c (rest) | context.c3 (merged) | 0 (ported) |
+| compiler.c (pipeline), source_file.c `source_file_load` | compiler_rest.c3 | 0 (ported) |
+| utils (file_utils, time, benchmark, StringSlice, a5hash) | utils_rest.c3 | 0 (ported) |
 | float.c, module.c, decltable.c, ast.c | already complete (float.c3, context.c3, tables.c3, ast_helpers.c3) | 0 |
-| target.c | compiler.c3 `target_setup_x64_linux` | sema calls nothing in target.c |
+| target.c (+ build_options.c / builder.c target bits) | target.c3 | 0 (ported; LLVM-only parts skipped, see its header) |
 
 `*_rest.c3` files are companions of partially ported files; merge them into
 the main file once they are done. Shared contract files, owned by nobody in
@@ -225,7 +229,7 @@ files) is already ported in semantic_analyser.c3.
 - C varargs: `type_func_match(..., Type*... arg_types)`,
   `clobbers_make(int, int...)` (a `-1` terminator is accepted, not needed).
 - Callbacks: `CastRule`, `CastFunction` (sema_casts.c3), `DeclAppendFn`
-  (types_rest.c3) are `fn` aliases.
+  (types.c3) are `fn` aliases.
 - `CopyStruct.fixups` is a slice (allocate MAX_FIXUPS on first use) instead
   of a 16 MB inline array. `AbiType.abi_type` overlays the low bits of
   `type` like c3c (little-endian).
@@ -261,3 +265,21 @@ See the header of sema_internal.c3: `SCOPE_START` ->
   (`--use-stdlib=no -C`) and currently stops at
   `sema stub: type_func_prototype_init`. Remaining stubs:
   `grep -c 'unreachable("sema stub' src/frontend/c3/*.c3`.
+
+## Assertions
+
+c3c has two kinds: `ASSERT(x)` (utils/common.h) is always on, so port it as
+`assert(x)`. Plain C `assert(x)` is compiled out in c3c's normal (Release,
+NDEBUG) build, and some of them are actually false at run time (e.g. the
+lambda `resolve_status` check in `sema_expr_analyse_lambda`). Port those as a
+comment `// c3c: assert(...) -- compiled out in release` instead of a C3
+`assert`, so the port behaves like the shipped c3c.
+
+## Vector truthiness
+
+A c3c vector is a pointer: `if (vec)` / `x || vec` tests whether it was ever
+allocated, not whether it is non-empty (an emptied or `VECNEW`ed vector is
+still non-null). Port such tests as `.ptr` (`.ptr != null`), not `.len`. Only
+`vec_size(v)` becomes `.len`. Example: `multiple = current_macro || ct_locals`
+in sema_expr_analyse_lambda, where `ct_locals` comes from
+`global_context_acquire_locals_list()` (always non-null).

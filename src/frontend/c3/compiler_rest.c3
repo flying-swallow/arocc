@@ -11,12 +11,13 @@
 // - Only the check-only path exists: lex_only / docgen / headers / stats /
 //   codegen stop with error_exit. `free_arenas` / `compiler_print_stats` at
 //   the end of a check-only run are left to the caller (compiler_free).
-// - `update_feature_flags` covers the flags a x86_64-linux check-only build
-//   sets (no `--feature` list, DEBUG_SYMBOLS is not tracked).
+// - `update_feature_flags` covers the flags a check-only build sets
+//   (DEBUG_SYMBOLS is not tracked).
 // - `source_file_load` does not resolve the real path: files are keyed and
 //   reported by the name they were given.
-// - setup_int_define checks `int_fits` directly (c3c's
-//   expr_const_will_overflow, number.c3, is a stub).
+// - `compile_and_invoke` / `setup_exec_paths` are POSIX only; the
+//   compiler executable is `compiler_exe_name` (set by the driver) next to
+//   `find_executable_path()`.
 module aro::frontend::c3::compiler;
 import aro::frontend::c3::tokens, std::io, std::io::file, std::core::mem::alloc;
 
@@ -89,7 +90,8 @@ fn void build_target_setup_defaults()
 	target.feature.panic_level = PANIC_ON;
 	target.show_backtrace = SHOW_BACKTRACE_ON;
 	target.win.subsystem = WIN_SUBSYSTEM_DEFAULT;
-	target.link_libc = LINK_LIBC_ON;
+	// builder.c: LINK_LIBC_NOT_SET -> libc_from_arch_os (compiler_reset set the target).
+	target.link_libc = libc_from_arch_os(target.arch_os_target);
 	target.custom_libc = CUSTOM_LIBC_NOT_SET;
 	target.use_stdlib = USE_STDLIB_NOT_SET;
 	target.strip_unused = STRIP_UNUSED_NOT_SET;
@@ -134,7 +136,7 @@ fn void setup_int_define(String id, ulong i, Type* type)
 	assert(type_is_integer(flat));
 	Expr* expr = expr_new_const_int(0, flat, i);
 	expr.type = type;
-	if (!int_fits(expr.const_expr.ixx, flat.type_kind))
+	if (expr_const_will_overflow(&expr.const_expr, flat.type_kind))
 	{
 		@error_exit("Integer define %s overflow.", id);
 	}
@@ -153,6 +155,8 @@ fn void setup_bool_define(String id, bool value)
 
 fn void update_feature_flags()
 {
+	foreach (feature_flag : compiler.build.feature_list) add_feat(feature_flag);
+
 	if (link_libc()) add_feat("LIBC");
 	if (custom_libc()) add_feat("CUSTOM_LIBC");
 	bool no_libc = !link_libc() && !custom_libc();
@@ -178,6 +182,7 @@ fn void update_feature_flags()
 	if (compiler.platform.big_endian) add_feat("BIG_ENDIAN");
 	if (!compiler.platform.big_endian) add_feat("LITTLE_ENDIAN");
 	if (safe_mode_enabled()) add_feat("SAFE_MODE");
+	if (compiler.build.debug_info_full) add_feat("DEBUG_SYMBOLS");
 	if (compiler.build.show_backtrace != SHOW_BACKTRACE_OFF) add_feat("BACKTRACE");
 	if (compiler.build.build_benchmark) add_feat("BENCHMARKING");
 	if (compiler.build.build_test) add_feat("TESTING");
@@ -204,6 +209,102 @@ fn void update_feature_flags()
 		case XTENSA: add_feat("XTENSA");
 		default: break;
 	}
+	if (link_libc())
+	{
+		switch (compiler.platform.os)
+		{
+			case FREEBSD: add_feat("POSIX"); add_feat("BSD"); add_feat("FREEBSD");
+			case IOS: add_feat("POSIX"); add_feat("DARWIN"); add_feat("IOS");
+			case LINUX: add_feat("POSIX"); add_feat("LINUX");
+			case MACOSX: add_feat("POSIX"); add_feat("DARWIN"); add_feat("MACOS");
+			case NETBSD: add_feat("POSIX"); add_feat("BSD"); add_feat("NETBSD");
+			case OPENBSD: add_feat("POSIX"); add_feat("BSD"); add_feat("OPENBSD");
+			case WIN32: add_feat("WIN32");
+			case TVOS: add_feat("POSIX"); add_feat("DARWIN"); add_feat("TVOS");
+			case WATCHOS: add_feat("POSIX"); add_feat("DARWIN"); add_feat("WATCHOS");
+			case WASI: add_feat("WASI");
+			case EMSCRIPTEN: add_feat("POSIX"); add_feat("EMSCRIPTEN");
+			case ANDROID: add_feat("POSIX"); add_feat("ANDROID");
+			default: break;
+		}
+	}
+	if (compiler.platform.int128_supported) add_feat("NATIVE_I128");
+	if (compiler.platform.float128_supported) add_feat("NATIVE_F128");
+	if (compiler.platform.float16_supported) add_feat("NATIVE_F16");
+	if (compiler.build.feature.sanitize_address) add_feat("ASAN");
+	if (compiler.build.feature.sanitize_memory) add_feat("MSAN");
+	if (compiler.build.feature.sanitize_thread) add_feat("TSAN");
+	if (!no_panic()) add_feat("PRINT_PANIC");
+}
+
+// compiler.c:1495 (static)
+fn int jump_buffer_size()
+{
+	switch (compiler.build.arch_os_target)
+	{
+		case DEFAULT:
+			return 512;
+		case ELF_RISCV32:
+		case LINUX_RISCV32:
+			// Godbolt test
+			return 76;
+		case ELF_XTENSA:
+			// Godbolt 68 => 17 with 32 bit pointers
+			return 17;
+		case ELF_AVR:
+			// Extracted from avr-libc
+			return 12;
+		case ELF_RISCV64:
+		case LINUX_RISCV64:
+			// Godbolt test
+			return 43;
+		case IOS_X64_SIM:
+		case MACOS_X64:
+			return 19; // Actually 18.5
+		case WINDOWS_X64: // 16 on x32
+		case MINGW_X64:
+			// Godbolt test
+			return 32;
+		case ELF_X64:
+		case LINUX_X64:
+		case ANDROID_X86_64:
+			// Godbolt test
+			return 25;
+		case FREEBSD_X64:
+		case NETBSD_AARCH64:
+		case NETBSD_X64:
+		case OPENBSD_X64:
+			// c3c: REMINDER("Guessing setjmp for platform.")
+			return 32;
+		case ANDROID_AARCH64:
+		case LINUX_AARCH64:
+		case ELF_AARCH64:
+			return 39;
+		case WINDOWS_AARCH64:
+			// Based on Godbolt
+			return 24;
+		case IOS_AARCH64:
+		case IOS_AARCH64_SIM:
+		case MACOS_AARCH64:
+			// Based on macOS headers
+			return 25;
+		case LINUX_X86:
+		case MCU_X86:
+		case NETBSD_X86:
+		case OPENBSD_X86:
+		case ELF_X86:
+		case FREEBSD_X86:
+			// Early GCC
+			return 39;
+		case WASM32:
+		case EMSCRIPTEN_WASM32:
+			// 39 * 4 bytes = 156 bytes
+			return 39;
+		case WASM64:
+			// 20 * 8 bytes = 160 bytes
+			return 20;
+	}
+	unreachable();
 }
 
 <* c3c `compile` (check-only subset, after compiler_reset()). *>
@@ -232,8 +333,7 @@ fn void compile()
 	setup_int_define("LLVM_VERSION", 0, type_int);
 	setup_string_define("VERSION", COMPILER_VERSION);
 	setup_bool_define("PRERELEASE", PRERELEASE);
-	// c3c: jump_buffer_size() for LINUX_X64.
-	setup_int_define("JMP_BUF_SIZE", 25, type_int);
+	setup_int_define("JMP_BUF_SIZE", (ulong)jump_buffer_size(), type_int);
 	setup_int_define("LANGUAGE_DEV_VERSION", 8, type_int);
 	setup_string_define("BUILD_HASH", "54bab366a");
 	setup_string_define("BUILD_DATE", "");
@@ -333,16 +433,91 @@ fn void compiler_compile()
 	@error_exit("Code generation is not ported yet; use check_only.");
 }
 
+<* main.c `compiler_exe_name` (argv[0]); set by the driver, used by `compile_and_invoke`. *>
+String compiler_exe_name;
+
+<* The current working directory, copied to the arena (c3c's static PATH_MAX buffers). *>
+fn String getcwd_copy() @local
+{
+	char[4097] buffer;
+	ZString cwd = posix_getcwd(&buffer, 4096);
+	if (!cwd) return str_copy(".");
+	return str_copy(cwd.str_view());
+}
+
 // compiler.c:1570
 fn void setup_exec_paths(String* old_dir_ref, String* script_dir_ref, String* exec_dir_ref)
 {
-	unreachable("sema stub: setup_exec_paths");
+	String old_path = getcwd_copy();
+	*old_dir_ref = old_path;
+	*exec_dir_ref = *script_dir_ref = old_path;
+	if (compiler.build.script_dir.ptr)
+	{
+		if (!dir_change(compiler.build.script_dir)) @error_exit("Failed to open script dir '%s'", compiler.build.script_dir);
+		String script_path = getcwd_copy();
+		*exec_dir_ref = *script_dir_ref = script_path;
+		dir_change(old_path);
+	}
+	if (compiler.build.exec_dir.ptr)
+	{
+		if (!dir_change(compiler.build.exec_dir)) @error_exit("Failed to open exec dir '%s'", compiler.build.exec_dir);
+		String exec_path = getcwd_copy();
+		*exec_dir_ref = exec_path;
+	}
 }
 
 // compiler.c:2244
 fn SourceFile* compile_and_invoke(String file, String args, String stdin_data, usz limit)
 {
-	unreachable("sema stub: compile_and_invoke");
+	String name;
+	if (!file_namesplit(compiler_exe_name, &name, null))
+	{
+		@error_exit("Failed to extract file name from '%s'", compiler_exe_name);
+	}
+	String compiler_path = file_append_path(find_executable_path(), name);
+
+	scratch_buffer_clear();
+	// scratch_buffer_append_native_safe_path is a plain append on POSIX.
+	scratch_buffer_append(compiler_path);
+	String output = "__c3exec__";
+	scratch_buffer_append(" compile -g0 --single-module=yes");
+	StringSlice slice = slice_from_string(file);
+	while (slice.len > 0)
+	{
+		StringSlice file_name = slice_next_token(&slice, ';');
+		if (!file_name.len) continue;
+		scratch_buffer_append(" ");
+		scratch_buffer_append(file_name);
+	}
+	@scratch_buffer_printf(" -o %s", output);
+	String out;
+	if (!execute_cmd_failable(scratch_buffer_copy(), &out, {}, limit))
+	{
+		if (out.len)
+		{
+			io::eprintf("+-- Script compilation output ---------+\n");
+			io::eprintf("%s\n", out);
+			io::eprintf("+--------------------------------------+\n");
+		}
+		@error_exit("Failed to compile script '%s'.", file);
+	}
+	scratch_buffer_clear();
+	scratch_buffer_append("./");
+	scratch_buffer_append(output);
+	scratch_buffer_append(" ");
+	scratch_buffer_append(args);
+	if (!execute_cmd_failable(scratch_buffer_copy(), &out, stdin_data, limit))
+	{
+		if (out.len)
+		{
+			io::eprintf("+-- Script output ---------------------+\n");
+			io::eprintf("%s\n", out);
+			io::eprintf("+--------------------------------------+\n");
+		}
+		@error_exit("Error invoking script '%s' with arguments %s.", file, args);
+	}
+	(void)file::delete(output);
+	return source_file_text_load(file, out);
 }
 
 // ---------------------------------------------------------------------------

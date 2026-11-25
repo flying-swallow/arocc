@@ -1,0 +1,11 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: C3 frontend target setup (src/frontend/c3/target.c3) and the
+# non-x64 C ABIs it selects.
+
+c3_test(name = "target_tests", srcs = ["target_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+
+test_suite(
+    name = "all",
+    tests = [":target_tests"],
+)

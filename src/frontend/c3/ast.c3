@@ -22,7 +22,7 @@ module aro::frontend::c3::compiler;
 import aro::frontend::c3::tokens, aro::frontend::c3::lexer;
 
 alias Real = double;
-typedef ByteSize = long;
+alias ByteSize = long;
 alias TypeSize = int;
 alias IndexDiff = long;
 alias ArrayIndex = long;
