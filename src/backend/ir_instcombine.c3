@@ -8,6 +8,13 @@ fn ir::Ref instcombine_int_constant(ir::Ir* graph, DeclEditor* editor, ushort wi
 	return editor.add_constant(graph.interner.put(primitive_value::int_key(const_prop_signed(bits, width))), ty);
 }
 
+<* `value` is representable as a signed `width`-bit integer (1 <= width <= 64). *>
+fn bool nsw_fits(int128 value, ushort width)
+{
+	int128 bound = (int128)1 << (width - 1);
+	return value >= -bound && value < bound;
+}
+
 fn bool instcombine_is_compare(ir::InstTag tag)
 {
 	switch (tag)
@@ -264,7 +271,10 @@ fn bool instcombine_inst(ir::Ir* graph, DeclEditor* editor, ir::Ref ref, ir::Ref
 				ulong negated = (0 - constant_bits) & const_prop_mask(width);
 				ir::Ref constant = instcombine_int_constant(graph, editor, width, negated, inst.ty);
 				if (constant == ir::NONE) return false;
-				editor.insts.entries[(sz)ref] = { .tag = ir::InstTag.ADD, .data.bin = { inst.data.bin.lhs, constant }, .ty = inst.ty };
+				// x - C cannot overflow iff x + (-C) cannot, unless -C itself wraps (C = INT_MIN).
+				bool nsw = inst.nsw && nsw_fits(-(int128)const_prop_signed(constant_bits, width), width);
+				editor.insts.entries[(sz)ref] = { .tag = ir::InstTag.ADD, .nsw = nsw, .data.bin = { inst.data.bin.lhs, constant },
+					.ty = inst.ty };
 				return true;
 			}
 		}
@@ -315,6 +325,12 @@ fn bool instcombine_inst(ir::Ir* graph, DeclEditor* editor, ir::Ref ref, ir::Ref
 					insts[(sz)outer_constant].ty == inst.ty && scalar_constant_bits(graph, insts, outer_constant, &c2))
 				{
 					ulong mask = const_prop_mask(width);
+					// (x op C1) op C2 with both steps non-wrapping has the same exact value
+					// as x op (C1 op C2), so nsw survives when the folded constant fits too.
+					int128 s1 = const_prop_signed(c1, width);
+					int128 s2 = const_prop_signed(c2, width);
+					bool nsw = inst.nsw && inner.nsw &&
+						nsw_fits(inst.tag == ir::InstTag.ADD ? s1 + s2 : s1 * s2, width);
 					if (inst.tag == ir::InstTag.ADD) { c1 = (c1 + c2) & mask; }
 					else if (inst.tag == ir::InstTag.MUL) { c1 = (c1 * c2) & mask; }
 					else if (inst.tag == ir::InstTag.BIT_AND) { c1 = (c1 & c2) & mask; }
@@ -323,6 +339,7 @@ fn bool instcombine_inst(ir::Ir* graph, DeclEditor* editor, ir::Ref ref, ir::Ref
 					ir::Ref combined = instcombine_int_constant(graph, editor, width, c1, inst.ty);
 					if (combined == ir::NONE) return false;
 					editor.insts.entries[(sz)ref].data.bin = { value, combined };
+					editor.insts.entries[(sz)ref].nsw = nsw;
 					return true;
 				}
 			}

@@ -47,6 +47,7 @@
 // - Zig `Compilation.float80Type` (?QualType) is `Compilation.float80_type()`
 //   in compilation.c3, with compilation::NO_FLOAT80 for null.
 module aro::frontend::c::number_literal;
+import aro::bigint;
 import aro::primitive_value;
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source, aro::frontend::c::lang_opts, aro::frontend::c::type_store, aro::frontend::c::text_literal;
 import std::core::array;

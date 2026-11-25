@@ -27,7 +27,8 @@ fn bool is_unpromoted_builtin_callee(parser::Parser* p, type_store::NodeIndex ca
 		expanded.tag == common::TAG___BUILTIN_COMPLEX ||
 		expanded.tag == common::TAG___BUILTIN_ISINF ||
 		expanded.tag == common::TAG___BUILTIN_ISINF_SIGN ||
-		expanded.tag == common::TAG___BUILTIN_ISNAN;
+		expanded.tag == common::TAG___BUILTIN_ISNAN ||
+		expanded.tag == common::TAG___BUILTIN_ISSIGNALING;
 	}
 	return false;
 }
@@ -223,7 +224,7 @@ fn value::Value string_subscript_value(parser::Parser* p, parser_result::Result 
 		char[] bytes = base.val.to_bytes(p.comp);
 		if ((usz)index_int >= bytes.len) return value::NONE;
 		char unit = bytes[index_int];
-		if (elem.signedness(p.comp) == lang_opts::Signedness.UNSIGNED) return value::int_u64((ulong)unit, p.comp);
+		if (elem.signedness(p.comp) == bigint::Signedness.UNSIGNED) return value::int_u64((ulong)unit, p.comp);
 		return value::int_i64((long)(ichar)unit, p.comp);
 	}
 	return value::NONE;
@@ -334,7 +335,7 @@ fn void? check_subscript_bounds(parser::Parser* p, parser_result::Result index, 
 			}
 		}
 		ulong index_int = index.val.to_u64(p.comp) ?? ulong::max;
-		if (index.qt.signedness(p.comp) == lang_opts::Signedness.UNSIGNED)
+		if (index.qt.signedness(p.comp) == bigint::Signedness.UNSIGNED)
 		{
 			if (index_int >= len)
 			{
@@ -542,6 +543,7 @@ fn parser_result::Result? field_access_extra(parser::Parser* p, type_store::Node
 		}
 		if (ctx.target_name == field.name)
 		{
+			p.check_deprecated_unavailable(field.field_decl, ctx.name_tok)!;
 			type_store::NodeIndex node = p.tree.add_node(
 				{
 					.kind = is_arrow ? tree::NodeKind.MEMBER_ACCESS_PTR_EXPR : tree::NodeKind.MEMBER_ACCESS_EXPR,

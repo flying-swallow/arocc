@@ -1,0 +1,31 @@
+// #kind: run
+// #exit: 0
+// _Float16 (computed in float, rounded back) and __float128 (libgcc soft float):
+// arithmetic, comparisons, conversions, statics, and XMM argument passing.
+#include <stdio.h>
+struct H { _Float16 x, y; };
+_Float16 hs[3] = { 1.5f16, -2.25f16, 65504.0f16 };
+__float128 qs = 1e300Q * 1e300Q;
+__attribute__((noinline)) static _Float16 hscale(_Float16 a, int k, _Float16 b) { return a * k + b; }
+__attribute__((noinline)) static __float128 qfma(__float128 a, __float128 b, double c) { return a * b + c; }
+__attribute__((noinline)) static struct H hswap(struct H h) { struct H r = { h.y, h.x }; return r; }
+int main(void)
+{
+	_Float16 h = hscale(1.5f16, 3, 0.125f16);
+	__float128 q = qfma(1.5Q, 2.0Q, 0.25);
+	struct H s = hswap((struct H){1.0f16, 2.0f16});
+	printf("%g %g %g %g | %g %g %g %d\n", (double)h, (double)q, (double)s.x, (double)s.y,
+		(double)hs[0], (double)hs[1], (double)hs[2], qs > 1e308Q);
+	__float128 x = 3;
+	__float128 y = qfma(x, 1.5Q, 0) / 2 - 1;
+	long double l = (long double)(x / 7);
+	unsigned long long u = (unsigned long long)(x * 1e15Q);
+	short sh = (short)-x;
+	_Float16 k = (_Float16)0.1 + (_Float16)0.2;
+	printf("%g %d %d %.15Lg %llu %d %d %g %d\n", (double)y, y > x, (int)(x * 100), l, u, sh, -y < 0, (double)k, k == (_Float16)0.3);
+	return 0;
+}
+
+// #expect: stdout
+4.625 3.25 2 1 | 1.5 -2.25 65504 1
+1.25 0 300 0.428571428571429 3000000000000000 -3 1 0.299805 0

@@ -43,6 +43,7 @@ fn bool attrs_alloc_use_escapes(ir::Inst* inst, ir::Ref value)
 		case BIT_NOT:
 		case NEGATE:
 		case FNEG:
+		case FABS:
 		case TRUNC:
 		case ZEXT:
 		case SEXT:

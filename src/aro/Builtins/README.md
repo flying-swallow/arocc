@@ -22,6 +22,18 @@ this C3 generation step. If a group is added or removed, update the declared
 inputs in the root `BUILD.bazel` and the `BuiltinGroup` enum in
 `src/frontend/c/builtin_properties.c3`.
 
+### Local additions
+
+`common.def` carries GCC-only builtins that Clang's TableGen does not emit:
+`__builtin_{inf,nan,nans}f{32,32x,64,64x}`. `_Float32` / `_Float32x` / `_Float64`
+use the same-format `f` / `d` types and `_Float64x` uses `LLd` (aro's `_Float64x`
+is binary128). A TableGen refresh drops them, so re-add them afterwards.
+
+Adding or removing any `common.def` entry that sorts before `__builtin_va_copy`
+shifts the hard-coded `COMMON_VA_*_INDEX` constants in
+`src/frontend/c/builtin_properties.c3`, and the counts in
+`test/unit/builtins/{builtins_tests,def_parse_tests}.c3`; update them together.
+
 ## Optional legacy Zig/Clang TableGen refresh
 
 The following workflow is only for intentionally refreshing the `.def` files

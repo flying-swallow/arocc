@@ -97,8 +97,15 @@ fn parser_result::Result? Parser.parse_unresolved_identifier(&self,
 		}
 		if (expanded.header != builtin_properties::Header.NONE)
 		{
-			Diagnostic.IMPLICIT_BUILTIN.@emit(p, tok,
-				name)!;
+			// Before C99 an implicit library declaration is legal; Clang still warns.
+			if (p.comp.langopts.standard.at_least(lang_opts::Standard.C99))
+			{
+				Diagnostic.IMPLICIT_BUILTIN.@emit(p, tok, name)!;
+			}
+			else
+			{
+				Diagnostic.IMPLICIT_BUILTIN_C89.@emit(p, tok, name)!;
+			}
 			Diagnostic.IMPLICIT_BUILTIN_HEADER_NOTE.@emit(p, tok,
 				expanded.header.name, name)!;
 		}
@@ -363,6 +370,9 @@ fn parser_result::Result? Parser.parse_identifier(&self, tokens::TokenIndex tok,
 		Diagnostic.UNEXPECTED_TYPE_NAME.@emit(p, tok, name)!;
 		return PARSING_FAILED~;
 	}
+	p.check_deprecated_unavailable((type_store::NodeOptIndex)symbol.node, tok)!;
+	// clang: an enumerator of a deprecated/unavailable enum is reported under its own name.
+	if (symbol.kind == symbol_stack::SymbolKind.ENUMERATION) p.check_enumerator_parent_deprecated(symbol, tok)!;
 	p.mark_used(symbol.node);
 	tree::NodeKind kind = symbol.kind == symbol_stack::SymbolKind.ENUMERATION ?
 	tree::NodeKind.ENUMERATION_REF : tree::NodeKind.DECL_REF_EXPR;
@@ -538,7 +548,10 @@ fn parser_result::Result? Parser.parse_generic(&self, tokens::TokenIndex generic
 			}
 			foreach (previous : types)
 			{
-				if (association_qt.eql(previous.qt, p.comp))
+				// C11 6.5.1.1p2: no two associations may name compatible types; `int`
+				// and `const int` are not compatible (the qualified one just never
+				// matches, which GENERIC_QUAL_TYPE reports).
+				if (association_qt.eql_qualified(previous.qt, p.comp))
 				{
 					Diagnostic.GENERIC_DUPLICATE.@emit(p, association_tok,
 						p.fmt_qt(association_qt))!;

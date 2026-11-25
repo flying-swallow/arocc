@@ -8,18 +8,15 @@ import aro::frontend::c::attribute_wip, aro::frontend::c::parser_declaration;
 
 excuse ENUM_UNDERLYING_NO_DECL_SPEC;
 
+<* What `record_header` resolves for a tag specifier. Kind (struct/union/enum),
+   name and fixed underlying type live on the tag type `qt` itself. *>
 struct TagHeader
 {
 	type_store::QualType qt;
-	string_interner::StringId name;
-	tokens::TokenIndex keyword_tok;
-	tokens::TokenIndex name_tok;
 	type_store::NodeIndex decl_node;
-	bool is_union;
-	bool is_enum;
+	tokens::TokenIndex keyword_tok;
+	tokens::TokenIndex name_tok;  // 0 for an anonymous tag
 	bool is_definition;
-	bool has_fixed;
-	type_store::QualType fixed_qt;
 }
 
 <* Tag attributes parsed around the tag name and after `}` (before layout), plus
@@ -53,19 +50,29 @@ fn void? TagAttributes.apply_body_end(&self, Parser* p, type_store::QualType qt,
 	self.apply(p, qt, decl_node)!;
 }
 
+<* Input to the declaration grammar's body parser: the tag header plus the
+   state captured before the header was parsed. *>
 struct ContainerBodySeed
 {
-	type_store::QualType qt;
-	string_interner::StringId name;
-	tokens::TokenIndex keyword_tok;
-	tokens::TokenIndex name_tok;
-	type_store::NodeIndex decl_node;
-	bool is_union;
-	bool is_enum;
-	bool has_fixed;
-	type_store::QualType fixed_qt;
+	inline TagHeader header;
 	pack::PackValue pack_value;
 	TagAttributes* tags;
+}
+
+fn type_store::Type ContainerBodySeed.tag_type(&self, Parser* p) => self.qt.get_type(p.comp);
+fn bool ContainerBodySeed.is_enum(&self, Parser* p) => self.tag_type(p).tag == type_store::TypeTag.ENUM;
+fn bool ContainerBodySeed.is_union(&self, Parser* p) => self.tag_type(p).tag == type_store::TypeTag.UNION;
+<* The enum's fixed underlying type, or INVALID when it has none. *>
+fn type_store::QualType ContainerBodySeed.enum_fixed_qt(&self, Parser* p)
+{
+	type_store::EnumType enum_ty = self.tag_type(p).enum_ty;
+	return enum_ty.fixed ? enum_ty.tag : type_store::INVALID;
+}
+<* The tag name; a synthesized `(anonymous ...)` name for an anonymous tag. *>
+fn string_interner::StringId ContainerBodySeed.name(&self, Parser* p)
+{
+	type_store::Type ty = self.tag_type(p);
+	return ty.tag == type_store::TypeTag.ENUM ? ty.enum_ty.name : ty.record.name;
 }
 
 fn string_interner::StringId Parser.anonymous_container_name(&self, tokens::TokenIndex keyword_tok, bool is_union, bool is_enum)
@@ -194,7 +201,23 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, TagAttributes* tags)
 			has_fixed = true;
 		}
 	}
-	if (tags) tags.parse(self)!;
+	// Attributes after the tag name belong to the tag only when a body follows
+	// (`struct S __attribute__((packed)) {...}`). In a reference such as the member
+	// `enum E __attribute__((aligned(8))) c;` they belong to the declaration (GCC),
+	// so rewind and let the declaration specifiers parse them; applying them to the
+	// tag changed `enum E` everywhere.
+	if (tags)
+	{
+		tokens::TokenIndex after_name = self.tok_i;
+		attribute_wip::State before_attrs = tags.wip.state(false);
+		tags.parse(self)!;
+		// `struct S __attribute__((x));` (no declarator) still targets the tag.
+		if (self.tok_i != after_name && !self.is_at(tokenizer::TokenId.L_BRACE) && !self.is_at(tokenizer::TokenId.SEMICOLON))
+		{
+			tags.wip.restore(before_attrs);
+			self.tok_i = after_name;
+		}
+	}
 
 	bool is_definition = self.is_at(tokenizer::TokenId.L_BRACE);
 	if (name_tok != 0 && !is_definition)
@@ -208,9 +231,10 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, TagAttributes* tags)
 			{
 				self.check_enum_fixed_ty(has_fixed, fixed_qt, name_tok, prev)!;
 			}
-			TagHeader header = { .qt = prev.qt, .name = name, .keyword_tok = keyword_tok, .name_tok = name_tok,
-			.decl_node = prev.node, .is_union = is_union, .is_enum = is_enum, .is_definition = false,
-			.has_fixed = has_fixed, .fixed_qt = fixed_qt };
+			// A use of the tag (not a redeclaration `struct S;`) reports deprecated/unavailable tags, as clang does.
+			if (!self.is_at(tokenizer::TokenId.SEMICOLON)) self.check_deprecated_unavailable((type_store::NodeOptIndex)prev.node, name_tok)!;
+			TagHeader header = { .qt = prev.qt, .decl_node = prev.node, .keyword_tok = keyword_tok,
+				.name_tok = name_tok, .is_definition = false };
 			if (tags) tags.apply(self, header.qt, header.decl_node)!;
 			return header;
 		}
@@ -288,9 +312,9 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, TagAttributes* tags)
 	{
 		symbol_stack::SymbolKind symbol_kind = is_enum ? symbol_stack::SymbolKind.ENUM : is_union ? symbol_stack::SymbolKind.UNION : symbol_stack::SymbolKind.STRUCT;
 		self.define_symbol(
-		{
-			.kind = symbol_kind, .name = name, .tok = name_tok, .qt = qt, .node = node
-		}
+			{
+				.kind = symbol_kind, .name = name, .tok = name_tok, .qt = qt, .node = node
+			}
 		);
 	}
 	if (!is_definition)
@@ -313,9 +337,8 @@ fn TagHeader? Parser.record_header(&self, bool is_enum, TagAttributes* tags)
 			}
 			, (sz)node);
 	}
-	TagHeader header = { .qt = qt, .name = name, .keyword_tok = keyword_tok, .name_tok = name_tok,
-	.decl_node = node, .is_union = is_union, .is_enum = is_enum, .is_definition = is_definition,
-	.has_fixed = has_fixed, .fixed_qt = fixed_qt };
+	TagHeader header = { .qt = qt, .decl_node = node, .keyword_tok = keyword_tok,
+		.name_tok = name_tok, .is_definition = is_definition };
 	if (tags) tags.apply(self, header.qt, header.decl_node)!;
 	return header;
 }
@@ -377,14 +400,7 @@ fn type_store::QualType? Parser.record_spec_with_body(&self, parser_declaration:
 	*has_tag_decl_node_out = true;
 	if (!header.is_definition) return header.qt;
 	self.advance();  // opening brace
-	type_store::QualType completed = decls.parse_container_body(self, {
-			.qt = header.qt, .name = header.name, .keyword_tok = header.keyword_tok,
-			.name_tok = header.name_tok, .decl_node = header.decl_node,
-			.is_union = header.is_union, .is_enum = header.is_enum,
-			.has_fixed = header.has_fixed, .fixed_qt = header.fixed_qt,
-			.pack_value = pack_value,
-			.tags = &tags,
-		})!;
+	type_store::QualType completed = decls.parse_container_body(self, { .header = header, .pack_value = pack_value, .tags = &tags })!;
 	assert(completed.unqualified() == header.qt.unqualified(), "container body must preserve tag identity");
 	return completed;
 }

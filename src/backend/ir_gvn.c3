@@ -103,7 +103,7 @@ fn bool gvn_make_expression(GvnPass* context, ir::Inst inst, GvnExpr* key, bool*
 		case ir::InstTag.TRUNC: case ir::InstTag.ZEXT: case ir::InstTag.SEXT:
 		case ir::InstTag.FPTOSI: case ir::InstTag.FPTOUI: case ir::InstTag.SITOFP:
 		case ir::InstTag.UITOFP: case ir::InstTag.FPEXT: case ir::InstTag.FPTRUNC:
-		case ir::InstTag.FNEG: case ir::InstTag.CLZ: case ir::InstTag.CTZ:
+		case ir::InstTag.FNEG: case ir::InstTag.FABS: case ir::InstTag.CLZ: case ir::InstTag.CTZ:
 			key.a = gvn_input_value(context, inst.data.ref);
 			if ((inst.tag == ir::InstTag.CLZ || inst.tag == ir::InstTag.CTZ) &&
 				!gvn_integer_result(context.graph, inst)) return false;
@@ -555,6 +555,9 @@ fn void gvn_eliminate_block(GvnElim* context, uint block_index)
 		}
 		if (leader != ir::NONE && leader != ref)
 		{
+			// The leader now stands for the removed value too: it may only keep
+			// nsw (a poison-on-overflow promise) if the removed one made it.
+			if (!inst.nsw) context.decl.instructions[(sz)leader].nsw = false;
 			context.replacements[(sz)ref] = leader;
 			context.remove[(sz)ref] = true;
 			continue;

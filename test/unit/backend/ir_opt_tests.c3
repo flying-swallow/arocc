@@ -24,7 +24,6 @@ fn void OptFixture.init(&self)
 	self.diagnostics.init_list(&self.ta);
 	self.comp.init(&self.ta, null, &self.diagnostics);
 	self.comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-	self.comp.langopts.set_target_options(&self.comp.target);
 	type_store::init_named_types(&self.comp);
 	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 }
@@ -197,7 +196,7 @@ fn void harness_lowers_c_source_to_expected_dump() @test
 		"    ptr_ty %2 = alloc size 4 align 4\n"
 		"    store ptr_ty %1, i32 %0\n"
 		"    i32 %3 = load ptr_ty %1\n"
-		"    i32 %4 = add i32 %3, i32 1\n"
+		"    i32 %4 = add nsw i32 %3, i32 1\n"
 		"    store ptr_ty %2, i32 %4\n"
 		"    i32 %5 = load ptr_ty %2\n"
 		"    ret i32 %5\n"
@@ -216,7 +215,7 @@ fn void run_at_o0_without_passes_is_identity_and_o1_promotes_locals() @test
 		"    ptr_ty %2 = alloc size 4 align 4\n"
 		"    store ptr_ty %1, i32 %0\n"
 		"    i32 %3 = load ptr_ty %1\n"
-		"    i32 %4 = add i32 %3, i32 1\n"
+		"    i32 %4 = add nsw i32 %3, i32 1\n"
 		"    store ptr_ty %2, i32 %4\n"
 		"    i32 %5 = load ptr_ty %2\n"
 		"    ret i32 %5\n"
@@ -224,7 +223,7 @@ fn void run_at_o0_without_passes_is_identity_and_o1_promotes_locals() @test
 	String optimized =
 		"i32 @f(i32 %0) {\n"
 		"entry.0:\n"
-		"    i32 %1 = add i32 %0, i32 1\n"
+		"    i32 %1 = add nsw i32 %0, i32 1\n"
 		"    ret i32 %1\n"
 		"}\n\n";
 	OptFixture f;
@@ -3362,8 +3361,16 @@ fn void o2_converts_narrow_tail_recursion_with_truncation() @test
 	f.verify_graph();
 	assert(count_calls_to(find_function(&f.graph, "narrow"), "narrow") == 0,
 		"narrow recursive arguments with TRUNC should still form a loop");
-	assert(count_body_tag(find_function(&f.graph, "narrow"), ir::InstTag.TRUNC) != 0,
-		"the converted backedge should narrow its integer argument with TRUNC");
+	// The backedge value stays 8-bit: a TRUNC of the promoted `n - 1`, or (after
+	// narrow_truncated_arith) the `sub i8` itself.
+	ir::Decl* narrow = find_function(&f.graph, "narrow");
+	bool i8_phi = false;
+	foreach (ref : narrow.body)
+	{
+		ir::Inst inst = narrow.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.PHI && inst.ty == value_interner::REF_I8) i8_phi = true;
+	}
+	assert(i8_phi, "the converted loop should carry the narrow argument as an i8 PHI");
 	f.free();
 }
 
@@ -3404,7 +3411,8 @@ fn void o2_leaves_recursive_call_intact() @test
 {
 	OptFixture f;
 	f.init();
-	f.lower("int recursive(int value) { if (value <= 0) return 0; return 1 + recursive(value - 1); }\n");
+	f.lower(// `-` is not associative, so tail recursion with an accumulator does not apply.
+		"int recursive(int value) { if (value <= 0) return 0; return 1 - recursive(value - 1); }\n");
 	f.run_o2();
 	f.verify_graph();
 	ir::Decl* recursive = find_function(&f.graph, "recursive");
@@ -3420,7 +3428,8 @@ fn void o2_keeps_non_tail_recursive_call() @test
 {
 	OptFixture f;
 	f.init();
-	f.lower("int recursive(int value) { if (value <= 0) return 0; return 1 + recursive(value - 1); }\n");
+	f.lower(// `-` is not associative, so tail recursion with an accumulator does not apply.
+		"int recursive(int value) { if (value <= 0) return 0; return 1 - recursive(value - 1); }\n");
 	f.run_o2();
 	f.verify_graph();
 	assert(count_calls_to(find_function(&f.graph, "recursive"), "recursive") == 1,
@@ -3507,7 +3516,7 @@ fn void o2_self_recursive_callee_into_outer_caller() @test
 	OptFixture f;
 	f.init();
 	f.lower(
-		"static int r(int n) { return n <= 0 ? 0 : 1 + r(n - 1); }\n"
+		"static int r(int n) { return n <= 0 ? 0 : 1 - r(n - 1); }\n"
 		"int g(int n) { return r(n); }\n");
 	f.run_o2();
 	f.verify_graph();
@@ -3527,7 +3536,7 @@ fn void o2_skips_large_alloca_callee_in_recursive_caller_but_inlines_nonrecursiv
 		"return value + scratch[0] + scratch[sizeof(scratch) - 1] - "
 		"(unsigned char)value - (unsigned char)(value >> 8); }\n"
 		"int recursive_caller(int depth) { if (depth <= 0) return 0; "
-		"return large_helper(depth) + recursive_caller(depth - 1); }\n"
+		"return large_helper(depth) - recursive_caller(depth - 1); }\n"
 		"int ordinary_caller(int value) { return large_helper(value); }\n");
 	f.run_o2();
 	f.verify_graph();
@@ -7683,13 +7692,13 @@ fn void lowers_block_vla_with_stack_save_and_restore() @test
 		"    ptr_ty %6 = stack_save\n"
 		"    ptr_ty %7 = dyn_alloc i64 %5 align 4\n"
 		"    i32 %8 = load ptr_ty %1\n"
-		"    i32 %9 = sub i32 %8, i32 1\n"
+		"    i32 %9 = sub nsw i32 %8, i32 1\n"
 		"    i64 %10 = sext i32 %9\n"
 		"    i64 %11 = mul i64 %10, i64 4\n"
 		"    ptr_ty %12 = add ptr_ty %7, i64 %11\n"
 		"    store ptr_ty %12, i32 7\n"
 		"    i32 %13 = load ptr_ty %1\n"
-		"    i32 %14 = sub i32 %13, i32 1\n"
+		"    i32 %14 = sub nsw i32 %13, i32 1\n"
 		"    i64 %15 = sext i32 %14\n"
 		"    i64 %16 = mul i64 %15, i64 4\n"
 		"    ptr_ty %17 = add ptr_ty %7, i64 %16\n"
@@ -7731,8 +7740,8 @@ fn void lowers_goto_out_of_vla_scope() @test
 		"    ptr_ty %2 = alloc size 4 align 4\n"
 		"    store ptr_ty %1, i32 %0\n"
 		"    store ptr_ty %2, i32 0\n"
-		"    jmp label.1\n"
-		"label.1:\n"
+		"    jmp user.top.1\n"
+		"user.top.1:\n"
 		"    i32 %3 = load ptr_ty %1\n"
 		"    i64 %4 = sext i32 %3\n"
 		"    i64 %5 = mul i64 %4, i64 4\n"
@@ -7744,14 +7753,14 @@ fn void lowers_goto_out_of_vla_scope() @test
 		"    ptr_ty %11 = add ptr_ty %7, i64 %10\n"
 		"    store ptr_ty %11, i32 %8\n"
 		"    i32 %12 = load ptr_ty %2\n"
-		"    i32 %13 = add i32 %12, i32 1\n"
+		"    i32 %13 = add nsw i32 %12, i32 1\n"
 		"    store ptr_ty %2, i32 %13\n"
 		"    i32 %14 = load ptr_ty %2\n"
 		"    i1 %15 = cmp_slt i32 %14, i32 3\n"
 		"    branch i1 %15, if.then.2, if.end.4\n"
 		"if.then.2:\n"
 		"    stack_restore ptr_ty %6\n"
-		"    jmp label.1\n"
+		"    jmp user.top.1\n"
 		"goto.after.3:\n"
 		"    jmp if.end.4\n"
 		"if.end.4:\n"
@@ -7764,13 +7773,13 @@ fn void lowers_goto_out_of_vla_scope() @test
 		"    jmp if.end.7\n"
 		"if.end.7:\n"
 		"    stack_restore ptr_ty %6\n"
-		"    jmp label.8\n"
-		"label.8:\n"
+		"    jmp user.out.8\n"
+		"user.out.8:\n"
 		"    i32 %18 = load ptr_ty %2\n"
 		"    ret i32 %18\n"
 		"goto.vla.9:\n"
 		"    stack_restore ptr_ty %6\n"
-		"    jmp label.8\n"
+		"    jmp user.out.8\n"
 		"}\n\n");
 	alloc::free(&f.ta, actual.ptr);
 	f.run_o1();
@@ -9247,6 +9256,31 @@ fn void o2_global_opt_replaces_unwritten_internal_global_but_keeps_mutable_and_v
 	f.free();
 }
 
+fn void o2_global_opt_sees_address_stored_into_local_pointer() @test
+{
+	// Regression (csmith seed 320): `&g` stored into a local pointer slot is the
+	// second operand of the STORE; the escape scan used to skip it and fold `g`
+	// to its initializer.
+	OptFixture f;
+	f.init();
+	f.lower(
+		"static int g = 7;\n"
+		"int write_through_local_pointer(void) { int *p = &g; *p = 0; return g; }\n"
+		"static int h = 3;\n"
+		"static int k = 4;\n"
+		"int write_through_select(int c) { int *p = c ? &h : &k; *p = 9; return h + k; }\n");
+	f.run_o2();
+	f.verify_graph();
+	String output = f.dump();
+	// Wrong folding yields 7 for both (g's initializer; h + k = 3 + 4).
+	assert(!output.contains("ret i32 7"),
+		"a global written through a local or selected pointer must not fold to its initializer");
+	assert(output.contains("@h") && output.contains("@k"),
+		"globals reachable through a selected pointer must stay in memory");
+	alloc::free(&f.ta, output.ptr);
+	f.free();
+}
+
 fn void global_opt_folds_initializer_in_target_byte_order() @test
 {
 	bool[2] orders = { false, true };
@@ -10153,5 +10187,278 @@ fn void ipsccp_resets_function_attrs_when_specializing() @test
 		!target.attrs.will_return && target.attrs.arg_nocapture == 0 &&
 		target.attrs.arg_noread == 0 && target.attrs.arg_nowrite == 0,
 		"editing a specialized function must reset all computed function and argument attributes");
+	f.free();
+}
+
+fn void sysv_aggregate_classification_picks_eightbyte_registers() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"struct DL { double d; long l; };\n"
+		"struct DL mixed(struct DL a) { return a; }\n"
+		// INTEGER beats X87 when they share an eightbyte (GCC merge order).
+		"union UL { long double x; long l[2]; };\n"
+		"union UL long_double_union(union UL u) { return u; }\n"
+		// The second eightbyte is padding only (NO_CLASS): one XMM register.
+		"struct N { float b; long double c[0]; };\n"
+		"struct N padding_word(struct N n) { return n; }\n"
+		// A pointer at offset 4 is not aligned to its size: memory.
+		"typedef char *P4 __attribute__((aligned(4)));\n"
+		"struct M { int c; P4 p; int d; };\n"
+		"struct M misaligned(struct M m) { return m; }\n");
+	f.verify_graph();
+	String output = f.dump();
+	assert(output.contains("f64 @mixed(f64 %0, i64 %1)"), "{double, long} is SSE + INTEGER");
+	assert(output.contains("i64 @long_double_union(i64 %0, i64 %1)"), "a long double/integer union is INTEGER + INTEGER");
+	assert(output.contains("f64 @padding_word(f64 %0)"), "a NO_CLASS eightbyte takes no register");
+	assert(output.contains("ptr_ty @misaligned(ptr_ty %0, ptr_ty %1)"), "a misaligned pointer member sends the record to memory");
+	alloc::free(&f.ta, output.ptr);
+	f.free();
+}
+
+fn void o2_tail_recursion_with_add_accumulator_becomes_a_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower(
+		"long sum_to(long n) { if (n == 0) return 0; return n + sum_to(n - 1); }\n"
+		"unsigned fact(unsigned n) { return n <= 1 ? 1 : fact(n - 1) * n; }\n"
+		"int fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }\n");
+	f.run_o2();
+	f.verify_graph();
+	ir::Decl* sum = find_function(&f.graph, "sum_to");
+	assert(count_calls_to(sum, "sum_to") == 0, "`n + f(n - 1)` accumulates in a loop");
+	assert(count_body_tag(sum, ir::InstTag.PHI) >= 2, "the parameter and the accumulator are loop PHIs");
+	ir::Decl* fact = find_function(&f.graph, "fact");
+	assert(count_calls_to(fact, "fact") == 0, "`f(n - 1) * n` accumulates a product in a loop");
+	ir::Decl* fib = find_function(&f.graph, "fib");
+	assert(count_calls_to(fib, "fib") == 1, "fib keeps one call (fib(n - 1)) and loops on fib(n - 2)");
+	f.free();
+}
+
+fn void o2_tail_recursion_mixed_accumulators_are_left_alone() @test
+{
+	// `+` and `*` accumulating sites cannot share one accumulator.
+	OptFixture f;
+	f.init();
+	f.lower("int mix(int n) { if (n < 2) return 1; if (n & 1) return n + mix(n - 1); return mix(n - 1) * 3; }\n");
+	f.run_o2();
+	f.verify_graph();
+	assert(count_calls_to(find_function(&f.graph, "mix"), "mix") == 2, "both recursive calls stay");
+	f.free();
+}
+
+// ---- nsw (no signed wrap), sext widening and loop strength reduction ----
+
+fn uint count_body_nsw(ir::Decl* decl, ir::InstTag tag, value_interner::InternerRef ty, bool nsw)
+{
+	uint count = 0;
+	foreach (ref : decl.body)
+	{
+		ir::Inst inst = decl.instructions[(sz)ref];
+		if (inst.tag == tag && inst.ty == ty && inst.nsw == nsw) count++;
+	}
+	return count;
+}
+
+fn uint count_body_phi_type(ir::Decl* decl, value_interner::InternerRef ty)
+{
+	uint count = 0;
+	foreach (ref : decl.body)
+	{
+		ir::Inst inst = decl.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.PHI && inst.ty == ty) count++;
+	}
+	return count;
+}
+
+fn void nsw_marks_only_signed_int_rank_arithmetic() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a, int b, unsigned u, unsigned v, short s) {\n"
+		"  s++;\n"
+		"  int x = a * b + 3;\n"
+		"  int y = (int)(u * v);\n"
+		"  return x - y + s + -a;\n"
+		"}");
+	ir::Decl* decl = find_function(&f.graph, "f");
+	assert(count_body_nsw(decl, ir::InstTag.MUL, value_interner::REF_I32, true) == 1, "signed int a * b is nsw");
+	assert(count_body_nsw(decl, ir::InstTag.MUL, value_interner::REF_I32, false) == 1, "unsigned u * v wraps");
+	assert(count_body_nsw(decl, ir::InstTag.ADD, value_interner::REF_I16, true) == 0,
+		"short ++ narrows by conversion, so it is not nsw");
+	// a*b+3, x-y, +s, -a (0 - a), + -a
+	assert(count_body_nsw(decl, ir::InstTag.SUB, value_interner::REF_I32, true) == 2, "x - y and -a are nsw");
+	assert(count_body_nsw(decl, ir::InstTag.ADD, value_interner::REF_I32, true) == 3, "signed int adds are nsw");
+	f.verify_graph();
+	f.free();
+}
+
+fn void nsw_is_off_under_fwrapv() @test
+{
+	OptFixture f;
+	f.init();
+	f.comp.langopts.wrapv = true;
+	f.lower("int f(int a, int b) { return a * b + a - 1; }");
+	ir::Decl* decl = find_function(&f.graph, "f");
+	foreach (ref : decl.body) assert(!decl.instructions[(sz)ref].nsw, "-fwrapv arithmetic must not be nsw");
+	f.free();
+}
+
+fn void verifier_rejects_nsw_on_non_arithmetic() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int f(int a) { return a & 3; }");
+	ir::Decl* decl = find_function(&f.graph, "f");
+	foreach (ref : decl.body)
+	{
+		if (decl.instructions[(sz)ref].tag == ir::InstTag.BIT_AND) decl.instructions[(sz)ref].nsw = true;
+	}
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	assert(!ir_opt::verify(&f.graph, &errors), "nsw on BIT_AND must not verify");
+	errors.free();
+	f.free();
+}
+
+fn void instcombine_keeps_nsw_only_when_folded_constant_fits() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int keep(int x) { return (x + 1) + 2; }\n"
+		"int drop(int x) { return (x + 2147483647) + 1; }\n"
+		"int sub_min(int x) { return x - (-2147483647 - 1); }");
+	f.run_o1();
+	ir::Decl* keep = find_function(&f.graph, "keep");
+	assert(count_body_nsw(keep, ir::InstTag.ADD, value_interner::REF_I32, true) == 1 &&
+		count_body_tag(keep, ir::InstTag.ADD) == 1, "x + 3 stays nsw");
+	ir::Decl* drop = find_function(&f.graph, "drop");
+	assert(count_body_tag(drop, ir::InstTag.ADD) == 1 &&
+		count_body_nsw(drop, ir::InstTag.ADD, value_interner::REF_I32, false) == 1,
+		"x + INT_MIN (folded from INT_MAX + 1) is not nsw");
+	ir::Decl* sub_min = find_function(&f.graph, "sub_min");
+	foreach (ref : sub_min.body) assert(!sub_min.instructions[(sz)ref].nsw, "x - INT_MIN as x + INT_MIN is not nsw");
+	f.free();
+}
+
+fn void indvar_widen_and_lsr_reduce_matmul_inner_loop() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("void mm(int *a, int *b, int *c, int n) {\n"
+		"  for (int i = 0; i < n; i++)\n"
+		"    for (int j = 0; j < n; j++) {\n"
+		"      int sum = 0;\n"
+		"      for (int k = 0; k < n; k++) sum += a[i * n + k] * b[k * n + j];\n"
+		"      c[i * n + j] = sum;\n"
+		"    }\n"
+		"}");
+	f.run_o2();
+	ir::Decl* decl = find_function(&f.graph, "mm");
+	// Only `sum` stays a narrow PHI: i, j and k are i64 twins.
+	assert(count_body_phi_type(decl, value_interner::REF_I32) == 1, "narrow IVs should be widened away");
+	assert(count_body_phi_type(decl, value_interner::REF_PTR) >= 3, "a, b and c addresses should be pointer PHIs");
+	// The single remaining sext is of the invariant `n`.
+	assert(count_body_tag(decl, ir::InstTag.SEXT) == 1, "index sign extensions should be gone");
+	// LFTR: the k loop exits on its pointer IV, so its i64 counter is gone.
+	uint pointer_exits = 0;
+	foreach (ref : decl.body)
+	{
+		ir::Inst inst = decl.instructions[(sz)ref];
+		if (inst.tag == ir::InstTag.CMP_NE && decl.instructions[(sz)inst.data.bin.lhs].ty == value_interner::REF_PTR) pointer_exits++;
+	}
+	assert(pointer_exits >= 1, "the inner loop should exit on a pointer compare");
+	assert(count_body_phi_type(decl, value_interner::REF_I64) == 2, "only the i and j counters stay i64 PHIs");
+	f.free();
+}
+
+fn void indvar_widen_keeps_wrapping_unsigned_index() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("int g(int *a, unsigned u, int n) {\n"
+		"  int s = 0;\n"
+		"  for (int i = 0; i < n; i++) s += a[(int)(u * (unsigned)i)];\n"
+		"  return s;\n"
+		"}");
+	f.run_o2();
+	ir::Decl* decl = find_function(&f.graph, "g");
+	// The index is wrapping unsigned arithmetic converted to int: its sext must stay.
+	assert(count_body_nsw(decl, ir::InstTag.MUL, value_interner::REF_I32, false) == 1, "u * i stays i32 wrapping");
+	assert(count_body_tag(decl, ir::InstTag.SEXT) >= 1, "the sext of the wrapped index must stay");
+	f.free();
+}
+
+// ---- loop vectorizer ----
+
+fn ir::Decl* lower_o2(OptFixture* f, String source, String name, bool no_vectorize = false)
+{
+	f.lower(source);
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	fault fail = @catch(ir_opt::run(&f.graph, {
+		.level = code_gen_options::OptimizationLevel.O2,
+		.verify = true,
+		.no_vectorize = no_vectorize,
+	}, &errors));
+	assert(!fail, "ir_opt::run failed: %s", errors.len() == 0 ? "no verifier message" : errors.message_at(0));
+	errors.free();
+	return find_function(&f.graph, name);
+}
+
+fn uint count_vector_values(ir::Ir* graph, ir::Decl* decl)
+{
+	uint count = 0;
+	foreach (ref : decl.body) if (graph.is_vector(decl.instructions[(sz)ref].ty)) count++;
+	return count;
+}
+
+fn void loop_vectorize_int_sum_reduction() @test
+{
+	OptFixture f;
+	f.init();
+	ir::Decl* decl = lower_o2(&f, "int sum(const int *a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }", "sum");
+	assert(count_body_tag(decl, ir::InstTag.VREDUCE_ADD) == 1, "the sum should be reduced once after the vector loop");
+	assert(count_vector_values(&f.graph, decl) >= 3, "vector load, accumulator PHI and add");
+	// No stores, so no overlap checks.
+	assert(count_body_tag(decl, ir::InstTag.CMP_ULT) == 0, "a pure reduction needs no runtime alias check");
+	f.free();
+}
+
+fn void loop_vectorize_map_checks_overlap() @test
+{
+	OptFixture f;
+	f.init();
+	ir::Decl* decl = lower_o2(&f, "void add(int *c, const int *a, const int *b, int n) { for (int i = 0; i < n; i++) c[i] = a[i] + b[i]; }", "add");
+	assert(count_vector_values(&f.graph, decl) >= 3, "the map should be vectorized");
+	assert(count_body_tag(decl, ir::InstTag.CMP_ULT) == 4, "c is checked against a and b (two compares each)");
+	f.free();
+}
+
+fn void loop_vectorize_respects_no_vectorize() @test
+{
+	OptFixture f;
+	f.init();
+	ir::Decl* decl = lower_o2(&f, "int sum(const int *a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }", "sum", true);
+	assert(count_vector_values(&f.graph, decl) == 0, "-fno-tree-vectorize keeps the loop scalar");
+	f.free();
+}
+
+fn void loop_vectorize_rejects_float_reduction_and_iv_values() @test
+{
+	OptFixture f;
+	f.init();
+	f.lower("double fsum(const double *a, int n) { double s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }\n"
+		"void iota(int *a, int n) { for (int i = 0; i < n; i++) a[i] = i; }\n"
+		"void gather(int *a, const int *idx, const int *b, int n) { for (int i = 0; i < n; i++) a[i] = b[idx[i]]; }\n"
+		"void vol(volatile int *a, int n) { for (int i = 0; i < n; i++) a[i] = 1; }");
+	f.run_o2();
+	foreach (name : (String[]){ "fsum", "iota", "gather", "vol" })
+	{
+		ir::Decl* decl = find_function(&f.graph, name);
+		assert(count_vector_values(&f.graph, decl) == 0, "%s must stay scalar", name);
+	}
 	f.free();
 }

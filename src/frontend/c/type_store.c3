@@ -20,6 +20,7 @@
 // (only `Builder.fromType(...).str()` is ported, for `should_desugar`), the
 // attribute map (`getAttribute`/`hasAttribute`) and anonymous record names.
 module aro::frontend::c::type_store;
+import aro::bigint;
 import aro::frontend::c::compilation, aro::string_interner, aro::frontend::c::lang_opts, aro::target;
 import std::collections::list, std::collections::map;
 

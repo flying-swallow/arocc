@@ -4,6 +4,8 @@ module aro::backend::x86_64;
 import aro::backend::ir, aro::backend::object, std::collections::list, std::core::dstring;
 
 struct LocalLabelOffset { String name; usz offset; }
+<* A `.Lblockaddr.<fn>.<label>` label: `offset` bytes into `function`. *>
+struct BlockAddress { String label; String function; ulong offset; }
 struct PendingFixup { Fixup fixup; usz field_offset; }
 struct PendingRelocation
 {
@@ -172,8 +174,10 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 		List{char} encoded; encoded.init(tmem);
 		List{PendingFixup} fixups; fixups.init(tmem);
 		List{LocalLabelOffset} labels; labels.init(tmem);
+		List{BlockAddress} block_addresses; block_addresses.init(tmem);
 		List{char}* text = object::get_section(obj, object::SECTION_FUNC);
 		object::set_section_align(obj, object::SECTION_FUNC, 16);
+		ulong text_align = 16;
 		object::get_section(obj, object::SECTION_DATA);
 		object::get_section(obj, object::SECTION_READ_ONLY_DATA);
 		object::get_section(obj, object::SECTION_BSS);
@@ -188,6 +192,12 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 			encoded.clear(); fixups.clear(); labels.clear();
 			foreach (line : lowering.lines)
 			{
+				if (line.is_raw)
+				{
+					errors.put(decl.name, string::format(errors.allocator,
+						"inline asm needs the system assembler (-fno-integrated-as)"));
+					continue;
+				}
 				if (line.is_label)
 				{
 					labels.push({ .name = line.label, .offset = (usz)encoded.len() });
@@ -217,8 +227,21 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 				}
 			}
 
-			foreach (pending : fixups)
+			foreach (&pending : fixups)
 			{
+				// A RIP-relative reference to a label of this function (`lea` of a
+				// block address for `&&label`) resolves locally like a jump.
+				if (pending.fixup.kind == FixupKind.SYMBOL && pending.fixup.reloc == object::RelocKind.PC32)
+				{
+					usz label_target;
+					if (label_offset(&labels, pending.fixup.name, &label_target))
+					{
+						patch_rel32(&encoded, pending.field_offset,
+							(long)label_target + pending.fixup.addend - (long)pending.field_offset);
+						pending.fixup.kind = FixupKind.NONE;
+					}
+					continue;
+				}
 				if (pending.fixup.kind != FixupKind.LOCAL_REL32) continue;
 				usz target_offset;
 				if (!label_offset(&labels, pending.fixup.name, &target_offset))
@@ -232,12 +255,24 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 			}
 
 			ulong start = (ulong)text.len();
-			while (start % 16 != 0) { text.push(0); start++; }
+			ulong code_align = function_alignment(decl);
+			if (code_align > text_align)
+			{
+				text_align = code_align;
+				object::set_section_align(obj, object::SECTION_FUNC, text_align);
+			}
+			while (start % code_align != 0) { text.push(0); start++; }
 			start = (ulong)text.len();
 			text.push_all(encoded.array_view());
 			object::declare_symbol(obj, object::SECTION_FUNC, decl.name, true, object_linkage(decl.linkage, decl.is_weak),
 				object::SymbolType.FUNC, start, (ulong)encoded.len());
 			if (!declared(&names, decl.name)) names.push(decl.name);
+			// Block-address labels (`&&label` in static data) become function + offset.
+			foreach (label : labels)
+			{
+				if (!label.name.starts_with(".Lblockaddr.")) continue;
+				block_addresses.push({ .label = label.name.copy(tmem), .function = decl.name, .offset = (ulong)label.offset });
+			}
 
 			foreach (pending : fixups)
 			{
@@ -284,6 +319,17 @@ fn void? render_object(ir::Ir* ir, object::Object* obj, ir::ErrorList* errors, b
 				.kind = object::RelocKind.ABS64 });
 		}
 
+		foreach (&relocation : relocations)
+		{
+			if (!relocation.name.starts_with(".Lblockaddr.")) continue;
+			foreach (block : block_addresses)
+			{
+				if (block.label != relocation.name) continue;
+				relocation.name = block.function;
+				relocation.addend += (long)block.offset;
+				break;
+			}
+		}
 		// The Object API requires both section and symbol declarations before relocation.
 		foreach (relocation : relocations) declare_external(obj, &names, relocation.name);
 		foreach (relocation : relocations)

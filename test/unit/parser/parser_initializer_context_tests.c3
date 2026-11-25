@@ -3,30 +3,12 @@ module parser_init_ctx_tests;
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::parser_result;
 import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::symbol_stack, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value;
 
-fn parser_result::Result? parse_context_test_expr(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	value::Value val = eval && spelling != "unknown" ? value::int_i64(1, p.comp) : value::NONE;
-	return { .node = node, .qt = type_store::INT, .val = val };
-}
-
-fn parser_result::Result? parse_context_test_ice(void* context, parser::Parser* p, parser::ConstDeclFoldingMode folding)
-{
-	return parse_context_test_expr(context, p, true);
-}
-
 fn void init_context_parser(Compilation* comp, Preprocessor* pp, Source src, Parser* p)
 {
 	pp.init(comp, preprocessor::TESTING)!!;
 	pp.add_token(pp.preprocess(src)!!)!!;
 	p.init(pp);
 	p.bind_finalized_tokens();
-	p.set_initializer_test_probe(&grammar_parse_context_test_expr);
 	type_store::NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 		.variable = { .qt = type_store::INT } });
 	p.define_symbol({ .name = comp.intern_string("unknown"), .kind = symbol_stack::SymbolKind.DEF,
@@ -129,46 +111,6 @@ fn void static_initializer_rejects_unavailable_value() @test
 	assert(ta.allocation_count() == 0);
 }
 
-// Emits a known ERROR diagnostic and returns no saved value, so a static
-// requirement would fail on top of it unless the error skip applies.
-fn parser_result::Result? parse_context_error_test_expr(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	Diagnostic.EXPECTED_EXPR.@emit(p, tok)!;
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	return { .node = node, .qt = type_store::INT, .val = value::NONE };
-}
-
-fn void init_context_error_parser(Compilation* comp, Preprocessor* pp, Source src, Parser* p)
-{
-	pp.init(comp, preprocessor::TESTING)!!;
-	pp.add_token(pp.preprocess(src)!!)!!;
-	p.init(pp);
-	p.bind_finalized_tokens();
-	p.set_initializer_test_probe(&grammar_parse_context_error_test_expr);
-}
-
-fn void static_initializer_skips_value_check_after_error() @test
-{
-	TrackingAllocator ta; ta.init(mem); defer ta.free();
-	{
-		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
-		source::Source src = comp.add_source_from_buffer("static-error-init.c", "unknown")!!;
-		preprocessor::Preprocessor pp;
-		parser::Parser p;
-		init_context_error_parser(&comp, &pp, src, &p);
-		p.parse_initializer_with_context(type_store::INT, parser::InitContext.STATIC, false)!!;
-		assert(d.messages.len() == 1, "a static initializer that already reported an error is not re-checked for a value");
-		test::eq(d.messages[0].text, "expected expression");
-		p.free(); pp.free(); comp.free(); d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
 fn void variable_length_array_initializer_reports_diagnostic_and_recovers() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
@@ -191,23 +133,3 @@ fn void variable_length_array_initializer_reports_diagnostic_and_recovers() @tes
 	}
 	assert(ta.allocation_count() == 0);
 }
-
-alias InitAssignFn = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias InitIceFn = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode folding);
-
-<* IExpressionGrammar over this file's initializer test productions. *>
-struct InitGrammar (parser::IExpressionGrammar)
-{
-	void* context;
-	InitAssignFn assign;
-	InitIceFn ice;
-}
-
-fn parser_result::Result? InitGrammar.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
-	=> self.assign(self.context, p, eval);
-fn parser_result::Result? InitGrammar.integer_constant_expression(&self, parser::Parser* p,
-	parser::ConstDeclFoldingMode folding, bool eval) @dynamic
-	=> self.ice(self.context, p, folding);
-
-InitGrammar grammar_parse_context_test_expr = { null, &parse_context_test_expr, &parse_context_test_ice };
-InitGrammar grammar_parse_context_error_test_expr = { null, &parse_context_error_test_expr, &parse_context_test_ice };

@@ -20,7 +20,9 @@ has its own stable `area/file.c#N` result. Live progress uses the GCC runner for
 output, exit codes, and unsupported reasons. Reports are `results.jsonl` and
 `summary.md`, placed in `--out` or Bazel's undeclared outputs directory.
 
-Direct cc1 commands disable implicit system include paths.
+Direct cc1 commands disable implicit system include paths (`-nostdlibinc`) but
+keep Aro's builtin headers, like lit's `%clang_cc1`. Macro-backtrace notes
+(`expanded from ...`) are not counted, matching clang `-verify`.
 
 The C3 runner supports direct `%clang_cc1`/`%clang` syntax checks, `not`, C
 standards, defines, includes, target selection, warning flags, verification

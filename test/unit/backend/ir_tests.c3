@@ -563,3 +563,48 @@ fn void builder_materializes_fallthrough_and_skips_terminators() @test
 	errors.free();
 	f.free();
 }
+
+fn ir::VectorShape int_shape(uint lanes, ushort bits) => { .lanes = lanes, .elem = value_interner::REF_I32, .elem_bits = bits };
+fn ir::VectorShape float_shape(uint lanes, ushort bits) => { .lanes = lanes, .elem = value_interner::REF_F32, .elem_bits = bits, .is_float = true };
+
+fn void sse2_vector_op_matches_the_x86_64_selection_table() @test
+{
+	// SSE2 has no 8-bit / 64-bit multiply, 8-bit shifts, 64-bit arithmetic shift or 64-bit compares.
+	assert(ir::sse2_vector_op(MUL, int_shape(8, 16)) && ir::sse2_vector_op(MUL, int_shape(4, 32)));
+	assert(!ir::sse2_vector_op(MUL, int_shape(16, 8)) && !ir::sse2_vector_op(MUL, int_shape(2, 64)));
+	assert(ir::sse2_vector_op(BIT_SHL, int_shape(2, 64)) && !ir::sse2_vector_op(BIT_SHL, int_shape(16, 8)));
+	assert(ir::sse2_vector_op(BIT_ASHR, int_shape(4, 32)) && !ir::sse2_vector_op(BIT_ASHR, int_shape(2, 64)));
+	assert(ir::sse2_vector_op(CMP_ULT, int_shape(16, 8)) && !ir::sse2_vector_op(CMP_EQ, int_shape(2, 64)));
+	assert(ir::sse2_vector_op(FCMP_OGE, float_shape(2, 64)) && !ir::sse2_vector_op(FCMP_OGE, int_shape(4, 32)));
+	assert(!ir::sse2_vector_op(FADD, int_shape(4, 32)) && !ir::sse2_vector_op(ADD, float_shape(4, 32)));
+	assert(!ir::sse2_vector_op(SDIV, int_shape(4, 32)) && !ir::sse2_vector_op(UREM, int_shape(8, 16)));
+	// Only v4i32 <-> v4f32 signed conversions exist.
+	assert(ir::sse2_vector_cast(SITOFP, int_shape(4, 32), float_shape(4, 32)));
+	assert(ir::sse2_vector_cast(FPTOSI, float_shape(4, 32), int_shape(4, 32)));
+	assert(!ir::sse2_vector_cast(UITOFP, int_shape(4, 32), float_shape(4, 32)));
+	assert(!ir::sse2_vector_cast(FPTOSI, float_shape(2, 64), int_shape(2, 64)));
+}
+
+fn void sse2_shuffle_kind_classifies_masks() @test
+{
+	char u = ir::SHUFFLE_UNDEF;
+	ir::ShuffleSelect s = ir::sse2_shuffle_kind(int_shape(4, 32), (char[]){ 3, 2, 1, 0 });
+	assert(s.kind == PERMUTE && !s.swap);
+	s = ir::sse2_shuffle_kind(int_shape(4, 32), (char[]){ 5, u, 7, 4 });
+	assert(s.kind == PERMUTE && s.swap);
+	s = ir::sse2_shuffle_kind(float_shape(4, 32), (char[]){ 0, 3, 4, 6 });
+	assert(s.kind == SHUFFLE_PAIRS && !s.swap);
+	s = ir::sse2_shuffle_kind(float_shape(4, 32), (char[]){ 7, 4, 1, 2 });
+	assert(s.kind == SHUFFLE_PAIRS && s.swap);
+	s = ir::sse2_shuffle_kind(int_shape(8, 16), (char[]){ 0, 8, 1, 9, 2, 10, 3, 11 });
+	assert(s.kind == UNPACK_LO && !s.swap);
+	s = ir::sse2_shuffle_kind(int_shape(8, 16), (char[]){ 12, 4, 13, 5, u, 6, 15, 7 });
+	assert(s.kind == UNPACK_HI && s.swap);
+	s = ir::sse2_shuffle_kind(int_shape(2, 64), (char[]){ 0, 2 });
+	assert(s.kind == UNPACK_LO);
+	// 16-bit lanes beyond an interleave, mixed-source 32-bit lanes, and out-of-range entries are not selectable.
+	assert(ir::sse2_shuffle_kind(int_shape(8, 16), (char[]){ 7, 6, 5, 4, 3, 2, 1, 0 }).kind == NONE);
+	assert(ir::sse2_shuffle_kind(int_shape(4, 32), (char[]){ 0, 5, 2, 7 }).kind == NONE);
+	assert(ir::sse2_shuffle_kind(int_shape(4, 32), (char[]){ 0, 1, 2, 8 }).kind == NONE);
+	assert(ir::sse2_shuffle_kind(int_shape(4, 32), (char[]){ 0, 1, 2 }).kind == NONE);
+}

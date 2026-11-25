@@ -3,7 +3,7 @@
 module aro::frontend::c::codegen;
 import aro::backend::ir, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor;
 import aro::frontend::c::attribute, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::string_interner;
-import std::collections::list, std::collections::map;
+import std::collections::list, std::collections::map, aro::frontend::c::tokenizer;
 import std::core::dstring;
 
 <* An active switch statement's cases. *>
@@ -173,6 +173,8 @@ struct CodeGen
 	<* Flags per node index (`LINKAGE_*` bits), built once by `index_internal_linkage` so
 	   `has_internal_linkage` and `is_root_declaration` avoid scanning `root_decls`. *>
 	HashMap{uint, char} linkage_flags;
+	<* Functions defined with an identifier list (K&R), see index_knr_definitions. *>
+	List{string_interner::StringId} knr_functions;
 	ir::Ref bool_end_label;
 	ir::Ref cond_dummy_ref;
 	ir::Ref continue_label;
@@ -190,11 +192,22 @@ struct CodeGen
 	List{PendingGoto} pending_gotos;
 	ir::Ref return_label;
 	bool has_compound_assign_dummy;
+	<* The dummy holds the lhs value itself (atomic compound assignment), not its address. *>
+	bool compound_dummy_is_value;
+	<* An expression already evaluated once (the operand of an atomic compound
+	   assignment, reused by every retry of its compare-exchange loop). *>
+	type_store::NodeIndex cached_expr_node;
+	ir::Ref cached_expr_value;
+	bool has_cached_expr;
 	ir::Ref compound_assign_dummy;
 	<* Aggregate return storage for the function currently being lowered. *>
 	bool aggregate_return;
 	AggClass aggregate_return_class;
+	<* Full classification when aggregate_return_class is REGISTER. *>
+	AggClassResult aggregate_return_abi;
 	ulong aggregate_return_size;
+	<* The C return type when `aggregate_return`. *>
+	type_store::QualType aggregate_return_qt;
 	ir::Ref aggregate_return_slot;
 	ir::Ref sret_pointer;
 	bool keep_going;
@@ -248,6 +261,7 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 	c.record_elem_buf.init(comp.gpa);
 	c.record_cache.init(comp.gpa);
 	c.linkage_flags.init(comp.gpa);
+	c.knr_functions.init(comp.gpa);
 	c.vla_sizes.init(comp.gpa);
 	c.vla_scopes.init(comp.gpa);
 	c.vla_save_pool.init(comp.gpa);
@@ -269,8 +283,10 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 	defer c.record_elem_buf.free();
 	defer c.record_cache.free();
 	defer c.linkage_flags.free();
+	defer c.knr_functions.free();
 	defer c.builder.free();
 	c.index_internal_linkage();
+	c.index_knr_definitions();
 
 	foreach (decl_index : tree.root_decls)
 	{
@@ -332,14 +348,8 @@ fn ir::Ir? gen_ir(tree::Tree* tree, preprocessor::Preprocessor* pp, int tu_id = 
 					c.gen_var(decl.variable, decl_index)!;
 				}
 			case GLOBAL_ASM:
-				if (keep_going)
-				{
-					todo_report.definitions_total++;
-					todo_report.record("TODO global assembly", "<global assembly>");
-					continue;
-				}
-				c.fail("TODO global assembly")!;
-				unreachable();
+				// File-scope `asm("...")`: emitted verbatim (AT&T) by the text renderer.
+				c.builder.add_global_asm(c.asm_string(decl.global_asm.asm_str)!);
 			default:
 				unreachable("unexpected top-level node in CodeGen.gen_ir");
 		}
@@ -435,6 +445,45 @@ const char LINKAGE_STATIC_FN_TARGET = 4;
 const char LINKAGE_STATIC_VAR_TARGET = 8;
 const char LINKAGE_ROOT = 16;
 
+<* Record functions defined with an identifier list (`float f(x) float x; {}`).
+   Such a definition is not a prototype, so even with it in scope its `float`
+   parameters are passed as the default-promoted double (gcc and clang ABI);
+   the parser has already rewritten the type to a NORMAL `fn (float)`. *>
+fn void CodeGen.index_knr_definitions(&self)
+{
+	foreach (root_decl : self.tree.root_decls)
+	{
+		tree::Node node = root_decl.get(self.tree);
+		if (node.kind != tree::NodeKind.FUNCTION || node.function.body.is_null()) continue;
+		if (!self.is_knr_definition(node.function)) continue;
+		self.knr_functions.push(self.comp.intern_string(self.tree.tok_slice(node.function.name_tok)));
+	}
+}
+
+<* A K&R parameter's name token sits in the identifier list: `(` or `,` before
+   it and `,` or `)` after; a prototype parameter has a type before its name. *>
+fn bool CodeGen.is_knr_definition(&self, tree::NodeFunction function)
+{
+	type_store::Func func_type = function.qt.base(self.comp).ty.func;
+	foreach (param : func_type.params)
+	{
+		usz tok = (usz)param.name_tok;
+		if (tok == 0) continue;
+		if (tok + 1 >= self.tree.tokens.len) return false;
+		tokenizer::TokenId before = self.tree.tokens[tok - 1].id;
+		tokenizer::TokenId after = self.tree.tokens[tok + 1].id;
+		return (before == L_PAREN || before == COMMA) && (after == COMMA || after == R_PAREN);
+	}
+	return false;
+}
+
+<* `name` is a function defined in this file with an identifier list. *>
+fn bool CodeGen.is_knr_function(&self, string_interner::StringId name)
+{
+	foreach (knr : self.knr_functions) if (knr == name) return true;
+	return false;
+}
+
 <* Mark every file-scope node with `LINKAGE_ROOT`, and record, for every static file-scope
    function/variable, the root node itself and the definition it links to. *>
 fn void CodeGen.index_internal_linkage(&self)
@@ -516,6 +565,12 @@ fn void CodeGen.apply_retention(&self, String name, type_store::NodeIndex declar
 			decl.static_init = ir::StaticInit.DESTRUCTOR;
 			decl.init_priority = attr.args.destructor.priority;
 		}
+		else if (attr.args.tag == attribute::AttributeTag.ALIGNMENT)
+		{
+			// `aligned` without an argument means the target's largest useful alignment.
+			uint align = attr.args.alignment.has_alignment ? attr.args.alignment.alignment : 16;
+			if (align > decl.code_align) decl.code_align = align;
+		}
 	}
 }
 
@@ -572,14 +627,24 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 		case STRUCT:
 			uint cache_key = (uint)base.qt.unqualified();
 			if (try cached = self.record_cache.get(cache_key)) return cached;
+			// A struct with bit-fields is represented like a union, as its bytes: the
+			// record type is only a value-type tag (records move by address), and
+			// bit-field accesses go through bitfield_lval.
+			foreach (field : base.ty.record.fields)
+			{
+				if (field.bit_width == type_store::BIT_WIDTH_NULL) continue;
+				value_interner::InternerRef bytes_type = self.builder.interner.put(
+					{
+						.tag = ARRAY_TY,
+						.array_ty = { .len = base.qt.sizeof(self.comp), .child = value_interner::REF_I8 }
+					}
+				);
+				self.record_cache.set(cache_key, bytes_type);
+				return bytes_type;
+			}
 			usz first_elem = (usz)self.record_elem_buf.len();
 			foreach (field : base.ty.record.fields)
 			{
-				if (field.bit_width != type_store::BIT_WIDTH_NULL)
-				{
-					self.fail("TODO lower struct bitfields")!;
-					unreachable();
-				}
 				value_interner::InternerRef field_type = self.gen_type(field.qt)!;
 				self.record_elem_buf.push(field_type);
 			}
@@ -612,8 +677,8 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 			self.fail("TODO lower complex types")!;
 			unreachable();
 		case ATOMIC:
-			self.fail("TODO lower atomic types")!;
-			unreachable();
+			// Same representation as the base type on x86_64 (lock-free sizes).
+			return self.gen_type(base.ty.atomic);
 		case ENUM:
 			if (!base.ty.enum_ty.has_tag) unreachable("enum without a tag in CodeGen.gen_type");
 			return self.gen_type(base.ty.enum_ty.tag);
@@ -657,7 +722,12 @@ fn value_interner::InternerRef? CodeGen.gen_type(&self, type_store::QualType qt)
 				self.fail("TODO VLAs")!;
 				unreachable();
 			case INCOMPLETE:
-				unreachable("incomplete array type in CodeGen.gen_type");
+				// A flexible array member: no storage of its own in the record.
+				return self.builder.interner.put(
+					{
+						.tag = ARRAY_TY, .array_ty = { .len = 0, .child = elem }
+					}
+				);
 		}
 		case VECTOR:
 			value_interner::InternerRef elem = self.gen_type(base.ty.vector.elem)!;
@@ -707,7 +777,9 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		// bitfield layouts; ordinary aggregates use address-based expression values.
 		self.gen_type(func_type.return_type)!;
 		self.aggregate_return_class = return_class.kind;
+		self.aggregate_return_abi = return_class;
 		self.aggregate_return_size = func_type.return_type.sizeof(self.comp);
+		self.aggregate_return_qt = func_type.return_type;
 	}
 	self.ret_nodes.clear();
 	// Clear function-local symbols between functions; reusing Zig's persistent
@@ -732,13 +804,15 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 			ir::ArgLocationKind.GP_REGISTER, gp_index, 0);
 		gp_index++;
 	}
-	if (self.aggregate_return && self.aggregate_return_class == AggClass.INTEGER)
+	if (self.aggregate_return && (self.aggregate_return_class == AggClass.REGISTER || self.aggregate_return_class == AggClass.X87 ||
+		self.aggregate_return_class == AggClass.VECTOR128))
 	{
 		uint padded_size = (uint)((self.aggregate_return_size + 7) / 8 * 8);
 		self.aggregate_return_slot = self.builder.add_alloc(padded_size, 8,
 			self.type_contains_volatile(func_type.return_type));
 		self.gen_zero_fill(self.aggregate_return_slot, padded_size)!;
 	}
+	bool knr_definition = self.is_knr_definition(function);
 	foreach (param : func_type.params)
 	{
 		ir::Ref alloc;
@@ -756,17 +830,24 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		{
 			AggClassResult class = self.classify_record(param.qt)!;
 			self.gen_type(param.qt)!;
-			uint words = class.kind == AggClass.INTEGER ? (uint)class.eightbyte_count : 0;
+			uint words = class.kind == AggClass.REGISTER ? (uint)class.eightbyte_count : 0;
 			uint allocation_size = size;
-			if (class.kind == AggClass.INTEGER && words * 8 > allocation_size) allocation_size = words * 8;
+			if (class.kind == AggClass.REGISTER && words * 8 > allocation_size) allocation_size = words * 8;
 			alloc = self.builder.add_alloc(allocation_size, alignment, self.type_contains_volatile(param.qt));
-			if (class.kind == AggClass.INTEGER)
+			if (class.kind == AggClass.REGISTER)
 			{
-				bool in_registers = gp_index + words <= 6;
+				// All eightbytes go in registers, or the whole aggregate goes on the stack.
+				bool in_registers = gp_index + class.gp_words() <= 6 && sse_index + class.sse_words() <= 8;
 				for (uint word = 0; word < words; word++)
 				{
 					ir::Ref arg;
-					if (in_registers)
+					if (in_registers && class.words[word] == WordClass.NONE) continue;
+					if (in_registers && class.is_sse(word))
+					{
+						arg = self.builder.add_arg_at(value_interner::REF_F64,
+							ir::ArgLocationKind.SSE_REGISTER, sse_index++, 0);
+					}
+					else if (in_registers)
 					{
 						arg = self.builder.add_arg_at(value_interner::REF_I64,
 							ir::ArgLocationKind.GP_REGISTER, gp_index++, 0);
@@ -780,8 +861,14 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 					self.builder.add_store(self.ptr_at(alloc, (ulong)word * 8), arg);
 				}
 			}
-			else if (class.kind == AggClass.MEMORY)
+			else if (class.kind == AggClass.VECTOR128 && sse_index < 8)
 			{
+				ir::Ref arg = self.builder.add_arg_at(self.vector128_carrier(param.qt), ir::ArgLocationKind.SSE_REGISTER, sse_index++, 0);
+				self.builder.add_store(alloc, arg);
+			}
+			else if (class.kind == AggClass.MEMORY || class.kind == AggClass.X87 || class.kind == AggClass.VECTOR128)
+			{
+				if (alignment > 8) stack_offset = (stack_offset + 15) / 16 * 16;
 				uint rounded_size = (uint)((size + 7) / 8 * 8);
 				ir::Ref arg = self.builder.add_arg_at(value_interner::REF_PTR,
 					ir::ArgLocationKind.STACK, stack_offset, rounded_size, true);
@@ -804,15 +891,20 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 			else if (param.qt.is(self.comp, type_store::TypeTag.FLOAT))
 			{
 				self.ensure_scalar_float_width(param.qt)!;
+				// K&R `float` parameters arrive promoted to double; narrow on entry.
+				bool promoted = self.is_knr_float_param(func_type, param.qt) ||
+					(knr_definition && param.qt.is(self.comp, type_store::TypeTag.FLOAT) && param.qt.bit_sizeof(self.comp) == 32);
+				value_interner::InternerRef incoming = promoted ? value_interner::REF_F64 : self.gen_type(param.qt)!;
 				if (sse_index < 8)
 				{
-					arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.SSE_REGISTER, sse_index++, 0);
+					arg = self.builder.add_arg_at(incoming, ir::ArgLocationKind.SSE_REGISTER, sse_index++, 0);
 				}
 				else
 				{
-					arg = self.builder.add_arg_at(self.gen_type(param.qt)!, ir::ArgLocationKind.STACK, stack_offset, 8);
+					arg = self.builder.add_arg_at(incoming, ir::ArgLocationKind.STACK, stack_offset, 8);
 					stack_offset += 8;
 				}
+				if (promoted) arg = self.builder.add_inst(ir::InstTag.FPTRUNC, { .ref = arg }, self.gen_type(param.qt)!);
 			}
 			else if (self.is_int128(param.qt))
 			{
@@ -846,6 +938,11 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 		);
 	}
 
+	// C11 6.9.1p10: on entry, the size expression of each variably modified
+	// parameter is evaluated (`int a[i++]`, `int (*p)[n++]`), in order, after
+	// every parameter has its value.
+	foreach (param : func_type.params) self.eval_param_vla_sizes(param.qt)!;
+
 	self.return_label = self.builder.make_label("return");
 	self.gen_stmt(function.body.unwrap())!;
 	// Keep `return;` as RET(NONE), route early returns through the placed return
@@ -854,14 +951,24 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	{
 		if (!self.builder.block_terminated()) self.builder.add_jump(self.return_label);
 		self.builder.start_block(self.return_label);
-		if (self.aggregate_return_class == AggClass.INTEGER)
+		if (self.aggregate_return_class == AggClass.X87 || self.aggregate_return_class == AggClass.VECTOR128)
 		{
+			ir::Ref value = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.aggregate_return_slot },
+				self.aggregate_return_class == AggClass.X87 ? value_interner::REF_F80 : self.vector128_carrier(self.aggregate_return_qt));
+			self.builder.add_return(value);
+		}
+		else if (self.aggregate_return_class == AggClass.REGISTER)
+		{
+			uint[2] active;
+			uint active_count = self.aggregate_return_abi.active_words(&active);
 			ir::Ref low = self.builder.add_inst(ir::InstTag.LOAD,
-				{ .ref = self.aggregate_return_slot }, value_interner::REF_I64);
-			if (self.aggregate_return_size > 8)
+				{ .ref = self.ptr_at(self.aggregate_return_slot, (ulong)active[0] * 8) },
+				word_value_type(self.aggregate_return_abi.words[active[0]]));
+			if (active_count > 1)
 			{
 				ir::Ref high = self.builder.add_inst(ir::InstTag.LOAD,
-					{ .ref = self.ptr_at(self.aggregate_return_slot, 8) }, value_interner::REF_I64);
+					{ .ref = self.ptr_at(self.aggregate_return_slot, (ulong)active[1] * 8) },
+					word_value_type(self.aggregate_return_abi.words[active[1]]));
 				self.builder.add_return_pair(low, high);
 			}
 			else
@@ -898,6 +1005,44 @@ fn void? CodeGen.gen_fn(&self, type_store::NodeIndex declaration, tree::NodeFunc
 	self.apply_retention(name, declaration);
 }
 
+<* Evaluate the runtime array bounds in a parameter's type: through the
+   array a pointer parameter decayed from, and through pointees. Types with a
+   `[*]` bound are skipped (it has no expression). *>
+fn void? CodeGen.eval_param_vla_sizes(&self, type_store::QualType qt)
+{
+	type_store::QualType current = qt;
+	while (true)
+	{
+		type_store::BaseType base = current.base(self.comp);
+		if (base.ty.tag == POINTER)
+		{
+			current = base.ty.pointer.has_decayed ? base.ty.pointer.decayed : base.ty.pointer.child;
+			continue;
+		}
+		if (base.ty.tag != ARRAY) return;
+		if (self.has_unspecified_vla_bound(current)) return;
+		if (self.is_vla(current))
+		{
+			self.gen_type_size(current)!;
+			return;
+		}
+		current = base.ty.array.elem;
+	}
+}
+
+<* An array type with a `[*]` bound at some level. *>
+fn bool CodeGen.has_unspecified_vla_bound(&self, type_store::QualType qt)
+{
+	type_store::QualType current = qt;
+	while (true)
+	{
+		type_store::BaseType base = current.base(self.comp);
+		if (base.ty.tag != ARRAY) return false;
+		if (base.ty.array.len.kind == UNSPECIFIED_VARIABLE) return true;
+		current = base.ty.array.elem;
+	}
+}
+
 <* A 128-bit integer (`__int128`, `_BitInt(128)`), passed in two GPRs and returned in RDX:RAX. *>
 fn bool CodeGen.is_int128(&self, type_store::QualType qt)
 {
@@ -918,10 +1063,21 @@ fn ir::Ref? CodeGen.add_un(&self, ir::InstTag tag, ir::Ref operand, type_store::
 	return self.builder.add_inst(tag, { .ref = operand }, self.gen_type(qt)!);
 }
 
-<* Emit a binary instruction with the C type's corresponding IR result type. *>
+<* Emit a binary instruction with the C type's corresponding IR result type.
+   Signed ADD/SUB/MUL at `int` rank or wider get `nsw`: overflow there is UB
+   (C11 6.5p5). Narrower types are promoted first, so arithmetic still typed
+   narrower here (e.g. `short` `++`) narrows by conversion instead, which is
+   implementation-defined, not UB. `-fwrapv` turns the flag off. *>
 fn ir::Ref? CodeGen.add_bin(&self, ir::InstTag tag, ir::Ref lhs, ir::Ref rhs, type_store::QualType qt)
 {
-	return self.builder.add_inst(tag, { .bin = { .lhs = lhs, .rhs = rhs } }, self.gen_type(qt)!);
+	return self.builder.add_inst(tag, { .bin = { .lhs = lhs, .rhs = rhs } }, self.gen_type(qt)!, self.arith_nsw(tag, qt));
+}
+
+fn bool CodeGen.arith_nsw(&self, ir::InstTag tag, type_store::QualType qt)
+{
+	if (!tag.allows_nsw() || self.comp.langopts.wrapv) return false;
+	if (qt.is_pointer(self.comp) || !qt.is_int(self.comp) || qt.signedness(self.comp) != SIGNED) return false;
+	return qt.bit_sizeof(self.comp) >= type_store::INT.bit_sizeof(self.comp);
 }
 
 <* A short-circuit exit. `value` is the whole condition's truth on this edge;

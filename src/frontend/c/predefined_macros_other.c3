@@ -357,7 +357,7 @@ fn char arm_coproc_bits(Target* t) @local
  SIMD32, HwFp/Fpu computation from arm_float_abi() and the vfp/fp_armv8/
  neon/mve_fp/fp64/fp16 features, __ARM_FP 0x<hex>, FMA, VFPV*, NEON +
  __ARM_NEON_FP, __ARM_PCS_VFP, __SOFTFP__, __ARM_FEATURE_COPROC, interwork,
- LDREX (langopts.has_arm_ldrex), UNALIGNED, endian, ROPI/RWPI, minimal enum
+ LDREX (target.arm_ldrex()), UNALIGNED, endian, ROPI/RWPI, minimal enum
  size and __ARM_SIZEOF_WCHAR_T). Needs type_store::init_named_types (wchar).
 *>
 fn void? write_arm_defines(Compilation* comp, OutStream w)
@@ -515,7 +515,7 @@ fn void? write_arm_defines(Compilation* comp, OutStream w)
 
 	if (arm_version >= 5 && arm_version <= 8 && t.os.tag != WINDOWS) define(w, "__THUMB_INTERWORK__")!;
 
-	if (comp.langopts.has_arm_ldrex) io::fprintf(w, "#define __ARM_FEATURE_LDREX 0x%x\n", (char)comp.langopts.arm_ldrex)!;
+	if (try ldrex = comp.target.arm_ldrex()) io::fprintf(w, "#define __ARM_FEATURE_LDREX 0x%x\n", (char)ldrex)!;
 
 	if (!t.cpu.has(ARM_NO_UNALIGNED_ACCESS)) define(w, "__ARM_FEATURE_UNALIGNED")!;
 
@@ -597,7 +597,7 @@ fn void? write_aarch64_defines(Compilation* comp, OutStream w)
 	define(w, "__ARM_ARCH_ISA_A64")!;
 	define(w, "__ARM_FEATURE_CLZ")!;
 	define(w, "__ARM_FEATURE_FMA")!;
-	if (comp.langopts.has_arm_ldrex) io::fprintf(w, "#define __ARM_FEATURE_LDREX 0x%x\n", (char)comp.langopts.arm_ldrex)!;
+	if (try ldrex = comp.target.arm_ldrex()) io::fprintf(w, "#define __ARM_FEATURE_LDREX 0x%x\n", (char)ldrex)!;
 	define(w, "__ARM_FEATURE_IDIV")!; // As specified in ACLE
 	define(w, "__ARM_FEATURE_DIV")!; // For backwards compatibility
 	define(w, "__ARM_STATE_ZA")!;

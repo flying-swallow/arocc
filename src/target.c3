@@ -30,7 +30,41 @@
 // - Native CPU detection (cpuid etc.) is not ported: a "native" CPU resolves to
 //   the baseline model of the host architecture.
 module aro::target;
-import aro::frontend::c::lang_opts;
+import aro::bigint;
+
+<* Compiler a C toolchain emulates; target-derived default via Target.system_compiler. *>
+enum Compiler : char
+{
+	CLANG,
+	GCC,
+	MSVC,
+	NO,
+}
+
+fn uint Compiler.default_gcc_version(self)
+{
+	switch (self)
+	{
+		case CLANG: return 4 * 10_000 + 2 * 100 + 1;
+		case NO:
+		case GCC: return 7 * 10_000 + 1 * 100 + 0;
+		case MSVC: return 0;
+	}
+}
+
+<* The floating-point evaluation method for intermediate results within a single expression. `value` is Zig's i8 tag. *>
+enum FPEvalMethod : char(ichar value)
+{
+	<* The evaluation method cannot be determined or is inconsistent for this target. *>
+	INDETERMINATE { -1 },
+	<* Use the type declared in the source *>
+	SOURCE { 0 },
+	<* Use double for all float expressions narrower than double. *>
+	DOUBLE { 1 },
+	<* Use long double for all float expressions narrower than long double. *>
+	EXTENDED { 2 },
+}
+
 
 excuse UNKNOWN_ARCH;
 excuse UNKNOWN_OS;
@@ -390,6 +424,9 @@ fn Vendor? vendor_parse(String candidate)
 		case "suse": return SUSE;
 		case "oe": return OPEN_EMBEDDED;
 		case "intel": return INTEL;
+		// LLVM spellings of "no vendor".
+		case "unknown": return UNKNOWN;
+		case "none": return UNKNOWN;
 		default: return UNKNOWN_VENDOR~;
 	}
 }
@@ -825,36 +862,84 @@ fn Target? parse_triple(String arch_os_abi, Host h, String cpu = "", TripleError
 	}
 	Arch arch = query.has_arch ? query.arch : h.arch;
 
-	bool has_os_text;
-	String os_text;
-	if (try os_or_vendor = it.next())
+	// Remaining dash-separated fields. Beyond the Zig `arch-os-abi` form, LLVM/clang
+	// triples are accepted: `arch-vendor-os-env(-objfmt)`, with `unknown`/`none`/empty
+	// vendor and OS fields (`x86_64-unknown-linux-gnu`, `arm-none-eabi`, `i686--`).
+	String[5] fields;
+	usz field_count;
+	while (try f = it.next())
 	{
-		if (try v = vendor_parse_name(os_or_vendor))
+		if (field_count == fields.len)
+		{
+			err.text = arch_os_abi;
+			return UNEXPECTED_EXTRA_FIELD~;
+		}
+		fields[field_count++] = f;
+	}
+	// A trailing object-format field (`powerpc-ibm-aix-xcoff`) carries nothing Aro uses.
+	if (field_count >= 3 && llvm_object_format_field(fields[field_count - 1])) field_count--;
+	String[] rest = fields[:field_count];
+
+	bool vendor_given;
+	if (rest.len)
+	{
+		if (try v = vendor_parse_name(rest[0]))
 		{
 			vendor = v;
-			if (try o = it.next())
-			{
-				os_text = o;
-				has_os_text = true;
-			}
+			vendor_given = true;
 		}
-		else
+		else if (rest.len >= 2 && !llvm_os_field(rest[0], h) && (rest.len >= 3 || rest[0] == "" || llvm_os_field(rest[1], h)))
 		{
-			os_text = os_or_vendor;
-			has_os_text = true;
+			// clang maps any unrecognized vendor (`w64`, `arm`, empty) to the unknown vendor.
+			vendor_given = true;
+		}
+		if (vendor_given) rest = rest[1..];
+	}
+
+	bool default_gnu_abi;
+	if (rest.len)
+	{
+		String os_text = rest[0];
+		rest = rest[1..];
+		switch
+		{
+			case (vendor_given && (os_text == "" || os_text == "unknown")) || os_text == "none" || os_text == "elf":
+				query.has_os_tag = true;
+				query.os_tag = FREESTANDING;
+			case os_text.starts_with("mingw"):
+				query.has_os_tag = true;
+				query.os_tag = WINDOWS;
+				default_gnu_abi = true;
+			case os_name_part(os_text) == "aix":
+				query.has_os_tag = true;
+				query.os_tag = OTHER;
+			case os_text == "eabi" || os_text == "eabihf":
+				// Environment in the OS slot (`arm-none-eabi`, `aarch64-eabi`).
+				query.has_os_tag = true;
+				query.os_tag = FREESTANDING;
+				query.has_abi = true;
+				query.abi = os_text == "eabi" ? EABI : EABIHF;
+			default:
+				String version_str;
+				if (catch f = parse_os(&query, os_text, h, &version_str))
+				{
+					err.text = f == UNKNOWN_OS ? os_text : version_str;
+					return f~;
+				}
 		}
 	}
-	if (has_os_text)
+	else if (vendor_given)
 	{
-		String version_str;
-		if (catch f = parse_os(&query, os_text, h, &version_str))
-		{
-			err.text = f == UNKNOWN_OS ? os_text : version_str;
-			return f~;
-		}
+		// `arch-vendor` alone: clang's unknown OS.
+		query.has_os_tag = true;
+		query.os_tag = FREESTANDING;
 	}
-	if (try abi_text = it.next())
+	if (rest.len)
 	{
+		String abi_text = rest[0];
+		rest = rest[1..];
+		// clang's `msvc<version>` names the MSVC compatibility version, not an ABI version.
+		if (abi_text.len > 4 && abi_text.starts_with("msvc") && abi_text[4] >= '0' && abi_text[4] <= '9') abi_text = "msvc";
 		String version_str;
 		if (catch f = parse_abi(&query, abi_text, &version_str))
 		{
@@ -862,7 +947,12 @@ fn Target? parse_triple(String arch_os_abi, Host h, String cpu = "", TripleError
 			return f~;
 		}
 	}
-	if (try extra = it.next())
+	else if (default_gnu_abi)
+	{
+		query.has_abi = true;
+		query.abi = GNU;
+	}
+	if (rest.len)
 	{
 		err.text = arch_os_abi;
 		return UNEXPECTED_EXTRA_FIELD~;
@@ -902,6 +992,23 @@ fn Target? parse_triple(String arch_os_abi, Host h, String cpu = "", TripleError
 	return target;
 }
 
+<* LLVM triple object-format suffixes (`-xcoff`, `-coff`, `-macho`, `-elf` as a 4th/5th field). *>
+fn bool llvm_object_format_field(String f) @local => f == "xcoff" || f == "coff" || f == "macho" || f == "elf" || f == "wasm" || f == "goff";
+
+<* An OS field `parse_triple` accepts, including the LLVM-only spellings it maps. *>
+fn bool llvm_os_field(String text, Host h) @local
+{
+	String name = os_name_part(text);
+	return @ok(check_os(name, h)) || text.starts_with("mingw") || name == "aix" || text == "unknown" || text == "none" || text == "elf";
+}
+
+<* The OS name with any trailing version stripped (`aix7.1` -> `aix`, `darwin9` -> `darwin`). *>
+fn String os_name_part(String text) @local
+{
+	foreach (i, c : text) if ((c >= '0' && c <= '9') || c == '.') return text[:i];
+	return text;
+}
+
 <* Zig mem.splitScalar(u8, s, '-'): yields at least one (possibly empty) part. *>
 struct SplitIter
 {
@@ -927,7 +1034,11 @@ fn void? apply_cpu_features(Query* query, Arch arch, String cpu_features, bool h
 	usz index = 0;
 	while (index < cpu_features.len && cpu_features[index] != '+' && cpu_features[index] != '-') index++;
 	String cpu_name = cpu_features[:index];
-	if (cpu_name == "native")
+	if (cpu_name.len == 0)
+	{
+		// Only `+feature-feature` (from -m<feature> flags): keep the default model.
+	}
+	else if (cpu_name == "native")
 	{
 		query.cpu_model_kind = NATIVE;
 	}

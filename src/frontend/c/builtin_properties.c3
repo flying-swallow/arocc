@@ -158,10 +158,10 @@ bitstruct BuiltinTag : uint
 <* The builtin table generator compiles this module without generated tag
  modules, so these predicates use bytewise-sorted common.def indices. Keep the
  indices synchronized if the relevant names or their ordering change. *>
-const ushort COMMON_VA_COPY_BUILTIN_INDEX = 795;
-const ushort COMMON_VA_COPY_INDEX = 1484;
-const ushort COMMON_VA_END_BUILTIN_INDEX = 796;
-const ushort COMMON_VA_END_INDEX = 1485;
+const ushort COMMON_VA_COPY_BUILTIN_INDEX = 807;
+const ushort COMMON_VA_COPY_INDEX = 1496;
+const ushort COMMON_VA_END_BUILTIN_INDEX = 808;
+const ushort COMMON_VA_END_INDEX = 1497;
 
 fn bool is_va_end_tag(BuiltinTag tag) => tag.group == BuiltinGroup.COMMON &&
 	(tag.index == COMMON_VA_END_BUILTIN_INDEX || tag.index == COMMON_VA_END_INDEX);

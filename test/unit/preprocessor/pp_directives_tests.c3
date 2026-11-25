@@ -120,7 +120,7 @@ fn void expect_helpers() @test
 	{
 		Source s1 = pp.comp.add_source_from_buffer("e1.c", "  FOO /* x */ bar baz\nnext")!!;
 		Tokenizer t;
-		t.init(s1.buf, s1.id, pp.comp.langopts);
+		t.init(s1.buf, s1.id, pp.comp.langopts, &pp.comp.target);
 		test::eq(pp.expect_macro_name(&t)!!, "FOO");
 		pp.expect_nl(&t)!!;
 		check(d.messages.len(), 1);
@@ -128,17 +128,17 @@ fn void expect_helpers() @test
 		check(t.next().id.ordinal, TokenId.IDENTIFIER.ordinal);
 
 		Source s2 = pp.comp.add_source_from_buffer("e2.c", "  1 rest of line\nnext")!!;
-		t.init(s2.buf, s2.id, pp.comp.langopts);
+		t.init(s2.buf, s2.id, pp.comp.langopts, &pp.comp.target);
 		assert(@catch(pp.expect_macro_name(&t)) == preprocessor::NO_MACRO_NAME);
 		expect_msg(d, 1, "macro name missing", 1, 3);
 		// skip_to_nl consumed the line.
 		check(t.next().id.ordinal, TokenId.IDENTIFIER.ordinal);
 
 		// A keyword is a macro identifier.
-		t.init(" if\n", src.id, pp.comp.langopts);
+		t.init(" if\n", src.id, pp.comp.langopts, &pp.comp.target);
 		test::eq(pp.expect_macro_name(&t)!!, "if");
 
-		t.init("a b c\nd", src.id, pp.comp.langopts);
+		t.init("a b c\nd", src.id, pp.comp.langopts, &pp.comp.target);
 		preprocessor::skip_to_nl(&t);
 		check(t.line, 2);
 	};
@@ -419,14 +419,14 @@ fn void skip_leaves_tokenizer_at_directive() @test
 	{
 		Tokenizer t;
 		String text = "a\n#if X\n#elif\n#endif\n  #  elif Y\n";
-		t.init(text, src.id, pp.comp.langopts);
+		t.init(text, src.id, pp.comp.langopts, &pp.comp.target);
 		pp.skip(&t, UNTIL_ELSE)!!;
 		check(t.index, 21);
 		check(t.line, 5);
 		Token h = t.next_no_ws();
 		check(h.id.ordinal, TokenId.HASH.ordinal);
 		// UNTIL_ENDIF ignores #elif but stops at #else.
-		t.init("#elif\n#else\n#endif\n", src.id, pp.comp.langopts);
+		t.init("#elif\n#else\n#endif\n", src.id, pp.comp.langopts, &pp.comp.target);
 		pp.skip(&t, UNTIL_ENDIF)!!;
 		check(t.index, 6);
 		check(d.messages.len(), 0);

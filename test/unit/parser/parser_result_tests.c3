@@ -5,31 +5,6 @@ import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::fronte
 import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::symbol_stack, aro::frontend::c::tokens;
 import std::core::mem::allocators;
 
-fn parser_result::Result? parse_initializer_context_assignment(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	String spelling = p.tree.tok_slice(tok);
-	p.advance();
-	if (spelling == "x")
-	{
-		type_store::NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
-			.variable = { .name_tok = tok, .qt = type_store::INT } });
-		type_store::NodeIndex reference = p.tree.add_node({ .kind = tree::NodeKind.DECL_REF_EXPR,
-			.decl_ref = { .qt = type_store::INT, .decl = declaration, .name_tok = tok } });
-		return { .node = reference, .qt = type_store::INT, .val = value::NONE };
-	}
-	type_store::NodeIndex literal = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	return { .node = literal, .qt = type_store::INT, .val = eval ? value::int_i64(7, p.comp) : value::NONE };
-}
-
-fn parser_result::Result? parse_initializer_context_ice(void* context, parser::Parser* p,
-	parser::ConstDeclFoldingMode folding)
-{
-	return parse_initializer_context_assignment(context, p, true);
-}
-
 fn void assert_declaration_pointer_offset(value::Value result, compilation::Compilation* comp,
 	type_store::NodeIndex decl, long expected_offset)
 {
@@ -594,7 +569,6 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_context_assignment);
 		type_store::NodeIndex x_declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 			.variable = { .qt = type_store::INT } });
 		p.define_symbol({ .name = comp.intern_string("x"), .kind = symbol_stack::SymbolKind.DEF,
@@ -683,7 +657,6 @@ fn void variable_length_array_initializers_are_diagnosed_and_defaulted() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_context_assignment);
 
 		type_store::NodeIndex bound = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
 			.literal = { .literal_tok = 0, .qt = type_store::INT } });
@@ -705,22 +678,3 @@ fn void variable_length_array_initializers_are_diagnosed_and_defaulted() @test
 	diags.free();
 	assert(ta.allocation_count() == 0);
 }
-
-alias InitAssignFn = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias InitIceFn = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode folding);
-
-<* IExpressionGrammar over this file's initializer test productions. *>
-struct InitGrammar (parser::IExpressionGrammar)
-{
-	void* context;
-	InitAssignFn assign;
-	InitIceFn ice;
-}
-
-fn parser_result::Result? InitGrammar.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
-	=> self.assign(self.context, p, eval);
-fn parser_result::Result? InitGrammar.integer_constant_expression(&self, parser::Parser* p,
-	parser::ConstDeclFoldingMode folding, bool eval) @dynamic
-	=> self.ice(self.context, p, folding);
-
-InitGrammar grammar_parse_initializer_context_assignment = { null, &parse_initializer_context_assignment, &parse_initializer_context_ice };

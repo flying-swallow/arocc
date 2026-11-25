@@ -26,7 +26,6 @@ macro @with_target(String triple; @body(Compilation* comp, AttributeMap* am))
 		Compilation comp;
 		comp.init(&ta);
 		comp.target = tgt(triple);
-		comp.langopts.set_target_options(&comp.target);
 		AttributeMap am;
 		am.init(&ta);
 		@body(&comp, &am);

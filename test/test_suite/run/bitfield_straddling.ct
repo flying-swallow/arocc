@@ -1,0 +1,20 @@
+// #kind: run
+// #exit: 0
+// Bit-fields no single 1/2/4/8-byte unit can hold (packed fields straddling an
+// eightbyte) go through a 128-bit window on a copy of their bytes.
+#include <stdio.h>
+struct __attribute__((packed)) P { unsigned char c:7; unsigned long long b:64; signed char t; };
+struct __attribute__((packed)) Q { char x; long long v:60; int w:30; };
+struct __attribute__((packed)) R { unsigned a:3; unsigned long long b:63; };
+int main(void) {
+  struct P p = {0}; p.c = 5; p.b = 0xfedcba9876543210ULL; p.t = -3;
+  struct Q q = {0}; q.x = 1; q.v = -123456789012345LL; q.w = -77;
+  struct R r = {0}; r.a = 6; r.b = 0x4123456789abcdefULL;
+  p.b += 1; q.v -= 5; r.b ^= 1;
+  printf("%u %llx %d | %d %lld %d | %u %llx | %zu %zu %zu\n", p.c, p.b, p.t, q.x, (long long)q.v, q.w, r.a, (unsigned long long)r.b, sizeof p, sizeof q, sizeof r);
+  unsigned char *bp = (unsigned char *)&p; for (unsigned i = 0; i < sizeof p; i++) printf("%02x", bp[i]); puts("");
+}
+
+// #expect: stdout
+5 fedcba9876543211 -3 | 1 -123456789012350 -77 | 6 4123456789abcdee | 10 13 9
+8508192a3b4c5d6e7ffd

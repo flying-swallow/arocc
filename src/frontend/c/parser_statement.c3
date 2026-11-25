@@ -67,6 +67,9 @@ struct StatementParser (parser::IAddressOfLabel)
 	list::List{tokens::TokenIndex} labels;
 	list::List{type_store::NodeIndex} label_nodes;
 	list::List{tokens::TokenIndex} gotos;
+	<* The first `&&label` node per label of this function: every `&&label` of one
+	   label carries the same pointer constant, so `&&l == &&l` folds to true. *>
+	list::List{type_store::NodeIndex} label_address_nodes;
 	uint label_count;
 	bool in_function;
 	type_store::QualType function_return_qt;
@@ -189,7 +192,26 @@ fn parser_result::Result? StatementParser.handle_address_of_label(&self, parser:
 			.addr_of_label = { .label_tok = label_tok, .qt = type_store::VOID_POINTER }
 		}
 	);
-	return { .node = node, .qt = type_store::VOID_POINTER, .val = value::NONE };
+	// An address constant (`static void *t[] = { &&l };`): CodeGen resolves the
+	// pointer, which names this label's first `&&` node, to the block address.
+	type_store::NodeIndex canonical = node;
+	if (self.in_function)
+	{
+		String name = p.tree.tok_slice(label_tok);
+		bool found = false;
+		foreach (earlier : self.label_address_nodes)
+		{
+			if (p.tree.tok_slice(earlier.get(&p.tree).addr_of_label.label_tok) == name)
+			{
+				canonical = earlier;
+				found = true;
+				break;
+			}
+		}
+		if (!found) self.label_address_nodes.push(node);
+	}
+	value::Value address = value::pointer({ .node = (uint)canonical, .offset = value::ZERO.ref() }, p.comp);
+	return { .node = node, .qt = type_store::VOID_POINTER, .val = address };
 }
 
 <* Evaluate the borrowed token ranges for each attribute argument and append
@@ -1219,6 +1241,7 @@ fn void StatementParser.begin_fn_body(&self, parser::Parser* p) @noinline
 	self.labels.init(p.comp.gpa);
 	self.label_nodes.init(p.comp.gpa);
 	self.gotos.init(p.comp.gpa);
+	self.label_address_nodes.init(p.comp.gpa);
 }
 
 <* Function-body validation and cleanup, run by `parse_body`'s defer. *>
@@ -1240,6 +1263,7 @@ fn void StatementParser.end_fn_body(&self, parser::Parser* p, parser::IAddressOf
 	self.labels.free();
 	self.label_nodes.free();
 	self.gotos.free();
+	self.label_address_nodes.free();
 	self.in_function = false;
 	self.has_computed_goto = false;
 	self.function_has_address_of_label = false;
@@ -1309,7 +1333,9 @@ fn void? StatementParser.finish_body(&self, parser::Parser* p, list::List{type_s
 					type_store::Type? maybe_int = ret_qt.get(p.comp, type_store::TypeTag.INT);
 					if (@ok(maybe_int) && maybe_int!.int_ty == type_store::TypeInt.INT) return_zero = true;
 				}
-				if (!return_zero)
+				// Like clang's hasUncompilableErrorOccurred(): once an error has been
+				// reported, falling off the end is likely recovery fallout.
+				if (!return_zero && p.diagnostics.errors == 0)
 				{
 					Diagnostic.FUNC_DOES_NOT_RETURN.@emit(p, r_brace,
 						p.tree.tok_slice(self.function_name_tok))!;

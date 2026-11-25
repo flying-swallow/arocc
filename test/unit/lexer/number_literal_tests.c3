@@ -38,7 +38,6 @@ macro @with_ctx(String triple; @body(Ctx* c))
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.target = target::parse_triple(triple, HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		Source src = comp.add_source_from_buffer("lit.c", "x\n")!!;
 		Ctx c = { .comp = &comp, .d = &d, .loc = { .id = src.id, .byte_offset = 0, .line = 1 } };

@@ -740,7 +740,7 @@ fn ExpandBuf? Preprocessor.expand_func_macro(&self, TokenWithExpansionLocs macro
 						else if (func_macro.params.len == 0 && expanded_args.len() == 1 && expanded_args.entries[0].len == 0)
 						{
 							// Ambiguous whether this is "empty __VA_ARGS__" or "__VA_ARGS__ omitted"
-							if (self.comp.langopts.standard.is_gnu())
+							if (self.comp.langopts.standard.is_gnu)
 							{
 								// GNU standard, drop the comma
 								self.err_raw(hash_hash, Diagnostic.COMMA_DELETION_VA_ARGS)!;
@@ -800,6 +800,7 @@ fn void Preprocessor.expand_va_opt(&self, ExpandBuf* buf, RawToken raw, bool sho
 		.index = raw.start,
 		.source = raw.source,
 		.langopts = self.comp.langopts,
+		.target = &self.comp.target,
 		.line = raw.line,
 		.splice_locs = src.splice_locs,
 	};

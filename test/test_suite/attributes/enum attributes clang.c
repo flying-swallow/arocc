@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 // #opt: --emulate=clang
 enum E {
    is_deprecated __attribute__((deprecated)), // #note@33: 'is_deprecated' has been explicitly marked deprecated here

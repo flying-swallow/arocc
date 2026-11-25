@@ -5,7 +5,10 @@ load("//tools:c3.bzl", "c3_binary", "c3_library", "c3_test")
 c3_library(
     name = "test_suite_runner_lib",
     srcs = ["test_suite_runner.c3"],
-    deps = ["//test/src/manifest:runner_lib"],
+    deps = [
+        "//test/src/lib:harness_lib",
+        "//test/src/manifest:runner_lib",
+    ],
     visibility = ["//test:__subpackages__"],
 )
 

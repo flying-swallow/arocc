@@ -343,15 +343,6 @@ fn void gen_ir_rejects_complex_type() @test
 	f.free();
 }
 
-fn void gen_ir_rejects_atomic_type() @test
-{
-	CodeGenFixture f;
-	f.init();
-	type_store::QualType atomic_type = f.comp.type_store.put(type_store::type_atomic(type_store::INT));
-	f.expect_typed_return_fatal(atomic_type, "TODO lower atomic types");
-	f.free();
-}
-
 fn void gen_ir_rejects_block_type() @test
 {
 	CodeGenFixture f;
@@ -370,20 +361,6 @@ fn void gen_ir_rejects_vla_type() @test
 	NodeIndex length = f.int_literal(4);
 	type_store::QualType vla_type = f.comp.type_store.put(type_store::type_vla(type_store::INT, length));
 	f.expect_typed_return_fatal(vla_type, "TODO VLAs");
-	f.free();
-}
-
-fn void gen_ir_rejects_struct_bitfield_type() @test
-{
-	CodeGenFixture f;
-	f.init();
-	type_store::RecordField[1] fields = {
-		type_store::record_field(f.comp.intern_string("bits"), type_store::INT),
-	};
-	fields[0].bit_width = 1;
-	type_store::QualType bitfield_type = f.comp.type_store.put(type_store::type_record(
-		f.comp.intern_string("UnsupportedBitfield"), fields[..], {}, false));
-	f.expect_typed_return_fatal(bitfield_type, "TODO lower struct bitfields");
 	f.free();
 }
 
@@ -420,7 +397,8 @@ fn void gen_ir_rejects_global_assembly() @test
 	NodeIndex global_asm = f.tree.add_node({ .kind = tree::NodeKind.GLOBAL_ASM,
 		.global_asm = { .asm_tok = 0, .asm_str = asm_string } });
 	f.tree.root_decls.push(global_asm);
-	f.expect_fatal("TODO global assembly");
+	// File-scope asm is emitted verbatim; its operand must be a string literal.
+	f.expect_fatal("TODO CodeGen inline asm: operand is not a string literal\n");
 	f.free();
 }
 
@@ -442,8 +420,8 @@ fn void gen_ir_rejects_switch_case_range() @test
 
 fn void gen_ir_rejects_unimplemented_statement_nodes() @test
 {
-	tree::NodeKind[3] kinds = { tree::NodeKind.COMPUTED_GOTO_STMT,
-		tree::NodeKind.ASM_STMT, tree::NodeKind.NULLPTR_LITERAL };
+	// COMPUTED_GOTO_STMT lowers to JMP_VAL (computed_goto_O0.c run test).
+	tree::NodeKind[2] kinds = { tree::NodeKind.ASM_STMT, tree::NodeKind.NULLPTR_LITERAL };
 	foreach (kind : kinds)
 	{
 		CodeGenFixture f;
@@ -452,9 +430,6 @@ fn void gen_ir_rejects_unimplemented_statement_nodes() @test
 		NodeIndex statement;
 		switch (kind)
 		{
-			case COMPUTED_GOTO_STMT:
-				statement = f.tree.add_node({ .kind = kind,
-					.computed_goto_stmt = { .goto_tok = 0, .expr = expression } });
 			case ASM_STMT:
 				statement = f.tree.add_node({ .kind = kind,
 					.asm_stmt = { .asm_tok = 0, .asm_str = expression } });
@@ -463,15 +438,19 @@ fn void gen_ir_rejects_unimplemented_statement_nodes() @test
 					.literal = { .literal_tok = 0, .qt = type_store::NULLPTR_T } });
 			default: unreachable();
 		}
-		f.expect_statement_fatal(statement, string::tformat("TODO CodeGen.genStmt %s\n", kind.name));
+		// asm statements lower to inline asm calls; this one's template is not a string.
+		String expected = kind == tree::NodeKind.ASM_STMT ? "TODO CodeGen inline asm: operand is not a string literal\n"
+			: string::tformat("TODO CodeGen.genStmt %s\n", kind.name);
+		f.expect_statement_fatal(statement, expected);
 		f.free();
 	}
 }
 
 fn void gen_ir_rejects_unimplemented_expression_nodes() @test
 {
-	// SIZEOF_EXPR/ALIGNOF_EXPR lower to constants (sizeof_unsaved_value.c run test).
-	tree::NodeKind[5] kinds = { tree::NodeKind.ADDR_OF_LABEL, tree::NodeKind.IMAG_EXPR,
+	// SIZEOF_EXPR/ALIGNOF_EXPR lower to constants (sizeof_unsaved_value.c run test);
+	// ADDR_OF_LABEL lowers to LABEL_ADDR (computed_goto_O0.c).
+	tree::NodeKind[4] kinds = { tree::NodeKind.IMAG_EXPR,
 		tree::NodeKind.REAL_EXPR, tree::NodeKind.BUILTIN_VA_ARG_PACK,
 		tree::NodeKind.BUILTIN_VA_ARG_PACK_LEN };
 	foreach (kind : kinds)
@@ -482,9 +461,6 @@ fn void gen_ir_rejects_unimplemented_expression_nodes() @test
 		NodeIndex expression;
 		switch (kind)
 		{
-			case ADDR_OF_LABEL:
-				expression = f.tree.add_node({ .kind = kind,
-					.addr_of_label = { .label_tok = 0, .qt = type_store::INT_POINTER } });
 			case IMAG_EXPR: case REAL_EXPR:
 				expression = f.tree.add_node({ .kind = kind,
 					.unary = { .qt = type_store::INT, .operand = operand } });
@@ -501,7 +477,7 @@ fn void gen_ir_rejects_unimplemented_expression_nodes() @test
 fn void gen_ir_rejects_unimplemented_cast_kinds() @test
 {
 	// POINTER_TO_INT, INT_TO_POINTER and NULL_TO_POINTER are implemented (pointer_casts_lower).
-	tree::CastKind[14] kinds = {
+	tree::CastKind[12] kinds = {
 		tree::CastKind.BITCAST, tree::CastKind.BOOL_TO_POINTER,
 		tree::CastKind.COMPLEX_INT_TO_COMPLEX_FLOAT,
 		tree::CastKind.COMPLEX_FLOAT_TO_COMPLEX_INT, tree::CastKind.COMPLEX_INT_CAST,
@@ -509,7 +485,6 @@ fn void gen_ir_rejects_unimplemented_cast_kinds() @test
 		tree::CastKind.REAL_TO_COMPLEX_INT, tree::CastKind.COMPLEX_FLOAT_CAST,
 		tree::CastKind.COMPLEX_FLOAT_TO_REAL, tree::CastKind.REAL_TO_COMPLEX_FLOAT,
 		tree::CastKind.UNION_CAST, tree::CastKind.VECTOR_SPLAT,
-		tree::CastKind.ATOMIC_TO_NON_ATOMIC, tree::CastKind.NON_ATOMIC_TO_ATOMIC,
 	};
 	foreach (kind : kinds)
 	{
@@ -690,8 +665,10 @@ fn void gen_ir_lowers_scalar_float_conversions_and_truthiness() @test
 
 fn void gen_ir_rejects_unimplemented_lvalue_nodes() @test
 {
-	tree::NodeKind[4] kinds = { tree::NodeKind.MEMBER_ACCESS_EXPR, tree::NodeKind.MEMBER_ACCESS_PTR_EXPR,
-		tree::NodeKind.COMPOUND_LITERAL_EXPR, tree::NodeKind.COMPOUND_LITERAL_EXPR };
+	// A `static` compound literal lowers to an internal global
+	// (file_scope_compound_literal_address.c); thread_local ones do not yet.
+	tree::NodeKind[3] kinds = { tree::NodeKind.MEMBER_ACCESS_EXPR, tree::NodeKind.MEMBER_ACCESS_PTR_EXPR,
+		tree::NodeKind.COMPOUND_LITERAL_EXPR };
 	foreach (i, kind : kinds)
 	{
 		CodeGenFixture f;
@@ -708,16 +685,15 @@ fn void gen_ir_rejects_unimplemented_lvalue_nodes() @test
 		{
 			NodeIndex initializer = f.int_literal(1);
 			lvalue = f.tree.add_node({ .kind = kind,
-				.compound_literal = { .qt = type_store::INT, .thread_local = i == 3,
-					.storage_class = i == 2 ? tree::CompoundLiteralStorageClass.STATIC : tree::CompoundLiteralStorageClass.AUTO,
-					.initializer = initializer } });
+				.compound_literal = { .qt = type_store::INT, .thread_local = true,
+					.storage_class = tree::CompoundLiteralStorageClass.AUTO, .initializer = initializer } });
 		}
 		NodeIndex rhs = f.int_literal(1);
 		NodeIndex assignment = f.tree.add_node({ .kind = tree::NodeKind.ASSIGN_EXPR,
 			.binary = { .qt = type_store::INT, .lhs = lvalue, .rhs = rhs } });
 		String expected = i < 2
 			? string::tformat("TODO CodeGen.genLval %s\n", kind.name)
-			: "TODO CodeGen.compound_literal_expr static or thread_local\n";
+			: "TODO CodeGen.compound_literal_expr thread_local\n";
 		f.expect_expression_fatal(assignment, expected);
 		f.free();
 	}
@@ -954,7 +930,7 @@ fn void gen_ir_returns_sret_pointer_for_memory_class_record() @test
 	f.free();
 }
 
-fn void gen_ir_reports_sse_class_for_record_with_float_field() @test
+fn void classify_record_puts_double_field_in_sse_class() @test
 {
 	CodeGenFixture f;
 	f.init();
@@ -967,10 +943,11 @@ fn void gen_ir_reports_sse_class_for_record_with_float_field() @test
 	type_store::QualType record_type = f.comp.type_store.put(type_store::type_record(
 		f.comp.intern_string("FloatingRecord"), fields[..], layout));
 	codegen::CodeGen generator = { .comp = &f.comp };
-	fault fatal = @catch(generator.classify_record(record_type));
-	assert(fatal == compilation::FATAL_ERROR, "SSE-class aggregate classification should report its TODO");
-	assert(f.diagnostics.messages.len() == 1, "SSE classification should report one diagnostic");
-	test::eq(f.diagnostics.messages[0].text, "TODO pass and return struct/union by value: SSE class\n");
+	codegen::AggClassResult class = generator.classify_record(record_type)!!;
+	assert(class.kind == codegen::AggClass.REGISTER, "a lone double field is passed in a register");
+	assert(class.eightbyte_count == 1);
+	assert(class.words[0] == codegen::WordClass.SSE, "a double-only eightbyte is SSE class");
+	assert(f.diagnostics.messages.len() == 0);
 	f.free();
 }
 
@@ -1399,25 +1376,20 @@ fn void gen_ir_keeps_unsupported_va_arg_result_as_todo() @test
 	f.free();
 }
 
-fn void gen_ir_allows_f80_only_on_x86_64_and_keeps_other_float_widths_unsupported() @test
+fn void gen_ir_allows_f16_f80_f128_only_on_x86_64() @test
 {
 	CodeGenFixture f;
 	f.init();
 	f.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
 	codegen::CodeGen generator = { .comp = &f.comp };
-	generator.ensure_scalar_float_width(type_store::LONG_DOUBLE)!!;
+	// F80 is x87; F16 and F128 lower to libgcc calls (ir_soft_float.c3).
+	type_store::QualType[3] widths = { type_store::LONG_DOUBLE, type_store::FLOAT16, type_store::FLOAT128 };
+	foreach (qt : widths) generator.ensure_scalar_float_width(qt)!!;
 	f.comp.target.cpu.arch = target::Arch.AARCH64;
-	fault non_x86_fatal = @catch(generator.ensure_scalar_float_width(type_store::LONG_DOUBLE));
-	assert(non_x86_fatal == compilation::FATAL_ERROR,
-		"F80 should remain unsupported outside the x86_64 lowering path");
-	assert(f.diagnostics.messages[f.diagnostics.messages.len() - 1].text ==
-		"TODO lower non-f32/f64 floating point\n");
-	f.comp.target.cpu.arch = target::Arch.X86_64;
-	type_store::QualType[2] unsupported = { type_store::FLOAT16, type_store::FLOAT128 };
-	foreach (qt : unsupported)
+	foreach (qt : widths)
 	{
 		fault fatal = @catch(generator.ensure_scalar_float_width(qt));
-		assert(fatal == compilation::FATAL_ERROR, "F16 and F128 should remain unsupported in scalar lowering");
+		assert(fatal == compilation::FATAL_ERROR, "only the x86_64 lowering handles non-f32/f64 floats");
 		assert(f.diagnostics.messages[f.diagnostics.messages.len() - 1].text ==
 			"TODO lower non-f32/f64 floating point\n");
 	}

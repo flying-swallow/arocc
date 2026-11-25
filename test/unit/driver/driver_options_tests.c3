@@ -2,6 +2,7 @@
 // These tests only parse arguments and resolve synthetic target triples; they
 // do not read files, launch subprocesses, or invoke a compiler backend.
 module driver_options_tests;
+import aro::bigint;
 import aro::frontend::c::driver;
 import aro::frontend::c::driver_options;
 import aro::target;
@@ -110,6 +111,27 @@ fn void archives_and_shared_libraries_are_link_inputs_but_similar_sources_are_no
 	check(opts.input_link_slots.get(2), 2);
 	check(opts.input_link_slots.get(3), 3);
 	check(opts.input_link_slots.get(4), 3);
+}
+
+fn void x_language_applies_to_following_inputs() @test
+{
+	DriverOptions opts;
+	opts.init(mem);
+	defer opts.free();
+	// `-x c` makes even an object-looking name a C input; `-x none` restores
+	// extension-based classification. `-` is stdin either way.
+	parse_options(&opts, { "aro", "a.o", "-x", "c", "-", "b.o", "-xnone", "c.o" });
+	check(opts.inputs.len(), 2);
+	check(opts.inputs.get(0), "-");
+	check(opts.inputs.get(1), "b.o");
+	check(opts.link_objects.len(), 2);
+	check(opts.link_objects.get(0), "a.o");
+	check(opts.link_objects.get(1), "c.o");
+
+	DriverOptions bad;
+	bad.init(mem);
+	defer bad.free();
+	assert(@catch(driver::parse_args(&bad, { "aro", "-x", "fortran", "a.f" })) == driver::INVALID_ARGUMENT);
 }
 
 fn void missing_linker_search_path_and_library_values_are_rejected() @test
@@ -353,16 +375,16 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 		"--ld-path=/usr/bin/ld", "-shared-libgcc", "-static-pie", "-rdynamic", "-s",
 		"-r", "source.c",
 	});
-	check(opts.emulate.value, lang_opts::Compiler.MSVC);
+	check(opts.emulate.value, target::Compiler.MSVC);
 	check(opts.emulate.has_value, true);
 	check(opts.short_enums.value, false);
 	check(opts.dollars_in_identifiers.value, false);
 	check(opts.digraphs.value, false);
 	check(opts.gnu_asm.value, false);
-	check(opts.char_signedness.value, lang_opts::Signedness.UNSIGNED);
-	check(opts.fp_eval_method.value, lang_opts::FPEvalMethod.EXTENDED);
+	check(opts.char_signedness.value, bigint::Signedness.UNSIGNED);
+	check(opts.fp_eval_method.value, target::FPEvalMethod.EXTENDED);
 	check(opts.bounds_safety.value, lang_opts::BoundsSafety.CLANG);
-	check(opts.char8_t_override.value, lang_opts::Tristate.ON);
+	check(opts.char8_t_override.value, true);
 	check(opts.visibility.value, lang_opts::Visibility.HIDDEN);
 	check(opts.use_native_half_type, true);
 	check(opts.allow_half_args_returns, true);
@@ -385,13 +407,13 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 	defer comp.free();
 	toolchain::Options tc_opts = {};
 	driver::apply_options(&opts, &comp, &tc_opts, &d)!!;
-	check(comp.langopts.emulate, lang_opts::Compiler.MSVC);
+	check(comp.langopts.emulate, target::Compiler.MSVC);
 	check(comp.langopts.short_enums, false);
 	check(comp.langopts.dollars_in_identifiers, false);
-	check(comp.langopts.digraphs, lang_opts::Tristate.OFF);
+	check(comp.langopts.digraphs.get()!!, false);
 	check(comp.langopts.gnu_asm, false);
 	check(comp.langopts.bounds_safety, lang_opts::BoundsSafety.CLANG);
-	check(comp.langopts.has_char8_t_override, lang_opts::Tristate.ON);
+	check(comp.langopts.char8_t_override.get()!!, true);
 	check(comp.langopts.default_symbol_visibility, lang_opts::Visibility.HIDDEN);
 	check(comp.langopts.use_native_half_type, true);
 	check(comp.langopts.allow_half_args_and_returns, true);
@@ -400,9 +422,9 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 	check(comp.langopts.ms_extensions, false);
 	check(comp.langopts.declspec_attrs, false);
 	check(comp.langopts.has_char_signedness_override, true);
-	check(comp.langopts.char_signedness_override, lang_opts::Signedness.UNSIGNED);
+	check(comp.langopts.char_signedness_override, bigint::Signedness.UNSIGNED);
 	check(comp.langopts.has_fp_eval_method, true);
-	check(comp.langopts.fp_eval_method, lang_opts::FPEvalMethod.EXTENDED);
+	check(comp.langopts.fp_eval_method, target::FPEvalMethod.EXTENDED);
 	check(comp.langopts.has_gnuc_version, true);
 	check(comp.langopts.gnuc_version, 120304);
 	check(d.macro_backtrace_limit, uint::max);

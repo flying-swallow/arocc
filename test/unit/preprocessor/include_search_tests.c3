@@ -185,6 +185,37 @@ fn void quoted_and_include_next() @test
 	check(ta.allocation_count(), 0);
 }
 
+fn void quoted_include_dir_when_slash_index_equals_name_length() @test
+{
+	// Regression: an includer whose last '/' index equals the included name's
+	// length was read as "no slash" and searched the cwd (/usr/include/fribidi).
+	TrackingAllocator ta;
+	ta.init(mem);
+	defer ta.free();
+	{
+		MemTree tree;
+		tree.init(&ta);
+		tree.add_file("/sys/abc/top.h", "");
+		tree.add_file("/sys/abc/abcdef.h", "sibling");
+		tree.add_file("/abcd/top.h", "");
+		tree.add_file("/abcd/x.h", "root-level sibling");
+		Compilation comp;
+		comp.init(&ta);
+		setup_files(&tree, &comp);
+		comp.set_include_dirs({ { .kind = SYSTEM, .path = "/sys" } });
+		Source top = add_source(&comp, "/sys/abc/top.h");
+		// "/sys/abc" is 8 chars and "abcdef.h" is 8 chars.
+		Source found = comp.search_include("abcdef.h", top.id, QUOTES, FIRST, null)!!;
+		check(found.path, "/sys/abc/abcdef.h");
+		Source root_top = add_source(&comp, "/abcd/top.h");
+		found = comp.search_include("x.h", root_top.id, QUOTES, FIRST, null)!!;
+		check(found.path, "/abcd/x.h");
+		comp.free();
+		tree.free();
+	}
+	check(ta.allocation_count(), 0);
+}
+
 fn void microsoft_cwd_search_reports_extension() @test
 {
 	TrackingAllocator ta;

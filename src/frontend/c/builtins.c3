@@ -310,7 +310,7 @@ fn bool language_allows(Language language, LangOpts* opts)
 		case ALL_LANGUAGES: return true;
 		case ALL_MS_LANGUAGES: return opts.ms_extensions;
 		case ALL_GNU_LANGUAGES:
-		case GNU_LANG: return opts.standard.is_gnu();
+		case GNU_LANG: return opts.standard.is_gnu;
 		case C23_LANG: return opts.standard.at_least(C23);
 	}
 }

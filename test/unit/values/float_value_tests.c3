@@ -30,7 +30,6 @@ macro @with_comp(; @body(Compilation* comp))
 		Compilation comp;
 		comp.init(&ta);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		@body(&comp);
 		comp.free();
@@ -211,6 +210,31 @@ fn void value_wrappers() @test
 		assert(!inf.is_nan(comp));
 		assert(f64v(comp, 0x7FF8_0000_0000_0001).is_nan(comp));
 		check(value::ONE.is_inf_sign(comp).value, IsInfKind.UNKNOWN.value);
+	};
+}
+
+fn void value_is_signaling() @test
+{
+	@with_comp(; Compilation* comp)
+	{
+		// Quiet bit = top stored fraction bit; sNaN needs it clear and a nonzero payload.
+		assert(f64v(comp, 0x7FF0_0000_0000_0001).is_signaling(comp));
+		assert(f64v(comp, 0xFFF4_0000_0000_0000).is_signaling(comp));
+		assert(!f64v(comp, 0x7FF8_0000_0000_0000).is_signaling(comp));
+		assert(!f64v(comp, 0x7FF0_0000_0000_0000).is_signaling(comp)); // inf
+		assert(f32v(comp, 0x7FA0_0000).is_signaling(comp));
+		assert(!f32v(comp, 0x7FC0_0000).is_signaling(comp));
+		assert(!f32v(comp, 0x3F80_0000).is_signaling(comp));
+		assert(fv(comp, primitive_value::f16_value(0x7D00)).is_signaling(comp));
+		assert(!fv(comp, primitive_value::f16_value(0x7E00)).is_signaling(comp));
+		// x87: integer bit set, quiet bit (62) clear, payload nonzero.
+		assert(fv(comp, primitive_value::f80_value((F80Bits)u128(0x7FFF, 0xA000_0000_0000_0000))).is_signaling(comp));
+		assert(!fv(comp, primitive_value::f80_value((F80Bits)u128(0x7FFF, 0xC000_0000_0000_0000))).is_signaling(comp));
+		assert(!fv(comp, primitive_value::f80_value((F80Bits)u128(0x7FFF, 0x2000_0000_0000_0000))).is_signaling(comp)); // pseudo-NaN
+		assert(fv(comp, primitive_value::f128_value((F128Bits)u128(0x7FFF_4000_0000_0000, 0))).is_signaling(comp));
+		assert(fv(comp, primitive_value::f128_value((F128Bits)u128(0x7FFF_0000_0000_0000, 1))).is_signaling(comp));
+		assert(!fv(comp, primitive_value::f128_value((F128Bits)u128(0x7FFF_8000_0000_0000, 0))).is_signaling(comp));
+		assert(!value::ONE.is_signaling(comp));
 	};
 }
 

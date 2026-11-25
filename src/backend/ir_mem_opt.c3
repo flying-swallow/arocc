@@ -20,7 +20,7 @@ fn ir::Decl* mem_call_callee(ir::Ir* graph, ir::Decl* caller, ir::Inst* call)
 		(usz)call.data.call.memory_copy_bytes.len != (usz)call.data.call.args.len) return null;
 	return decl;
 }
-<* Byte size for scalar integer, float, and pointer types. *>
+<* Byte size for scalar integer, float, pointer and 128-bit vector types. *>
 fn bool mem_access_size(ir::Ir* graph, value_interner::InternerRef ty, uint* size)
 {
 	primitive_value::PrimitiveValue key = graph.interner.get(ty);
@@ -32,6 +32,12 @@ fn bool mem_access_size(ir::Ir* graph, value_interner::InternerRef ty, uint* siz
 			*size = ((uint)key.ty_bits + 7) / 8;
 			return true;
 		case primitive_value::PrimitiveType.PTR_TY: *size = 8; return true;
+		// A 128-bit vector access covers 16 bytes; reporting it keeps store
+		// forwarding and dead-store elimination from looking past it.
+		case primitive_value::PrimitiveType.VECTOR_TY:
+			if (!graph.is_vector(ty)) return false;
+			*size = 16;
+			return true;
 		default: return false;
 	}
 }
@@ -188,6 +194,7 @@ macro @sroa_each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case BIT_NOT:
 		case NEGATE:
 		case FNEG:
+		case FABS:
 		case TRUNC:
 		case ZEXT:
 		case SEXT:
@@ -200,7 +207,9 @@ macro @sroa_each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case STACK_RESTORE:
 		case VA_START:
 		case CLZ:
-		case CTZ: @body(&inst.data.ref);
+		case CTZ:
+		case VSPLAT:
+		case VREDUCE_ADD: @body(&inst.data.ref);
 		case ATOMIC_LOAD: @body(&inst.data.atomic.ptr);
 		case ATOMIC_STORE:
 			@body(&inst.data.atomic.ptr);
@@ -244,6 +253,8 @@ macro @sroa_each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case FCMP_OLE:
 		case FCMP_OGT:
 		case FCMP_OGE:
+		case VEXTRACT:
+		case VSHUFFLE:
 			@body(&inst.data.bin.lhs);
 			@body(&inst.data.bin.rhs);
 		case BRANCH: @body(&inst.data.branch.cond);

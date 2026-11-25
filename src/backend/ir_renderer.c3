@@ -1,7 +1,7 @@
 // Text dump, lowering status and object rendering for the index-based C3 IR.
 module aro::backend::ir;
 import aro::primitive_value;
-import std::core::string::ansi, aro::frontend::c::diagnostics, aro::value_interner, aro::backend::object, aro::backend::x86_64, aro::target, std::collections::list, std::core::dstring, std::io;
+import std::core::string::ansi, aro::terminal, aro::value_interner, aro::backend::object, aro::backend::x86_64, aro::target, std::collections::list, std::core::dstring, std::io;
 
 // Lowering failure fault reported by Renderer.fail (Zig Renderer.Error.LowerFail).
 excuse LOWER_FAIL;
@@ -220,10 +220,13 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 				IrDumpRole.ATTRIBUTE.apply(term)!; io::fprintf(w, " %s", inst.data.atomic.order.name)!; w.write_byte('\n')!;
 			case CLZ:
 			case CTZ:
+			case VSPLAT:
+			case VREDUCE_ADD:
 			case LOAD:
 			case BIT_NOT:
 			case NEGATE:
 			case FNEG:
+			case FABS:
 			case TRUNC:
 			case ZEXT:
 			case SEXT:
@@ -269,7 +272,9 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case FCMP_OLE:
 			case FCMP_OGT:
 			case FCMP_OGE:
+			case VEXTRACT:
 				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::fprintf(w, "%s ", inst.tag.name)!;
+				if (inst.nsw) io::write_all(w, "nsw ")!;
 				self.write_ref(decl, refs, inst.data.bin.lhs, term)!; term.set_color(ansi::Ansi.RESET)!; io::write_all(w, ", ")!;
 				self.write_ref(decl, refs, inst.data.bin.rhs, term)!; w.write_byte('\n')!;
 			case CONSTANT:
@@ -281,6 +286,18 @@ fn void? Ir.dump_decl(&self, Decl* decl, String name, Terminal term)
 			case JMP_VAL:
 				IrDumpRole.INSTRUCTION.apply(term)!; io::write_all(w, "    jmp_val ")!; term.set_color(ansi::Ansi.RESET)!;
 				self.write_ref(decl, refs, inst.data.ref, term)!; w.write_byte('\n')!;
+			case VSHUFFLE:
+				self.write_new_ref(decl, refs, ref_count, ref, term)!; ref_count++; io::write_all(w, "vshuffle ")!;
+				self.write_ref(decl, refs, inst.data.shuffle.lhs, term)!; term.set_color(ansi::Ansi.RESET)!; io::write_all(w, ", ")!;
+				self.write_ref(decl, refs, inst.data.shuffle.rhs, term)!; term.set_color(ansi::Ansi.RESET)!;
+				IrDumpRole.ATTRIBUTE.apply(term)!; io::write_all(w, " [")!;
+				uint lanes = self.interner.get(inst.ty).vector_ty.len;
+				for (uint i = 0; i < lanes && i < 16; i++)
+				{
+					if (i) io::write_all(w, " ")!;
+					if (inst.data.shuffle.mask[i] == ir::SHUFFLE_UNDEF) { io::write_all(w, "u")!; } else { io::fprintf(w, "%d", inst.data.shuffle.mask[i])!; }
+				}
+				io::write_all(w, "]")!; term.set_color(ansi::Ansi.RESET)!; w.write_byte('\n')!;
 		}
 	}
 	term.set_color(ansi::Ansi.RESET)!; io::write_all(w, "}\n\n")!;
@@ -305,7 +322,7 @@ fn void? Ir.write_type(&self, value_interner::InternerRef ty_ref, Terminal term)
 	}
 }
 
-fn Terminal plain_term(Terminal term) { term.mode = diagnostics::ColorMode.NO_COLOR; return term; }
+fn Terminal plain_term(Terminal term) { term.mode = terminal::ColorMode.NO_COLOR; return term; }
 
 fn void? Ir.write_value(&self, value_interner::InternerRef val, Terminal term)
 {

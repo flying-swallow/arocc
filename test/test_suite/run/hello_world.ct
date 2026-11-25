@@ -1,4 +1,6 @@
-// #skip: compare_output is not implemented
+// #kind: run
+// #exit: 0
+// Static forward declaration called before its definition; printf through stdio.
 #if defined(__linux) || defined(__APPLE__)
 #include <stdio.h>
 #else
@@ -16,3 +18,5 @@ static int foo(void) {
     return 0;
 }
 
+// #expect: stdout
+Hello, world!

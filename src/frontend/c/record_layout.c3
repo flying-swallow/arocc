@@ -36,6 +36,13 @@ fn RecordLayout? compute_layout(QualType qt, Compilation* comp)
 	if (ty.tag == STRUCT || ty.tag == UNION)
 	{
 		RecordLayout r = ty.record.layout;
+		// GCC/Clang: `aligned` on a typedef may lower the alignment, so a member of
+		// that typedef type uses the requested value as is (sysprof-capture-types.h:
+		// `typedef struct {...} T __attribute__((aligned(1)))`).
+		if (comp.langopts.emulate != MSVC && requested != 0 && is_typedef_with_own_alignment(qt, comp))
+		{
+			return { .size_bits = r.size_bits, .pointer_alignment_bits = requested, .field_alignment_bits = requested, .required_alignment_bits = requested };
+		}
 		return { .size_bits = r.size_bits, .pointer_alignment_bits = max(requested, r.pointer_alignment_bits), .field_alignment_bits = max(requested, r.field_alignment_bits), .required_alignment_bits = max(requested, r.required_alignment_bits) };
 	}
 	uint bits = qt.alignof(comp).overflow_mul(8)!;
@@ -43,6 +50,13 @@ fn RecordLayout? compute_layout(QualType qt, Compilation* comp)
 	ulong? optional_size = qt.sizeof_or_null(comp);
 	if (try s = optional_size) size = s;
 	return { .size_bits = size.overflow_mul(8)!, .pointer_alignment_bits = bits, .field_alignment_bits = bits, .required_alignment_bits = max(requested, (uint)8) };
+}
+
+<* Whether `qt` names a typedef that carries its own `aligned` attribute. *>
+fn bool is_typedef_with_own_alignment(QualType qt, Compilation* comp)
+{
+	if (qt.get_type(comp).tag != TYPEDEF) return false;
+	return @ok(comp.type_store.get_requested_alignment(qt));
 }
 
 fn uint? msvc_required_alignment(QualType qt, Compilation* comp)
@@ -192,6 +206,8 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 				}
 				ulong annotation = 1; if (anno != 0) annotation = anno;
 				ulong bit_align = 1;
+				// GCC: the bit-field is laid out as a plain field of its width's mode.
+				bool natural_full_width = false;
 				if (width == 0)
 				{
 					bit_align = max(ty_align, annotation);
@@ -205,8 +221,18 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 						bit_align = annotation;
 						if (max_bits != 0) bit_align = min(bit_align, max_bits);
 						ulong start = record_align_forward(first, bit_align)!;
-						bool cross = start % ty_align + width > layout.size_bits;
-						if (!has_pack && (ty_align > layout.size_bits || cross)) bit_align = max(bit_align, ty_align);
+						// stor-layout.c layout_decl: a bit-field whose width is a machine mode,
+						// at a position already aligned to that width, becomes a plain field.
+						ulong known_align = start & (~start + 1);
+						bool mode_width = width == 8 || width == 16 || width == 32 || width == 64 || width == 128;
+						natural_full_width = mode_width && !(width > 8 && field_packed) && (start == 0 || known_align >= width);
+						// place_field (PCC_BITFIELD_TYPE_MATTERS): any other bit-field may not
+						// span more units of its type's alignment than the type itself does.
+						if (!natural_full_width && !has_pack)
+						{
+							ulong unit_offset = start % ty_align;
+							if ((unit_offset + width + ty_align - 1) / ty_align > layout.size_bits / ty_align) bit_align = max(bit_align, ty_align);
+						}
 					}
 					else
 					{
@@ -220,6 +246,9 @@ fn RecordLayout? compute(RecordField[] fields, NodeOptIndex opt_decl, bool is_un
 				if (named || comp.target.unnamed_field_affects_alignment())
 				{
 					ulong inherited = max(ty_align, annotation);
+					// Such a field also contributes its mode's alignment, even under a
+					// typedef that lowers the type's alignment.
+					if (natural_full_width && !field_packed && max_bits == 0) inherited = max(inherited, (ulong)width);
 					if (width == 0)
 					{
 						inherited = max(ty_align, annotation);

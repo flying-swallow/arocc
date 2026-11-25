@@ -24,7 +24,6 @@ fn value::Value intern_c_string(compilation::Compilation* comp, String text)
 fn void set_target(compilation::Compilation* comp, String triple)
 {
 	comp.target = target::from_triple(triple)!!;
-	comp.langopts.set_target_options(&comp.target);
 }
 
 fn parser_result::Result string_attribute_arg(parser::Parser* p, compilation::Compilation* comp, String text)

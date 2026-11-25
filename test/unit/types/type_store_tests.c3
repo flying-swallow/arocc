@@ -52,7 +52,6 @@ macro @with_target(String triple; @body(Compilation* comp))
 		Compilation comp;
 		comp.init(&ta);
 		comp.target = tgt(triple);
-		comp.langopts.set_target_options(&comp.target);
 		@body(&comp);
 		comp.free();
 	}

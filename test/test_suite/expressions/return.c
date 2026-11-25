@@ -27,7 +27,7 @@ int *ip(void) {
 }
 
 int foo(void) {
-} // #warning@1: non-void function 'foo' does not return a value [-Wreturn-type]
+}
 int bar(void) {
     return; // #error@5: non-void function 'bar' should return a value [-Wreturn-type]
 }

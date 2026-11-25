@@ -69,6 +69,12 @@ fn int main(String[] args)
 	if ((status = step({ cc, consumer_object, data_object, "-o", binary }))) return status;
 	if ((status = step({ binary }))) return status;
 
+	// A link step with only object inputs goes straight to the linker (it used to
+	// fail with "no input files").
+	String linked_by_aro = string::format(mem, "%s/backend_consumer_aro_link", tmpdir);
+	if ((status = step({ aro_c3, consumer_object, data_object, "-o", linked_by_aro }))) return status;
+	if ((status = step({ linked_by_aro }))) return status;
+
 	// Exercise scalar identities, dominating CSE, PHI edges, side effects,
 	// and loop backedges through both output paths and optimization levels.
 	String pipeline_source = string::format(mem, "%s/ir_pipeline.c", tmpdir);

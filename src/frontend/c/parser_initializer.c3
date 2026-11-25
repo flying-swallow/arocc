@@ -1,7 +1,6 @@
 // Initializer grammar and typed initializer construction: `= expr`, brace lists,
 // designators and GNU ranges, built into an InitList and converted to tree nodes.
-// Element expressions use Parser's own assignment / integer-constant productions;
-// test builds may substitute them through `Parser.initializer_test_probe`.
+// Element expressions use Parser's own assignment / integer-constant productions.
 module aro::frontend::c::parser;
 import aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::init_list;
 import aro::frontend::c::parser_result, aro::frontend::c::value, aro::frontend::c::diagnostics, aro::string_interner;
@@ -16,31 +15,12 @@ struct InitializerRangeSegment
 	ulong end_index;
 }
 
-<* Initializer assignment-expression production. Test builds may substitute
-   it through `initializer_test_probe`. *>
-fn parser_result::Result? Parser.initializer_assign_expr(&self, bool eval)
-{
-	$if env::TESTING:
-		if (self.initializer_test_probe) return self.initializer_test_probe.assignment_expression(self, eval);
-	$endif
-	return self.assign_expr(eval);
-}
-
-<* Initializer integer-constant-expression production (array designators). *>
-fn parser_result::Result? Parser.initializer_ice(&self, ConstDeclFoldingMode mode)
-{
-	$if env::TESTING:
-		if (self.initializer_test_probe) return self.initializer_test_probe.integer_constant_expression(self, mode, true);
-	$endif
-	return self.integer_const_expr(true, mode);
-}
-
 fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::QualType target, bool eval = true)
 {
 	if (!self.is_at(tokenizer::TokenId.L_BRACE))
 	{
 		tokens::TokenIndex tok = self.tok_i;
-		parser_result::Result? parsed = self.initializer_assign_expr(eval);
+		parser_result::Result? parsed = self.assign_expr(eval);
 		if (catch __fault = parsed)
 		{
 			if (__fault == NO_EXPRESSION)
@@ -117,7 +97,7 @@ fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::Qual
 				tokens::TokenIndex bracket = self.tok_i;
 				self.advance();
 				tokens::TokenIndex index_tok = self.tok_i;
-				parser_result::Result index_result = self.initializer_ice(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
+				parser_result::Result index_result = self.integer_const_expr(true, ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
 				if (index_result.val.is_none())
 				{
 					Diagnostic.EXPECTED_INTEGER_CONSTANT_EXPR.@emit(self, index_tok)!;
@@ -153,7 +133,7 @@ fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::Qual
 				{
 					self.advance();
 					range_end_tok = self.tok_i;
-					parser_result::Result range_end = self.initializer_ice(ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
+					parser_result::Result range_end = self.integer_const_expr(true, ConstDeclFoldingMode.GNU_FOLDING_EXTENSION)!;
 					end_result = range_end;
 					if (end_result.val.is_none())
 					{
@@ -228,18 +208,24 @@ fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::Qual
 						self.fmt_qt(designated_qt))!;
 					return PARSING_FAILED~;
 				}
-				usz field_index = self.field_index(designated_qt, field_name);
-				if (field_index == usz::max)
+				// `.b` may name a member of an anonymous struct/union member: designate
+				// each anonymous level on the way (c-testsuite 00216).
+				List{ulong} field_path;
+				field_path.init(tmem);
+				if (!self.field_path(designated_qt, field_name, &field_path))
 				{
 					Diagnostic.NO_SUCH_FIELD_DESIGNATOR.@emit(self, self.tok_i - 1,
 						name)!;
 					return PARSING_FAILED~;
 				}
-				index = (ulong)field_index;
-				child_qt = self.field_type(designated_qt, field_index);
-				designated_qt = child_qt;
-				selected = selected.find(index);
-				cursor_path.push(index);
+				foreach (step : field_path)
+				{
+					index = step;
+					child_qt = self.field_type(designated_qt, (usz)step);
+					designated_qt = child_qt;
+					selected = selected.find(index);
+					cursor_path.push(index);
+				}
 			}
 		}
 		if (range_segments.len() > 0)
@@ -270,7 +256,7 @@ fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::Qual
 			if (!designated)
 			{
 				child = il.find(index);
-				ulong brace_index = cursor_path.len() > 0 ? cursor_path[0] : 0;
+				ulong brace_index = self.skip_unnamed_bitfields(target, cursor_path.len() > 0 ? cursor_path[0] : 0);
 				ulong limit = self.aggregate_count(target);
 				if (self.is_aggregate(target) && brace_index < limit)
 				{
@@ -301,7 +287,7 @@ fn parser_result::Result? Parser.parse_initializer_value(&self, type_store::Qual
 		else
 		{
 			tokens::TokenIndex expr_tok = self.tok_i;
-			parser_result::Result parsed = self.initializer_assign_expr(eval)!;
+			parser_result::Result parsed = self.assign_expr(eval)!;
 			parser_result::Result result = parsed;
 			if (!designated && !self.is_aggregate(target) && !il.node.is_null())
 			{
@@ -469,6 +455,15 @@ fn bool? Parser.coerce_array_initializer(&self, parser_result::Result* item,
 	return true;
 }
 
+<* clang reports initializing a deprecated/unavailable record field, by designator or position. *>
+fn void? Parser.check_field_deprecated(&self, type_store::QualType qt, usz index, tokens::TokenIndex tok)
+{
+	if (try rec = qt.get_record(self.comp))
+	{
+		if (index < rec.fields.len) return self.check_deprecated_unavailable(rec.fields[index].field_decl, tok);
+	}
+}
+
 fn type_store::QualType Parser.child_type(&self, type_store::QualType qt, ulong index)
 {
 	if (try arr = qt.get(self.comp, type_store::TypeTag.ARRAY)) return arr.array.elem;
@@ -479,6 +474,21 @@ fn type_store::QualType Parser.child_type(&self, type_store::QualType qt, ulong 
 		if (index < (ulong)rec.fields.len) return rec.fields[(usz)index].qt;
 	}
 	return type_store::INVALID;
+}
+
+<* The first record member at or after `index` that takes an initializer:
+   unnamed bit-fields are not members (C11 6.7.9p9). Other types: `index`. *>
+fn ulong Parser.skip_unnamed_bitfields(&self, type_store::QualType qt, ulong index)
+{
+	if (try rec = qt.get_record(self.comp))
+	{
+		while (index < (ulong)rec.fields.len && rec.fields[(usz)index].bit_width != type_store::BIT_WIDTH_NULL &&
+			rec.fields[(usz)index].name_tok == (type_store::TokenIndex)0)
+		{
+			index++;
+		}
+	}
+	return index;
 }
 
 fn ulong Parser.aggregate_count(&self, type_store::QualType qt)
@@ -518,7 +528,8 @@ fn bool? Parser.find_scalar_initializer(&self, init_list::InitList* il, type_sto
 {
 	if (qt.is_invalid()) return true;
 	while (path.len() <= (sz)depth) path.push(0);
-	ulong index = (*path)[(sz)depth];
+	ulong index = self.skip_unnamed_bitfields(qt, (*path)[(sz)depth]);
+	(*path)[(sz)depth] = index;
 	ulong count = self.aggregate_count(qt);
 	if (qt.is(self.comp, type_store::TypeTag.ARRAY))
 	{
@@ -571,6 +582,7 @@ fn bool? Parser.find_scalar_initializer(&self, init_list::InitList* il, type_sto
 			}
 			return true;
 		}
+		self.check_field_deprecated(qt, (usz)index, tok)!;
 		type_store::QualType child_qt = self.child_type(qt, index);
 		init_list::InitList* child = il.find(index);
 		bool maybe_complete = self.find_scalar_initializer(child, child_qt, result, tok, path, depth + 1, warned_excess)!;
@@ -579,7 +591,7 @@ fn bool? Parser.find_scalar_initializer(&self, init_list::InitList* il, type_sto
 		if (index < ulong::max) (*path)[(sz)depth] = index + 1;
 		while (path.len() > (sz)depth + 1) path.pop()!!;
 		if (qt.is(self.comp, type_store::TypeTag.UNION)) return true;
-		return index < ulong::max && index + 1 >= count;
+		return index < ulong::max && self.skip_unnamed_bitfields(qt, index + 1) >= count;
 	}
 
 	self.store_initializer_result(il, qt, result, tok, true)!;
@@ -636,6 +648,30 @@ fn usz Parser.field_index(&self, type_store::QualType qt, string_interner::Strin
 		for (usz i = 0; i < rec.fields.len; i++) if (rec.fields[i].name == name) return i;
 	}
 	return usz::max;
+}
+
+<* The member indices leading to field `name` of record `qt`: one index for a
+   direct member, more when it is reached through anonymous struct/union members. *>
+fn bool Parser.field_path(&self, type_store::QualType qt, string_interner::StringId name, List{ulong}* path)
+{
+	type_store::Record? rec = qt.get_record(self.comp);
+	if (catch rec) return false;
+	for (usz i = 0; i < rec.fields.len; i++)
+	{
+		if (rec.fields[i].name == name)
+		{
+			path.push((ulong)i);
+			return true;
+		}
+	}
+	for (usz i = 0; i < rec.fields.len; i++)
+	{
+		if (rec.fields[i].name_tok != (type_store::TokenIndex)0 || !@ok(rec.fields[i].qt.get_record(self.comp))) continue;
+		path.push((ulong)i);
+		if (self.field_path(rec.fields[i].qt, name, path)) return true;
+		(void)path.pop();
+	}
+	return false;
 }
 
 fn type_store::QualType Parser.field_type(&self, type_store::QualType qt, usz index)

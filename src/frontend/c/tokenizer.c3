@@ -13,7 +13,7 @@
 //   members of Token.Id (Zig never analyzed that function body).
 module aro::frontend::c::tokenizer;
 import aro::string_util;
-import aro::source, aro::frontend::c::lang_opts, aro::frontend::c::tree, aro::frontend::c::tokens;
+import aro::source, aro::target, aro::frontend::c::lang_opts, aro::frontend::c::tree, aro::frontend::c::tokens;
 
 excuse NO_LEXEME;
 
@@ -734,7 +734,7 @@ fn TokenId lookup_keyword(String str)
  identifiers belong to the implementation namespace, so they always become
  keywords; other keywords are gated by the language options.
 *>
-fn TokenId get_token_id(LangOpts langopts, String str)
+fn TokenId get_token_id(LangOpts langopts, Target* target, String str)
 {
 	TokenId kw = lookup_keyword(str);
 	if (kw == IDENTIFIER) return IDENTIFIER;
@@ -742,17 +742,17 @@ fn TokenId get_token_id(LangOpts langopts, String str)
 	switch (kw)
 	{
 		case KEYWORD_INLINE:
-			return standard.is_gnu() || standard.at_least(C99) ? kw : IDENTIFIER;
+			return standard.is_gnu || standard.at_least(C99) ? kw : IDENTIFIER;
 		case KEYWORD_RESTRICT:
 			return standard.at_least(C99) ? kw : IDENTIFIER;
 		case KEYWORD_TYPEOF:
-			return standard.is_gnu() || standard.at_least(C23) ? kw : IDENTIFIER;
+			return standard.is_gnu || standard.at_least(C23) ? kw : IDENTIFIER;
 		case KEYWORD_ASM:
-			return standard.is_gnu() ? kw : IDENTIFIER;
+			return standard.is_gnu ? kw : IDENTIFIER;
 		case KEYWORD_DECLSPEC:
 			return langopts.declspec_attrs ? kw : IDENTIFIER;
 		case KEYWORD_INT24:
-			return langopts.has_int24 ? kw : IDENTIFIER;
+			return target.has_int24() ? kw : IDENTIFIER;
 		case KEYWORD_C23_ALIGNAS:
 		case KEYWORD_C23_ALIGNOF:
 		case KEYWORD_C23_BOOL:
@@ -812,6 +812,8 @@ struct Tokenizer
 	uint index;
 	SourceId source;
 	LangOpts langopts;
+	<* Borrowed; gates target-specific keywords (`__int24`). *>
+	Target* target;
 	uint line;
 	uint splice_index;
 	uint[] splice_locs;
@@ -821,9 +823,9 @@ struct Tokenizer
  @require buf.ptr != null && buf.ptr[buf.len] == 0 : "buf must be NUL-terminated"
  @require (ulong)buf.len < 0xFFFF_FFFF
 *>
-fn void Tokenizer.init(&self, String buf, SourceId source, LangOpts langopts, uint[] splice_locs = {})
+fn void Tokenizer.init(&self, String buf, SourceId source, LangOpts langopts, Target* target, uint[] splice_locs = {})
 {
-	*self = { .buf = buf, .source = source, .langopts = langopts, .line = 1, .splice_locs = splice_locs };
+	*self = { .buf = buf, .source = source, .langopts = langopts, .target = target, .line = 1, .splice_locs = splice_locs };
 }
 
 enum State : char @private
@@ -874,7 +876,7 @@ enum State : char @private
 fn TokenId Tokenizer.identifier_end(&self, uint start, bool extended)
 {
 	if (extended) return EXTENDED_IDENTIFIER;
-	return get_token_id(self.langopts, self.buf[start:self.index - start]);
+	return get_token_id(self.langopts, self.target, self.buf[start:self.index - start]);
 }
 
 fn Token Tokenizer.next(&self)

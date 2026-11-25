@@ -34,7 +34,7 @@ fn Outcome eval_line(Preprocessor* pp, String line)
 	// Paths must be unique: add_source_from_buffer returns an existing source of the same path.
 	Source src = comp.add_source_from_buffer(string::tformat("t%d.c", comp.sources.len()), text)!!;
 	Tokenizer tz;
-	tz.init(src.buf, src.id, comp.langopts);
+	tz.init(src.buf, src.id, comp.langopts, &comp.target);
 	Token hash = tz.next_no_ws();
 	assert(hash.id == HASH);
 	Token kw = tz.next_no_ws();

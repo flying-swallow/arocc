@@ -49,7 +49,7 @@ struct Opts
 
 <*
  Run `section` for a compilation targeting `triple` (and -mcpu `cpu`) the
- way generate_builtin_macros would (set_target_options, init_named_types)
+ way generate_builtin_macros would (init_named_types)
  and return its output in the temp allocator. Checks nothing leaks.
 *>
 fn String emit(String triple, String cpu, SectionFn section, Opts o = {})
@@ -63,7 +63,6 @@ fn String emit(String triple, String cpu, SectionFn section, Opts o = {})
 		comp.init(&ta);
 		comp.target = tgt(triple, cpu);
 		if (o.set_os) comp.target.os.tag = o.os;
-		comp.langopts.set_target_options(&comp.target);
 		comp.langopts.pthread = o.pthread;
 		comp.langopts.short_enums = o.short_enums;
 		comp.code_gen_options.pic_level = o.pic;

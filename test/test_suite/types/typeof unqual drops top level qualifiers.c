@@ -10,3 +10,7 @@ _Static_assert(IS(plain_type, int), "");
 _Static_assert(IS(const_copy, const int), "");
 _Static_assert(IS(pointer_copy, const int *), "");
 _Static_assert(IS(nested_type, int), "");
+
+const unsigned _BitInt(12) width_source = 1; typeof_unqual(width_source) width_copy = 2;
+_Static_assert(IS(width_source, const unsigned _BitInt(12)), "");
+_Static_assert(IS(width_copy, unsigned _BitInt(12)), "");

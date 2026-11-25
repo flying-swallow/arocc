@@ -241,6 +241,17 @@ fn FloatClass PrimitiveValue.classify(self)
 
 <* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_nan(self) => self.classify() == NAN;
+<* glibc issignaling: a NaN whose quiet bit (top stored fraction bit) is clear. x87
+   pseudo-NaNs (integer bit clear) are not signaling. @require self.tag.kind == FLOAT *>
+fn bool PrimitiveValue.is_signaling(self)
+{
+	FloatFormat fmt = self.tag.format;
+	uint e_max = ((uint)1 << fmt.exp_bits) - 1;
+	if (self.biased_exponent() != e_max) return false;
+	if (fmt.explicit_int && ((self.float_bits() >> 63) & 1) == 0) return false;
+	uint128 frac = self.fraction();
+	return frac != 0 && (frac >> (fmt.frac_bits - 1)) == 0;
+}
 <* @require self.tag.kind == FLOAT *>
 fn bool PrimitiveValue.is_inf(self) => self.classify() == INFINITE;
 <* std.math.isFinite: not inf and not NaN. @require self.tag.kind == FLOAT *>

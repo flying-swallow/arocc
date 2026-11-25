@@ -1,0 +1,36 @@
+// #kind: run
+// #exit: 0
+// Atomic read-modify-write builtins (__c11_atomic_*, __atomic_*, __sync_*) lower
+// to locked x86 instructions; four threads hammer the same counters.
+#include <stdio.h>
+#include <stdbool.h>
+#include <pthread.h>
+static long counter;
+static int flags;
+static void *worker(void *arg) { for (int i = 0; i < 100000; i++) { __atomic_fetch_add(&counter, 1, __ATOMIC_SEQ_CST); __sync_fetch_and_or(&flags, 1 << (long)arg); } return 0; }
+int main(void) {
+  pthread_t t[4];
+  for (long i = 0; i < 4; i++) pthread_create(&t[i], 0, worker, (void *)i);
+  for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
+  _Atomic int a = 5; int exp = 5;
+  bool ok1 = __c11_atomic_compare_exchange_strong(&a, &exp, 9, 5, 5);
+  exp = 1;
+  bool ok2 = __c11_atomic_compare_exchange_weak(&a, &exp, 3, 5, 5);
+  short s = 10;
+  short old = __atomic_exchange_n(&s, 20, __ATOMIC_SEQ_CST);
+  unsigned char c = 0xF0;
+  unsigned char n = __atomic_nand_fetch(&c, 0x3C, __ATOMIC_SEQ_CST);
+  long v = 100;
+  long prev = __sync_val_compare_and_swap(&v, 100, 7);
+  bool sw = __sync_bool_compare_and_swap(&v, 100, 8);
+  int arr[4]; _Atomic(int *) p = arr;
+  int *op = __c11_atomic_fetch_add(&p, 2, 5);
+  long sub = __atomic_sub_fetch(&v, 3, __ATOMIC_SEQ_CST);
+  char lock = 0; bool was = __atomic_test_and_set(&lock, __ATOMIC_SEQ_CST); bool was2 = __atomic_test_and_set(&lock, __ATOMIC_SEQ_CST);
+  __atomic_clear(&lock, __ATOMIC_SEQ_CST);
+  printf("%ld %d | %d %d %d %d | %d %d | %u | %ld %d | %d %d | %ld | %d %d %d\n", counter, flags, ok1, ok2, a, exp, old, s, n, prev, sw,
+    (int)(op - arr), (int)((int *)p - arr), sub, was, was2, lock);
+}
+
+// #expect: stdout
+400000 15 | 1 0 9 9 | 10 20 | 207 | 100 0 | 0 2 | 4 | 0 1 0

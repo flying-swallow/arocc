@@ -215,6 +215,24 @@ fn void encode_movaps_register_and_memory_rows() @test
 	assert_encoded(MOVAPS, { x86_64::reg_op(XMM9), x86_64::reg_op(XMM12) }, (char[]){ 0x45, 0x0f, 0x28, 0xcc });
 }
 
+fn void encode_sse2_packed_rows() @test
+{
+	// paddd xmm9, xmm8: mandatory 66 prefix goes before REX.
+	assert_encoded(PADDD, { x86_64::reg_op(XMM9), x86_64::reg_op(XMM8) }, (char[]){ 0x66, 0x45, 0x0f, 0xfe, 0xc8 });
+	// psrld xmm9, 3: MI form, /2 in ModRM.reg, the XMM register in ModRM.rm (REX.B).
+	assert_encoded(PSRLD, { x86_64::reg_op(XMM9), x86_64::imm_op(3) }, (char[]){ 0x66, 0x41, 0x0f, 0x72, 0xd1, 0x03 });
+	// pslldq xmm1, 8: /7.
+	assert_encoded(PSLLDQ, { x86_64::reg_op(XMM1), x86_64::imm_op(8) }, (char[]){ 0x66, 0x0f, 0x73, 0xf9, 0x08 });
+	// pshufd xmm8, xmm1, 0x1b: RMI.
+	assert_encoded(PSHUFD, { x86_64::reg_op(XMM8), x86_64::reg_op(XMM1), x86_64::imm_op(0x1b) }, (char[]){ 0x66, 0x44, 0x0f, 0x70, 0xc1, 0x1b });
+	// pextrw eax, xmm10, 2: GPR destination, XMM source.
+	assert_encoded(PEXTRW, { x86_64::reg_op(EAX), x86_64::reg_op(XMM10), x86_64::imm_op(2) }, (char[]){ 0x66, 0x41, 0x0f, 0xc5, 0xc2, 0x02 });
+	// cmpps xmm0, xmmword ptr [rbp - 16], 1 (lt).
+	assert_encoded(CMPPS, { x86_64::reg_op(XMM0), x86_64::mem_op(RBP, -16, 128), x86_64::imm_op(1) }, (char[]){ 0x0f, 0xc2, 0x45, 0xf0, 0x01 });
+	// cvttps2dq xmm2, xmm3: F3 prefix.
+	assert_encoded(CVTTPS2DQ, { x86_64::reg_op(XMM2), x86_64::reg_op(XMM3) }, (char[]){ 0xf3, 0x0f, 0x5b, 0xd3 });
+}
+
 fn void encode_rip_relative_and_branch_fixups() @test
 {
 	// lea rax, [rip + sym]
@@ -504,7 +522,11 @@ fn void indexed_address_folding_falls_back_above_signed_disp32() @test
 	defer alloc::free(&f.ta, text.ptr);
 	assert(!text.contains("*8 + 2147483648]"), "out-of-range offset is not encoded as a signed disp32");
 	assert(text.contains("2147483648"), "fallback lowering materializes the full 64-bit displacement");
-	assert(text.contains("imul") && text.contains("add"), "fallback lowering computes the index and pointer addition explicitly");
+	// The scaled index folds into the inner pointer ADD's LEA; its MUL is then
+	// read by nothing and is not emitted. The large offset is a separate ADD.
+	assert(text.contains("\tlea rax, [rcx + rdx*8]") && text.contains("\tadd "),
+		"fallback lowering forms the indexed address with LEA and adds the offset explicitly");
+	assert(!text.contains("imul"), "the folded index multiply is not materialized");
 }
 
 struct Fixture
@@ -1085,22 +1107,15 @@ fn void lowers_signed_division_in_register_mode() @test
 		"quot:\n"
 		"\tpush rbp\n"
 		"\tmov rbp, rsp\n"
-		"\tsub rsp, 32\n"
-		"\tmov qword ptr [rbp - 8], rbx\n"
-		"\tmov qword ptr [rbp - 16], r12\n"
-		"\tmov qword ptr [rbp - 24], r13\n"
-		"\tmov ebx, edi\n"
-		"\tmov r12d, esi\n"
+		// The operands stay in their parameter registers; the quotient may not
+		// use R8/R9 (divide-by-constant scratch), so it lands in R10.
 		".Lquot.entry.0:\n"
-		"\tmov eax, ebx\n"
-		"\tmov ecx, r12d\n"
+		"\tmov eax, edi\n"
+		"\tmov ecx, esi\n"
 		"\tcdq\n"
 		"\tidiv ecx\n"
-		"\tmov r13d, eax\n"
-		"\tmov eax, r13d\n"
-		"\tmov rbx, qword ptr [rbp - 8]\n"
-		"\tmov r12, qword ptr [rbp - 16]\n"
-		"\tmov r13, qword ptr [rbp - 24]\n"
+		"\tmov r10d, eax\n"
+		"\tmov eax, r10d\n"
 		"\tleave\n"
 		"\tret\n"
 		"\t.size quot, .-quot\n\n"
@@ -1136,9 +1151,11 @@ fn void lowers_seven_live_builder_values_in_register_mode() @test
 	String text = render(&f, &errors)!!;
 	defer alloc::free(&f.ta, text.ptr);
 	assert(text.contains("sum_seven_live:"), "seven simultaneously live Builder values lower successfully");
-	// Only spilled values get frame slots: two stack-resident ARGs, then this one.
-	assert(text.contains("\tmov dword ptr [rbp - 24], eax"),
-		"a non-ARG value spills to its existing frame slot under register pressure");
+	// ARGs stay in their parameter registers when those are allocatable (RDI,
+	// RSI, R8, R9); RDX/RCX are scratch, so those two ARGs move once.
+	assert(!text.contains("dword ptr [rbp"), "nothing spills");
+	assert(text.contains("\tadd edi, esi\n") && text.contains(", r8d\n") && text.contains(", r9d\n"),
+		"the sum reads the ARGs in place, accumulating in the dead first ARG's register");
 }
 
 fn void lowers_eight_i32_call_stack_arguments_in_spill_all_order() @test
@@ -1564,6 +1581,63 @@ fn void lowers_call_hi_and_stores_both_return_registers() @test
 	}, "CALL/CALL_HI paired return registers");
 }
 
+fn void lowers_mixed_sse_integer_call_hi_and_ret_pair() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol("returns_double_long", value_interner::REF_FUNC);
+	ir::Ref call = f.builder.add_call_abi(callee, {}, {}, {}, value_interner::REF_F64);
+	ir::Ref high = f.builder.add_call_hi(call, value_interner::REF_I64);
+	f.builder.add_return_pair(call, high);
+	f.builder.finish_fn("calls_mixed_pair");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	// SysV {double, long}: the SSE eightbyte uses XMM0, the INTEGER one RAX (not RDX).
+	assert_text_lines_in_order(text, {
+		"\tcall returns_double_long@PLT\n",
+		"\tmovsd qword ptr [rbp - 8], xmm0\n",
+		"\tmov qword ptr [rbp - 16], rax\n",
+		"\tmov rax, qword ptr [rbp - 16]\n",
+		"\tmovsd xmm0, qword ptr [rbp - 8]\n",
+		"\tleave\n",
+		"\tret\n",
+	}, "mixed SSE/INTEGER pair return registers");
+}
+
+fn void lowers_two_sse_eightbyte_pair_in_xmm0_xmm1() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol("returns_two_doubles", value_interner::REF_FUNC);
+	ir::Ref call = f.builder.add_call_abi(callee, {}, {}, {}, value_interner::REF_F64);
+	ir::Ref high = f.builder.add_call_hi(call, value_interner::REF_F64);
+	f.builder.add_return_pair(call, high);
+	f.builder.finish_fn("calls_double_pair");
+
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, {
+		"\tcall returns_two_doubles@PLT\n",
+		"\tmovsd qword ptr [rbp - 8], xmm0\n",
+		"\tmovsd qword ptr [rbp - 16], xmm1\n",
+		"\tmovsd xmm1, qword ptr [rbp - 16]\n",
+		"\tmovsd xmm0, qword ptr [rbp - 8]\n",
+		"\tleave\n",
+		"\tret\n",
+	}, "two SSE eightbytes return in XMM0/XMM1");
+}
+
 fn void lowers_stack_only_struct_copy_without_consuming_gp_registers() @test
 {
 	Fixture f;
@@ -1650,7 +1724,8 @@ fn void object_emits_quot_text_and_global_function_symbol() @test
 	defer { obj.deinit(); graph.free(); }
 	elf::Elf* e = (elf::Elf*)obj.implementation;
 	elf::SectionData* text = elf_section(e, "text");
-	char[8] prologue = { 0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 0x20 };
+	// push rbp; mov rbp, rsp. No frame: the values live in caller-saved registers.
+	char[4] prologue = { 0x55, 0x48, 0x89, 0xe5 };
 	assert(text.bytes.len() >= prologue.len, "quot text contains the expected prologue");
 	for (usz i = 0; i < prologue.len; i++)
 	{
@@ -1788,7 +1863,9 @@ fn void object_patches_loop_branches_inside_function() @test
 			"local rel32 destination %d is within loop", destination);
 		branches++;
 	}
-	assert(branches >= 3, "loop emits its local conditional and backward branches");
+	// entry falls into header, header falls into body: one Jcc to exit and
+	// body's backward JMP remain.
+	assert(branches >= 2, "loop emits its local conditional and backward branches");
 }
 
 fn void object_emits_bytes_constant_and_pc32_relocation() @test
@@ -2319,7 +2396,7 @@ fn void identical_string_constants_share_one_assembly_label() @test
 		".Lpass_strings.entry.0:\n"
 		"\tlea rdi, [rip + .L.str.0]\n"
 		"\tlea rsi, [rip + .L.str.0]\n"
-		"\tmov eax, 0\n"
+		"\txor eax, eax\n"
 		"\tcall consume_strings@PLT\n"
 		"\tmov dword ptr [rbp - 8], eax\n"
 		"\tmov eax, dword ptr [rbp - 8]\n"
@@ -2498,9 +2575,11 @@ fn void select_register_mode_keeps_callee_saved_values() @test
 	String text = render(&f, &errors)!!;
 	defer alloc::free(&f.ta, text.ptr);
 	assert_text_lines_in_order(text, {
-		"\tmov rax, r12\n", "\tmov rcx, r13\n", "\tmov dl, bl\n", "\ttest dl, dl\n",
-		"\tcmove rax, rcx\n", "\tmov r14, rax\n", "\tmov rax, r14\n"
-	}, "register-mode SELECT copies live callee-saved operands through scratch registers");
+		"\tmov rax, rsi\n", "\tmov rcx, r8\n", "\tmov dl, dil\n", "\ttest dl, dl\n",
+		"\tcmove rax, rcx\n", "\tadd "
+	}, "register-mode SELECT copies the arms (still in parameter registers) through scratch registers");
+	// The ADD reads the SELECT result and the still-live arm in place.
+	assert(text.contains(", rsi\n"), "the live true arm is read from its register by the ADD");
 }
 
 fn void select_float_f64_and_f80_keep_branch() @test
@@ -2739,4 +2818,587 @@ fn void evex_table_rows_and_disp8_scaling() @test
 	EvexEntry gather = evex_row(VGATHERDPS, L512, EvexOp.VSIB_ZMM)!!;
 	assert(gather.flags.mask_required && gather.disp8_n(false) == 4);
 	assert(EvexMap.MAP0F38.mmm == 2 && (char)EvexPrefix.PF2.ordinal == 3);
+}
+
+<* Two-way branch on `cond_tag(a, b)` returning 1 or 2; `rhs` replaces b when set. *>
+fn String render_compare_branch(Fixture* f, ir::ErrorList* errors, ir::InstTag cond_tag,
+	value_interner::InternerRef ty, bool reuse_compare = false, long rhs_constant = -1)
+{
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(ty);
+	ir::Ref b = f.builder.add_arg(ty);
+	if (rhs_constant >= 0) b = f.builder.add_constant(f.interner.put(primitive_value::int_key(rhs_constant)), ty);
+	ir::Ref cond = f.builder.add_inst(cond_tag, { .bin = { a, b } }, value_interner::REF_I1);
+	ir::Ref yes = f.builder.make_label("yes");
+	ir::Ref no = f.builder.make_label("no");
+	f.builder.add_branch(cond, yes, no);
+	f.builder.start_block(yes);
+	if (reuse_compare)
+	{
+		f.builder.add_return(cond);
+	}
+	else
+	{
+		f.builder.add_return(f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32));
+	}
+	f.builder.start_block(no);
+	f.builder.add_return(f.builder.add_constant(f.interner.put(primitive_value::int_key(2)), value_interner::REF_I32));
+	f.builder.finish_fn("compare_branch");
+	return render(f, errors, true)!!;
+}
+
+fn void branch_fuses_single_use_integer_compare() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_compare_branch(&f, &errors, CMP_SLT, value_interner::REF_I64);
+	defer alloc::free(&f.ta, text.ptr);
+	// `yes` is the next block: jump to `no` on the inverted condition.
+	assert_text_lines_in_order(text, {
+		"\tcmp rax, qword ptr [rbp -", "\tjge .Lcompare_branch.no.", ".Lcompare_branch.yes."
+	}, "compare-and-branch reads the CMP flags directly");
+	assert(!text.contains("setl") && !text.contains("test al, al"), "fused compare is not materialized");
+}
+
+fn void branch_compare_with_constant_uses_immediate() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_compare_branch(&f, &errors, CMP_ULT, value_interner::REF_I32, false, 10);
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, { "\tcmp eax, 10\n", "\tjae .Lcompare_branch.no." },
+		"constant right operand is a CMP immediate");
+}
+
+fn void branch_compare_with_constant_left_swaps_condition() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref five = f.builder.add_constant(f.interner.put(primitive_value::int_key(5)), value_interner::REF_I64);
+	// 5 < a  ==  a > 5
+	ir::Ref cond = f.builder.add_inst(CMP_SLT, { .bin = { five, a } }, value_interner::REF_I1);
+	ir::Ref yes = f.builder.make_label("yes");
+	ir::Ref no = f.builder.make_label("no");
+	f.builder.add_branch(cond, yes, no);
+	f.builder.start_block(yes);
+	f.builder.add_return(a);
+	f.builder.start_block(no);
+	f.builder.add_return(five);
+	f.builder.finish_fn("swap_branch");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, { "\tcmp rax, 5\n", "\tjle .Lswap_branch.no." },
+		"constant left operand swaps into the immediate with the mirrored condition");
+}
+
+fn void branch_keeps_compare_with_other_uses() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_compare_branch(&f, &errors, CMP_SLT, value_interner::REF_I64, true);
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, { "\tsetl al\n", "\ttest al, al\n", "\tje .Lcompare_branch.no." },
+		"a compare also used elsewhere stays a 0/1 value the branch tests");
+}
+
+fn void branch_float_equality_checks_parity() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_compare_branch(&f, &errors, FCMP_OEQ, value_interner::REF_F64);
+	defer alloc::free(&f.ta, text.ptr);
+	// Not equal or unordered both go to `no`.
+	assert_text_lines_in_order(text, {
+		"\tucomisd xmm0, xmm1\n", "\tjp .Lcompare_branch.no.", "\tjne .Lcompare_branch.no."
+	}, "ordered float equality branches away on NE or unordered");
+}
+
+fn void branch_float_less_than_swaps_to_above() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_compare_branch(&f, &errors, FCMP_OLT, value_interner::REF_F64);
+	defer alloc::free(&f.ta, text.ptr);
+	// a < b is b > a: JBE (also taken on unordered) goes to `no`, no parity test.
+	assert_text_lines_in_order(text, { "\tucomisd xmm0, xmm1\n", "\tjbe .Lcompare_branch.no." },
+		"float less-than compares swapped operands with an unsigned condition");
+	assert(!text.contains("\tjp ") && !text.contains("setnp"), "ordered less-than needs no parity check");
+}
+
+fn void select_fuses_integer_compare_into_cmov() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref b = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref cond = f.builder.add_inst(CMP_SLT, { .bin = { a, b } }, value_interner::REF_I1);
+	ir::Ref selected = f.builder.add_select(cond, a, b, value_interner::REF_I64);
+	f.builder.add_return(selected);
+	f.builder.finish_fn("min_select");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, { "\tmov rdx,", "\tmov r11,", "\tcmp rax,", "\tcmovge rdx, r11\n" },
+		"min via SELECT is CMP + CMOVcc on the inverted condition");
+	assert(!text.contains("setl"), "fused SELECT compare is not materialized");
+}
+
+fn void jump_to_next_block_falls_through() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref next = f.builder.make_label("next");
+	f.builder.add_jump(next);
+	f.builder.start_block(next);
+	f.builder.add_return(f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32));
+	f.builder.finish_fn("fall");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(!text.contains("\tjmp "), "a JMP to the block that follows is omitted");
+}
+
+fn void branch_on_call_result_is_not_a_compare() @test
+{
+	// The instruction before the BRANCH is its condition but not a compare:
+	// fusion must check the tag before reading compare operands.
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref callee = f.builder.add_symbol("predicate", value_interner::REF_FUNC);
+	ir::Ref cond = f.builder.add_call(callee, {}, value_interner::REF_I1);
+	ir::Ref yes = f.builder.make_label("yes");
+	ir::Ref no = f.builder.make_label("no");
+	f.builder.add_branch(cond, yes, no);
+	f.builder.start_block(yes);
+	f.builder.add_return(f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32));
+	f.builder.start_block(no);
+	f.builder.add_return(f.builder.add_constant(value_interner::REF_ZERO, value_interner::REF_I32));
+	f.builder.finish_fn("branch_on_call");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert_text_lines_in_order(text, { "\tcall predicate", "\ttest al, al\n", "\tje .Lbranch_on_call.no." },
+		"a non-compare i1 condition is tested as a byte");
+}
+
+fn void alu_uses_immediates_and_allocated_destination() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref twelve = f.builder.add_constant(f.interner.put(primitive_value::int_key(12)), value_interner::REF_I64);
+	ir::Ref one = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I64);
+	ir::Ref three = f.builder.add_constant(f.interner.put(primitive_value::int_key(3)), value_interner::REF_I64);
+	ir::Ref product = f.builder.add_inst(MUL, { .bin = { a, twelve } }, value_interner::REF_I64);
+	ir::Ref sum = f.builder.add_inst(ADD, { .bin = { one, product } }, value_interner::REF_I64);
+	ir::Ref shifted = f.builder.add_inst(BIT_SHL, { .bin = { sum, three } }, value_interner::REF_I64);
+	ir::Ref mixed = f.builder.add_inst(BIT_XOR, { .bin = { shifted, a } }, value_interner::REF_I64);
+	f.builder.add_return(mixed);
+	f.builder.finish_fn("alu_chain");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\timul r") && text.contains(", 12\n"), "constant multiply is the three-operand IMUL");
+	assert(text.contains("\tadd r") && text.contains(", 1\n"), "constant on the left of a commutative ADD becomes an immediate");
+	assert(text.contains("\tshl r") && text.contains(", 3\n"), "constant shift count is an immediate");
+	assert(!text.contains("\tmov rcx,") && !text.contains("cl\n"), "no constant is staged in RCX");
+	assert(count_sequence(text, "\tmov rax, r") == 1, "only the return value is copied into RAX");
+}
+
+fn void alu_reads_spilled_operand_from_its_slot() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref b = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref sum = f.builder.add_inst(SUB, { .bin = { a, b } }, value_interner::REF_I32);
+	f.builder.add_return(sum);
+	f.builder.finish_fn("slot_sub");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors, true)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tsub eax, dword ptr [rbp -"), "spill-all SUB reads its right operand from memory");
+}
+
+fn void indexed_load_uses_allocated_base_and_index() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { index, eight } }, value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { base, scaled } }, value_interner::REF_PTR);
+	ir::Ref loaded = f.builder.add_inst(LOAD, { .ref = address }, value_interner::REF_I64);
+	ir::Ref stored_to = f.builder.add_inst(ADD, { .bin = { base, eight } }, value_interner::REF_PTR);
+	f.builder.add_store(stored_to, f.builder.add_constant(f.interner.put(primitive_value::int_key(7)), value_interner::REF_I64));
+	f.builder.add_return(loaded);
+	f.builder.finish_fn("indexed_load");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("*8]\n") && !text.contains("\tmov rcx, r") && !text.contains("\tmov rdx, r"),
+		"the scaled index addresses through the allocated registers directly");
+	assert(text.contains("qword ptr [r") && text.contains("], 7\n"), "a constant is stored as an immediate");
+}
+
+fn void dead_index_multiply_is_not_emitted() @test
+{
+	// The LOAD re-forms [base + index*8] itself: the MUL and pointer ADD have no
+	// lowered reader and are dropped.
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref base = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref index = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref eight = f.builder.add_constant(f.interner.put(primitive_value::int_key(8)), value_interner::REF_I64);
+	ir::Ref scaled = f.builder.add_inst(MUL, { .bin = { index, eight } }, value_interner::REF_I64);
+	ir::Ref address = f.builder.add_inst(ADD, { .bin = { base, scaled } }, value_interner::REF_PTR);
+	ir::Ref first = f.builder.add_load(address, value_interner::REF_I64);
+	ir::Ref second = f.builder.add_load(address, value_interner::REF_I64);
+	f.builder.add_return(f.builder.add_inst(ADD, { .bin = { first, second } }, value_interner::REF_I64));
+	f.builder.finish_fn("dead_index");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(!text.contains("imul") && !text.contains("\tlea "), "no dead index multiply or address LEA");
+	assert(count_sequence(text, "*8]\n") == 2, "both loads address [base + index*8] directly");
+}
+
+<* header: a = phi(x, b), b = phi(y, a), i = phi(0, i + 1); exits when i == n. *>
+fn String render_phi_swap_loop(Fixture* f, ir::ErrorList* errors, value_interner::InternerRef ty)
+{
+	f.builder.start_fn();
+	ir::Ref x = f.builder.add_arg(ty);
+	ir::Ref y = f.builder.add_arg(ty);
+	ir::Ref n = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref entry = f.builder.current_label;
+	ir::Ref zero = f.builder.add_constant(value_interner::REF_ZERO, value_interner::REF_I32);
+	ir::Ref one = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32);
+	ir::Ref header = f.builder.make_label("header");
+	ir::Ref body = f.builder.make_label("body");
+	ir::Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	// The PHIs reference each other and the increment made later in `body`.
+	ir::Ref a = (ir::Ref)f.builder.instructions.len();
+	ir::Ref b = a + 1;
+	ir::Ref i = a + 2;
+	ir::Ref next = a + 5;
+	ir::PhiInput[2] a_in = { { .label = entry, .value = x }, { .label = body, .value = b } };
+	ir::PhiInput[2] b_in = { { .label = entry, .value = y }, { .label = body, .value = a } };
+	ir::PhiInput[2] i_in = { { .label = entry, .value = zero }, { .label = body, .value = next } };
+	assert(f.builder.add_phi(a_in[..], ty) == a && f.builder.add_phi(b_in[..], ty) == b &&
+		f.builder.add_phi(i_in[..], value_interner::REF_I32) == i, "PHI refs are sequential");
+	ir::Ref done = f.builder.add_inst(CMP_EQ, { .bin = { i, n } }, value_interner::REF_I1);
+	f.builder.add_branch(done, exit, body);
+	f.builder.start_block(body);
+	assert(f.builder.add_inst(ADD, { .bin = { i, one } }, value_interner::REF_I32) == next, "increment ref as predicted");
+	f.builder.add_jump(header);
+	f.builder.start_block(exit);
+	f.builder.add_return(a);
+	f.builder.finish_fn("phi_swap");
+	return render(f, errors)!!;
+}
+
+<* The text of block `name` (from its label to the next label). *>
+fn String block_text(String text, String name)
+{
+	sz start = text.index_of(string::tformat(".Lphi_swap.%s.", name))!!;
+	String rest = text[start..];
+	sz line_end = rest.index_of("\n")!!;
+	String after = rest[line_end + 1..];
+	if (try next = after.index_of("\n.L")) return after[:next + 1];
+	return after;
+}
+
+fn void phi_swap_cycle_moves_through_scratch_register() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_phi_swap_loop(&f, &errors, value_interner::REF_I64);
+	defer alloc::free(&f.ta, text.ptr);
+	String body = block_text(text, "body");
+	// Inputs go straight to their PHIs: no staging through RAX and a copy area.
+	assert(!body.contains("rax"), "PHI copies are not staged through RAX");
+	assert(body.contains("r11"), "the a/b swap cycle is broken through R11");
+	assert(count_sequence(body, "\tmov ") <= 6, "the swap takes three moves (plus the increment)");
+}
+
+fn void phi_float_swap_cycle_moves_through_xmm1() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render_phi_swap_loop(&f, &errors, value_interner::REF_F64);
+	defer alloc::free(&f.ta, text.ptr);
+	String body = block_text(text, "body");
+	assert(!body.contains("xmm0"), "float PHI copies are not staged through XMM0");
+	assert(body.contains("xmm1"), "the float swap cycle is broken through XMM1");
+}
+
+fn void leaf_values_use_caller_saved_registers() @test
+{
+	// Values defined after the ARGs that cross no call need no callee-saved
+	// register, so nothing is saved in the prologue for them.
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref doubled = f.builder.add_inst(ADD, { .bin = { a, a } }, value_interner::REF_I64);
+	ir::Ref tripled = f.builder.add_inst(ADD, { .bin = { doubled, a } }, value_interner::REF_I64);
+	f.builder.add_return(f.builder.add_inst(MUL, { .bin = { tripled, doubled } }, value_interner::REF_I64));
+	f.builder.finish_fn("leaf");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(text.contains("\tmov rsi, rdi\n") && text.contains("\tadd rsi, rdi\n"),
+		"the ARG stays in RDI and the temporaries use caller-saved registers");
+	assert(!text.contains("[rbp"), "no callee-saved register is saved");
+}
+
+fn void value_live_across_call_stays_callee_saved() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref live = f.builder.add_inst(ADD, { .bin = { a, a } }, value_interner::REF_I64);
+	ir::Ref callee = f.builder.add_symbol("opaque", value_interner::REF_FUNC);
+	ir::Ref result = f.builder.add_call(callee, {}, value_interner::REF_I64);
+	f.builder.add_return(f.builder.add_inst(ADD, { .bin = { live, result } }, value_interner::REF_I64));
+	f.builder.finish_fn("across_call");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	// `live` is defined before the call and used after it.
+	sz call_at = text.index_of("\tcall opaque")!!;
+	String before = text[:call_at];
+	assert(!before.contains("\tmov rsi, ") && !before.contains("\tmov rdi, ") && !before.contains("\tmov r8, ") &&
+		!before.contains("\tmov r9, ") && !before.contains("\tmov r10, "), "no caller-saved register holds a value across the call");
+	// The call's result is moved out of RAX after the call and may be caller-saved.
+	assert(text[call_at..].contains("rax\n"), "the result is taken from RAX after the call");
+}
+
+fn void spill_choice_keeps_loop_values_in_registers() @test
+{
+	// p and n are used every iteration of a loop that calls out, so with i they
+	// need callee-saved registers; five cold values defined before the loop
+	// (used once after it) compete for the same five registers. The cold ones
+	// must spill, not the hot ones.
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref p = f.builder.add_arg(value_interner::REF_PTR);
+	ir::Ref n = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref entry = f.builder.current_label;
+	ir::Ref[5] cold;
+	for (usz k = 0; k < 5; k++)
+	{
+		ir::Ref offset = f.builder.add_constant(f.interner.put(primitive_value::int_key((int128)k + 2)), value_interner::REF_I64);
+		cold[k] = f.builder.add_inst(MUL, { .bin = { n, offset } }, value_interner::REF_I64);
+	}
+	ir::Ref zero = f.builder.add_constant(value_interner::REF_ZERO, value_interner::REF_I64);
+	ir::Ref one = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I64);
+	ir::Ref callee = f.builder.add_symbol("visit", value_interner::REF_FUNC);
+	ir::Ref header = f.builder.make_label("header");
+	ir::Ref body = f.builder.make_label("body");
+	ir::Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	ir::Ref i = (ir::Ref)f.builder.instructions.len();
+	ir::Ref next = i + 4;
+	ir::PhiInput[2] i_in = { { .label = entry, .value = zero }, { .label = body, .value = next } };
+	assert(f.builder.add_phi(i_in[..], value_interner::REF_I64) == i, "PHI ref as predicted");
+	ir::Ref more = f.builder.add_inst(CMP_SLT, { .bin = { i, n } }, value_interner::REF_I1);
+	f.builder.add_branch(more, body, exit);
+	f.builder.start_block(body);
+	ir::Ref[2] args = { p, i };
+	f.builder.add_call(callee, args[..], value_interner::REF_VOID);
+	assert(f.builder.add_inst(ADD, { .bin = { i, one } }, value_interner::REF_I64) == next, "increment ref as predicted");
+	f.builder.add_jump(header);
+	f.builder.start_block(exit);
+	ir::Ref total = i;
+	foreach (value : cold) total = f.builder.add_inst(ADD, { .bin = { total, value } }, value_interner::REF_I64);
+	f.builder.add_return(total);
+	f.builder.finish_fn("hot_loop");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	sz body_at = text.index_of(".Lhot_loop.body.")!!;
+	sz exit_at = text.index_of(".Lhot_loop.exit.")!!;
+	sz header_at = text.index_of(".Lhot_loop.header.")!!;
+	String loop = text[header_at:exit_at - header_at];
+	assert(!loop.contains("[rbp"), "the loop reads p, n and i from registers, no frame slot");
+	assert(body_at > header_at, "body follows the header");
+}
+
+fn void peephole_drops_swapback_and_self_moves() @test
+{
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	f.builder.add_return(f.builder.add_inst(ADD, { .bin = { a, a } }, value_interner::REF_I64));
+	f.builder.finish_fn("peep");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	ir::Ir graph = f.builder.finish();
+	defer graph.free();
+	x86_64::Lowering lowering = { .ir = &graph, .errors = &errors };
+	lowering.lines.init(&f.ta);
+	defer lowering.lines.free();
+	lowering.lines.push({ .mnemonic = MOV, .ops = { x86_64::reg_op(RBX), x86_64::reg_op(RSI), {} }, .op_count = 2 });
+	lowering.lines.push({ .mnemonic = MOV, .ops = { x86_64::reg_op(RSI), x86_64::reg_op(RBX), {} }, .op_count = 2 });
+	lowering.lines.push({ .mnemonic = MOV, .ops = { x86_64::reg_op(R12), x86_64::reg_op(R12), {} }, .op_count = 2 });
+	lowering.lines.push({ .mnemonic = MOV, .ops = { x86_64::reg_op(EBX), x86_64::reg_op(EBX), {} }, .op_count = 2 });
+	lowering.lines.push({ .mnemonic = MOV, .ops = { x86_64::reg_op(EAX), x86_64::reg_op(ESI), {} }, .op_count = 2 });
+	lowering.lines.push({ .mnemonic = MOV, .ops = { x86_64::reg_op(ESI), x86_64::reg_op(EAX), {} }, .op_count = 2 });
+	lowering.peephole();
+	assert(lowering.lines.len() == 4, "the 64-bit swap-back and self-move go; 32-bit forms stay");
+	assert(lowering.lines[0].ops[0].reg == RBX && lowering.lines[1].ops[0].reg == EBX &&
+		lowering.lines[2].ops[0].reg == EAX && lowering.lines[3].ops[0].reg == ESI, "the kept moves stay in order");
+}
+
+fn void loop_phis_coalesce_with_their_inputs() @test
+{
+	// header: i = phi(0, i + 1), s = phi(0, s + i); exit returns s, so s is
+	// live after the loop. The body must update both PHI registers in place.
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref n = f.builder.add_arg(value_interner::REF_I32);
+	ir::Ref entry = f.builder.current_label;
+	ir::Ref zero = f.builder.add_constant(value_interner::REF_ZERO, value_interner::REF_I32);
+	ir::Ref one = f.builder.add_constant(value_interner::REF_ONE, value_interner::REF_I32);
+	ir::Ref header = f.builder.make_label("header");
+	ir::Ref body = f.builder.make_label("body");
+	ir::Ref exit = f.builder.make_label("exit");
+	f.builder.add_jump(header);
+	f.builder.start_block(header);
+	ir::Ref i = (ir::Ref)f.builder.instructions.len();
+	ir::Ref sum = i + 1;
+	ir::Ref next_sum = i + 4;
+	ir::Ref next_i = i + 5;
+	ir::PhiInput[2] i_in = { { .label = entry, .value = zero }, { .label = body, .value = next_i } };
+	ir::PhiInput[2] s_in = { { .label = entry, .value = zero }, { .label = body, .value = next_sum } };
+	assert(f.builder.add_phi(i_in[..], value_interner::REF_I32) == i && f.builder.add_phi(s_in[..], value_interner::REF_I32) == sum,
+		"PHI refs as predicted");
+	ir::Ref more = f.builder.add_inst(CMP_SLT, { .bin = { i, n } }, value_interner::REF_I1);
+	f.builder.add_branch(more, body, exit);
+	f.builder.start_block(body);
+	assert(f.builder.add_inst(ADD, { .bin = { sum, i } }, value_interner::REF_I32) == next_sum &&
+		f.builder.add_inst(ADD, { .bin = { i, one } }, value_interner::REF_I32) == next_i, "body refs as predicted");
+	f.builder.add_jump(header);
+	f.builder.start_block(exit);
+	f.builder.add_return(sum);
+	f.builder.finish_fn("accumulate");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	sz body_at = text.index_of(".Laccumulate.body.")!!;
+	String rest = text[body_at..];
+	sz line_end = rest.index_of("\n")!!;
+	String block = rest[line_end + 1..];
+	block = block[:block.index_of(".Laccumulate.exit.")!!];
+	assert(count_sequence(block, "\tadd ") == 2, "both updates are one ADD each");
+	assert(!block.contains("\tmov "), "no PHI copies: each PHI shares its input's register");
+}
+
+fn void call_arguments_are_a_parallel_move() @test
+{
+	// g(a, b) { return h(b, a); }: a and b stay in RDI/RSI until the call,
+	// whose argument setup swaps them (through R11) without a frame.
+	Fixture f;
+	f.init();
+	defer { f.builder.free(); f.interner.free(); f.ta.free(); }
+	f.builder.start_fn();
+	ir::Ref a = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref b = f.builder.add_arg(value_interner::REF_I64);
+	ir::Ref callee = f.builder.add_symbol("h", value_interner::REF_FUNC);
+	ir::Ref[2] args = { b, a };
+	f.builder.add_return(f.builder.add_call(callee, args[..], value_interner::REF_I64));
+	f.builder.finish_fn("swap_call");
+	ir::ErrorList errors;
+	errors.init(&f.ta);
+	defer errors.free();
+	String text = render(&f, &errors)!!;
+	defer alloc::free(&f.ta, text.ptr);
+	assert(!text.contains("[rbp"), "no callee-saved register or slot is needed");
+	assert_text_lines_in_order(text, { "\tmov r11, ", "\tmov rdi, rsi\n", "\tmov rsi, r11\n", "\tcall h" },
+		"the RDI/RSI swap is one parallel move");
 }

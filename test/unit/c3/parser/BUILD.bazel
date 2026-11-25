@@ -1,0 +1,19 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: C3 frontend parser core (parser.c3 token handling, inline
+# diagnostics, symtab globals, builtin types, AST/expr helpers).
+
+c3_test(name = "parse_expr_tests", srcs = ["parse_expr_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+
+c3_test(name = "parse_global_tests", srcs = ["parse_global_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+
+c3_test(name = "parser_core_tests", srcs = ["parser_core_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+
+test_suite(
+    name = "all",
+    tests = [
+        ":parse_expr_tests",
+        ":parse_global_tests",
+        ":parser_core_tests",
+    ],
+)

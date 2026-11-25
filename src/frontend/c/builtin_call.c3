@@ -3,7 +3,7 @@
 module aro::frontend::c::builtin_call;
 import aro::frontend::c::builtin_defs::aarch64, aro::frontend::c::builtin_defs::arm, aro::frontend::c::builtin_defs::common;
 import aro::frontend::c::builtin_eval, aro::frontend::c::builtins, aro::frontend::c::builtin_properties;
-import aro::frontend::c::lang_opts;
+import aro::frontend::c::lang_opts, aro::target;
 import aro::frontend::c::parser, aro::frontend::c::diagnostics, aro::frontend::c::parser_result;
 import aro::frontend::c::tree, aro::frontend::c::tokens, aro::frontend::c::type_store, aro::frontend::c::value;
 import std::core::dstring;
@@ -34,6 +34,7 @@ fn uint? param_count_override(builtins::Expanded expanded)
 		case common::TAG___BUILTIN_ISINF:
 		case common::TAG___BUILTIN_ISINF_SIGN:
 		case common::TAG___BUILTIN_ISNAN:
+		case common::TAG___BUILTIN_ISSIGNALING:
 		case common::TAG___BUILTIN_ELEMENTWISE_ABS:
 		case common::TAG___BUILTIN_ELEMENTWISE_BITREVERSE:
 		case common::TAG___BUILTIN_ELEMENTWISE_CANONICALIZE:
@@ -377,7 +378,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 		return;
 	}
 
-	char mask = (char)p.comp.langopts.arm_ldrex;
+	char mask = (char)(p.comp.target.arm_ldrex() ?? target::ARM_LDREX_NONE);
 	bool is_dword = false;
 	switch (tag)
 	{
@@ -385,7 +386,7 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 		case arm::TAG___BUILTIN_ARM_STREXD: is_dword = true;
 		default: break;
 	}
-	if (is_dword) mask = mask & lang_opts::ARM_LDREX_D_INT;
+	if (is_dword) mask = mask & target::ARM_LDREX_D_INT;
 	if (mask == 0)
 	{
 		Diagnostic.BUILTIN_ARM_LDREX_STREX_UNSUPPORTED.@emit(p, builtin_tok, name)!;
@@ -398,32 +399,32 @@ fn void? check_arm_exclusive(parser::Parser* p, builtin_properties::BuiltinTag t
 	if (!supported)
 	{
 		uint size_count = 0;
-		if ((mask & lang_opts::ARM_LDREX_B_INT) != 0) size_count++;
-		if ((mask & lang_opts::ARM_LDREX_H_INT) != 0) size_count++;
-		if ((mask & lang_opts::ARM_LDREX_W_INT) != 0) size_count++;
-		if ((mask & lang_opts::ARM_LDREX_D_INT) != 0) size_count++;
+		if ((mask & target::ARM_LDREX_B_INT) != 0) size_count++;
+		if ((mask & target::ARM_LDREX_H_INT) != 0) size_count++;
+		if ((mask & target::ARM_LDREX_W_INT) != 0) size_count++;
+		if ((mask & target::ARM_LDREX_D_INT) != 0) size_count++;
 		DString sizes;
 		sizes.init(tmem);
 		uint seen = 0;
-		if ((mask & lang_opts::ARM_LDREX_B_INT) != 0)
+		if ((mask & target::ARM_LDREX_B_INT) != 0)
 		{
 			if (seen > 0) sizes.append_string(seen + 1 == size_count ? " or " : ", ");
 			sizes.appendf("%d", 1);
 			seen++;
 		}
-		if ((mask & lang_opts::ARM_LDREX_H_INT) != 0)
+		if ((mask & target::ARM_LDREX_H_INT) != 0)
 		{
 			if (seen > 0) sizes.append_string(seen + 1 == size_count ? " or " : ", ");
 			sizes.appendf("%d", 2);
 			seen++;
 		}
-		if ((mask & lang_opts::ARM_LDREX_W_INT) != 0)
+		if ((mask & target::ARM_LDREX_W_INT) != 0)
 		{
 			if (seen > 0) sizes.append_string(seen + 1 == size_count ? " or " : ", ");
 			sizes.appendf("%d", 4);
 			seen++;
 		}
-		if ((mask & lang_opts::ARM_LDREX_D_INT) != 0)
+		if ((mask & target::ARM_LDREX_D_INT) != 0)
 		{
 			if (seen > 0) sizes.append_string(seen + 1 == size_count ? " or " : ", ");
 			sizes.appendf("%d", 8);

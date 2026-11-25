@@ -142,7 +142,6 @@ fn bool? Ctx.init(&self, Allocator a, String cfg)
 	self.diags.state.enable_all_warnings = true;
 	self.comp.init(a, null, &self.diags);
 	self.comp.target = target::parse_triple(parts[0], HOST)!;
-	self.comp.langopts.set_target_options(&self.comp.target);
 	switch (parts[2])
 	{
 		case "gcc": self.comp.langopts.emulate = GCC;

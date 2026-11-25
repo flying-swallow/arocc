@@ -3160,6 +3160,22 @@ __builtin_inff16
     .param_str = "x"
     .attributes = .{ .@"const" = true, .const_evaluable = true }
 
+__builtin_inff32
+    .param_str = "f"
+    .attributes = .{ .@"const" = true, .const_evaluable = true }
+
+__builtin_inff32x
+    .param_str = "d"
+    .attributes = .{ .@"const" = true, .const_evaluable = true }
+
+__builtin_inff64
+    .param_str = "d"
+    .attributes = .{ .@"const" = true, .const_evaluable = true }
+
+__builtin_inff64x
+    .param_str = "LLd"
+    .attributes = .{ .@"const" = true, .const_evaluable = true }
+
 __builtin_infer_alloc_token
     .param_str = "z."
     .attributes = .{ .@"const" = true, .pure = true, .custom_typecheck = true, .const_evaluable = true, .eval_args = false }
@@ -4197,6 +4213,22 @@ __builtin_nanf128
     .param_str = "LLdcC*"
     .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
 
+__builtin_nanf32
+    .param_str = "fcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nanf32x
+    .param_str = "dcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nanf64
+    .param_str = "dcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nanf64x
+    .param_str = "LLdcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
 __builtin_nansf
     .param_str = "fcC*"
     .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
@@ -4214,6 +4246,22 @@ __builtin_nansf16
     .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
 
 __builtin_nansf128
+    .param_str = "LLdcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nansf32
+    .param_str = "fcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nansf32x
+    .param_str = "dcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nansf64
+    .param_str = "dcC*"
+    .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
+
+__builtin_nansf64x
     .param_str = "LLdcC*"
     .attributes = .{ .lib_function_with_builtin_prefix = true, .pure = true, .const_evaluable = true }
 

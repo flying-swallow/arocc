@@ -12,7 +12,7 @@
 // their callers as enums with associated values (see `DiagMeta`).
 module aro::frontend::c::diagnostics;
 import aro::source, aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::frontend::c::parser, aro::frontend::c::tokens, std::core::string::ansi, std::io, std::collections::list, std::collections::enumset;
-import aro::frontend::c::driver_arguments;
+import aro::frontend::c::driver_arguments, aro::terminal;
 
 <* Zig `Message.Kind`; the label is the `{t}` spelling used in output. Order matters (max for -Wpedantic). *>
 enum MessageKind : char(String label)
@@ -342,28 +342,8 @@ macro bool Diagnostics.@enabled(&self, diag)
 // ---------------------------------------------------------------------------
 // Terminal output (the no_color / escape_codes subset of std.Io.Terminal)
 
-enum ColorMode : char
-{
-	NO_COLOR,
-	ESCAPE_CODES,
-}
-
-struct Terminal
-{
-	OutStream writer;
-	ColorMode mode;
-}
-
-fn void? Terminal.set_color(self, String color)
-{
-	if (self.mode == NO_COLOR) return;
-	io::write_all(self.writer, color)!;
-}
-
-fn void? Terminal.write(self, String s)
-{
-	if (s.len) io::write_all(self.writer, s)!;
-}
+alias ColorMode = terminal::ColorMode;
+alias Terminal = terminal::Terminal;
 
 <* Render the message (its effective_kind must not be OFF). Zig `Message.write`. *>
 fn void? Message.write(&self, Terminal term, bool details)
@@ -1155,7 +1135,8 @@ enum Diagnostic : ushort (String fmt, MessageKind kind, DiagMeta meta, Diagnosti
 	STATIC_FUNC_NOT_GLOBAL { "static functions must be global", ERROR, {}, PARSER },
 	IMPLICIT_FUNC_DECL { "call to undeclared function '%s'; ISO C99 and later do not support implicit function declarations", ERROR, { .has_opt = true, .opt = Option.IMPLICIT_FUNCTION_DECLARATION, .has_suppress_unless_version = true, .suppress_unless_version = C99 }, PARSER },
 	UNKNOWN_BUILTIN { "use of unknown builtin '%s'", ERROR, { .has_opt = true, .opt = Option.IMPLICIT_FUNCTION_DECLARATION }, PARSER },
-	IMPLICIT_BUILTIN { "implicitly declaring library function '%s'", ERROR, { .has_opt = true, .opt = Option.IMPLICIT_FUNCTION_DECLARATION }, PARSER },
+	IMPLICIT_BUILTIN { "implicitly declaring library function '%s'", ERROR, { .has_opt = true, .opt = Option.IMPLICIT_FUNCTION_DECLARATION, .has_suppress_unless_version = true, .suppress_unless_version = C99 }, PARSER },
+	IMPLICIT_BUILTIN_C89 { "implicitly declaring library function '%s'", WARNING, { .has_opt = true, .opt = Option.IMPLICIT_FUNCTION_DECLARATION }, PARSER },
 	IMPLICIT_BUILTIN_HEADER_NOTE { "include the header <%s.h> or explicitly provide a declaration for '%s'", NOTE, { .has_opt = true, .opt = Option.IMPLICIT_FUNCTION_DECLARATION }, PARSER },
 	EXPECTED_PARAM_DECL { "expected parameter declaration", ERROR, {}, PARSER },
 	INVALID_OLD_STYLE_PARAMS { "identifier parameter lists are only allowed in function definitions", ERROR, {}, PARSER },
@@ -1365,6 +1346,7 @@ enum Diagnostic : ushort (String fmt, MessageKind kind, DiagMeta meta, Diagnosti
 	COMPLEX_INT { "complex integer types are a GNU extension", OFF, { .has_opt = true, .opt = Option.GNU_COMPLEX_INTEGER, .extension = true }, PARSER },
 	QUAL_ON_RET_TYPE { "'%s' type qualifier on return type has no effect", OFF, { .has_opt = true, .opt = Option.IGNORED_QUALIFIERS }, PARSER },
 	EXTRA_SEMI { "extra ';' outside of a function", OFF, { .has_opt = true, .opt = Option.EXTRA_SEMI }, PARSER },
+	EXTRA_SEMI_IN_RECORD { "extra ';' inside a %s", OFF, { .has_opt = true, .opt = Option.EXTRA_SEMI }, PARSER },
 	FUNC_FIELD { "field declared as a function", ERROR, {}, PARSER },
 	EXPECTED_MEMBER_NAME { "expected member name after declarator", ERROR, {}, PARSER },
 	VLA_FIELD { "variable length array fields extension is not supported", ERROR, {}, PARSER },

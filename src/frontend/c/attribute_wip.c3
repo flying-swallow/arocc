@@ -2,6 +2,7 @@
 // Parsed attributes and their expression results are scoped by State so a
 // parser can restore them after a failed or completed declarator.
 module aro::frontend::c::attribute_wip;
+import aro::bigint;
 import aro::primitive_value;
 import aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::lang_opts;
 import aro::frontend::c::parser, aro::frontend::c::parser_result, aro::target, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
@@ -16,6 +17,8 @@ struct Parsed
 	uint args_len;
 	tokens::TokenIndex tok;
 	bool used_as_type_attr;
+	<* Written after a `*` in a declarator (`int * __attribute__((x)) p`). *>
+	bool pointer_position;
 }
 
 struct State
@@ -37,6 +40,22 @@ struct Wip
 	uint pending_calling_conventions_cursor;
 	List{attribute_map::AttrRef} applied;
 	uint top;
+}
+
+<* Any parsed attribute so far spells `deprecated` (GNU, standard or declspec). *>
+fn bool Wip.has_deprecated(&self)
+{
+	foreach (attr : self.attrs)
+	{
+		switch (attr.name.ns)
+		{
+			case GNU: if (attr.name.gnu == attribute::AttrGnu.DEPRECATED) return true;
+			case STANDARD: if (attr.name.standard == attribute::AttrStandard.DEPRECATED) return true;
+			case DECLSPEC: if (attr.name.declspec == attribute::AttrDeclspec.DEPRECATED) return true;
+			default: {}
+		}
+	}
+	return false;
 }
 
 fn void Wip.init(&self, Allocator gpa)
@@ -209,6 +228,52 @@ fn bool? Wip.arg_count(&self, parser::Parser* p, Parsed attr, uint count)
 		default: self.emit(p, attr, Diagnostic.ARG_COUNT, (long)count)!;
 	}
 	return true;
+}
+
+<*
+ Report a recognized but unimplemented attribute. Clang's argument-count
+ errors still apply first, so a wrong arity is diagnosed like any other
+ attribute (only arities clang checks for these spellings are listed).
+*>
+fn void? Wip.unimplemented(&self, parser::Parser* p, Parsed attr)
+{
+	int min = -1;
+	int max;
+	switch (attr.name.ns)
+	{
+		case GNU:
+			switch (attr.name.gnu)
+			{
+				case NOTHROW: case RETURNS_TWICE: case LEAF: case NO_STACK_PROTECTOR: case NO_PROFILE_INSTRUMENT_FUNCTION:
+				case ARTIFICIAL: case COLD: case HOT: case FLATTEN: case NO_SPLIT_STACK: case NO_INSTRUMENT_FUNCTION:
+				case RETURNS_NONNULL: case MAY_ALIAS: case NOCOMMON: case COMMON: case PURE: case NO_REORDER:
+					min = 0; max = 0;
+				case MALLOC:
+					// GCC's malloc takes an optional deallocator and its argument position.
+					min = 0; max = p.comp.langopts.emulate == target::Compiler.GCC ? 2 : 0;
+				case ALLOC_ALIGN: case MODE: case TLS_MODEL: case TARGET:
+					min = 1; max = 1;
+				case SENTINEL:
+					min = 0; max = 2;
+				default: {}
+			}
+		case CLANG:
+			switch (attr.name.clang)
+			{
+				case NO_STACK_PROTECTOR: case NODEREF: case OPTNONE:
+					min = 0; max = 0;
+				case ADDRESS_SPACE: case EXT_VECTOR_TYPE:
+					min = 1; max = 1;
+				default: {}
+			}
+		default: {}
+	}
+	if (min >= 0)
+	{
+		bool bad = min == max ? self.arg_count(p, attr, (uint)min)! : self.arg_count_min_max(p, attr, (uint)min, (uint)max)!;
+		if (bad) return;
+	}
+	self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
 }
 
 fn bool? Wip.arg_count_min_max(&self, parser::Parser* p, Parsed attr, uint min, uint max)
@@ -556,12 +621,12 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case NORETURN: case _NORETURN: self.apply_noreturn(p, attr, decl, qt)!; continue;
 					case MAYBE_UNUSED: self.apply_unused(p, attr, decl, qt)!; continue;
 					case UNSEQUENCED:
-						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION_TYPE })!) continue;
 						if (self.arg_count(p, attr, 0)!) continue;
+						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION_TYPE })!) continue;
 						value.tag = attribute::AttributeTag.UNSEQUENCED; apply = true;
 					case REPRODUCIBLE:
-						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION_TYPE })!) continue;
 						if (self.arg_count(p, attr, 0)!) continue;
+						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION_TYPE })!) continue;
 						value.tag = attribute::AttributeTag.REPRODUCIBLE; apply = true;
 					case FALLTHROUGH: self.emit(p, attr, Diagnostic.STMT_ATTR_ON_DECL)!;
 				}
@@ -569,8 +634,8 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 				switch (attr.name.gnu)
 				{
 					case SCALAR_STORAGE_ORDER:
-						if (self.check_target(p, attr, decl, qt, { TargetKind.TAG })!) continue;
 						if (self.arg_count(p, attr, 1)!) continue;
+						if (self.check_target(p, attr, decl, qt, { TargetKind.TAG })!) continue;
 						uint order;
 						String[2] orders = { "little-endian", "big-endian" };
 						if (!self.arg_enum(p, attr, 0, orders[..], &order)!) continue;
@@ -579,11 +644,14 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						apply = true;
 
 					case PACKED:
-						if (self.check_target(p, attr, decl, qt, { TargetKind.TAG, TargetKind.FIELD })!) continue;
-						value.tag = attribute::AttributeTag.PACKED; apply = !self.arg_count(p, attr, 0)!;
-					case HOT: case COLD:
-						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
 						if (self.arg_count(p, attr, 0)!) continue;
+						// GCC applies `packed` after a `*` to the pointer type, where it does nothing.
+						if (attr.pointer_position && p.comp.langopts.emulate == target::Compiler.GCC) continue;
+						if (self.check_target(p, attr, decl, qt, { TargetKind.TAG, TargetKind.FIELD })!) continue;
+						value.tag = attribute::AttributeTag.PACKED; apply = true;
+					case HOT: case COLD:
+						if (self.arg_count(p, attr, 0)!) continue;
+						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
 						self.incompatible(p, attr, attr.name.gnu == attribute::AttrGnu.HOT ? attribute::AttributeTag.COLD : attribute::AttributeTag.HOT)!;
 						value.tag = attr.name.gnu == attribute::AttrGnu.HOT ? attribute::AttributeTag.HOT : attribute::AttributeTag.COLD; apply = true;
 					case CONST: case __CONST: value.tag = attribute::AttributeTag.CONST; apply = !self.arg_count(p, attr, 0)!;
@@ -593,14 +661,15 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case UNUSED: self.apply_unused(p, attr, decl, qt)!; continue;
 					case FALLTHROUGH: self.emit(p, attr, Diagnostic.STMT_ATTR_ON_DECL)!;
 					case WEAK:
+						if (self.arg_count(p, attr, 0)!) continue;
 						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE })!) continue;
-						value.tag = attribute::AttributeTag.WEAK; apply = !self.arg_count(p, attr, 0)!;
+						value.tag = attribute::AttributeTag.WEAK; apply = true;
 					case SELECTANY:
 						value.tag = attribute::AttributeTag.SELECTANY; apply = !self.arg_count(p, attr, 0)!;
 					case WARNING: case ERROR:
 						{
-							if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
 							if (self.arg_count(p, attr, 1)!) continue;
+							if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
 							String message;
 							if (!self.arg_string(p, attr, 0, &message)!) continue;
 							value.tag = attr.name.gnu == attribute::AttrGnu.WARNING ? attribute::AttributeTag.WARNING : attribute::AttributeTag.ERROR;
@@ -611,7 +680,15 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						if (node.kind != tree::NodeKind.STRUCT_DECL) { self.emit(p, attr, Diagnostic.DESIGNATED_INIT_INVALID)!; continue; }
 						if (self.arg_count(p, attr, 0)!) return;
 						value.tag = attribute::AttributeTag.DESIGNATED_INIT; apply = true;
-					case ALIGNED: self.apply_alignment(p, attr, qt, node, false)!;
+					case ALIGNED:
+						self.apply_alignment(p, attr, qt, node, false)!;
+						// GCC applies `aligned` after a `*` to the pointer type, which may
+						// lower its alignment; for a member that is `packed, aligned(N)`.
+						if (attr.pointer_position && p.comp.langopts.emulate == target::Compiler.GCC &&
+							node.kind == tree::NodeKind.RECORD_FIELD && attr.args_len == 1)
+						{
+							self.add_applied(p, attr, { .tag = attribute::AttributeTag.PACKED });
+						}
 					case CDECL: case FASTCALL: case MS_ABI: case REGCALL: case STDCALL: case SYSV_ABI: case THISCALL:
 						self.attrs[(sz)i].used_as_type_attr = true;
 						if (self.arg_count(p, attr, 0)!) continue;
@@ -628,12 +705,13 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case ALWAYS_INLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
 					case NOINLINE: self.apply_noinline(p, attr, decl, qt)!; continue;
 					case USED:
+						if (self.arg_count(p, attr, 0)!) continue;
 						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE })!) continue;
-						value.tag = attribute::AttributeTag.USED; apply = !self.arg_count(p, attr, 0)!;
+						value.tag = attribute::AttributeTag.USED; apply = true;
 					case CONSTRUCTOR: case DESTRUCTOR:
 						{
-							if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
 							if (self.arg_count_min_max(p, attr, 0, 1)!) continue;
+							if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) continue;
 							uint priority = attribute::DEFAULT_PRIORITY;
 							if (self.parsed_args(attr).len == 1 && !self.arg_u32(p, attr, 0, &priority)!) continue;
 							if (priority > attribute::DEFAULT_PRIORITY)
@@ -646,7 +724,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 							apply = true;
 						}
 					case GNU_INLINE: self.apply_gnu_inline(p, attr, decl, qt)!; continue;
-					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
+					default: self.unimplemented(p, attr)!;
 				}
 			case CLANG:
 				switch (attr.name.clang)
@@ -661,8 +739,8 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 							apply = true;
 						}
 					case INTERNAL_LINKAGE:
-						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE })!) continue;
 						if (self.arg_count(p, attr, 0)!) continue;
+						if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE })!) continue;
 						value.tag = attribute::AttributeTag.INTERNAL_LINKAGE; apply = true;
 					case AARCH64_SVE_PCS: case AARCH64_VECTOR_PCS: case RISCV_VECTOR_CC: case RISCV_VLS_CC: case VECTORCALL:
 						self.attrs[(sz)i].used_as_type_attr = true;
@@ -670,7 +748,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						qt = self.apply_calling_convention(p, i, qt, true)!;
 					case ALWAYS_INLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
 					case NOINLINE: self.apply_noinline(p, attr, decl, qt)!; continue;
-					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
+					default: self.unimplemented(p, attr)!;
 				}
 			case DECLSPEC:
 				switch (attr.name.declspec)
@@ -682,7 +760,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case NOINLINE: self.apply_noinline(p, attr, decl, qt)!; continue;
 					case SELECTANY:
 						value.tag = attribute::AttributeTag.SELECTANY; apply = !self.arg_count(p, attr, 0)!;
-					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
+					default: self.unimplemented(p, attr)!;
 				}
 			case KEYWORD:
 				switch (attr.name.keyword)
@@ -694,7 +772,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 					case _ALIGNAS: case ALIGNAS: self.apply_alignment(p, attr, qt, node, true)!;
 					case NORETURN: self.apply_noreturn(p, attr, decl, qt)!; continue;
 					case __FORCEINLINE: case _FORCEINLINE: self.apply_always_inline(p, attr, decl, qt)!; continue;
-					default: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
+					default: self.unimplemented(p, attr)!;
 				}
 			case RISCV:
 				switch (attr.name.riscv)
@@ -704,7 +782,7 @@ fn void? Wip.apply_decl_attrs_extra(&self, parser::Parser* p, type_store::NodeIn
 						if (self.arg_count(p, attr, 0)!) continue;
 						qt = self.apply_calling_convention(p, i, qt, true)!;
 				}
-			case ARO: case MSVC: self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
+			case ARO: case MSVC: self.unimplemented(p, attr)!;
 		}
 		if (apply) self.add_applied(p, attr, value);
 	}
@@ -818,8 +896,8 @@ fn void? Wip.apply_transparent_union(&self, parser::Parser* p, Parsed attr, type
 
 fn void? Wip.apply_visibility(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.GLOBAL_VARIABLE })!) return;
 	if (self.arg_count(p, attr, 1)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.GLOBAL_VARIABLE })!) return;
 	String[4] choices = { "hidden", "default", "internal", "protected" };
 	uint choice = 0;
 	if (!self.arg_enum(p, attr, 0, choices[..], &choice)!) return;
@@ -848,8 +926,8 @@ fn void? Wip.apply_visibility(&self, parser::Parser* p, Parsed attr, type_store:
 
 fn void? Wip.apply_noreturn(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	if (self.arg_count(p, attr, 0)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	if (attr.name.ns == attribute::AttrNamespace.STANDARD && attr.name.standard == attribute::AttrStandard._NORETURN)
 	{
 		self.emit(p, attr, Diagnostic.DEPRECATED_NORETURN)!;
@@ -860,8 +938,8 @@ fn void? Wip.apply_noreturn(&self, parser::Parser* p, Parsed attr, type_store::N
 fn void? Wip.apply_cleanup(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
 	if (qt.is_invalid()) return;
-	if (self.check_target(p, attr, decl, qt, { TargetKind.LOCAL_VARIABLE })!) return;
 	if (self.arg_count(p, attr, 1)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.LOCAL_VARIABLE })!) return;
 	tree::NodeDeclRef decl_ref;
 	if (!self.arg_decl_ref(p, attr, 0, &decl_ref)!) return;
 	tree::Node decl_node = decl_ref.decl.get(&p.tree);
@@ -889,8 +967,8 @@ fn void? Wip.apply_cleanup(&self, parser::Parser* p, Parsed attr, type_store::No
 
 fn void? Wip.apply_always_inline(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	if (self.arg_count(p, attr, 0)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	foreach (ref : self.applied.array_view())
 	{
 		attribute::Attribute prev = p.tree.attr_map.get(ref);
@@ -908,8 +986,8 @@ fn void? Wip.apply_always_inline(&self, parser::Parser* p, Parsed attr, type_sto
 <* `noinline`: a function-only marker; the IR inliner never inlines the function. *>
 fn void? Wip.apply_noinline(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	if (self.arg_count(p, attr, 0)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	foreach (ref : self.applied.array_view())
 	{
 		if (p.tree.attr_map.get(ref).args.tag == attribute::AttributeTag.NOINLINE) return;
@@ -919,8 +997,8 @@ fn void? Wip.apply_noinline(&self, parser::Parser* p, Parsed attr, type_store::N
 
 fn void? Wip.apply_gnu_inline(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	if (self.arg_count(p, attr, 0)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION })!) return;
 	if (!decl.get(&p.tree).function.is_inline)
 	{
 		self.emit(p, attr, Diagnostic.GNU_INLINE_NON_INLINE)!;
@@ -931,8 +1009,8 @@ fn void? Wip.apply_gnu_inline(&self, parser::Parser* p, Parsed attr, type_store:
 
 fn void? Wip.apply_section(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.GLOBAL_VARIABLE })!) return;
 	if (self.arg_count(p, attr, 1)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.GLOBAL_VARIABLE })!) return;
 	String section_name;
 	if (!self.arg_string(p, attr, 0, &section_name)!) return;
 	foreach (ref : self.applied.array_view())
@@ -989,8 +1067,8 @@ fn void? Wip.apply_warn_unused_result(&self, parser::Parser* p, Parsed attr, typ
 <* Zig `applyUnused` for `unused` and `maybe_unused`. *>
 fn void? Wip.apply_unused(&self, parser::Parser* p, Parsed attr, type_store::NodeIndex decl, type_store::QualType qt)
 {
-	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE, TargetKind.PARAM, TargetKind.TYPEDEF, TargetKind.TAG, TargetKind.FIELD, TargetKind.LABEL })!) return;
 	if (self.arg_count(p, attr, 0)!) return;
+	if (self.check_target(p, attr, decl, qt, { TargetKind.FUNCTION, TargetKind.VARIABLE, TargetKind.PARAM, TargetKind.TYPEDEF, TargetKind.TAG, TargetKind.FIELD, TargetKind.LABEL })!) return;
 	self.add_applied(p, attr, { .tag = attribute::AttributeTag.UNUSED });
 }
 
@@ -1062,7 +1140,8 @@ fn void? Wip.apply_alignment(&self, parser::Parser* p, Parsed attr, type_store::
 		if (node.kind == tree::NodeKind.RECORD_FIELD && !node.record_field.bit_width.is_null()) { self.emit(p, attr, Diagnostic.ALIGNAS_BITFIELD)!; return; }
 		if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.RECORD_FIELD && !node.kind.props.tag_decl) { self.emit(p, attr, Diagnostic.ALIGNAS_ON_FUNC)!; return; }
 	}
-	else if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.TYPEDEF && !node.kind.props.tag_decl && !node.kind.props.field_decl && node.kind != tree::NodeKind.PARAM)
+	else if (node.kind != tree::NodeKind.VARIABLE && node.kind != tree::NodeKind.TYPEDEF && !node.kind.props.tag_decl &&
+		!node.kind.props.field_decl && node.kind != tree::NodeKind.PARAM && node.kind != tree::NodeKind.FUNCTION)
 	{
 		self.invalid_target(p, attr, "functions, variables, typedefs, tags, parameters, and fields")!;
 		return;
@@ -1076,7 +1155,8 @@ fn void? Wip.apply_alignment(&self, parser::Parser* p, Parsed attr, type_store::
 		self.emit(p, attr, Diagnostic.MSVC_ENUM_ALIGN_IGNORED)!;
 		return;
 	}
-	self.add_alignment_to_type_map(p, node, qt, has_alignment, alignment);
+	// GNU `aligned` on a function aligns its code; the function type is unchanged.
+	if (node.kind != tree::NodeKind.FUNCTION) self.add_alignment_to_type_map(p, node, qt, has_alignment, alignment);
 	attribute::AttributeArgs payload = { .tag = attribute::AttributeTag.ALIGNMENT, .alignment = { .has_alignment = has_alignment, .alignment = alignment } };
 	self.add_applied(p, attr, payload);
 }
@@ -1150,7 +1230,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 			{
 				if (try enum_ty = result.get(p.comp, type_store::TypeTag.ENUM))
 				{
-					if (p.comp.langopts.emulate == lang_opts::Compiler.CLANG && enum_ty.enum_ty.incomplete) continue;
+					if (p.comp.langopts.emulate == target::Compiler.CLANG && enum_ty.enum_ty.incomplete) continue;
 				}
 				self.attrs[(sz)i].used_as_type_attr = false;
 				self.emit(p, attr, Diagnostic.INVALID_VEC_ELEM_TY, p.fmt_qt(result))!;
@@ -1182,6 +1262,13 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 			}
 			result = p.comp.type_store.put(type_store::type_vector(result, bytes / elem_size));
 		}
+		else if (attr.name.ns == attribute::AttrNamespace.GNU && attr.name.gnu == attribute::AttrGnu.MODE)
+		{
+			self.attrs[(sz)i].used_as_type_attr = true;
+			if (result.is_invalid()) continue;
+			if (self.arg_count(p, attr, 1)!) continue;
+			result = self.apply_mode(p, attr, result)!;
+		}
 		else if (attr.name.ns == attribute::AttrNamespace.CLANG && (attr.name.clang == attribute::AttrClang.NEON_VECTOR_TYPE || attr.name.clang == attribute::AttrClang.NEON_POLYVECTOR_TYPE))
 		{
 			type_store::VectorKind kind = attr.name.clang == attribute::AttrClang.NEON_POLYVECTOR_TYPE ? type_store::VectorKind.NEON_POLY : type_store::VectorKind.NEON;
@@ -1198,7 +1285,7 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 		}
 		else if ((attr.name.ns == attribute::AttrNamespace.GNU && (attr.name.gnu == attribute::AttrGnu.REGPARM || attr.name.gnu == attribute::AttrGnu.RISCV_RVV_VECTOR_BITS)) || (attr.name.ns == attribute::AttrNamespace.CLANG && (attr.name.clang == attribute::AttrClang.ADDRESS_SPACE || attr.name.clang == attribute::AttrClang.ARM_SVE_VECTOR_BITS || attr.name.clang == attribute::AttrClang.EXT_VECTOR_TYPE || attr.name.clang == attribute::AttrClang.MATRIX_TYPE || attr.name.clang == attribute::AttrClang.NODEREF) || (attr.name.ns == attribute::AttrNamespace.KEYWORD && (attr.name.keyword == attribute::AttrKeyword.PTR32 || attr.name.keyword == attribute::AttrKeyword.PTR64 || attr.name.keyword == attribute::AttrKeyword.SPTR || attr.name.keyword == attribute::AttrKeyword.UPTR))))
 		{
-			self.emit(p, attr, Diagnostic.UNIMPLEMENTED)!;
+			self.unimplemented(p, attr)!;
 			self.attrs[(sz)i].used_as_type_attr = true;
 		}
 		else if ((attr.name.ns == attribute::AttrNamespace.CLANG && (attr.name.clang == attribute::AttrClang.AARCH64_SVE_PCS || attr.name.clang == attribute::AttrClang.AARCH64_VECTOR_PCS || attr.name.clang == attribute::AttrClang.RISCV_VECTOR_CC || attr.name.clang == attribute::AttrClang.RISCV_VLS_CC || attr.name.clang == attribute::AttrClang.VECTORCALL)) || (attr.name.ns == attribute::AttrNamespace.RISCV && (attr.name.riscv == attribute::AttrRiscv.VECTOR_CC || attr.name.riscv == attribute::AttrRiscv.VLS_CC)))
@@ -1211,6 +1298,81 @@ fn type_store::QualType? Wip.apply_type_attrs(&self, parser::Parser* p, type_sto
 		}
 	}
 	return result;
+}
+
+<*
+ GCC `mode(M)`: replace a scalar type with the integer or floating type of
+ machine mode M (QI/HI/SI/DI/TI, SF/DF/XF/TF/HF, byte/word/pointer), keeping
+ its signedness and qualifiers. A pointer keeps its type when the mode is
+ pointer-sized. Vector and complex modes are not implemented.
+*>
+fn type_store::QualType? Wip.apply_mode(&self, parser::Parser* p, Parsed attr, type_store::QualType qt)
+{
+	parser_result::Result arg = self.parsed_args(attr)[0];
+	tree::Node node = arg.node.get(&p.tree);
+	if (node.kind != tree::NodeKind.IDENTIFIER_ARG)
+	{
+		self.unimplemented(p, attr)!;
+		return qt;
+	}
+	String name = p.tree.tok_slice(node.identifier_arg.identifier_tok);
+	if (name.len >= 4 && name.starts_with("__") && name.ends_with("__")) name = name[2:name.len - 4];
+	uint int_bytes;
+	uint float_bits;
+	switch (name)
+	{
+		case "QI": case "byte": int_bytes = 1;
+		case "HI": int_bytes = 2;
+		case "SI": int_bytes = 4;
+		case "DI": case "word": case "pointer": int_bytes = 8;
+		case "TI": int_bytes = 16;
+		case "HF": float_bits = 16;
+		case "SF": float_bits = 32;
+		case "DF": float_bits = 64;
+		case "XF": float_bits = 80;
+		case "TF": float_bits = 128;
+		default:
+			self.unimplemented(p, attr)!;
+			return qt;
+	}
+	type_store::QualType replaced;
+	type_store::TypeTag tag = qt.base(p.comp).ty.tag;
+	if (tag == type_store::TypeTag.POINTER && int_bytes == 8)
+	{
+		return qt;
+	}
+	else if (int_bytes != 0 && (tag == type_store::TypeTag.INT || tag == type_store::TypeTag.BIT_INT))
+	{
+		bool unsigned = qt.signedness(p.comp) == bigint::Signedness.UNSIGNED;
+		switch (int_bytes)
+		{
+			case 1: replaced = unsigned ? type_store::UCHAR : type_store::SCHAR;
+			case 2: replaced = unsigned ? type_store::USHORT : type_store::SHORT;
+			case 4: replaced = unsigned ? type_store::UINT : type_store::INT;
+			case 8: replaced = unsigned ? type_store::ULONG : type_store::LONG;
+			default: replaced = unsigned ? type_store::UINT128 : type_store::INT128;
+		}
+	}
+	else if (float_bits != 0 && tag == type_store::TypeTag.FLOAT)
+	{
+		switch (float_bits)
+		{
+			case 16: replaced = type_store::FLOAT16;
+			case 32: replaced = type_store::FLOAT;
+			case 64: replaced = type_store::DOUBLE;
+			case 80: replaced = type_store::LONG_DOUBLE;
+			default: replaced = type_store::FLOAT128;
+		}
+	}
+	else
+	{
+		self.unimplemented(p, attr)!;
+		return qt;
+	}
+	replaced.is_const = qt.is_const;
+	replaced.is_volatile = qt.is_volatile;
+	replaced.is_restrict = qt.is_restrict;
+	return replaced;
 }
 
 <* Zig `applyCallingConvention` delay checks: true when the attribute should wait for a later declarator. `can_delay` needs a non-standard spelling and no declarator target (Zig `wip.current.target == null`), so the decl path (`has_decl_target` true) never waits on an auto type or a non-function. The incomplete-declarator placeholder waits either way, as Zig does. *>
@@ -1494,15 +1656,15 @@ fn void? Wip.apply_stmt_attrs(&self, parser::Parser* p, type_store::NodeIndex st
 		}
 		else if (hot || cold)
 		{
-			if (self.check_target(p, attr, stmt, type_store::INVALID, { TargetKind.LABEL })!) continue;
 			if (self.arg_count(p, attr, 0)!) continue;
+			if (self.check_target(p, attr, stmt, type_store::INVALID, { TargetKind.LABEL })!) continue;
 			self.incompatible(p, attr, hot ? attribute::AttributeTag.COLD : attribute::AttributeTag.HOT)!;
 			self.add_applied(p, attr, { .tag = hot ? attribute::AttributeTag.HOT : attribute::AttributeTag.COLD });
 		}
 		else if (unused)
 		{
-			if (self.check_target(p, attr, stmt, type_store::INVALID, { TargetKind.FUNCTION, TargetKind.VARIABLE, TargetKind.PARAM, TargetKind.TYPEDEF, TargetKind.TAG, TargetKind.FIELD, TargetKind.LABEL })!) continue;
 			if (self.arg_count(p, attr, 0)!) continue;
+			if (self.check_target(p, attr, stmt, type_store::INVALID, { TargetKind.FUNCTION, TargetKind.VARIABLE, TargetKind.PARAM, TargetKind.TYPEDEF, TargetKind.TAG, TargetKind.FIELD, TargetKind.LABEL })!) continue;
 			self.add_applied(p, attr, { .tag = attribute::AttributeTag.UNUSED });
 		}
 		else { self.emit(p, attr, Diagnostic.INVALID_STMT_ATTR)!; }

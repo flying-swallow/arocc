@@ -252,6 +252,72 @@ fn void Lowering.compute_address_folds(&self)
 			}
 		}
 	}
+	self.fold_dead_values();
+	self.compute_compare_fusions(total_uses);
+}
+
+<* Pure integer operations nothing reads once lowered (`@each_lowered_use`,
+   PHI inputs included) are not emitted: e.g. the scaled index MUL and pointer
+   ADD whose address every LOAD/STORE re-forms in its own addressing mode.
+   Folding one drops its operand uses, so repeat to a fixpoint. *>
+fn void Lowering.fold_dead_values(&self)
+{
+	usz count = self.decl.instructions.len;
+	uint[] lowered_uses = alloc::new_array(&self.scratch, uint, (sz)count);
+	bool progress = true;
+	while (progress)
+	{
+		progress = false;
+		for (usz i = 0; i < count; i++) lowered_uses[i] = 0;
+		foreach (ref : self.decl.body)
+		{
+			if ((usz)ref >= count) continue;
+			ir::Inst inst = self.inst(ref);
+			if (inst.tag == PHI)
+			{
+				foreach (input : inst.data.phi) if ((usz)input.value < count) lowered_uses[(sz)input.value]++;
+				continue;
+			}
+			@each_lowered_use(self, inst, ref; ir::Ref used)
+			{
+				if ((usz)used < count) lowered_uses[(sz)used]++;
+			};
+		}
+		foreach (ref : self.decl.body)
+		{
+			if ((usz)ref >= count || self.folded_away[(sz)ref] || lowered_uses[(sz)ref] != 0) continue;
+			ir::Inst inst = self.inst(ref);
+			// VSPLAT is the one pure vector op dropped: a constant shift count leaves it unused.
+			if (inst.tag != VSPLAT && (!is_pure_integer_op(inst.tag) || self.is_wide_int(inst.ty) || self.is_float_type(inst.ty))) continue;
+			self.folded_away[(sz)ref] = true;
+			progress = true;
+		}
+	}
+}
+
+<* Integer operations without side effects or traps (no division). *>
+fn bool is_pure_integer_op(ir::InstTag tag)
+{
+	switch (tag)
+	{
+		case ADD:
+		case SUB:
+		case MUL:
+		case BIT_AND:
+		case BIT_OR:
+		case BIT_XOR:
+		case BIT_SHL:
+		case BIT_ASHR:
+		case BIT_LSHR:
+		case BIT_NOT:
+		case NEGATE:
+		case SEXT:
+		case ZEXT:
+		case TRUNC:
+			return true;
+		default:
+			return false;
+	}
 }
 
 macro @each_lowered_use(Lowering* self, ir::Inst inst, ir::Ref ref; @body(ir::Ref used))
@@ -266,9 +332,23 @@ macro @each_lowered_use(Lowering* self, ir::Inst inst, ir::Ref ref; @body(ir::Re
 	}
 	else
 	{
+		// A vector shift by a constant count never reads its VSPLAT (see vector_shift_immediate).
+		long shift_imm;
+		bool skip_count = self.vector_shift_immediate(inst, &shift_imm) && inst.data.bin.lhs != inst.data.bin.rhs;
 		@each_value_use(inst; ir::Ref value)
 		{
-			@body(value);
+			// A compare fused into this BRANCH/SELECT reads its operands here.
+			if (skip_count && value == inst.data.bin.rhs) {}
+			else if ((usz)value < self.folded_away.len && self.folded_away[(sz)value])
+			{
+				ir::Inst compare = self.inst(value);
+				@body(compare.data.bin.lhs);
+				@body(compare.data.bin.rhs);
+			}
+			else
+			{
+				@body(value);
+			}
 		};
 	}
 }
@@ -295,21 +375,22 @@ fn Operand? Lowering.address_operand(&self, ir::Ref ref, Register base_reg, Regi
 			if (!saved_mode) mode.disp -= self.areas[(sz)mode.base];
 			if (mode.index != ir::NONE)
 			{
-				self.load(mode.index, index_reg)!;
-				return sib_mem_op(RBP, index_reg, mode.scale, (int)mode.disp, bits);
+				Register index = self.address_reg(mode.index, index_reg)!;
+				return sib_mem_op(RBP, index, mode.scale, (int)mode.disp, bits);
 			}
 			return mem_op(RBP, (int)mode.disp, bits);
 		}
-		self.load(mode.base, base_reg)!;
+		// Allocated base/index registers are used in place.
+		Register base = self.address_reg(mode.base, base_reg)!;
 		if (mode.index != ir::NONE)
 		{
-			self.load(mode.index, index_reg)!;
-			return sib_mem_op(base_reg, index_reg, mode.scale, (int)mode.disp, bits);
+			Register index = self.address_reg(mode.index, index_reg)!;
+			return sib_mem_op(base, index, mode.scale, (int)mode.disp, bits);
 		}
-		return mem_op(base_reg, (int)mode.disp, bits);
+		return mem_op(base, (int)mode.disp, bits);
 	}
 	ir::Inst inst = self.inst(ref);
 	ir::Ref ptr = inst.tag == LOAD ? inst.data.ref : inst.data.bin.lhs;
-	self.load(ptr, base_reg)!;
-	return mem_op(base_reg, 0, bits);
+	Register base = self.address_reg(ptr, base_reg)!;
+	return mem_op(base, 0, bits);
 }

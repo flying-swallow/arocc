@@ -1,0 +1,18 @@
+// #kind: run
+// #exit: 0
+// #opt: -O2
+// Registers an asm statement clobbers are preserved for values the register
+// allocator keeps in them across it.
+#include <stdio.h>
+__attribute__((noinline)) long work(long a, long b, long c, long d, long e) {
+  long s = 0;
+  for (long i = 0; i < 10; i++) {
+    asm volatile("xorl %%ebx, %%ebx\n\txorl %%r12d, %%r12d\n\txorl %%r13d, %%r13d\n\txorl %%r14d, %%r14d\n\txorl %%r15d, %%r15d" ::: "rbx", "r12", "r13", "r14", "r15");
+    s += a * i + b + c * d - e;
+  }
+  return s;
+}
+int main(void) { printf("%ld\n", work(3, 5, 7, 11, 2)); return 0; }
+
+// #expect: stdout
+935

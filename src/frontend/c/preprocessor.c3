@@ -77,6 +77,7 @@
 //  - `?SourceEpoch` options are `has_source_epoch` + `source_epoch`; without
 //    one, init calls source_epoch_from_environment.
 module aro::frontend::c::preprocessor;
+import aro::target;
 import aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::hideset, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import aro::frontend::c::lang_opts, aro::string_interner, aro::frontend::c::text_literal, aro::frontend::c::dep_file, aro::frontend::c::pragma;
 import std::collections::list, std::collections::map, std::core::mem::allocators, std::io, std::hash::fnv32a;
@@ -791,7 +792,7 @@ fn String Preprocessor.expanded_slice_at(&self, TokenId id, Location loc, MacroW
 		return buf[loc.byte_offset..i];
 	}
 	Tokenizer tmp;
-	tmp.init(buf, source::GENERATED_ID, self.comp.langopts);
+	tmp.init(buf, source::GENERATED_ID, self.comp.langopts, &self.comp.target);
 	tmp.index = loc.byte_offset;
 	RawToken res = tmp.next();
 	return buf[res.start:res.end - res.start];
@@ -1104,7 +1105,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess(&self, Source src)
 fn TreeToken? Preprocessor.tokenize(&self, Source src)
 {
 	Tokenizer tokenizer;
-	tokenizer.init(src.buf, src.id, self.comp.langopts, src.splice_locs);
+	tokenizer.init(src.buf, src.id, self.comp.langopts, &self.comp.target, src.splice_locs);
 	self.ensure_total_token_capacity(self.tokens.len() + src.buf.len / 8);
 	while (true)
 	{
@@ -1867,7 +1868,7 @@ fn void? Preprocessor.pragma_operator(&self, TokenWithExpansionLocs string_tok, 
 	uint start = (uint)self.comp.generated_buf.len();
 	self.gen_text((String)self.char_buf.array_view());
 	Tokenizer generated;
-	generated.init((String)self.comp.generated_buf.array_view(), source::GENERATED_ID, self.comp.langopts);
+	generated.init((String)self.comp.generated_buf.array_view(), source::GENERATED_ID, self.comp.langopts, &self.comp.target);
 	generated.index = start;
 	generated.line = self.generated_line;
 	self.generated_line++;

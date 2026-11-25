@@ -3,10 +3,14 @@ module aro::backend::ir_opt;
 import aro::backend::ir, aro::value_interner;
 import std::collections::list;
 
+<* The block `label` starts, via `block_of_ref` (a scan of every block per lookup
+   was quadratic). Labels appended since the CFG was built are in no block. *>
 fn uint unroll_block_for_label(Cfg* cfg, ir::Ref label)
 {
-	foreach (i, block : cfg.blocks) if (block.label == label) return (uint)i;
-	return NONE_BLOCK;
+	if ((usz)label >= (usz)cfg.block_of_ref.len) return NONE_BLOCK;
+	uint block = cfg.block_of_ref[(sz)label];
+	if (block == NONE_BLOCK || (usz)block >= (usz)cfg.blocks.len || cfg.blocks[(sz)block].label != label) return NONE_BLOCK;
+	return block;
 }
 
 fn bool unroll_loop_once(ir::Ir* graph, ir::Decl* decl, usz threshold, FunctionAnalyses* cached = null)
@@ -176,14 +180,18 @@ fn bool unroll_loop_once(ir::Ir* graph, ir::Decl* decl, usz threshold, FunctionA
 					@each_value_operand(copy; ir::Ref* slot) { *slot = inline_mapped_ref(cur, *slot); };
 					@each_label_operand(copy; ir::Ref* slot)
 					{
+						// No `continue` here: inside a trailing-body macro it would leave
+						// the enclosing loop iteration and skip the remaining operands.
 						uint target = unroll_block_for_label(cfg, *slot);
-						if (target == NONE_BLOCK || !loop_body_contains(loop, target)) continue;
-					if (copy.tag == ir::InstTag.PHI) { *slot = label_of[k][(sz)target]; }
-					else if (target == loop.header)
-					{
-						*slot = k + 1 < copies ? label_of[k + 1][(sz)target] : cfg.blocks[(sz)target].label;
-					}
-					else { *slot = label_of[k][(sz)target]; }
+						if (target != NONE_BLOCK && loop_body_contains(loop, target))
+						{
+							if (copy.tag == ir::InstTag.PHI) { *slot = label_of[k][(sz)target]; }
+							else if (target == loop.header)
+							{
+								*slot = k + 1 < copies ? label_of[k + 1][(sz)target] : cfg.blocks[(sz)target].label;
+							}
+							else { *slot = label_of[k][(sz)target]; }
+						}
 					};
 				}
 				if (block_terminator_position(decl, block) == block.end)

@@ -9,6 +9,7 @@
 // per line (empty lines dropped) plus manifest diagnostics; "source-derived"
 // = read from Preprocessor.zig, no Zig executable was run.
 module macro_expand_manual_tests;
+import aro::target;
 import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::source, aro::frontend::c::compilation, aro::frontend::c::diagnostics;
 import aro::frontend::c::hideset, aro::frontend::c::lang_opts;
 import std::io, std::core::string, std::core::mem::allocators;
@@ -22,7 +23,7 @@ macro check(left, right)
 fn void? drive(Preprocessor* pp, Source src)
 {
 	Tokenizer t;
-	t.init(src.buf, src.id, pp.comp.langopts, src.splice_locs);
+	t.init(src.buf, src.id, pp.comp.langopts, &pp.comp.target, src.splice_locs);
 	bool start_of_line = true;
 	while (true)
 	{

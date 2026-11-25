@@ -45,7 +45,6 @@ macro @with_target(String triple; @body(Compilation* comp))
 		Compilation comp;
 		comp.init(&ta);
 		comp.target = tgt(triple);
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		@body(&comp);
 		comp.free();

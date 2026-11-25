@@ -26,6 +26,8 @@ import aro::backend::ir, aro::bitset, aro::value_interner, std::collections::lis
 struct Line
 {
 	bool is_label;
+	<* Verbatim assembly text (inline asm); `label` holds it. *>
+	bool is_raw;
 	String label;
 	Mnemonic mnemonic;
 	Operand[3] ops;
@@ -69,6 +71,14 @@ struct Lowering
 	usz[] label_body_next;
 	<* rbp displacement of the PHI copy area. *>
 	int phi_area;
+	<* Per address-taken block with PHIs: its own incoming-copy area (else 0).
+	   Every predecessor, including a computed goto, only fills this area; the
+	   block moves it into its PHIs on entry. *>
+	int[] block_phi_area;
+	<* Blocks named by some LABEL_ADDR: the successors of every JMP_VAL. *>
+	ir::Ref[] address_taken_labels;
+	<* Frame offset of the inline-asm spill area (0: the function has no asm). *>
+	int asm_scratch;
 	<* rbp displacement of the first byte in the SysV variadic register save area, or 0 if unused. *>
 	int reg_save_area;
 	<* Initial gp_offset for va_start, based on named GP arguments. *>
@@ -98,6 +108,12 @@ struct Lowering
 	List{ir::Ref} xmm_values;
 	<* Body position of the instruction being lowered. *>
 	uint current_pos;
+	<* Per value: uses and defs weighted by loop depth (see allocate). *>
+	ulong[] spill_weight;
+	<* Per value: a PHI it is an input of (register preference), or NONE. *>
+	ir::Ref[] phi_hint;
+	<* The value may live in its phi_hint's register while that PHI is dead. *>
+	bool[] share_with_phi;
 	AddrMode[] addr_of;
 	bool[] has_addr;
 	bool[] folded_away;
@@ -109,6 +125,9 @@ struct Lowering
 	ir::Ref current_label;
 	<* The last lowered instruction ended the block (jmp, branch, switch or ret). *>
 	bool block_terminated;
+	<* The LABEL right after the instruction being lowered, if any: a jump
+	   there can fall through instead. *>
+	ir::Ref fallthrough_label;
 }
 
 struct LiveInterval
@@ -155,9 +174,16 @@ fn ir::Inst Lowering.inst(&self, ir::Ref ref) => self.decl.instructions[(sz)ref]
 
 fn bool is_void_type(value_interner::InternerRef ty) => ty == value_interner::REF_VOID || ty == value_interner::REF_NORETURN;
 
+<* XMM-class: a scalar float or a 128-bit vector (`ir::VectorShape`, see lower_vector.c3). *>
 fn bool Lowering.is_float_type(&self, value_interner::InternerRef ty)
 {
-	return self.ir.interner.get(ty).tag == primitive_value::PrimitiveType.FLOAT_TY;
+	return self.ir.interner.get(ty).tag == primitive_value::PrimitiveType.FLOAT_TY || self.ir.is_vector(ty);
+}
+
+fn bool Lowering.is_f128_type(&self, value_interner::InternerRef ty)
+{
+	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
+	return key.tag == primitive_value::PrimitiveType.FLOAT_TY && key.ty_bits == 128;
 }
 
 fn bool Lowering.is_f80_type(&self, value_interner::InternerRef ty)
@@ -168,7 +194,7 @@ fn bool Lowering.is_f80_type(&self, value_interner::InternerRef ty)
 
 fn uint Lowering.value_slot_bytes(&self, value_interner::InternerRef ty)
 {
-	if (self.is_f80_type(ty) || self.is_wide_int(ty)) return 16;
+	if (self.is_f80_type(ty) || self.is_wide_int(ty) || self.is_f128_type(ty) || self.ir.is_vector(ty)) return 16;
 	return 8;
 }
 
@@ -182,15 +208,19 @@ fn bool Lowering.is_wide_int(&self, value_interner::InternerRef ty)
 
 fn ushort? Lowering.float_width(&self, value_interner::InternerRef ty)
 {
+	if (self.ir.is_vector(ty)) return 128;
 	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
 	if (key.tag != primitive_value::PrimitiveType.FLOAT_TY) return 0;
 	switch (key.ty_bits)
 	{
 		case 32: return 32;
 		case 64: return 64;
-		case 16: self.fail("TODO: F16 floating point lowering")!;
+		// _Float16: moved only (MOVH16); arithmetic goes through f32 (ir_soft_float.c3).
+		case 16: return 16;
 		case 80: return 80;
-		case 128: self.fail("TODO: F128 floating point lowering")!;
+		// A 128-bit XMM value (`__float128` bits or a 16-byte vector): moved
+		// with MOVUPS; arithmetic on it is not lowered.
+		case 128: return 128;
 		default: self.fail("TODO: %d-bit floating point lowering", key.ty_bits)!;
 	}
 	unreachable();
@@ -211,6 +241,8 @@ fn ushort? Lowering.bits(&self, value_interner::InternerRef ty)
 			self.fail("TODO: %d-bit integers", key.ty_bits)!;
 		case PTR_TY: return 64;
 		case FLOAT_TY: return self.float_width(ty)!;
+		case VECTOR_TY: if (self.ir.is_vector(ty)) return 128;
+			self.fail("TODO: lowering values of aggregate type")!;
 		default: self.fail("TODO: lowering values of aggregate type")!;
 	}
 	unreachable();
@@ -221,6 +253,25 @@ fn void Lowering.emit(&self, Mnemonic mnemonic, Operand a = {}, Operand b = {}, 
 	if (mnemonic == CALL && self.xmm_values.len())
 	{
 		self.save_xmm_values_around_call(a);
+		return;
+	}
+	if (mnemonic == MOVH16)
+	{
+		// _Float16 lives in the low 16 bits of an XMM register; SSE2 has no
+		// 16-bit XMM load/store, so go through EAX.
+		if (a.kind == REG && b.kind == REG) { self.emit_raw(MOVAPS, a, b); return; }
+		if (a.kind == REG)
+		{
+			Operand source = b;
+			source.mem.bits = 16;
+			self.emit_raw(MOVZX, reg_op(EAX), source);
+			self.emit_raw(MOVD, a, reg_op(EAX));
+			return;
+		}
+		Operand target = a;
+		target.mem.bits = 16;
+		self.emit_raw(MOVD, reg_op(EAX), b);
+		self.emit_raw(MOV, target, reg_op(AX));
 		return;
 	}
 	self.emit_raw(mnemonic, a, b, c);
@@ -234,14 +285,14 @@ fn void Lowering.save_xmm_values_around_call(&self, Operand target)
 	foreach (ref : self.xmm_values)
 	{
 		if (self.live_start[(sz)ref] >= pos || self.live_end[(sz)ref] <= pos) continue;
-		ushort w = self.ir.interner.get(self.inst(ref).ty).ty_bits == 32 ? 32 : 64;
+		ushort w = self.float_width(self.inst(ref).ty) ?? 64;
 		self.emit_raw(self.float_move_mnemonic(w), self.slot(ref, w), reg_op(self.value_regs[(sz)ref]));
 	}
 	self.emit_raw(CALL, target);
 	foreach (ref : self.xmm_values)
 	{
 		if (self.live_start[(sz)ref] >= pos || self.live_end[(sz)ref] <= pos) continue;
-		ushort w = self.ir.interner.get(self.inst(ref).ty).ty_bits == 32 ? 32 : 64;
+		ushort w = self.float_width(self.inst(ref).ty) ?? 64;
 		self.emit_raw(self.float_move_mnemonic(w), reg_op(self.value_regs[(sz)ref]), self.slot(ref, w));
 	}
 }
@@ -267,7 +318,7 @@ fn Operand Lowering.slot(&self, ir::Ref ref, ushort bits) => mem_op(RBP, -self.s
 
 fn String Lowering.new_edge_label(&self) => string::tformat(".L%s.edge.%d", self.decl.name, self.edge_count++);
 
-fn Mnemonic Lowering.float_move_mnemonic(&self, ushort width) => width == 32 ? MOVSS : MOVSD;
+fn Mnemonic Lowering.float_move_mnemonic(&self, ushort width) => width == 32 ? MOVSS : (width == 128 ? MOVUPS : (width == 16 ? MOVH16 : MOVSD));
 
 fn String Lowering.intern_float_bytes(&self, char[] bytes, uint align)
 {
@@ -306,13 +357,12 @@ fn String? Lowering.float_constant_label(&self, ir::Inst inst)
 	}
 	else if (inst.data.constant == value_interner::REF_ONE)
 	{
-		bits = width == 32 ? 0x3F80_0000 : width == 80 ? 0x3FFF_8000_0000_0000_0000 : 0x3FF0_0000_0000_0000;
+		bits = width == 32 ? 0x3F80_0000 : width == 80 ? 0x3FFF_8000_0000_0000_0000 :
+			width == 128 ? (uint128)0x3FFF << 112 : width == 16 ? 0x3C00 : 0x3FF0_0000_0000_0000;
 	}
-	else if (key.tag == primitive_value::PrimitiveType.F32 || key.tag == primitive_value::PrimitiveType.F64)
-	{
-		bits = key.float_bits();
-	}
-	else if (key.tag == primitive_value::PrimitiveType.F80)
+	else if (key.tag == primitive_value::PrimitiveType.F32 || key.tag == primitive_value::PrimitiveType.F64 ||
+		key.tag == primitive_value::PrimitiveType.F80 || key.tag == primitive_value::PrimitiveType.F128 ||
+		key.tag == primitive_value::PrimitiveType.F16)
 	{
 		bits = key.float_bits();
 	}
@@ -332,6 +382,13 @@ fn void? Lowering.load_float(&self, ir::Ref ref, Register xmm)
 	ir::Inst inst = self.inst(ref);
 	ushort width = self.float_width(inst.ty)!;
 	Mnemonic mnemonic = self.float_move_mnemonic(width);
+	if (inst.tag == CONSTANT && self.ir.is_vector(inst.ty))
+	{
+		// The only vector constant is all-zero lanes (a pass folding `x ^ x`).
+		if (inst.data.constant != value_interner::REF_ZERO) self.fail("TODO: non-zero vector constant")!;
+		self.emit(PXOR, reg_op(xmm), reg_op(xmm));
+		return;
+	}
 	if (inst.tag == CONSTANT)
 	{
 		String label = self.float_constant_label(inst)!;
@@ -604,6 +661,8 @@ fn void? Lowering.layout(&self)
 		// Constants and symbols are rematerialized by load(); register-allocated
 		// values never read or write their slot. Neither needs frame space.
 		if (inst.tag == CONSTANT || inst.tag == SYMBOL) continue;
+		// Folded values (address nodes, fused compares) are never lowered.
+		if (self.folded_away[(sz)ref]) continue;
 		// XMM-held floats keep a slot for call-site spills and x87 transfers.
 		if (!self.spill_all && self.value_in_reg[(sz)ref] && !self.is_float_type(inst.ty)) continue;
 		if (self.value_slot_bytes(inst.ty) == 16)
@@ -619,6 +678,35 @@ fn void? Lowering.layout(&self)
 	if (phi_bytes_in_block > max_phi_bytes) max_phi_bytes = phi_bytes_in_block;
 	offset += (int)max_phi_bytes;
 	self.phi_area = offset;
+	self.asm_scratch = 0;
+	foreach (ref : self.decl.body)
+	{
+		ir::Inst call = self.inst(ref);
+		if (call.tag != CALL || self.inst(call.data.call.func).tag != SYMBOL) continue;
+		if (!self.inst(call.data.call.func).data.label.starts_with(ASM_PREFIX)) continue;
+		offset = (offset + 15) / 16 * 16 + ASM_SCRATCH_SLOTS * 16;
+		self.asm_scratch = offset;
+		break;
+	}
+	self.block_phi_area = alloc::new_array(&self.scratch, int, count);
+	for (sz i = 0; i < count; i++) self.block_phi_area[i] = 0;
+	foreach (ref : self.decl.body)
+	{
+		ir::Inst taken = self.inst(ref);
+		if (taken.tag != LABEL_ADDR || (usz)taken.data.ref >= (usz)count) continue;
+		ir::Ref label = taken.data.ref;
+		if (self.block_phi_area[(sz)label] != 0) continue;
+		usz start = self.label_body_next[(sz)label];
+		if (start == 0) continue;
+		uint bytes = 0;
+		for (usz i = start; i < self.decl.body.len && self.inst(self.decl.body[i]).tag == PHI; i++)
+		{
+			bytes += self.value_slot_bytes(self.inst(self.decl.body[i]).ty);
+		}
+		if (bytes == 0) continue;
+		offset = (offset + 15) / 16 * 16 + (int)bytes;
+		self.block_phi_area[(sz)label] = offset;
+	}
 	if (has_f80)
 	{
 		offset = (offset + 15) / 16 * 16 + 16;
@@ -715,6 +803,7 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 		case ZEXT:
 		case SEXT:
 		case FNEG:
+		case FABS:
 		case FPTOSI:
 		case FPTOUI:
 		case SITOFP:
@@ -725,6 +814,8 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 		case VA_START:
 		case CLZ:
 		case CTZ:
+		case VSPLAT:
+		case VREDUCE_ADD:
 			@body(inst.data.ref);
 		case ATOMIC_LOAD:
 			@body(inst.data.atomic.ptr);
@@ -772,6 +863,8 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 		case FSUB:
 		case FMUL:
 		case FDIV:
+		case VEXTRACT:
+		case VSHUFFLE:
 			@body(inst.data.bin.lhs);
 			@body(inst.data.bin.rhs);
 		case BRANCH:
@@ -786,6 +879,7 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 			@body(inst.data.call.func);
 			foreach (arg : inst.data.call.args) @body(arg);
 		case CALL_HI:
+		case JMP_VAL:
 			@body(inst.data.ref);
 		case CONSTANT:
 		case ARG:
@@ -793,7 +887,6 @@ macro @each_value_use(ir::Inst inst; @body(ir::Ref used))
 		case LABEL:
 		case LABEL_ADDR:
 		case JMP:
-		case JMP_VAL:
 		case ALLOC:
 		case PHI:
 		case STACK_SAVE:
@@ -871,6 +964,11 @@ fn void Lowering.merge_block_successors(&self, uint block, uint block_count,
 				self.merge_live_target(block, target, block_of_ref, block_starts, block_ends, block_labels, live_in, out, live_index);
 			}
 			self.merge_live_target(block, term.data.switch_data.default_label, block_of_ref, block_starts, block_ends, block_labels, live_in, out, live_index);
+		case JMP_VAL:
+			foreach (target : self.address_taken_labels)
+			{
+				self.merge_live_target(block, target, block_of_ref, block_starts, block_ends, block_labels, live_in, out, live_index);
+			}
 		default: break;
 	}
 }
@@ -893,7 +991,12 @@ fn void Lowering.note_phi_edge_intervals(&self, uint from, uint to,
 		{
 			if (input.label != block_labels[(sz)from]) continue;
 			self.note_interval(input.value, edge_pos, candidates, starts, ends);
-			self.note_interval(phi, edge_pos, candidates, starts, ends);
+			// A forward edge writes the PHI before its block: its register is
+			// taken from there. A back edge (after the PHI in body order) writes
+			// it when the loop's uses are done; values in that register then are
+			// dead or are inputs of the same parallel move, so the PHI's interval
+			// stops at its last use (this lets a PHI and its input coalesce).
+			if (edge_pos < pos) self.note_interval(phi, edge_pos, candidates, starts, ends);
 			break;
 		}
 	}
@@ -941,6 +1044,14 @@ fn void Lowering.note_block_phi_edges(&self, uint block, uint block_count,
 			{
 				self.note_phi_edge_intervals(block, block_of_ref[(sz)default_ref], block_starts, block_ends, block_labels, candidates, starts, ends);
 			}
+		case JMP_VAL:
+			foreach (target : self.address_taken_labels)
+			{
+				if ((usz)target < block_of_ref.len && block_of_ref[(sz)target] != uint::max)
+				{
+					self.note_phi_edge_intervals(block, block_of_ref[(sz)target], block_starts, block_ends, block_labels, candidates, starts, ends);
+				}
+			}
 		default: break;
 	}
 }
@@ -958,6 +1069,19 @@ fn void Lowering.allocate(&self)
 		self.used_callee_regs[reg] = false;
 		self.callee_save_slots[reg] = 0;
 	}
+	usz taken_count = 0;
+	foreach (ref : self.decl.body) if (self.inst(ref).tag == LABEL_ADDR) taken_count++;
+	self.address_taken_labels = alloc::new_array(&self.scratch, ir::Ref, (sz)taken_count);
+	taken_count = 0;
+	foreach (ref : self.decl.body)
+	{
+		ir::Inst taken = self.inst(ref);
+		if (taken.tag != LABEL_ADDR) continue;
+		bool seen = false;
+		foreach (label : self.address_taken_labels[:taken_count]) if (label == taken.data.ref) seen = true;
+		if (!seen) self.address_taken_labels[taken_count++] = taken.data.ref;
+	}
+	self.address_taken_labels = self.address_taken_labels[:taken_count];
 	if (self.spill_all || self.decl.body.len == 0 || count == 0) return;
 
 	bool[] candidates = alloc::new_array(&self.scratch, bool, (sz)count);
@@ -1046,6 +1170,11 @@ fn void Lowering.allocate(&self)
 	bitset::BitMatrix live_in = bitset::new_matrix(&self.scratch, block_count, live_count);
 	bitset::BitMatrix live_out = bitset::new_matrix(&self.scratch, block_count, live_count);
 
+	// Spill weights: each lowered use or def counts 8^(loop depth).
+	uint[] loop_depth = self.loop_depths();
+	self.spill_weight = alloc::new_array(&self.scratch, ulong, (sz)count);
+	for (usz ref = 0; ref < count; ref++) self.spill_weight[(sz)ref] = 0;
+
 	// Build per-block use/def sets and initial interval endpoints.
 	for (usz pos = 0; pos < body_len; pos++)
 	{
@@ -1054,12 +1183,15 @@ fn void Lowering.allocate(&self)
 		ir::Inst inst = self.inst(ref);
 		uint block = block_of_ref[(sz)ref];
 		uint at = (uint)pos;
+		ulong weight = depth_weight(loop_depth[(sz)pos]);
 		@each_lowered_use(self, inst, ref; ir::Ref used)
 		{
 			self.mark_use(used, block, at, candidates, live_index, block_defs, block_uses, starts, ends);
+			if ((usz)used < count) self.spill_weight[(sz)used] += weight;
 		};
 		if (candidates[(sz)ref])
 		{
+			self.spill_weight[(sz)ref] += weight;
 			if (live_index[(sz)ref] != uint::max) block_defs.row(block).set(live_index[(sz)ref]);
 			self.note_interval(ref, at, candidates, starts, ends);
 		}
@@ -1104,13 +1236,19 @@ fn void Lowering.allocate(&self)
 			uint block_end = (uint)(block_ends[(sz)block] - 1);
 			// Visit only the set bits; scanning every ref per block is
 			// O(blocks * refs) on huge functions (gcc 20001226-1.c).
+			// Live in: the whole block. Live out only: defined here, so from its
+			// definition (already noted) to the block's end.
 			next_out.assign(live_in.row(block));
-			next_out.union_with(live_out.row(block));
 			next_out.@each_set(; usz index)
 			{
 				ir::Ref value = live_refs[(sz)index];
 				self.note_interval(value, block_start, candidates, starts, ends);
 				self.note_interval(value, block_end, candidates, starts, ends);
+			};
+			next_out.assign(live_out.row(block));
+			next_out.@each_set(; usz index)
+			{
+				self.note_interval(live_refs[(sz)index], block_end, candidates, starts, ends);
 			};
 		}
 		self.note_block_phi_edges(block, block_count, block_of_ref, block_starts, block_ends,
@@ -1145,12 +1283,346 @@ fn void Lowering.allocate(&self)
 	}
 	self.live_start = starts;
 	self.live_end = ends;
-	self.linear_scan(intervals, sorted_intervals[:sorted_count], ends, &SYSV_CALLEE_PRESERVED_REGS, false);
+	self.phi_hint = alloc::new_array(&self.scratch, ir::Ref, (sz)count);
+	for (usz ref = 0; ref < count; ref++) self.phi_hint[(sz)ref] = ir::NONE;
+	foreach (ref : self.decl.body)
+	{
+		if ((usz)ref >= count || self.inst(ref).tag != PHI) continue;
+		foreach (input : self.inst(ref).data.phi)
+		{
+			if ((usz)input.value < count && self.phi_hint[(sz)input.value] == ir::NONE) self.phi_hint[(sz)input.value] = ref;
+		}
+	}
+	uint[] clobbers = self.caller_saved_clobber_prefix();
+	// A PHI input may share its PHI's register while the PHI is dead (see
+	// linear_scan's guests): its whole interval lies in one block, after the
+	// PHI's last use there, the PHI is not live out of that block, and no edge
+	// out of it reads the PHI.
+	self.share_with_phi = alloc::new_array(&self.scratch, bool, (sz)count);
+	for (usz ref = 0; ref < count; ref++)
+	{
+		self.share_with_phi[(sz)ref] = false;
+		ir::Ref phi = self.phi_hint[(sz)ref];
+		if (phi == ir::NONE || !candidates[ref] || !candidates[(sz)phi] || starts[ref] == uint::max) continue;
+		uint start = starts[ref];
+		uint end = ends[ref];
+		uint block = block_of_ref[(sz)self.decl.body[(sz)start]];
+		if (block_of_ref[(sz)self.decl.body[(sz)end]] != block) continue;
+		if (live_index[(sz)phi] != uint::max && live_out.row(block).get(live_index[(sz)phi])) continue;
+		// The defining instruction may read the PHI only as the operand its
+		// lowering first copies into the destination (`add r, x` in place).
+		bool read = false;
+		if (self.decl.body[(sz)start] != (ir::Ref)ref) continue;
+		ir::Ref reused = self.reusable_operand({ .ref = (ir::Ref)ref, .start = start, .end = end });
+		ir::Inst def = self.inst((ir::Ref)ref);
+		@each_lowered_use(self, def, (ir::Ref)ref; ir::Ref used)
+		{
+			if (used == phi && reused != phi) read = true;
+		};
+		for (usz pos = (usz)start + 1; pos < block_ends[(sz)block] && !read; pos++)
+		{
+			ir::Inst at = self.inst(self.decl.body[pos]);
+			@each_lowered_use(self, at, self.decl.body[pos]; ir::Ref used)
+			{
+				if (used == phi) read = true;
+			};
+		}
+		if (read || self.edge_reads_value(block, phi, block_of_ref, block_starts, block_ends, block_labels, block_count)) continue;
+		// XMM values are saved around calls by value: two values in one register would clash.
+		if (self.is_float_type(self.inst((ir::Ref)ref).ty) && clobbers[(sz)end] != (start == 0 ? 0 : clobbers[(sz)start - 1])) continue;
+		self.share_with_phi[(sz)ref] = true;
+	}
+	ClobberTable table = self.caller_saved_clobber_table();
+	self.linear_scan(intervals, sorted_intervals[:sorted_count], ends, &GPR_ALLOCATABLE_REGS, false,
+		&table, CALLER_SAVED_ALLOCATABLE);
 	self.linear_scan(intervals, sorted_intervals[:sorted_count], ends, &XMM_ALLOCATABLE_REGS, true);
 	for (usz ref = 0; ref < count; ref++)
 	{
 		if (self.value_in_reg[ref] && self.is_float_type(self.inst((ir::Ref)ref).ty)) self.xmm_values.push((ir::Ref)ref);
 	}
+}
+
+<* GPRs handed to integer values: first the caller-saved registers the
+   lowering never uses implicitly between clobber points (see
+   caller_saved_clobber_prefix), then the callee-saved ones (saved in the
+   prologue when used). RAX, RCX, RDX and R11 stay scratch registers. *>
+const Register[10] GPR_ALLOCATABLE_REGS = { RSI, RDI, R8, R9, R10, RBX, R12, R13, R14, R15 };
+<* GPR_ALLOCATABLE_REGS[:CALLER_SAVED_ALLOCATABLE] are caller-saved. *>
+const usz CALLER_SAVED_ALLOCATABLE = 5;
+
+<*
+ Prefix counts of the body positions that clobber the allocatable
+ caller-saved GPRs: CALL (argument setup, the callee, inline asm and atomic
+ intrinsics), ARG (incoming parameter registers are still unread), division
+ (divide-by-constant uses R8/R9) and 128-bit operations (R8). An interval
+ containing such a position (interval_crosses_clobber) must use a
+ callee-saved register.
+ `prefix[p]` = clobber positions at or before body position p.
+*>
+fn uint[] Lowering.caller_saved_clobber_prefix(&self)
+{
+	usz body_len = self.decl.body.len;
+	uint[] prefix = alloc::new_array(&self.scratch, uint, (sz)(body_len + 1));
+	uint total = 0;
+	foreach (pos, ref : self.decl.body)
+	{
+		ir::Inst inst = self.inst(ref);
+		bool clobbers;
+		switch (inst.tag)
+		{
+			case CALL:
+			case ARG:
+			case SDIV:
+			case UDIV:
+			case SREM:
+			case UREM:
+			case VA_START:
+				clobbers = true;
+			default:
+				clobbers = !is_void_type(inst.ty) && self.is_wide_int(inst.ty);
+				@each_value_use(inst; ir::Ref used)
+				{
+					if ((usz)used < self.decl.instructions.len && self.is_wide_int(self.inst(used).ty)) clobbers = true;
+				};
+		}
+		if (clobbers) total++;
+		prefix[(sz)pos] = total;
+	}
+	prefix[(sz)body_len] = total;
+	return prefix;
+}
+
+<* Whether [start, end] holds a clobber position. The defining position counts
+   too (an ARG writes its register while later ARGs still have to read theirs;
+   division and wide operations use R8/R9 internally), except for a CALL, whose
+   result is moved out of RAX after the callee returns. *>
+fn bool Lowering.interval_crosses_clobber(&self, LiveInterval current, uint[] clobbers)
+{
+	uint before = current.start == 0 ? 0 : clobbers[(sz)current.start - 1];
+	uint inside = clobbers[(sz)current.end] - before;
+	if (inside > 0 && self.inst(self.decl.body[(sz)current.start]).tag == CALL) inside--;
+	return inside > 0;
+}
+
+<* Per body position, the allocatable caller-saved GPRs (bit i =
+   GPR_ALLOCATABLE_REGS[i]) the lowering there uses implicitly, as prefix
+   counts per register: `prefix[i * (len + 1) + p]` = clobbers of register i
+   at or before position p. A CALL (argument setup, the callee, inline asm,
+   atomics), VA_START and 128-bit operations use all of them; division R8/R9
+   (divide-by-constant). Incoming parameter registers are tracked apart
+   (arg_read_at). *>
+struct ClobberTable
+{
+	uint[] prefix;
+	usz stride;
+	<* Per position: the registers clobbered there (bitmask). *>
+	char[] mask;
+	<* Per caller-saved register: body position of the ARG that reads its
+	   incoming value, uint::max for none. Until then no other value may be
+	   written to it. *>
+	uint[CALLER_SAVED_ALLOCATABLE] arg_read_at;
+}
+
+fn ClobberTable Lowering.caller_saved_clobber_table(&self)
+{
+	usz body_len = self.decl.body.len;
+	ClobberTable table = { .stride = body_len + 1 };
+	table.prefix = alloc::new_array(&self.scratch, uint, (sz)(CALLER_SAVED_ALLOCATABLE * table.stride));
+	table.mask = alloc::new_array(&self.scratch, char, (sz)(body_len + 1));
+	char all = (char)((1 << CALLER_SAVED_ALLOCATABLE) - 1);
+	for (usz reg = 0; reg < CALLER_SAVED_ALLOCATABLE; reg++) table.arg_read_at[reg] = uint::max;
+	// Parameter registers each ARG reads, assigned like the ARG lowering does.
+	uint explicit_gp = 0;
+	foreach (ref : self.decl.body)
+	{
+		ir::Inst inst = self.inst(ref);
+		if (inst.tag == ARG && inst.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER) explicit_gp++;
+	}
+	uint ordinal_gp = explicit_gp;
+	foreach (pos, ref : self.decl.body)
+	{
+		ir::Inst inst = self.inst(ref);
+		char mask = 0;
+		switch (inst.tag)
+		{
+			case CALL:
+			case VA_START:
+				mask = all;
+			case SDIV:
+			case UDIV:
+			case SREM:
+			case UREM:
+				mask = caller_reg_bit(R8) | caller_reg_bit(R9);
+			case ARG:
+				// Not a clobber: the register is protected up to this read (arg_read_at).
+				char reads = 0;
+				if (inst.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER)
+				{
+					if (inst.data.arg.location < SYSV_INT_PARAM_REGS.len) reads = caller_reg_bit(SYSV_INT_PARAM_REGS[inst.data.arg.location]);
+				}
+				else if (inst.data.arg.location_kind == ir::ArgLocationKind.ORDINAL && !self.is_float_type(inst.ty))
+				{
+					uint words = self.is_wide_int(inst.ty) ? 2 : 1;
+					if ((usz)ordinal_gp + words <= SYSV_INT_PARAM_REGS.len)
+					{
+						for (uint w = 0; w < words; w++) reads |= caller_reg_bit(SYSV_INT_PARAM_REGS[ordinal_gp + w]);
+						ordinal_gp += words;
+					}
+				}
+				for (usz reg = 0; reg < CALLER_SAVED_ALLOCATABLE; reg++)
+				{
+					if ((reads >> reg) & 1) table.arg_read_at[reg] = (uint)pos;
+				}
+			default:
+				if (!is_void_type(inst.ty) && self.is_wide_int(inst.ty)) mask = all;
+				@each_value_use(inst; ir::Ref used)
+				{
+					if ((usz)used < self.decl.instructions.len && self.is_wide_int(self.inst(used).ty)) mask = all;
+				};
+		}
+		table.mask[(sz)pos] = mask;
+	}
+	for (usz reg = 0; reg < CALLER_SAVED_ALLOCATABLE; reg++)
+	{
+		uint total = 0;
+		for (usz pos = 0; pos < body_len; pos++)
+		{
+			if ((table.mask[(sz)pos] >> reg) & 1) total++;
+			table.prefix[(sz)(reg * table.stride + pos)] = total;
+		}
+		table.prefix[(sz)(reg * table.stride + body_len)] = total;
+	}
+	return table;
+}
+
+<* Bit of `reg` among the allocatable caller-saved GPRs, 0 if not one. *>
+fn char caller_reg_bit(Register reg)
+{
+	for (usz i = 0; i < CALLER_SAVED_ALLOCATABLE; i++)
+	{
+		if (GPR_ALLOCATABLE_REGS[i].enc == reg.enc) return (char)(1 << i);
+	}
+	return 0;
+}
+
+<* Bitmask over `regs` indexes that `current` may use. Callee-saved ones always;
+   caller-saved register i when no position in [start, end] clobbers it (the
+   defining position counts, except a CALL's: its result leaves RAX after the
+   callee returned) and, for an incoming parameter register, when `current`
+   is defined after the ARG reading it or is that ARG. *>
+fn ulong Lowering.allowed_registers(&self, LiveInterval current, ClobberTable* table, usz reg_count, usz caller_saved)
+{
+	ulong allowed = reg_count >= 64 ? ulong::max : ((ulong)1 << reg_count) - 1;
+	if (caller_saved == 0) return allowed;
+	ir::Inst def = self.inst(self.decl.body[(sz)current.start]);
+	char own = def.tag == CALL ? table.mask[(sz)current.start] : 0;
+	for (usz reg = 0; reg < caller_saved; reg++)
+	{
+		// An incoming parameter register is written by nothing before the ARG
+		// that reads it, except by that ARG itself.
+		uint read_at = table.arg_read_at[reg];
+		if (read_at != uint::max && current.start <= read_at && self.decl.body[(sz)read_at] != current.ref)
+		{
+			allowed &= ~((ulong)1 << reg);
+			continue;
+		}
+		usz base = reg * table.stride;
+		uint before = current.start == 0 ? 0 : table.prefix[(sz)(base + current.start - 1)];
+		uint inside = table.prefix[(sz)(base + current.end)] - before;
+		if (inside > 0 && ((own >> reg) & 1)) inside--;
+		// Read only as a register argument of the call that ends the interval:
+		// the call's argument setup is a parallel move.
+		if (inside == 1 && current.end != current.start && ((table.mask[(sz)current.end] >> reg) & 1) &&
+			self.is_register_argument_only(current.ref, self.decl.body[(sz)current.end])) inside--;
+		if (inside > 0) allowed &= ~((ulong)1 << reg);
+	}
+	return allowed;
+}
+
+<* `call` is an ordinary CALL (not an inline asm or atomic intrinsic) that
+   reads `value` only as integer register arguments, not as its callee. *>
+fn bool Lowering.is_register_argument_only(&self, ir::Ref value, ir::Ref call)
+{
+	ir::Inst inst = self.inst(call);
+	if (inst.tag != CALL || inst.data.call.func == value) return false;
+	ir::Inst callee = self.inst(inst.data.call.func);
+	if (callee.tag == SYMBOL && (callee.data.label.starts_with(ASM_PREFIX) || callee.data.label.starts_with(ATOMIC_INTRINSIC_PREFIX))) return false;
+	bool found = false;
+	uint gp = 0;
+	foreach (i, arg : inst.data.call.args)
+	{
+		ir::Inst arg_inst = self.inst(arg);
+		bool in_register = !self.is_f80_type(arg_inst.ty) && self.call_memory_copy_bytes(inst, (usz)i) == 0 &&
+			!self.call_stack_only(inst, (usz)i) && !self.is_float_type(arg_inst.ty);
+		bool gp_register = in_register && gp < SYSV_INT_PARAM_REGS.len;
+		if (in_register) gp++;
+		if (arg != value) continue;
+		if (!gp_register) return false;
+		found = true;
+	}
+	return found;
+}
+
+<* 8^depth, capped so deep nests do not overflow. *>
+fn ulong depth_weight(uint depth) => (ulong)1 << (3 * (depth < 6 ? depth : 6));
+
+<* Loop nesting depth of each body position: a jump or branch to a label at
+   or before it closes a loop [label, jump] (blocks are laid out in body order,
+   so back edges are exactly the backward jumps). *>
+fn uint[] Lowering.loop_depths(&self)
+{
+	usz count = self.decl.instructions.len;
+	usz body_len = self.decl.body.len;
+	uint[] label_pos = alloc::new_array(&self.scratch, uint, (sz)count);
+	for (usz i = 0; i < count; i++) label_pos[i] = uint::max;
+	foreach (pos, ref : self.decl.body)
+	{
+		if ((usz)ref < count && self.inst(ref).tag == LABEL) label_pos[(sz)ref] = (uint)pos;
+	}
+	int[] delta = alloc::new_array(&self.scratch, int, (sz)(body_len + 1));
+	for (usz i = 0; i <= body_len; i++) delta[i] = 0;
+	foreach (pos, ref : self.decl.body)
+	{
+		ir::Inst inst = self.inst(ref);
+		@each_jump_target(inst; ir::Ref target)
+		{
+			if ((usz)target < count && label_pos[(sz)target] <= (uint)pos)
+			{
+				delta[(sz)label_pos[(sz)target]]++;
+				delta[(sz)pos + 1]--;
+			}
+		};
+	}
+	uint[] depth = alloc::new_array(&self.scratch, uint, (sz)body_len);
+	int running = 0;
+	for (usz pos = 0; pos < body_len; pos++)
+	{
+		running += delta[pos];
+		depth[pos] = running < 0 ? 0 : (uint)running;
+	}
+	return depth;
+}
+
+macro @each_jump_target(ir::Inst inst; @body(ir::Ref target))
+{
+	switch (inst.tag)
+	{
+		case JMP: @body(inst.data.ref);
+		case BRANCH:
+			@body(inst.data.branch.then_label);
+			@body(inst.data.branch.else_label);
+		case SWITCH:
+			foreach (label : inst.data.switch_data.labels) @body(label);
+			@body(inst.data.switch_data.default_label);
+		default: break;
+	}
+}
+
+<* Spill weight per covered body position, scaled to keep integer precision. *>
+fn ulong Lowering.spill_density(&self, ir::Ref ref, LiveInterval[] intervals, uint[] ends)
+{
+	ulong length = (ulong)(ends[(sz)ref] - self.live_start[(sz)ref]) + 1;
+	return self.spill_weight[(sz)ref] * 1024 / length;
 }
 
 <* XMM registers handed to F32/F64 values. xmm0-xmm7 stay scratch/argument registers. *>
@@ -1159,16 +1631,25 @@ const Register[8] XMM_ALLOCATABLE_REGS = { XMM8, XMM9, XMM10, XMM11, XMM12, XMM1
 fn bool Lowering.is_xmm_float_type(&self, value_interner::InternerRef ty)
 {
 	primitive_value::PrimitiveValue key = self.ir.interner.get(ty);
-	return key.tag == primitive_value::PrimitiveType.FLOAT_TY && (key.ty_bits == 32 || key.ty_bits == 64);
+	return (key.tag == primitive_value::PrimitiveType.FLOAT_TY && (key.ty_bits == 32 || key.ty_bits == 64)) || self.ir.is_vector(ty);
 }
 
 <* Linear scan over the intervals of one register class (floats or not), in start order.
    Values evicted from a register use their stack slot for their entire interval. *>
-fn void Lowering.linear_scan(&self, LiveInterval[] intervals, usz[] sorted, uint[] ends, Register[] regs, bool floats)
+fn void Lowering.linear_scan(&self, LiveInterval[] intervals, usz[] sorted, uint[] ends, Register[] regs, bool floats,
+	ClobberTable* table = null, usz caller_saved = 0)
 {
 	ir::Ref[16] active;
+	// A guest shares its register with the active value while that value is
+	// dead (a PHI input coalesced with its PHI); the register stays taken for
+	// both, and the active value cannot be evicted, until the guest ends.
+	ir::Ref[16] guest;
 	usz reg_count = regs.len;
-	for (usz reg = 0; reg < reg_count; reg++) active[reg] = ir::NONE;
+	for (usz reg = 0; reg < reg_count; reg++)
+	{
+		active[reg] = ir::NONE;
+		guest[reg] = ir::NONE;
+	}
 	foreach (index : sorted)
 	{
 		LiveInterval current = intervals[index];
@@ -1176,11 +1657,30 @@ fn void Lowering.linear_scan(&self, LiveInterval[] intervals, usz[] sorted, uint
 		for (usz reg = 0; reg < reg_count; reg++)
 		{
 			if (active[reg] != ir::NONE && ends[(sz)active[reg]] < current.start) active[reg] = ir::NONE;
+			if (guest[reg] != ir::NONE && ends[(sz)guest[reg]] < current.start) guest[reg] = ir::NONE;
 		}
-		usz free_reg = reg_count;
-		for (usz reg = 0; reg < reg_count; reg++)
+		// regs[:caller_saved] are usable only by intervals they are not clobbered in.
+		ulong allowed = self.allowed_registers(current, table, reg_count, caller_saved);
+		if (self.share_with_phi[(sz)current.ref] && self.value_in_reg[(sz)self.phi_hint[(sz)current.ref]])
 		{
-			if (active[reg] == ir::NONE)
+			ir::Ref phi = self.phi_hint[(sz)current.ref];
+			bool shared = false;
+			for (usz reg = 0; reg < reg_count; reg++)
+			{
+				if (active[reg] != phi || guest[reg] != ir::NONE || !((allowed >> reg) & 1)) continue;
+				guest[reg] = current.ref;
+				self.value_in_reg[(sz)current.ref] = true;
+				self.value_regs[(sz)current.ref] = regs[reg];
+				shared = true;
+				break;
+			}
+			if (shared) continue;
+		}
+		usz free_reg = self.preferred_register(current, &active, regs, allowed, ends);
+		if (free_reg < reg_count && guest[free_reg] != ir::NONE) free_reg = reg_count;
+		for (usz reg = 0; reg < reg_count && free_reg == reg_count; reg++)
+		{
+			if (active[reg] == ir::NONE && guest[reg] == ir::NONE && ((allowed >> reg) & 1))
 			{
 				free_reg = reg; break;
 			}
@@ -1192,12 +1692,15 @@ fn void Lowering.linear_scan(&self, LiveInterval[] intervals, usz[] sorted, uint
 			self.value_regs[(sz)current.ref] = regs[free_reg];
 			continue;
 		}
-		usz victim = 0;
-		for (usz reg = 1; reg < reg_count; reg++)
+		// Spill whichever of the cheapest active value and the current one has
+		// the lower weight per position covered.
+		usz victim = reg_count;
+		for (usz reg = 0; reg < reg_count; reg++)
 		{
-			if (ends[(sz)active[reg]] > ends[(sz)active[victim]]) victim = reg;
+			if (guest[reg] != ir::NONE || !((allowed >> reg) & 1)) continue;
+			if (victim == reg_count || self.spill_density(active[reg], intervals, ends) < self.spill_density(active[victim], intervals, ends)) victim = reg;
 		}
-		if (ends[(sz)active[victim]] > current.end)
+		if (victim < reg_count && self.spill_density(active[victim], intervals, ends) < self.spill_density(current.ref, intervals, ends))
 		{
 			self.value_in_reg[(sz)active[victim]] = false;
 			active[victim] = current.ref;
@@ -1205,6 +1708,183 @@ fn void Lowering.linear_scan(&self, LiveInterval[] intervals, usz[] sorted, uint
 			self.value_regs[(sz)current.ref] = regs[victim];
 		}
 	}
+}
+
+<*
+ A register `current` should take when it can, as an index into `regs`, or
+ regs.len for none:
+ - the register of the operand a two-address lowering computes into
+   (`reusable_operand`) when that operand's interval ends at this very
+   instruction: the result then overwrites it in place (`add r, rhs`);
+ - the register of the PHI the value feeds on an edge, when free: the edge
+   copy then moves a register onto itself and disappears.
+*>
+fn usz Lowering.preferred_register(&self, LiveInterval current, ir::Ref[16]* active, Register[] regs, ulong allowed, uint[] ends)
+{
+	usz reg_count = regs.len;
+	ir::Ref reuse = self.reusable_operand(current);
+	if (reuse != ir::NONE && self.value_in_reg[(sz)reuse] && ends[(sz)reuse] == current.start)
+	{
+		for (usz reg = 0; reg < reg_count; reg++)
+		{
+			if ((*active)[reg] != reuse || !((allowed >> reg) & 1)) continue;
+			(*active)[reg] = ir::NONE;
+			return reg;
+		}
+	}
+	ir::Ref phi = self.phi_hint[(sz)current.ref];
+	if (phi != ir::NONE && self.value_in_reg[(sz)phi])
+	{
+		for (usz reg = 0; reg < reg_count; reg++)
+		{
+			if (regs[reg] == self.value_regs[(sz)phi] && (*active)[reg] == ir::NONE && ((allowed >> reg) & 1)) return reg;
+		}
+	}
+	// An incoming argument stays in its parameter register.
+	Register incoming;
+	if (self.arg_param_register(current, &incoming))
+	{
+		for (usz reg = 0; reg < reg_count; reg++)
+		{
+			if (regs[reg].enc == incoming.enc && regs[reg].class == incoming.class && (*active)[reg] == ir::NONE &&
+				((allowed >> reg) & 1)) return reg;
+		}
+	}
+	return reg_count;
+}
+
+<* The parameter register an ARG value arrives in (GP or SSE), if any. Uses
+   the ARG lowering's numbering: explicit locations, then ordinals in order. *>
+fn bool Lowering.arg_param_register(&self, LiveInterval current, Register* out)
+{
+	ir::Inst inst = self.inst(current.ref);
+	if (inst.tag != ARG || self.is_wide_int(inst.ty) || self.is_f80_type(inst.ty)) return false;
+	if (inst.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER)
+	{
+		if (inst.data.arg.location >= SYSV_INT_PARAM_REGS.len) return false;
+		*out = SYSV_INT_PARAM_REGS[inst.data.arg.location];
+		return true;
+	}
+	if (inst.data.arg.location_kind != ir::ArgLocationKind.ORDINAL) return false;
+	uint gp = 0;
+	uint sse = 0;
+	foreach (ref : self.decl.body)
+	{
+		ir::Inst other = self.inst(ref);
+		if (other.tag != ARG) continue;
+		if (other.data.arg.location_kind == ir::ArgLocationKind.GP_REGISTER) gp++;
+		if (other.data.arg.location_kind == ir::ArgLocationKind.SSE_REGISTER) sse++;
+	}
+	foreach (ref : self.decl.body)
+	{
+		ir::Inst other = self.inst(ref);
+		if (other.tag != ARG || other.data.arg.location_kind != ir::ArgLocationKind.ORDINAL) continue;
+		bool is_float = self.is_float_type(other.ty) && !self.is_f80_type(other.ty);
+		if (ref == current.ref)
+		{
+			if (is_float)
+			{
+				if (sse >= SYSV_SSE_PARAM_REGS.len) return false;
+				*out = SYSV_SSE_PARAM_REGS[sse];
+				return true;
+			}
+			if (gp >= SYSV_INT_PARAM_REGS.len) return false;
+			*out = SYSV_INT_PARAM_REGS[gp];
+			return true;
+		}
+		if (self.is_f80_type(other.ty)) continue;
+		if (is_float) { sse++; continue; }
+		uint words = self.is_wide_int(other.ty) ? 2 : 1;
+		if ((usz)gp + words <= SYSV_INT_PARAM_REGS.len) gp += words;
+	}
+	return false;
+}
+
+<*
+ The operand whose register the lowering of `current` may compute into: it
+ first copies that operand into the destination (skipped when they are the
+ same register) and reads every other operand before writing it. Only for
+ lowerings checked to behave that way (alu, shift, extend, trunc, neg/not,
+ float_alu); NONE otherwise, or when `current` does not start at its own
+ definition.
+*>
+fn ir::Ref Lowering.reusable_operand(&self, LiveInterval current)
+{
+	if (self.decl.body[(sz)current.start] != current.ref) return ir::NONE;
+	ir::Inst inst = self.inst(current.ref);
+	if (self.is_wide_int(inst.ty)) return ir::NONE;
+	switch (inst.tag)
+	{
+		case ADD:
+			if (inst.ty == value_interner::REF_PTR && self.has_addr[(sz)current.ref]) return ir::NONE;
+			return self.alu_destination_operand(inst, ADD);
+		case MUL: return self.alu_destination_operand(inst, IMUL);
+		case BIT_AND: return self.alu_destination_operand(inst, AND);
+		case BIT_OR: return self.alu_destination_operand(inst, OR);
+		case BIT_XOR: return self.alu_destination_operand(inst, XOR);
+		case SUB:
+		case BIT_SHL:
+		case BIT_ASHR:
+		case BIT_LSHR:
+			return inst.data.bin.lhs;
+		case FADD:
+		case FSUB:
+		case FMUL:
+		case FDIV:
+			return self.is_xmm_float_type(inst.ty) ? inst.data.bin.lhs : ir::NONE;
+		case SEXT:
+		case ZEXT:
+		case TRUNC:
+		case NEGATE:
+		case BIT_NOT:
+			return inst.data.ref;
+		default:
+			return ir::NONE;
+	}
+}
+
+<* Whether an edge out of `block` passes `value` to a PHI. *>
+fn bool Lowering.edge_reads_value(&self, uint block, ir::Ref value, uint[] block_of_ref, usz[] block_starts,
+	usz[] block_ends, ir::Ref[] block_labels, uint block_count)
+{
+	ir::Ref label = block_labels[(sz)block];
+	usz term_pos = self.terminator_position(block_starts[(sz)block], block_ends[(sz)block]);
+	bool found = false;
+	if (term_pos == block_ends[(sz)block])
+	{
+		// Falls through into the next block.
+		if (block + 1 < block_count && block_labels[(sz)block + 1] != ir::NONE)
+		{
+			found = self.phis_read(block_labels[(sz)block + 1], label, value, block_of_ref, block_starts, block_ends);
+		}
+		return found;
+	}
+	ir::Inst term = self.inst(self.decl.body[term_pos]);
+	if (term.tag == JMP_VAL) return true;
+	@each_jump_target(term; ir::Ref target)
+	{
+		if (self.phis_read(target, label, value, block_of_ref, block_starts, block_ends)) found = true;
+	};
+	return found;
+}
+
+<* Whether a PHI of block `target` takes `value` from predecessor `from`. *>
+fn bool Lowering.phis_read(&self, ir::Ref target, ir::Ref from, ir::Ref value, uint[] block_of_ref,
+	usz[] block_starts, usz[] block_ends)
+{
+	if ((usz)target >= block_of_ref.len || block_of_ref[(sz)target] == uint::max) return false;
+	uint block = block_of_ref[(sz)target];
+	for (usz pos = block_starts[(sz)block]; pos < block_ends[(sz)block]; pos++)
+	{
+		ir::Inst inst = self.inst(self.decl.body[pos]);
+		if (inst.tag == LABEL) continue;
+		if (inst.tag != PHI) break;
+		foreach (input : inst.data.phi)
+		{
+			if (input.label == from && input.value == value) return true;
+		}
+	}
+	return false;
 }
 
 <* Reserve save slots for the callee-preserved registers `allocate` used, after `layout`. *>
@@ -1228,14 +1908,14 @@ fn void Lowering.assign_callee_save_slots(&self)
 	self.frame = (offset + 15) / 16 * 16;
 }
 
-<* Copy the PHI inputs of block `target` that come from the current block into the PHI slots. *>
-fn void? Lowering.edge_copies(&self, ir::Ref target)
+<* Buffered PHI copies (see edge_copies in lower_phi.c3) for 16-byte PHIs and
+   address-taken targets. Phase 1 copies every input into the block's copy
+   area; phase 2 (phi_area_to_phis) moves the area into the PHIs. *>
+fn void? Lowering.edge_copies_buffered(&self, ir::Ref target, usz start)
 {
-	// Find target's PHIs: the instructions right after its LABEL in body order.
-	if ((usz)target >= self.label_body_next.len) return;
-	usz start = self.label_body_next[(sz)target];
-	if (start == 0) return;
 	// Phase 1: inputs into the copy area. Phase 2: copy area into the PHI slots.
+	// An address-taken block has its own area and does phase 2 itself on entry.
+	int area = self.block_phi_area[(sz)target] != 0 ? self.block_phi_area[(sz)target] : self.phi_area;
 	uint phi_offset = 0;
 	for (usz i = start; i < self.decl.body.len && self.inst(self.decl.body[i]).tag == PHI; i++)
 	{
@@ -1245,7 +1925,7 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 			if (input.label != self.current_label) continue;
 			if (self.is_wide_int(self.inst(phi).ty))
 			{
-				int destination = -(self.phi_area - (int)phi_offset);
+				int destination = -(area - (int)phi_offset);
 				self.load_pair(input.value, RAX, RDX)!;
 				self.emit(MOV, mem_op(RBP, destination, 64), reg_op(RAX));
 				self.emit(MOV, mem_op(RBP, destination + 8, 64), reg_op(RDX));
@@ -1262,7 +1942,7 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 				{
 					self.emit(LEA, reg_op(R11), mem_op(RBP, -self.slots[(sz)input.value], 0));
 				}
-				int destination = -(self.phi_area - (int)phi_offset);
+				int destination = -(area - (int)phi_offset);
 				self.emit(MOV, reg_op(RAX), mem_op(R11, 0, 64));
 				self.emit(MOV, mem_op(RBP, destination, 64), reg_op(RAX));
 				self.emit(MOV, reg_op(RAX), mem_op(R11, 8, 64));
@@ -1273,27 +1953,36 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 				ushort w = self.float_width(self.inst(phi).ty)!;
 				self.load_float(input.value, XMM0)!;
 				self.emit(self.float_move_mnemonic(w),
-					mem_op(RBP, -(self.phi_area - (int)phi_offset), w), reg_op(XMM0));
+					mem_op(RBP, -(area - (int)phi_offset), w), reg_op(XMM0));
 			}
 			else
 			{
 				ushort w = self.load(input.value, RAX)!;
-				self.emit(MOV, mem_op(RBP, -(self.phi_area - (int)phi_offset), w), reg_op(Register.RAX.to_bits(w)));
+				self.emit(MOV, mem_op(RBP, -(area - (int)phi_offset), w), reg_op(Register.RAX.to_bits(w)));
 			}
 			break;
 		}
 		phi_offset += self.value_slot_bytes(self.inst(phi).ty);
 	}
-	phi_offset = 0;
+	if (self.block_phi_area[(sz)target] != 0) return;
+	self.phi_area_to_phis(start, area, true)!;
+}
+
+<* Phase 2 of the PHI copies of the block whose PHIs start at body index
+   `start`: move `area` into the PHI locations, only for PHIs with an input from
+   the current block when `from_current` (else all of them, at block entry). *>
+fn void? Lowering.phi_area_to_phis(&self, usz start, int area, bool from_current)
+{
+	uint phi_offset = 0;
 	for (usz i = start; i < self.decl.body.len && self.inst(self.decl.body[i]).tag == PHI; i++)
 	{
 		ir::Ref phi = self.decl.body[i];
 		foreach (input : self.inst(phi).data.phi)
 		{
-			if (input.label != self.current_label) continue;
+			if (from_current && input.label != self.current_label) continue;
 			if (self.value_slot_bytes(self.inst(phi).ty) == 16)
 			{
-				int source = -(self.phi_area - (int)phi_offset);
+				int source = -(area - (int)phi_offset);
 				int destination = -self.slots[(sz)phi];
 				self.emit(MOV, reg_op(RAX), mem_op(RBP, source, 64));
 				self.emit(MOV, mem_op(RBP, destination, 64), reg_op(RAX));
@@ -1304,13 +1993,13 @@ fn void? Lowering.edge_copies(&self, ir::Ref target)
 			{
 				ushort w = self.float_width(self.inst(phi).ty)!;
 				self.emit(self.float_move_mnemonic(w), reg_op(XMM0),
-					mem_op(RBP, -(self.phi_area - (int)phi_offset), w));
+					mem_op(RBP, -(area - (int)phi_offset), w));
 				self.store_float(phi, XMM0)!;
 			}
 			else
 			{
 				ushort w = self.bits(self.inst(phi).ty)!;
-				self.emit(MOV, reg_op(Register.RAX.to_bits(w)), mem_op(RBP, -(self.phi_area - (int)phi_offset), w));
+				self.emit(MOV, reg_op(Register.RAX.to_bits(w)), mem_op(RBP, -(area - (int)phi_offset), w));
 				self.store(phi, RAX)!;
 			}
 			break;
@@ -1333,19 +2022,6 @@ fn bool Lowering.is_defined(&self, String name)
 		if (decl.name == name && decl.is_definition()) return true;
 	}
 	return false;
-}
-
-<* Lower a two-operand ALU instruction (add, sub, imul, and, or, xor). *>
-fn void? Lowering.alu(&self, ir::Ref ref, Mnemonic mnemonic)
-{
-	ir::Inst inst = self.inst(ref);
-	ushort w = self.load(inst.data.bin.lhs, RAX)!;
-	self.load(inst.data.bin.rhs, RCX)!;
-	// 8/16-bit operations run on the 32-bit registers (imul has no 8-bit
-	// two-operand form); the low bits of the result are the same.
-	ushort op_w = w < 32 ? 32 : w;
-	self.emit(mnemonic, reg_op(Register.RAX.to_bits(op_w)), reg_op(Register.RCX.to_bits(op_w)));
-	self.store(ref, RAX)!;
 }
 
 <* Load `ref` into `reg`, sign- or zero-extended to at least 32 bits. Returns the operation width. *>
@@ -1376,15 +2052,6 @@ fn void? Lowering.divide(&self, ir::Ref ref, bool signed, bool remainder)
 	self.store(ref, remainder ? RDX : RAX)!;
 }
 
-fn void? Lowering.shift(&self, ir::Ref ref, Mnemonic mnemonic, bool signed)
-{
-	ir::Inst inst = self.inst(ref);
-	ushort w = self.load_extended(inst.data.bin.lhs, RAX, signed)!;
-	self.load(inst.data.bin.rhs, RCX)!;
-	self.emit(mnemonic, reg_op(Register.RAX.to_bits(w)), reg_op(CL));
-	self.store(ref, RAX)!;
-}
-
 <* Bits of a register above an odd IR integer width (i1, i3, i17, ...) are
    unspecified: arithmetic runs at the rounded register width (`bits`) and does
    not mask its result, so an unsigned _BitInt(3) 7 + 1 leaves 8 in the byte.
@@ -1400,35 +2067,9 @@ fn void? Lowering.normalize_width(&self, Register reg, value_interner::InternerR
 	self.emit(signed ? SAR : SHR, reg_op(reg.to_bits(w)), imm_op(shift));
 }
 
-fn void? Lowering.compare(&self, ir::Ref ref, Condition cc)
+fn void? Lowering.compare(&self, ir::Ref ref)
 {
-	ir::Inst inst = self.inst(ref);
-	primitive_value::PrimitiveValue lhs_type = self.ir.interner.get(self.inst(inst.data.bin.lhs).ty);
-	if (lhs_type.tag == primitive_value::PrimitiveType.INT_TY && lhs_type.ty_bits == 1)
-	{
-		// i1 is stored as 0/1, but signed interpretation is 0/-1. Reverse
-		// only the signed ordering condition to compare the stored bits.
-		switch (inst.tag)
-		{
-			case CMP_SLT: cc = A;
-			case CMP_SLTE: cc = AE;
-			case CMP_SGT: cc = B;
-			case CMP_SGTE: cc = BE;
-			default: break;
-		}
-	}
-	ushort w = self.load(inst.data.bin.lhs, RAX)!;
-	self.load(inst.data.bin.rhs, RCX)!;
-	// i1 is zero-extended and uses the reversed unsigned condition above; other
-	// odd widths are sign-extended for signed predicates, as LLVM's
-	// PromoteSetCCOperands does, and zero-extended otherwise.
-	bool signed_predicate = lhs_type.ty_bits != 1 && (inst.tag == CMP_SLT || inst.tag == CMP_SLTE ||
-		inst.tag == CMP_SGT || inst.tag == CMP_SGTE);
-	value_interner::InternerRef operand_ty = self.inst(inst.data.bin.lhs).ty;
-	self.normalize_width(RAX, operand_ty, w, signed_predicate)!;
-	self.normalize_width(RCX, operand_ty, w, signed_predicate)!;
-	self.emit(CMP, reg_op(Register.RAX.to_bits(w)), reg_op(Register.RCX.to_bits(w)));
-	self.emit(cc.set, reg_op(AL));
+	self.set_from_flags({ self.int_compare_flags(self.inst(ref))!, NONE });
 	self.store(ref, RAX)!;
 }
 
@@ -1454,10 +2095,20 @@ fn void? Lowering.float_alu(&self, ir::Ref ref, Mnemonic f32_mnemonic, Mnemonic 
 		self.store_float(ref, ST0)!;
 		return;
 	}
-	self.load_float(inst.data.bin.lhs, XMM0)!;
-	self.load_float(inst.data.bin.rhs, XMM1)!;
-	self.emit(width == 32 ? f32_mnemonic : f64_mnemonic, reg_op(XMM0), reg_op(XMM1));
-	self.store_float(ref, XMM0)!;
+	// dst is the result's XMM register (never an operand's, see lower_operand.c3).
+	Register dst = self.in_register(ref) ? self.value_regs[(sz)ref] : XMM0;
+	Register right = XMM1;
+	if (self.in_register(inst.data.bin.rhs))
+	{
+		right = self.value_regs[(sz)inst.data.bin.rhs];
+	}
+	else
+	{
+		self.load_float(inst.data.bin.rhs, XMM1)!;
+	}
+	self.load_float(inst.data.bin.lhs, dst)!;
+	self.emit(width == 32 ? f32_mnemonic : f64_mnemonic, reg_op(dst), reg_op(right));
+	self.store_float(ref, dst)!;
 }
 
 <* Flip only the IEEE sign bit, preserving every other bit including NaN payloads. *>
@@ -1477,6 +2128,26 @@ fn void? Lowering.float_negate(&self, ir::Ref ref)
 	String label = self.intern_float_bytes(mask, 16);
 	self.load_float(self.inst(ref).data.ref, XMM0)!;
 	self.emit(width == 32 ? XORPS : XORPD, reg_op(XMM0), label_mem_op(label, 128));
+	self.store_float(ref, XMM0)!;
+}
+
+<* |x| by clearing the sign bit (ANDPS/ANDPD with ~sign), or x87 FABS. *>
+fn void? Lowering.float_abs(&self, ir::Ref ref)
+{
+	ushort width = self.float_width(self.inst(ref).ty)!;
+	if (width == 80)
+	{
+		self.load_float(self.inst(ref).data.ref, ST0)!;
+		self.emit(FABS);
+		self.store_float(ref, ST0)!;
+		return;
+	}
+	char[] mask = mem::temp_array(char, 16);
+	for (uint i = 0; i < 16; i++) mask[i] = (char)0xff;
+	for (uint lane = 0; lane < 16 / (width / 8); lane++) mask[(sz)((lane + 1) * (width / 8) - 1)] = (char)0x7f;
+	String label = self.intern_float_bytes(mask, 16);
+	self.load_float(self.inst(ref).data.ref, XMM0)!;
+	self.emit(width == 32 ? ANDPS : ANDPD, reg_op(XMM0), label_mem_op(label, 128));
 	self.store_float(ref, XMM0)!;
 }
 
@@ -1515,26 +2186,7 @@ fn void? Lowering.float_compare(&self, ir::Ref ref, Condition cc)
 		self.store(ref, RAX)!;
 		return;
 	}
-	self.load_float(inst.data.bin.lhs, XMM0)!;
-	self.load_float(inst.data.bin.rhs, XMM1)!;
-	self.emit(width == 32 ? UCOMISS : UCOMISD, reg_op(XMM0), reg_op(XMM1));
-	self.emit(cc.set, reg_op(AL));
-	switch (cc)
-	{
-		case E:
-			self.emit(SETNP, reg_op(CL));
-			self.emit(AND, reg_op(AL), reg_op(CL));
-		case NE:
-			self.emit(SETP, reg_op(CL));
-			self.emit(OR, reg_op(AL), reg_op(CL));
-		case B:
-			self.emit(SETNP, reg_op(CL));
-			self.emit(AND, reg_op(AL), reg_op(CL));
-		case BE:
-			self.emit(SETNP, reg_op(CL));
-			self.emit(AND, reg_op(AL), reg_op(CL));
-		default: break;
-	}
+	self.set_from_flags(self.float_compare_flags(inst)!);
 	self.store(ref, RAX)!;
 }
 
@@ -1774,35 +2426,6 @@ fn void? Lowering.float_convert(&self, ir::Ref ref, bool extend)
 	self.store_float(ref, XMM0)!;
 }
 
-fn void? Lowering.extend(&self, ir::Ref ref, bool signed)
-{
-	ir::Inst inst = self.inst(ref);
-	ushort from = self.load(inst.data.ref, RAX)!;
-	ushort to = self.bits(inst.ty)!;
-	// An odd source width must be extended from its exact width first; the
-	// MOVSX/MOVZX below only extends from the rounded register width.
-	self.normalize_width(RAX, self.inst(inst.data.ref).ty, from, signed)!;
-	if (from < to)
-	{
-		if (from == 32)
-		{
-			if (signed)
-			{
-				self.emit(MOVSXD, reg_op(RAX), reg_op(EAX));
-			}
-			else
-			{
-				self.emit(MOV, reg_op(EAX), reg_op(EAX));
-			}
-		}
-		else
-		{
-			self.emit(signed ? MOVSX : MOVZX, reg_op(Register.RAX.to_bits(to < 32 ? 32 : to)), reg_op(Register.RAX.to_bits(from)));
-		}
-	}
-	self.store(ref, RAX)!;
-}
-
 fn bool Lowering.call_stack_only(&self, ir::Inst inst, usz index)
 {
 	if (index >= inst.data.call.stack_only.len) return false;
@@ -1812,7 +2435,13 @@ fn bool Lowering.call_stack_only(&self, ir::Inst inst, usz index)
 fn uint Lowering.call_memory_copy_bytes(&self, ir::Inst inst, usz index)
 {
 	if (index >= inst.data.call.memory_copy_bytes.len) return 0;
-	return inst.data.call.memory_copy_bytes[(sz)index];
+	return ir::memory_copy_size(inst.data.call.memory_copy_bytes[(sz)index]);
+}
+
+fn bool Lowering.call_memory_copy_align16(&self, ir::Inst inst, usz index)
+{
+	if (index >= inst.data.call.memory_copy_bytes.len) return false;
+	return ir::memory_copy_align16(inst.data.call.memory_copy_bytes[(sz)index]);
 }
 
 <* Copy exactly size bytes from source into the outgoing stack argument area. *>
@@ -1855,6 +2484,15 @@ fn void? Lowering.copy_f80_argument(&self, ir::Ref source, uint destination)
 fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 {
 	ir::Inst inst = self.inst(ref);
+	ir::Inst callee_inst = self.inst(inst.data.call.func);
+	if (callee_inst.tag == SYMBOL && callee_inst.data.label.starts_with(ASM_PREFIX))
+	{
+		return self.inline_asm(ref, callee_inst.data.label);
+	}
+	if (callee_inst.tag == SYMBOL && callee_inst.data.label.starts_with(ATOMIC_INTRINSIC_PREFIX))
+	{
+		return self.atomic_intrinsic(ref, callee_inst.data.label[ATOMIC_INTRINSIC_PREFIX.len..]);
+	}
 	if (self.is_float_type(inst.ty))
 	{
 		self.float_width(inst.ty)!;
@@ -1875,6 +2513,7 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		}
 		if (copy_bytes > 0)
 		{
+			if (self.call_memory_copy_align16(inst, (usz)i)) stack_bytes = (stack_bytes + 15) / 16 * 16;
 			stack_bytes += (copy_bytes + 7) / 8 * 8;
 			continue;
 		}
@@ -1913,6 +2552,7 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		}
 		else if (copy_bytes > 0)
 		{
+			if (self.call_memory_copy_align16(inst, (usz)i)) stack_offset = (stack_offset + 15) / 16 * 16;
 			self.copy_stack_argument(arg, stack_offset, copy_bytes)!;
 			stack_offset += (copy_bytes + 7) / 8 * 8;
 		}
@@ -1954,8 +2594,13 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 			gp_arg_count++;
 		}
 	}
+	// Register arguments. The GP ones form one parallel move: an argument may
+	// sit in a parameter register another argument goes to (allowed_registers
+	// lets a value whose last use is this call live in caller-saved registers).
 	uint gp_register_index = 0;
 	uint sse_register_index = 0;
+	List{PhiMove} moves;
+	moves.init(tmem);
 	foreach (i, arg : args)
 	{
 		if (self.is_f80_type(self.inst(arg).ty) || self.call_memory_copy_bytes(inst, (usz)i) > 0 || self.call_stack_only(inst, (usz)i)) continue;
@@ -1971,14 +2616,26 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		{
 			if (gp_register_index < SYSV_INT_PARAM_REGS.len)
 			{
-				self.load(arg, SYSV_INT_PARAM_REGS[gp_register_index])!;
+				PhiMove move = { .src = self.phi_location(arg),
+					.dst = { .kind = REG, .reg = SYSV_INT_PARAM_REGS[gp_register_index] }, .width = self.bits(self.inst(arg).ty)! };
+				if (self.inst(arg).tag == SYMBOL || self.inst(arg).tag == ALLOC) move.width = 64;
+				if (!move.src.same(move.dst)) moves.push(move);
 			}
 			gp_register_index++;
 		}
 	}
+	self.parallel_move(&moves)!;
 	ir::Inst callee = self.inst(inst.data.call.func);
 	// SysV variadic callees use al as an upper bound on the vector registers used.
-	self.emit(MOV, reg_op(EAX), imm_op((long)sse_register_count));
+	// Flags are dead here (argument setup is moves): zero with the shorter XOR.
+	if (sse_register_count == 0)
+	{
+		self.emit(XOR, reg_op(EAX), reg_op(EAX));
+	}
+	else
+	{
+		self.emit(MOV, reg_op(EAX), imm_op((long)sse_register_count));
+	}
 	if (callee.tag == SYMBOL)
 	{
 		String name = callee.data.label;
@@ -2008,68 +2665,16 @@ fn void? Lowering.call(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 	}
 	if (call_hi_ref != ir::NONE && self.inst(call_hi_ref).tag == CALL_HI && self.inst(call_hi_ref).data.ref == ref)
 	{
-		self.store(call_hi_ref, RDX)!;
+		bool low_sse = self.is_float_type(inst.ty);
+		if (self.is_float_type(self.inst(call_hi_ref).ty))
+		{
+			self.store_float(call_hi_ref, low_sse ? XMM1 : XMM0)!;
+		}
+		else
+		{
+			self.store(call_hi_ref, low_sse ? RAX : RDX)!;
+		}
 	}
-}
-
-fn void? Lowering.branch(&self, ir::Ref ref)
-{
-	ir::BranchData b = self.inst(ref).data.branch;
-	// i1 values are represented as 0/1 in their byte, so testing the byte is enough.
-	self.load(b.cond, RAX)!;
-	self.emit(TEST, reg_op(AL), reg_op(AL));
-	String else_edge = self.new_edge_label();
-	self.emit(JE, target_op(else_edge));
-	self.jump_to(b.then_label)!;
-	self.emit_label(else_edge);
-	self.jump_to(b.else_label)!;
-}
-
-fn void? Lowering.select(&self, ir::Ref ref)
-{
-	ir::BranchData select = self.inst(ref).data.branch;
-	if (!self.is_float_type(self.inst(ref).ty))
-	{
-		// i1 values are represented as 0/1 in their byte, so testing the byte is enough.
-		// Both arms are already-materialized SSA values; the CMOV does not speculate arm effects.
-		ushort width = self.bits(self.inst(ref).ty)! <= 32 ? 32 : 64;
-		self.load(select.then_label, Register.RAX.to_bits(width))!;
-		self.load(select.else_label, Register.RCX.to_bits(width))!;
-		self.load(select.cond, RDX)!;
-		self.emit(TEST, reg_op(DL), reg_op(DL));
-		self.emit(CMOVE, reg_op(Register.RAX.to_bits(width)), reg_op(Register.RCX.to_bits(width)));
-		self.store(ref, RAX)!;
-		return;
-	}
-	// Keep floating-point selects as branches. Moving the bits preserves signed zero and NaN payloads.
-	self.load(select.cond, RAX)!;
-	self.emit(TEST, reg_op(AL), reg_op(AL));
-	String else_label = self.new_edge_label();
-	String done_label = self.new_edge_label();
-	self.emit(JE, target_op(else_label));
-	if (self.is_float_type(self.inst(ref).ty))
-	{
-		self.load_float(select.then_label, XMM0)!;
-		self.store_float(ref, XMM0)!;
-	}
-	else
-	{
-		self.load(select.then_label, RAX)!;
-		self.store(ref, RAX)!;
-	}
-	self.emit(JMP, target_op(done_label));
-	self.emit_label(else_label);
-	if (self.is_float_type(self.inst(ref).ty))
-	{
-		self.load_float(select.else_label, XMM0)!;
-		self.store_float(ref, XMM0)!;
-	}
-	else
-	{
-		self.load(select.else_label, RAX)!;
-		self.store(ref, RAX)!;
-	}
-	self.emit_label(done_label);
 }
 
 fn void? Lowering.switch_inst(&self, ir::Ref ref)
@@ -2128,8 +2733,25 @@ fn void? Lowering.ret(&self, ir::Ref ref)
 fn void? Lowering.ret_pair(&self, ir::Ref ref)
 {
 	ir::BinData pair = self.inst(ref).data.bin;
-	self.load(pair.rhs, RDX)!;
-	self.load(pair.lhs, RAX)!;
+	bool low_sse = self.is_float_type(self.inst(pair.lhs).ty);
+	bool high_sse = self.is_float_type(self.inst(pair.rhs).ty);
+	// SysV: INTEGER eightbytes take RAX then RDX, SSE ones XMM0 then XMM1.
+	if (high_sse)
+	{
+		self.load_float(pair.rhs, low_sse ? XMM1 : XMM0)!;
+	}
+	else
+	{
+		self.load(pair.rhs, low_sse ? RAX : RDX)!;
+	}
+	if (low_sse)
+	{
+		self.load_float(pair.lhs, XMM0)!;
+	}
+	else
+	{
+		self.load(pair.lhs, RAX)!;
+	}
 	self.return_epilogue();
 }
 
@@ -2506,9 +3128,15 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 {
 	if (self.folded_away[(sz)ref]) return;
 	if (self.lower_wide_int(ref)!) return;
+	if (self.lower_vector(ref)!) return;
 	ir::Inst inst = self.inst(ref);
 	switch (inst.tag)
 	{
+		case VSPLAT:
+		case VEXTRACT:
+		case VREDUCE_ADD:
+		case VSHUFFLE:
+			unreachable("lowered by lower_vector");
 		case ARG:
 			if (inst.data.arg.location_kind == ir::ArgLocationKind.SSE_REGISTER)
 			{
@@ -2604,11 +3232,22 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 			if (self.current_label != ir::NONE && !self.block_terminated) self.edge_copies(ref)!;
 			self.current_label = ref;
 			self.emit_label(self.labels[(sz)ref]);
+			// A user label whose address a static initializer takes (`&&label`)
+			// also gets a stable name the data relocation can refer to.
+			if (inst.data.label.starts_with(USER_LABEL_PREFIX) && self.is_address_taken(ref))
+			{
+				self.emit_label(block_address_symbol(self.decl.name, inst.data.label[USER_LABEL_PREFIX.len..]));
+			}
+			// An address-taken block moves its incoming area into its PHIs on entry.
+			if (self.block_phi_area[(sz)ref] != 0)
+			{
+				self.phi_area_to_phis(self.label_body_next[(sz)ref], self.block_phi_area[(sz)ref], false)!;
+			}
 		case ALLOC:
 		case PHI: break;
 		case CONSTANT:
 		case SYMBOL: break;
-		case JMP: self.jump_to(inst.data.ref)!;
+		case JMP: self.jump_or_fall_through(inst.data.ref)!;
 		case BRANCH: self.branch(ref)!;
 		case SWITCH: self.switch_inst(ref)!;
 		case RET: self.ret(ref)!;
@@ -2633,9 +3272,13 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 				}
 				break;
 			}
-			ushort w = self.load(inst.data.bin.rhs, RAX)!;
+			ir::Ref stored = inst.data.bin.rhs;
+			ushort w = self.bits(self.inst(stored).ty)!;
+			if (self.inst(stored).tag == SYMBOL || self.inst(stored).tag == ALLOC) w = 64;
+			// Read the stored value first: loading it may need RAX, never RCX/RDX.
+			Operand value = self.src_operand(stored, w, RAX, true, false)!;
 			Operand address = self.address_operand(ref, RCX, RDX, w)!;
-			self.emit(MOV, address, reg_op(Register.RAX.to_bits(w)));
+			self.emit(MOV, address, value);
 		case LOAD:
 			if (self.is_float_type(inst.ty))
 			{
@@ -2648,15 +3291,18 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 				}
 				else
 				{
-					self.emit(self.float_move_mnemonic(w), reg_op(XMM0), address);
-					self.store_float(ref, XMM0)!;
+					// Straight into the result's register when it has one.
+					Register dst = self.in_register(ref) ? self.value_regs[(sz)ref] : XMM0;
+					self.emit(self.float_move_mnemonic(w), reg_op(dst), address);
+					self.store_float(ref, dst)!;
 				}
 				break;
 			}
 			ushort w = self.bits(inst.ty)!;
 			Operand address = self.address_operand(ref, RCX, RDX, w)!;
-			self.emit(MOV, reg_op(Register.RAX.to_bits(w)), address);
-			self.store(ref, RAX)!;
+			Register dst = self.dest_reg(ref);
+			self.emit(MOV, reg_op(dst.to_bits(w)), address);
+			self.store(ref, dst)!;
 		// x86-64 is TSO: every aligned load is an acquire load and every plain store
 		// a release store, so only seq_cst stores and fences need a full barrier.
 		case ATOMIC_LOAD:
@@ -2705,8 +3351,9 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 			if (inst.ty == value_interner::REF_PTR && self.has_addr[(sz)ref])
 			{
 				Operand address = self.address_operand(ref, RCX, RDX, 0)!;
-				self.emit(LEA, reg_op(RAX), address);
-				self.store(ref, RAX)!;
+				Register dst = self.dest_reg(ref);
+				self.emit(LEA, reg_op(dst), address);
+				self.store(ref, dst)!;
 				break;
 			}
 			self.alu(ref, ADD)!;
@@ -2726,16 +3373,16 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		case BIT_SHL: self.shift(ref, SHL, false)!;
 		case BIT_ASHR: self.shift(ref, SAR, true)!;
 		case BIT_LSHR: self.shift(ref, SHR, false)!;
-		case CMP_EQ: self.compare(ref, E)!;
-		case CMP_NE: self.compare(ref, NE)!;
-		case CMP_SLT: self.compare(ref, L)!;
-		case CMP_SLTE: self.compare(ref, LE)!;
-		case CMP_SGT: self.compare(ref, G)!;
-		case CMP_SGTE: self.compare(ref, GE)!;
-		case CMP_ULT: self.compare(ref, B)!;
-		case CMP_ULTE: self.compare(ref, BE)!;
-		case CMP_UGT: self.compare(ref, A)!;
-		case CMP_UGTE: self.compare(ref, AE)!;
+		case CMP_EQ: self.compare(ref)!;
+		case CMP_NE: self.compare(ref)!;
+		case CMP_SLT: self.compare(ref)!;
+		case CMP_SLTE: self.compare(ref)!;
+		case CMP_SGT: self.compare(ref)!;
+		case CMP_SGTE: self.compare(ref)!;
+		case CMP_ULT: self.compare(ref)!;
+		case CMP_ULTE: self.compare(ref)!;
+		case CMP_UGT: self.compare(ref)!;
+		case CMP_UGTE: self.compare(ref)!;
 		case FCMP_OEQ: self.float_compare(ref, E)!;
 		case FCMP_UNE: self.float_compare(ref, NE)!;
 		case FCMP_OLT: self.float_compare(ref, B)!;
@@ -2744,10 +3391,12 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		case FCMP_OGE: self.float_compare(ref, AE)!;
 		case BIT_NOT:
 		case NEGATE:
-			ushort w = self.load(inst.data.ref, RAX)!;
-			self.emit(inst.tag == BIT_NOT ? Mnemonic.NOT : Mnemonic.NEG, reg_op(Register.RAX.to_bits(w)));
-			self.store(ref, RAX)!;
+			Register dst = self.dest_reg(ref);
+			ushort w = self.load(inst.data.ref, dst)!;
+			self.emit(inst.tag == BIT_NOT ? Mnemonic.NOT : Mnemonic.NEG, reg_op(dst.to_bits(w)));
+			self.store(ref, dst)!;
 		case FNEG: self.float_negate(ref)!;
+		case FABS: self.float_abs(ref)!;
 		case FPTOSI: self.float_to_int(ref, true)!;
 		case FPTOUI: self.float_to_int(ref, false)!;
 		case SITOFP: self.int_to_float(ref, true)!;
@@ -2755,9 +3404,10 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 		case FPEXT: self.float_convert(ref, true)!;
 		case FPTRUNC: self.float_convert(ref, false)!;
 		case TRUNC:
-			self.load(inst.data.ref, RAX)!;
-			if (inst.ty == value_interner::REF_I1) self.emit(AND, reg_op(AL), imm_op(1));
-			self.store(ref, RAX)!;
+			Register dst = self.dest_reg(ref);
+			self.load(inst.data.ref, dst)!;
+			if (inst.ty == value_interner::REF_I1) self.emit(AND, reg_op(dst.to_bits(8)), imm_op(1));
+			self.store(ref, dst)!;
 		case ZEXT: self.extend(ref, false)!;
 		case SEXT: self.extend(ref, true)!;
 		case SELECT: self.select(ref)!;
@@ -2779,7 +3429,14 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 			self.load(inst.data.ref, RAX)!;
 			self.emit(MOV, reg_op(RSP), reg_op(RAX));
 		case LABEL_ADDR:
-		case JMP_VAL: self.fail("TODO: lowering computed goto")!;
+			self.emit(LEA, reg_op(RAX), label_mem_op(self.labels[(sz)inst.data.ref]));
+			self.store(ref, RAX)!;
+		case JMP_VAL:
+			// An indirect jump may reach any address-taken block: fill each such
+			// block's own incoming area (its PHIs read it on entry), then jump.
+			foreach (target : self.address_taken_labels) self.edge_copies(target)!;
+			self.load(inst.data.ref, RAX)!;
+			self.emit(JMP, reg_op(RAX));
 	}
 }
 
@@ -2787,6 +3444,7 @@ fn void? Lowering.lower_inst(&self, ir::Ref ref, ir::Ref call_hi_ref = ir::NONE)
 fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 {
 	self.decl = decl;
+
 	self.scratch.reset();
 	self.lines.clear();
 	self.edge_count = 0;
@@ -2820,6 +3478,11 @@ fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 			ir::Inst next_inst = self.inst(next_ref);
 			if (next_inst.tag == CALL_HI && next_inst.data.ref == ref) call_hi_ref = next_ref;
 		}
+		self.fallthrough_label = ir::NONE;
+		if (body_index + 1 < (usz)decl.body.len && self.inst(decl.body[(sz)(body_index + 1)]).tag == LABEL)
+		{
+			self.fallthrough_label = decl.body[(sz)(body_index + 1)];
+		}
 		self.lower_inst(ref, call_hi_ref)!;
 		switch (inst.tag)
 		{
@@ -2832,5 +3495,474 @@ fn void? Lowering.lower_decl(&self, ir::Decl* decl)
 			case LABEL: self.block_terminated = false;
 			default: break;
 		}
+	}
+	self.peephole();
+}
+
+<* IR label names CodeGen gives C labels (`user.<name>`). *>
+const String USER_LABEL_PREFIX = "user.";
+
+<* The local symbol for the address of C label `label` in function `function`
+   (GCC `&&label` in a static initializer). *>
+fn String block_address_symbol(String function, String label, Allocator allocator = tmem)
+	=> string::format(allocator, ".Lblockaddr.%s.%s", function, label);
+
+<* Whether some LABEL_ADDR in the current function names block `label`. *>
+fn bool Lowering.is_address_taken(&self, ir::Ref label)
+{
+	foreach (taken : self.address_taken_labels) if (taken == label) return true;
+	return false;
+}
+
+<* CodeGen emits atomic read-modify-write builtins as calls to these reserved
+   symbols, `__aro.atomic.<op>.<bits>`; every IR pass already treats a call as a
+   memory side effect, and the lowering expands them inline. *>
+const String ATOMIC_INTRINSIC_PREFIX = "__aro.atomic.";
+
+<* Expand `<op>.<bits>`:
+   - `cmpxchg(ptr, expected_ptr, desired)` -> i1: like __atomic_compare_exchange_n;
+     on failure the current value is written to *expected_ptr.
+   - `xchg/add/sub/and/or/xor/nand(ptr, value)` -> the old value. *>
+fn void? Lowering.atomic_intrinsic(&self, ir::Ref ref, String spec)
+{
+	usz dot = (usz)(spec.index_of_char('.') ?? (long)spec.len);
+	String op = spec[:dot];
+	ushort width = dot < spec.len ? (ushort)spec[dot + 1..].to_int()! : 64;
+	ir::Ref[] args = self.inst(ref).data.call.args;
+	Register rax = Register.RAX.to_bits(width);
+	Register rdx = Register.RDX.to_bits(width);
+	Register r11 = Register.R11.to_bits(width);
+	if (op == "cmpxchg")
+	{
+		if (args.len != 3) return self.fail("atomic cmpxchg takes 3 arguments");
+		self.load(args[0], RCX)!;
+		self.load(args[1], R11)!;
+		self.load(args[2], RDX)!;
+		self.emit(MOV, reg_op(rax), mem_op(R11, 0, width));
+		self.emit(LOCK);
+		self.emit(CMPXCHG, mem_op(RCX, 0, width), reg_op(rdx));
+		// setcc and mov leave the flags alone; the failure path writes back the
+		// value that was found.
+		self.emit(SETE, reg_op(DL));
+		String done = self.new_edge_label();
+		self.emit(JE, target_op(done));
+		self.emit(MOV, mem_op(R11, 0, width), reg_op(rax));
+		self.emit_label(done);
+		self.emit(MOVZX, reg_op(EAX), reg_op(DL));
+		self.store(ref, RAX)!;
+		return;
+	}
+	if (args.len != 2) return self.fail("atomic %s takes 2 arguments", op);
+	self.load(args[0], RCX)!;
+	switch (op)
+	{
+		case "xchg":
+			self.load(args[1], RAX)!;
+			self.emit(XCHG, mem_op(RCX, 0, width), reg_op(rax));
+		case "add":
+		case "sub":
+			self.load(args[1], RAX)!;
+			if (op == "sub") self.emit(NEG, reg_op(rax));
+			self.emit(LOCK);
+			self.emit(XADD, mem_op(RCX, 0, width), reg_op(rax));
+		case "and":
+		case "or":
+		case "xor":
+		case "nand":
+			self.load(args[1], R11)!;
+			self.emit(MOV, reg_op(rax), mem_op(RCX, 0, width));
+			String again = self.new_edge_label();
+			self.emit_label(again);
+			self.emit(MOV, reg_op(rdx), reg_op(rax));
+			switch (op)
+			{
+				case "and": self.emit(AND, reg_op(rdx), reg_op(r11));
+				case "or": self.emit(OR, reg_op(rdx), reg_op(r11));
+				case "xor": self.emit(XOR, reg_op(rdx), reg_op(r11));
+				default:
+					self.emit(AND, reg_op(rdx), reg_op(r11));
+					self.emit(NOT, reg_op(rdx));
+			}
+			self.emit(LOCK);
+			self.emit(CMPXCHG, mem_op(RCX, 0, width), reg_op(rdx));
+			self.emit(JNE, target_op(again));
+		default:
+			return self.fail("unknown atomic intrinsic %s", op);
+	}
+	self.store(ref, RAX)!;
+}
+
+// ---------------------------------------------------------------------------
+// GNU inline asm
+// ---------------------------------------------------------------------------
+
+const String ASM_PREFIX = "__aro.asm.";
+<* 16-byte spill slots per asm statement: outputs, then saved registers. *>
+const int ASM_SCRATCH_SLOTS = 40;
+
+enum AsmPlanKind : char
+{
+	REG,
+	XMM,
+	MEM,
+	IMM,
+}
+
+struct AsmPlan
+{
+	AsmPlanKind kind;
+	Register reg;
+	String imm;
+}
+
+fn void Lowering.emit_raw_text(&self, String text) => self.lines.push({ .is_raw = true, .label = text });
+
+<* Registers the allocator may keep live values in across an asm statement:
+   inline asm that writes one must preserve it. *>
+fn bool asm_reg_is_preserved(Register reg)
+{
+	if (reg.class == SSE) return reg.enc >= 8;
+	foreach (saved : SYSV_CALLEE_PRESERVED_REGS) if (saved.enc == reg.enc) return true;
+	return false;
+}
+
+<* The 64-bit GP or XMM register a clobber or constraint name like `eax`, `%r8`
+   or `xmm3` denotes. *>
+fn Register? asm_register_named(String name)
+{
+	if (name.len > 0 && name[0] == '%') name = name[1..];
+	foreach (reg : Register::values)
+	{
+		if (reg.name != name) continue;
+		if (reg.class == SSE) return reg;
+		if (reg.class == GENERAL_PURPOSE) return reg.to_bits(64);
+	}
+	return NOT_FOUND~;
+}
+
+fn Register? asm_letter_register(char c)
+{
+	switch (c)
+	{
+		case 'a': return RAX;
+		case 'b': return RBX;
+		case 'c': return RCX;
+		case 'd': return RDX;
+		case 'S': return RSI;
+		case 'D': return RDI;
+		default: return NOT_FOUND~;
+	}
+}
+
+fn Register asm_xmm_register(char n)
+{
+	foreach (reg : Register::values) if (reg.class == SSE && reg.enc == n) return reg;
+	unreachable("no xmm register %d", n);
+}
+
+fn bool asm_has(String constraint, String letters)
+{
+	foreach (c : constraint) foreach (l : letters) if (c == l) return true;
+	return false;
+}
+
+fn ushort asm_size_bits(uint size) => size >= 8 ? 64 : (size >= 4 ? 32 : (size >= 2 ? 16 : 8));
+
+<* Expand one inline-asm statement: put inputs in registers or memory operands,
+   substitute the AT&T template between `.att_syntax`/`.intel_syntax`
+   directives, then store register outputs through their lvalue addresses. *>
+fn void? Lowering.inline_asm(&self, ir::Ref ref, String name)
+{
+	ir::AsmBlock* block = self.ir.find_asm(name);
+	if (!block) return self.fail("inline asm %s has no description", name);
+	if (block.basic)
+	{
+		self.emit_raw_text("\t.att_syntax prefix");
+		self.emit_raw_text(block.template);
+		self.emit_raw_text("\t.intel_syntax noprefix");
+		return;
+	}
+	ir::Ref[] args = self.inst(ref).data.call.args;
+	usz count = block.operands.len;
+	if ((int)count + 16 > ASM_SCRATCH_SLOTS) return self.fail("inline asm with %d operands", count);
+	AsmPlan[] plans = mem::temp_array(AsmPlan, (sz)count);
+	bool[] planned = mem::temp_array(bool, (sz)count);
+	bool[16] gp_used;
+	bool[16] xmm_used;
+	gp_used[Register.RSP.enc] = true;
+	gp_used[Register.RBP.enc] = true;
+	List{Register} preserve;
+	preserve.init(tmem);
+	foreach (clobber : block.clobbers)
+	{
+		if (try reg = asm_register_named(clobber))
+		{
+			if (reg.class == SSE) { xmm_used[reg.enc] = true; } else { gp_used[reg.enc] = true; }
+			if (asm_reg_is_preserved(reg)) preserve.push(reg);
+		}
+	}
+	// Specific registers first, then ties, then everything else.
+	foreach (i, op : block.operands)
+	{
+		foreach (c : op.constraint)
+		{
+			if (try reg = asm_letter_register(c))
+			{
+				plans[i] = { .kind = REG, .reg = reg };
+				planned[i] = true;
+				gp_used[reg.enc] = true;
+				if (asm_reg_is_preserved(reg)) preserve.push(reg);
+				break;
+			}
+		}
+	}
+	foreach (i, op : block.operands)
+	{
+		if (planned[i] || op.constraint.len == 0 || op.constraint[0] < '0' || op.constraint[0] > '9') continue;
+		usz tied = (usz)op.constraint.to_int()!;
+		if (tied >= count || !planned[tied])
+		{
+			// Plan the tied output now so the input can share it.
+			if (tied >= count) return self.fail("inline asm operand ties to missing operand %d", tied);
+		}
+		continue;
+	}
+	Register[*] gp_pool = { RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11 };
+	foreach (int pass : { 0, 1 })
+	{
+		foreach (i, op : block.operands)
+		{
+			if (planned[i]) continue;
+			bool tied_constraint = op.constraint.len > 0 && op.constraint[0] >= '0' && op.constraint[0] <= '9';
+			if (tied_constraint != (pass == 1)) continue;
+			if (tied_constraint)
+			{
+				usz tied = (usz)op.constraint.to_int()!;
+				if (!planned[tied]) return self.fail("inline asm input ties to an unplanned operand");
+				plans[i] = plans[tied];
+				planned[i] = true;
+				continue;
+			}
+			ir::Inst arg = self.inst(args[op.arg]);
+			if (!op.is_output && asm_has(op.constraint, "ingEFs") && (arg.tag == CONSTANT || arg.tag == SYMBOL) && !self.is_float_type(arg.ty))
+			{
+				if (arg.tag == SYMBOL)
+				{
+					plans[i] = { .kind = IMM, .imm = arg.data.label };
+				}
+				else
+				{
+					primitive_value::PrimitiveValue key = self.ir.interner.get(arg.data.constant);
+					if (key.tag != INT_POSITIVE && key.tag != INT_NEGATIVE && key.tag != NULL)
+					{
+						return self.fail("inline asm immediate operand is not an integer");
+					}
+					long value = key.tag == NULL ? 0 : (long)key.int_low_u64();
+					plans[i] = { .kind = IMM, .imm = string::tformat("%d", value) };
+				}
+				planned[i] = true;
+				continue;
+			}
+			bool wants_xmm = asm_has(op.constraint, "xvY");
+			bool wants_reg = asm_has(op.constraint, "rqRlgQU");
+			bool wants_mem = asm_has(op.constraint, "moVp");
+			if (wants_xmm)
+			{
+				bool found = false;
+				for (char x = 0; x < 8; x++)
+				{
+					if (xmm_used[x]) continue;
+					xmm_used[x] = true;
+					plans[i] = { .kind = XMM, .reg = asm_xmm_register(x) };
+					found = true;
+					break;
+				}
+				if (!found) return self.fail("inline asm ran out of XMM registers");
+				planned[i] = true;
+				continue;
+			}
+			if (!wants_reg && !wants_mem)
+			{
+				return self.fail("unsupported inline asm constraint '%s'", op.constraint);
+			}
+			// A memory operand (or a register operand) needs one free GP register.
+			bool found = false;
+			foreach (reg : gp_pool)
+			{
+				if (gp_used[reg.enc]) continue;
+				gp_used[reg.enc] = true;
+				plans[i] = { .kind = (wants_reg || !op.by_address) ? AsmPlanKind.REG : AsmPlanKind.MEM, .reg = reg };
+				found = true;
+				break;
+			}
+			if (!found) return self.fail("inline asm ran out of registers");
+			planned[i] = true;
+		}
+	}
+
+	int slot_base = self.asm_scratch;
+	// Preserve the allocator's registers the statement writes.
+	foreach (j, reg : preserve)
+	{
+		int at = -(slot_base - ((int)count + (int)j) * 16);
+		if (reg.class == SSE) { self.emit(MOVSD, mem_op(RBP, at, 64), reg_op(reg)); }
+		else { self.emit(MOV, mem_op(RBP, at, 64), reg_op(reg)); }
+	}
+	// Inputs: caller-saved registers first, so loads never read a preserved
+	// register an earlier operand already overwrote.
+	foreach (int phase : { 0, 1 })
+	{
+		foreach (i, op : block.operands)
+		{
+			AsmPlan plan = plans[i];
+			if (plan.kind == IMM) continue;
+			bool late = plan.kind == REG && asm_reg_is_preserved(plan.reg);
+			if (late != (phase == 1)) continue;
+			ir::Ref arg = args[op.arg];
+			if (op.is_output)
+			{
+				if (plan.kind == MEM) { self.load(arg, plan.reg)!; continue; }
+				if (!op.read_write) continue;
+				ushort w = asm_size_bits(op.size);
+				if (plan.kind == XMM)
+				{
+					self.load(arg, R11)!;
+					self.emit(op.size == 4 ? MOVSS : MOVSD, reg_op(plan.reg), mem_op(R11, 0, op.size == 4 ? 32 : 64));
+				}
+				else
+				{
+					self.load(arg, plan.reg)!;
+					self.emit(w < 32 ? MOVZX : MOV, reg_op(w < 32 ? plan.reg.to_bits(32) : plan.reg.to_bits(w)), mem_op(plan.reg, 0, w));
+				}
+				continue;
+			}
+			// A tied input shares its output's register: load it there.
+			if (plan.kind == XMM) { self.load_float(arg, plan.reg)!; continue; }
+			if (self.is_float_type(self.inst(arg).ty)) return self.fail("inline asm floating-point value in a GP register");
+			self.load(arg, plan.reg)!;
+		}
+	}
+
+	// The template.
+	DString text;
+	text.init(tmem);
+	String t = block.template;
+	for (usz k = 0; k < t.len; k++)
+	{
+		char c = t[k];
+		if (c == '{') { continue; }
+		if (c == '|')
+		{
+			// Dialect alternatives `{att|intel}`: keep the AT&T one.
+			while (k < t.len && t[k] != '}') k++;
+			continue;
+		}
+		if (c == '}') continue;
+		if (c != '%' || k + 1 >= t.len) { text.append_char(c); continue; }
+		k++;
+		c = t[k];
+		if (c == '%' || c == '{' || c == '|' || c == '}') { text.append_char(c); continue; }
+		if (c == '=') { text.appendf("%d", self.edge_count++); continue; }
+		char modifier = 0;
+		if ((c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') && k + 1 < t.len && (t[k + 1] == '[' || (t[k + 1] >= '0' && t[k + 1] <= '9')))
+		{
+			modifier = c;
+			k++;
+			c = t[k];
+		}
+		usz index = usz::max;
+		if (c == '[')
+		{
+			usz end = k + 1;
+			while (end < t.len && t[end] != ']') end++;
+			String wanted = t[k + 1:end - k - 1];
+			foreach (i, op : block.operands) if (op.name == wanted) index = (usz)i;
+			k = end;
+		}
+		else if (c >= '0' && c <= '9')
+		{
+			index = 0;
+			while (k < t.len && t[k] >= '0' && t[k] <= '9') { index = index * 10 + (usz)(t[k] - '0'); k++; }
+			k--;
+		}
+		if (index >= count) return self.fail("inline asm template refers to a missing operand");
+		AsmPlan plan = plans[index];
+		ir::AsmOperand op = block.operands[index];
+		switch (plan.kind)
+		{
+			case IMM:
+				if (modifier != 'c' && modifier != 'P' && modifier != 'n') text.append_char('$');
+				if (modifier == 'n') text.append_char('-');
+				text.append_string(plan.imm);
+			case XMM:
+				text.appendf("%%%s", plan.reg.name);
+			case MEM:
+				text.appendf("(%%%s)", plan.reg.name);
+			case REG:
+				ushort w = asm_size_bits(op.size);
+				switch (modifier)
+				{
+					case 'b': w = 8;
+					case 'w': w = 16;
+					case 'k': w = 32;
+					case 'q': w = 64;
+					default: break;
+				}
+				if (modifier == 'z')
+				{
+					text.append_char(w == 8 ? 'b' : w == 16 ? 'w' : w == 32 ? 'l' : 'q');
+					break;
+				}
+				if (modifier == 'h')
+				{
+					Register high;
+					switch (plan.reg.enc)
+					{
+						case 0: high = AH;
+						case 1: high = CH;
+						case 2: high = DH;
+						case 3: high = BH;
+						default: return self.fail("inline asm %%h on a register without a high byte");
+					}
+					text.appendf("%%%s", high.name);
+					break;
+				}
+				text.appendf("%%%s", plan.reg.to_bits(w).name);
+		}
+	}
+	self.emit_raw_text("\t.att_syntax prefix");
+	self.emit_raw_text(text.copy_str(&self.scratch));
+	self.emit_raw_text("\t.intel_syntax noprefix");
+
+	// Register outputs go to the spill area first: restoring a preserved register
+	// could overwrite one, and storing needs the (possibly preserved) address.
+	foreach (i, op : block.operands)
+	{
+		if (!op.is_output || (plans[i].kind != REG && plans[i].kind != XMM)) continue;
+		int at = -(slot_base - (int)i * 16);
+		if (plans[i].kind == XMM) { self.emit(MOVSD, mem_op(RBP, at, 64), reg_op(plans[i].reg)); }
+		else { self.emit(MOV, mem_op(RBP, at, 64), reg_op(plans[i].reg)); }
+	}
+	foreach (j, reg : preserve)
+	{
+		int at = -(slot_base - ((int)count + (int)j) * 16);
+		if (reg.class == SSE) { self.emit(MOVSD, reg_op(reg), mem_op(RBP, at, 64)); }
+		else { self.emit(MOV, reg_op(reg), mem_op(RBP, at, 64)); }
+	}
+	foreach (i, op : block.operands)
+	{
+		if (!op.is_output || (plans[i].kind != REG && plans[i].kind != XMM)) continue;
+		int at = -(slot_base - (int)i * 16);
+		self.load(args[op.arg], R11)!;
+		if (plans[i].kind == XMM || op.is_float)
+		{
+			ushort fw = op.size == 4 ? 32 : 64;
+			self.emit(fw == 32 ? MOVSS : MOVSD, reg_op(XMM0), mem_op(RBP, at, fw));
+			self.emit(fw == 32 ? MOVSS : MOVSD, mem_op(R11, 0, fw), reg_op(XMM0));
+			continue;
+		}
+		ushort w = asm_size_bits(op.size);
+		self.emit(MOV, reg_op(Register.RAX.to_bits(w)), mem_op(RBP, at, w));
+		self.emit(MOV, mem_op(R11, 0, w), reg_op(Register.RAX.to_bits(w)));
 	}
 }

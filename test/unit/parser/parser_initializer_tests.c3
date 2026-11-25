@@ -5,52 +5,6 @@ import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::fronte
 import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value;
 import aro::value_interner;
 
-fn parser_result::Result? parse_initializer_test_integer(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	String spelling = p.pp.tree_token_slice(p.tree.tokens[(usz)tok]);
-	long parsed_value = spelling == "0" ? 0 : spelling == "999999" ? 999999 : spelling == "1" ? 1 : spelling == "2" ? 2 : spelling == "3" ? 3 : spelling == "4" ? 4 : 7;
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
-		.literal = { .literal_tok = tok, .qt = type_store::INT } });
-	p.advance();
-	return { .node = node, .qt = type_store::INT, .val = eval ? value::int_i64(parsed_value, p.comp) : value::NONE };
-}
-
-fn parser_result::Result? parse_initializer_test_ice(void* context, parser::Parser* p, parser::ConstDeclFoldingMode folding)
-{
-	return parse_initializer_test_integer(context, p, true);
-}
-
-struct StringInitializerContext
-{
-	type_store::QualType qt;
-	tree::CharLiteralKind kind;
-	value::Value val;
-}
-
-fn parser_result::Result? parse_initializer_test_string(void* context, parser::Parser* p, bool eval)
-{
-	if (p.at_eof()) return parser::PARSING_FAILED~;
-	tokens::TokenIndex tok = p.tok_i;
-	StringInitializerContext* literal = context;
-	type_store::NodeIndex node = p.tree.add_node({ .kind = tree::NodeKind.STRING_LITERAL_EXPR,
-		.char_literal = { .literal_tok = tok, .qt = literal.qt, .kind = literal.kind } });
-	p.advance();
-	return { .node = node, .qt = literal.qt, .val = eval ? literal.val : value::NONE };
-}
-
-fn parser_result::Result? parse_initializer_test_mixed(void* context, parser::Parser* p, bool eval)
-{
-	if (p.is_at(tokenizer::TokenId.STRING_LITERAL) || p.is_at(tokenizer::TokenId.STRING_LITERAL_UTF_8) ||
-		p.is_at(tokenizer::TokenId.STRING_LITERAL_UTF_16) || p.is_at(tokenizer::TokenId.STRING_LITERAL_UTF_32) ||
-		p.is_at(tokenizer::TokenId.STRING_LITERAL_WIDE))
-	{
-		return parse_initializer_test_string(context, p, eval);
-	}
-	return parse_initializer_test_integer(context, p, eval);
-}
-
 fn void initializer_grammar_keeps_high_designators_sparse() @test
 {
 	TrackingAllocator ta;
@@ -69,7 +23,6 @@ fn void initializer_grammar_keeps_high_designators_sparse() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
 		parser_result::Result parsed = p.parse_initializer(incomplete)!!;
 		tree::Node init = parsed.node.get(&p.tree);
@@ -103,7 +56,6 @@ fn void initializer_grammar_parses_nested_designator_paths() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
 		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
@@ -148,7 +100,6 @@ fn void initializer_grammar_elides_braces_across_nested_arrays() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::QualType matrix = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.FIXED, 2));
 
@@ -194,7 +145,6 @@ fn void initializer_grammar_elided_scalar_override_diagnostic_order() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[2] pair_fields = {
 			type_store::record_field(comp.intern_string("first"), type_store::INT),
@@ -245,7 +195,6 @@ fn void initializer_grammar_range_and_duplicate_override_semantics() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
 		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
 		assert(parsed.kind == tree::NodeKind.ARRAY_INIT_EXPR);
@@ -288,7 +237,6 @@ fn void initializer_grammar_range_override_preserves_warning_locations() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
 
 		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
@@ -492,7 +440,6 @@ fn void brace_elision_fills_nested_array_fields_in_order() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::QualType pair_array = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::RecordField[2] fields = {
@@ -535,8 +482,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		type_store::QualType literal_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
-		StringInitializerContext literal = { .qt = literal_qt, .kind = tree::CharLiteralKind.ASCII,
-			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
+		value::Value literal_val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" });
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.INCOMPLETE));
 		Source inferred_src = comp.add_source_from_buffer("inferred-string-initializer.c", "\"abc\"")!!;
 		Preprocessor inferred_pp;
@@ -546,13 +492,11 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		parser::Parser inferred_parser;
 		inferred_parser.init(&inferred_pp);
 		inferred_parser.bind_finalized_tokens();
-		InitGrammar inferred_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
-		inferred_parser.set_initializer_test_probe(&inferred_parser_grammar);
 		parser_result::Result inferred = inferred_parser.parse_initializer(incomplete)!!;
 		assert(inferred.qt.get(&comp, type_store::TypeTag.ARRAY)!!.array.len.len == 4,
 			"the inferred array bound includes its terminating null code unit");
 		assert(inferred.node.get(&inferred_parser.tree).kind == tree::NodeKind.STRING_LITERAL_EXPR);
-		assert(inferred_parser.tree.value_of(inferred.node)!!.opt_ref == literal.val.opt_ref);
+		assert(inferred_parser.tree.value_of(inferred.node)!!.opt_ref == literal_val.opt_ref);
 		assert(d.messages.len() == 0);
 		inferred_parser.free();
 		inferred_pp.free();
@@ -566,8 +510,6 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		parser::Parser exact_parser;
 		exact_parser.init(&exact_pp);
 		exact_parser.bind_finalized_tokens();
-		InitGrammar exact_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
-		exact_parser.set_initializer_test_probe(&exact_parser_grammar);
 		exact_parser.parse_initializer(exact)!!;
 		assert(d.messages.len() == 0, "the target may omit only the final null code unit");
 		exact_parser.free();
@@ -582,8 +524,6 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		parser::Parser short_parser;
 		short_parser.init(&short_pp);
 		short_parser.bind_finalized_tokens();
-		InitGrammar short_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
-		short_parser.set_initializer_test_probe(&short_parser_grammar);
 		short_parser.parse_initializer(too_short)!!;
 		assert(d.messages.len() == 1);
 		assert(d.messages[0].text == "initializer-string for char array is too long");
@@ -610,8 +550,6 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		type_store::init_named_types(&comp);
 		type_store::QualType u16 = comp.type_store.uint_least16_t;
 		type_store::QualType literal_qt = comp.type_store.put(type_store::type_array(u16, type_store::ArrayLenKind.FIXED, 3));
-		StringInitializerContext literal = { .qt = literal_qt, .kind = tree::CharLiteralKind.UTF16,
-			.val = value::intern(&comp, { .tag = BYTES, .bytes = (char[]){ 'a', 0, 'b', 0, 0, 0 } }) };
 		type_store::QualType target = comp.type_store.put(type_store::type_array(u16, type_store::ArrayLenKind.FIXED, 2));
 		Source compatible_src = comp.add_source_from_buffer("utf16-string-initializer.c", "u\"ab\"")!!;
 		Preprocessor compatible_pp;
@@ -621,8 +559,6 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		parser::Parser compatible_parser;
 		compatible_parser.init(&compatible_pp);
 		compatible_parser.bind_finalized_tokens();
-		InitGrammar compatible_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
-		compatible_parser.set_initializer_test_probe(&compatible_parser_grammar);
 		parser_result::Result compatible = compatible_parser.parse_initializer(target)!!;
 		tree::Node compatible_node = compatible.node.get(&compatible_parser.tree);
 		assert(compatible_node.kind == tree::NodeKind.STRING_LITERAL_EXPR);
@@ -641,8 +577,6 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		parser::Parser incompatible_parser;
 		incompatible_parser.init(&incompatible_pp);
 		incompatible_parser.bind_finalized_tokens();
-		InitGrammar incompatible_parser_grammar = { &literal, &parse_initializer_test_string, &parse_initializer_test_ice };
-		incompatible_parser.set_initializer_test_probe(&incompatible_parser_grammar);
 		incompatible_parser.parse_initializer(char_array)!!;
 		assert(d.messages.len() == 1);
 		assert(d.messages[0].text.starts_with("cannot initialize array of type"));
@@ -675,10 +609,6 @@ fn void brace_elision_accepts_string_array_subobject() @test
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
-		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
-			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
-		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
-		p.set_initializer_test_probe(&p_grammar);
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 3));
 		type_store::RecordField[2] fields = {
 			type_store::record_field(comp.intern_string("text"), chars),
@@ -722,10 +652,6 @@ fn void brace_elision_does_not_replace_array_elements_with_later_string() @test
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
-		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
-			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
-		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
-		p.set_initializer_test_probe(&p_grammar);
 		type_store::QualType target = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 
 		tree::Node parsed = p.parse_initializer(target)!!.node.get(&p.tree);
@@ -769,10 +695,6 @@ fn void brace_elision_does_not_replace_initialized_char_array_with_string() @tes
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType string_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 3));
-		StringInitializerContext literal = { .qt = string_qt, .kind = tree::CharLiteralKind.ASCII,
-			.val = value::intern(&comp, { .tag = BYTES, .bytes = "bc\0" }) };
-		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
-		p.set_initializer_test_probe(&p_grammar);
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 1));
 
 		tree::Node parsed = p.parse_initializer(chars)!!.node.get(&p.tree);
@@ -812,10 +734,6 @@ fn void brace_elision_replaces_equal_nested_array_subobject_in_order() @test
 		p.init(&pp);
 		p.bind_finalized_tokens();
 		type_store::QualType chars = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
-		StringInitializerContext literal = { .qt = chars, .kind = tree::CharLiteralKind.ASCII,
-			.val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" }) };
-		InitGrammar p_grammar = { &literal, &parse_initializer_test_mixed, &parse_initializer_test_ice };
-		p.set_initializer_test_probe(&p_grammar);
 		type_store::RecordField[1] fields = { type_store::record_field(comp.intern_string("text"), chars) };
 		type_store::RecordLayout layout = { .size_bits = 128, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
 		type_store::QualType record = comp.type_store.put(type_store::type_record(comp.intern_string("Text"), fields[..], layout, false));
@@ -865,7 +783,6 @@ fn void range_designator_with_field_suffix_repeats_per_element() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
 		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
@@ -913,7 +830,6 @@ fn void range_designator_with_subscript_suffix_repeats_per_row() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::QualType matrix = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.FIXED, 2));
@@ -957,7 +873,6 @@ fn void nested_range_designators_fill_fixed_matrix() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::QualType matrix = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.FIXED, 2));
@@ -1003,7 +918,6 @@ fn void range_repeats_nested_brace_value_as_struct_ast() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
 		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
@@ -1052,7 +966,6 @@ fn void duplicate_scalar_override_reports_token_locations() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
 
 		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
@@ -1104,7 +1017,6 @@ fn void range_duplicate_override_reports_original_token_locations() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::RecordField[1] fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
 		type_store::RecordLayout layout = { .size_bits = 32, .field_alignment_bits = 32, .pointer_alignment_bits = 32, .required_alignment_bits = 8 };
@@ -1162,7 +1074,6 @@ fn void reversed_range_designator_is_an_error() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 5));
 
 		// Like other designator errors, an end before the start fails the initializer.
@@ -1197,7 +1108,6 @@ fn void single_element_range_designator_is_valid() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
 
 		tree::Node parsed = p.parse_initializer(array_type)!!.node.get(&p.tree);
@@ -1234,7 +1144,6 @@ fn void range_end_out_of_bounds_is_an_error() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
 
 		// The start is in bounds, so only the range end can trip OOB_ARRAY_DESIGNATOR.
@@ -1269,7 +1178,6 @@ fn void range_start_out_of_bounds_is_an_error() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType array_type = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
 
 		assert(@catch(p.parse_initializer(array_type)) == parser::PARSING_FAILED);
@@ -1303,7 +1211,6 @@ fn void inferred_array_length_from_range_end() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.INCOMPLETE));
 
 		tree::Node parsed = p.parse_initializer(incomplete)!!.node.get(&p.tree);
@@ -1346,7 +1253,6 @@ fn void inferred_outer_length_from_nested_range_end() @test
 		parser::Parser p;
 		p.init(&pp);
 		p.bind_finalized_tokens();
-		p.set_initializer_test_probe(&grammar_parse_initializer_test_integer);
 
 		type_store::QualType row = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 2));
 		type_store::QualType rows = comp.type_store.put(type_store::type_array(row, type_store::ArrayLenKind.INCOMPLETE));
@@ -1373,22 +1279,3 @@ fn void inferred_outer_length_from_nested_range_end() @test
 	}
 	assert(ta.allocation_count() == 0);
 }
-
-alias InitAssignFn = fn parser_result::Result?(void* context, parser::Parser* p, bool eval);
-alias InitIceFn = fn parser_result::Result?(void* context, parser::Parser* p, parser::ConstDeclFoldingMode folding);
-
-<* IExpressionGrammar over this file's initializer test productions. *>
-struct InitGrammar (parser::IExpressionGrammar)
-{
-	void* context;
-	InitAssignFn assign;
-	InitIceFn ice;
-}
-
-fn parser_result::Result? InitGrammar.assignment_expression(&self, parser::Parser* p, bool eval) @dynamic
-	=> self.assign(self.context, p, eval);
-fn parser_result::Result? InitGrammar.integer_constant_expression(&self, parser::Parser* p,
-	parser::ConstDeclFoldingMode folding, bool eval) @dynamic
-	=> self.ice(self.context, p, folding);
-
-InitGrammar grammar_parse_initializer_test_integer = { null, &parse_initializer_test_integer, &parse_initializer_test_ice };

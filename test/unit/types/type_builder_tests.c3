@@ -1,4 +1,5 @@
 module type_builder_tests;
+import aro::bigint;
 import aro::frontend::c::type_store, aro::target, aro::frontend::c::compilation, aro::frontend::c::parser;
 import aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::frontend::c::lang_opts;
 import std::core::mem::allocators;
@@ -13,7 +14,6 @@ macro @with_comp(; @body(Compilation* comp))
 	Compilation comp;
 	comp.init(&ta);
 	comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-	comp.langopts.set_target_options(&comp.target);
 	@body(&comp);
 	comp.free();
 	test::eq((long)ta.allocation_count(), 0);
@@ -30,7 +30,6 @@ macro @with_parser(; @body(Compilation* comp, Parser* p, Diagnostics* d))
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;

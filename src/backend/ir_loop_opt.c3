@@ -37,18 +37,16 @@ fn void LoopInfo.free(&self)
 fn bool Loop.contains(&self, LoopInfo* info, uint block)
 {
 	if ((usz)block >= (usz)info.innermost_of_block.len) return false;
-	uint self_index = NONE_BLOCK;
-	foreach (i, loop : info.loops) if (loop.header == self.header)
-	{
-		self_index = (uint)i; break;
-	}
-	if (self_index == NONE_BLOCK) return false;
+	// A loop is identified by its header (one loop per header), so walk the
+	// enclosing chain of `block` instead of first searching `info.loops` for
+	// `self`: that search made each call O(loops) and indvar_simplify quadratic.
 	uint current = info.innermost_of_block[(sz)block];
 	while (current != NONE_BLOCK)
 	{
 		if (current >= info.loops.len()) return false;
-		if (current == self_index) return true;
-		current = info.loops.entries[(sz)current].parent;
+		Loop* loop = &info.loops.entries[(sz)current];
+		if (loop.header == self.header) return true;
+		current = loop.parent;
 	}
 	return false;
 }

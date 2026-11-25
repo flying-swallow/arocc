@@ -246,12 +246,15 @@ fn Source? compilation::Compilation.search_include(&self, String filename, Sourc
 	}
 	if (which == FIRST && type == QUOTES)
 	{
-		uint slash = filename.len;
+		// The "no slash" sentinel is the includer path's length (as below); using
+		// filename.len misread an includer whose last '/' sits at that index
+		// (/usr/include/fribidi/x.h including "fribidi-begindecls.h") as bare.
+		uint slash = (uint)current.path.len;
 		for (usz i = current.path.len; i > 0; i--) if (current.path[i - 1] == '/')
 		{
 			slash = (uint)i - 1; break;
 		}
-		String dir = slash == filename.len ? "." : current.path[:slash];
+		String dir = slash == current.path.len ? "." : (slash == 0 ? "/" : current.path[:slash]);
 		if (try src = search_candidate(self, dir, filename, USER)) return src;
 	}
 	bool wait = false;

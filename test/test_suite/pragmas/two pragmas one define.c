@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 // #opt: -std=c23
 #define TWO_PRAGMAS_IN_ONE \
   _Pragma("GCC diagnostic push") \

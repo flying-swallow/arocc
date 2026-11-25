@@ -262,7 +262,6 @@ fn void run_file(String name)
 		Compilation comp;
 		comp.init(&ta);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 
 		String path = string::format(mem, "%s/%s", vectors_dir(), name);

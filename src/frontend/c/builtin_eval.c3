@@ -3,7 +3,7 @@
 // keep C3's “not a compile-time constant” check by folding these values instead.
 module aro::frontend::c::builtin_eval;
 import aro::primitive_value;
-import aro::frontend::c::builtins, aro::frontend::c::builtin_defs::common;
+import aro::frontend::c::builtins, aro::frontend::c::builtin_defs::common, aro::frontend::c::builtin_properties;
 import aro::frontend::c::compilation, aro::frontend::c::parser, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner;
 
 <* Recognized string literal after Zig's paren/no-op/bitcast/array-to-pointer peeling. *>
@@ -86,6 +86,76 @@ fn primitive_value::PrimitiveValue nan_with_payload(ulong bits, char[] payload)
 	return primitive_value::float_key(tag, primitive_value::std_nan(tag).float_bits() | (parsed & payload_mask));
 }
 
+<* Construct a signaling NaN: quiet bit clear, payload below it, forced nonzero so the
+   result stays a NaN (GCC's __builtin_nans). *>
+fn primitive_value::PrimitiveValue snan_with_payload(ulong bits, char[] payload)
+{
+	primitive_value::PrimitiveType tag = primitive_value::float_tag_of_width(bits);
+	uint128 quiet_bit = (uint128)1 << (tag.format.frac_bits - 1);
+	uint128 parsed = parse_nan_payload(payload, (uint)bits) & (quiet_bit - 1);
+	if (parsed == 0) parsed = quiet_bit >> 1;
+	return primitive_value::float_key(tag, (primitive_value::std_nan(tag).float_bits() & ~quiet_bit) | parsed);
+}
+
+faultdef NOT_NAN_BUILTIN; // also: not an inf builtin
+
+struct NanBuiltin
+{
+	type_store::QualType qt;
+	bool signaling;
+}
+
+<* The `__builtin_nan*` / `__builtin_nans*` family: result type and whether it is signaling. *>
+fn NanBuiltin? nan_builtin(builtin_properties::BuiltinTag tag)
+{
+	switch (tag)
+	{
+		case common::TAG___BUILTIN_NANF16: return { type_store::FLOAT16, false };
+		case common::TAG___BUILTIN_NANF:
+		case common::TAG___BUILTIN_NANF32: return { type_store::FLOAT, false };
+		case common::TAG___BUILTIN_NAN:
+		case common::TAG___BUILTIN_NANF64:
+		case common::TAG___BUILTIN_NANF32X: return { type_store::DOUBLE, false };
+		case common::TAG___BUILTIN_NANL: return { type_store::LONG_DOUBLE, false };
+		case common::TAG___BUILTIN_NANF64X:
+		case common::TAG___BUILTIN_NANF128: return { type_store::FLOAT128, false };
+		case common::TAG___BUILTIN_NANSF16: return { type_store::FLOAT16, true };
+		case common::TAG___BUILTIN_NANSF:
+		case common::TAG___BUILTIN_NANSF32: return { type_store::FLOAT, true };
+		case common::TAG___BUILTIN_NANS:
+		case common::TAG___BUILTIN_NANSF64:
+		case common::TAG___BUILTIN_NANSF32X: return { type_store::DOUBLE, true };
+		case common::TAG___BUILTIN_NANSL: return { type_store::LONG_DOUBLE, true };
+		case common::TAG___BUILTIN_NANSF64X:
+		case common::TAG___BUILTIN_NANSF128: return { type_store::FLOAT128, true };
+		default: return NOT_NAN_BUILTIN~;
+	}
+}
+
+<* Result type of the `__builtin_inf*` / `__builtin_huge_val*` families (IEEE: both are +inf). *>
+fn type_store::QualType? inf_builtin_type(builtin_properties::BuiltinTag tag)
+{
+	switch (tag)
+	{
+		case common::TAG___BUILTIN_INFF16:
+		case common::TAG___BUILTIN_HUGE_VALF16: return type_store::FLOAT16;
+		case common::TAG___BUILTIN_INFF:
+		case common::TAG___BUILTIN_HUGE_VALF:
+		case common::TAG___BUILTIN_INFF32: return type_store::FLOAT;
+		case common::TAG___BUILTIN_INF:
+		case common::TAG___BUILTIN_HUGE_VAL:
+		case common::TAG___BUILTIN_INFF64:
+		case common::TAG___BUILTIN_INFF32X: return type_store::DOUBLE;
+		case common::TAG___BUILTIN_INFL:
+		case common::TAG___BUILTIN_HUGE_VALL: return type_store::LONG_DOUBLE;
+		// _Float64x is binary128 here (type_store.c3), not GCC's x87 long double.
+		case common::TAG___BUILTIN_HUGE_VALF128:
+		case common::TAG___BUILTIN_INFF64X:
+		case common::TAG___BUILTIN_INFF128: return type_store::FLOAT128;
+		default: return NOT_NAN_BUILTIN~;
+	}
+}
+
 fn ulong swap_bytes(ulong v, uint bytes)
 {
 	ulong swapped = 0;
@@ -105,10 +175,8 @@ fn value::Value eval(builtins::Expanded expanded, parser::Parser* p, type_store:
 {
 	if (!expanded.attributes.const_evaluable) return value::NONE;
 	compilation::Compilation* comp = p.comp;
-	if (expanded.tag == common::TAG___BUILTIN_INFF || expanded.tag == common::TAG___BUILTIN_INF || expanded.tag == common::TAG___BUILTIN_INFL)
+	if (try qt = inf_builtin_type(expanded.tag))
 	{
-		type_store::QualType qt = expanded.tag == common::TAG___BUILTIN_INFF ? type_store::FLOAT :
-			expanded.tag == common::TAG___BUILTIN_INF ? type_store::DOUBLE : type_store::LONG_DOUBLE;
 		return value::intern(comp, primitive_value::inf(primitive_value::float_tag_of_width(qt.bit_sizeof(comp))));
 	}
 	if (expanded.tag == common::TAG___BUILTIN_ISINF || expanded.tag == common::TAG___BUILTIN_ISINF_SIGN || expanded.tag == common::TAG___BUILTIN_ISNAN)
@@ -127,14 +195,23 @@ fn value::Value eval(builtins::Expanded expanded, parser::Parser* p, type_store:
 			case NEGATIVE: return value::int_i64(-1, comp);
 		}
 	}
-	if (expanded.tag == common::TAG___BUILTIN_NAN)
+	if (try nan = nan_builtin(expanded.tag))
 	{
 		if (args.len != 1) return value::NONE;
 		value::Value? maybe = decayed_string(p, args[0]);
 		if (catch maybe) return value::NONE;
 		value::Value str = maybe;
 		if (!str.is(primitive_value::PrimitiveType.BYTES, comp)) return value::NONE;
-		return value::intern(comp, nan_with_payload(type_store::DOUBLE.bit_sizeof(comp), str.to_bytes(comp)));
+		ulong bits = nan.qt.bit_sizeof(comp);
+		char[] payload = str.to_bytes(comp);
+		return value::intern(comp, nan.signaling ? snan_with_payload(bits, payload) : nan_with_payload(bits, payload));
+	}
+	if (expanded.tag == common::TAG___BUILTIN_ISSIGNALING)
+	{
+		if (args.len != 1) return value::NONE;
+		value::Value? maybe = p.tree.value_of(args[0]);
+		if (catch maybe) return value::NONE;
+		return value::from_bool(maybe.is_signaling(comp));
 	}
 	if (expanded.tag == common::TAG___BUILTIN_CONSTANT_P)
 	{

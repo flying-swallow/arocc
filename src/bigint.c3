@@ -56,7 +56,12 @@
 //         per-limb power-of-two loop drops bits when 64 is not a multiple of log2(base)).
 module aro::bigint;
 import aro::string_util;
-import aro::frontend::c::lang_opts;
+
+enum Signedness : char
+{
+	SIGNED,
+	UNSIGNED,
+}
 
 <* std.math.big.Limb (usize on 64-bit hosts). Plain alias so slices of ulong interoperate. *>
 alias Limb = ulong;

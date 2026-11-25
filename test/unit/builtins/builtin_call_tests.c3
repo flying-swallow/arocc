@@ -364,7 +364,6 @@ fn void check_builtin_call_type(String text, String expected, String triple = ""
 		if (triple.len != 0)
 		{
 			comp.target = target::from_triple(triple)!!;
-			comp.langopts.set_target_options(&comp.target);
 		}
 		type_store::init_named_types(&comp);
 		CallOperands operands = make_call_operands(&comp);
@@ -469,7 +468,6 @@ fn void check_arm_exclusive_call(String text, String[] diag_fragments, uint[] di
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.target = target::from_triple("armv7a-linux-gnueabi")!!;
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;

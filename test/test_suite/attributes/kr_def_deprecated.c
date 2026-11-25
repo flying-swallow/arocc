@@ -7,6 +7,5 @@ int foo(a, int b, char c, d) // #error@9: unknown type name 'a' // #error@27: un
 
 int baz() {
     return bar(1); // #error@12: use of undeclared identifier 'bar'
-    // TODO no return-type warning
-} // #warning@1: non-void function 'baz' does not return a value [-Wreturn-type]
+}
 

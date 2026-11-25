@@ -1460,3 +1460,61 @@ fn ArmVersion? Target.arm_version(&self)
 	}
 	return UNKNOWN_CPU_FEATURE~;
 }
+
+<* Zig's `LangOpts.ArmLdrex` `packed struct(u4)`; the bit value is `(char)ldrex`. *>
+bitstruct ArmLdrex : char
+{
+	bool b: 0;  // byte (8-bit)
+	bool h: 1;  // half (16-bit)
+	bool w: 2;  // word (32-bit)
+	bool d: 3;  // double (64-bit)
+}
+
+const char ARM_LDREX_B_INT = 1;
+const char ARM_LDREX_H_INT = 2;
+const char ARM_LDREX_W_INT = 4;
+const char ARM_LDREX_D_INT = 8;
+const ArmLdrex ARM_LDREX_NONE = {};
+const ArmLdrex ARM_LDREX_ALL = { .b = true, .h = true, .w = true, .d = true };
+
+<* Whether the target supports AVR's non-standard 24-bit integer types (Zig `LangOpts.has_int24`). *>
+fn bool Target.has_int24(&self) => self.cpu.arch == AVR;
+
+<*
+ ARM exclusive load/store support (Zig `LangOpts.setTargetOptions`): masks of the
+ data sizes suitable for __builtin_arm_ldrex and __builtin_arm_strex.
+ See https://arm-software.github.io/acle/main/acle.html#ldrexstrex
+ Faults on non-ARM targets (Zig null).
+*>
+fn ArmLdrex? Target.arm_ldrex(&self)
+{
+	switch (self.cpu.arch)
+	{
+		case ARM:
+		case ARMEB:
+		case THUMB:
+		case THUMBEB:
+			char arm_version = 6;
+			if (try v = self.arm_version()) arm_version = v.version;
+			switch (arm_version)
+			{
+				case 6:
+					if (self.cpu.has(ARM_MCLASS)) return ARM_LDREX_NONE;
+					if (self.cpu.has(ARM_V6K) || self.cpu.has(ARM_V6KZ)) return ARM_LDREX_ALL;
+					return { .w = true };
+				case 7:
+				case 8:
+					return self.cpu.has(ARM_MCLASS) ? (ArmLdrex){ .b = true, .h = true, .w = true } : ARM_LDREX_ALL;
+				case 9:
+					return ARM_LDREX_ALL;
+				default:
+					return ARM_LDREX_NONE;
+			}
+		case AARCH64:
+		case AARCH64_BE:
+			// ARM ldrex is always full-width
+			return ARM_LDREX_ALL;
+		default:
+			return NOT_FOUND~;
+	}
+}

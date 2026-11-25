@@ -778,7 +778,19 @@ fn bool Tree.is_lval_extra(&self, NodeIndex node, bool* is_const)
 				return self.is_lval_extra(n.conditional.else_expr, is_const);
 			}
 			return false;
+		// C11 6.5.1.1p4: a generic selection is an lvalue/function designator
+		// exactly when its result expression is.
+		case GENERIC_EXPR: return self.is_lval_extra(self.generic_result(node), is_const);
 		case COMPOUND_ASSIGN_DUMMY_EXPR: return true;
 		default: return false;
 	}
+}
+
+<* The result expression a GENERIC_EXPR selected (its association's or default's). *>
+fn NodeIndex Tree.generic_result(&self, NodeIndex node)
+{
+	Node chosen = node.get(self).generic.chosen.get(self);
+	if (chosen.kind == GENERIC_ASSOCIATION_EXPR) return chosen.generic_association.expr;
+	if (chosen.kind == GENERIC_DEFAULT_EXPR) return chosen.generic_default.expr;
+	unreachable("unexpected node selected by generic expression");
 }

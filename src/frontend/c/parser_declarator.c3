@@ -3,6 +3,7 @@
 // the productions that need it; these Parser methods compose the declarator
 // operators around a caller-supplied base type.
 module aro::frontend::c::parser;
+import aro::target;
 import aro::bigint, aro::frontend::c::diagnostics, aro::frontend::c::parser_result, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::type_store, aro::frontend::c::value;
 import aro::frontend::c::compilation, aro::frontend::c::tree, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::lang_opts, aro::frontend::c::parser_declaration;
 import aro::frontend::c::parser_attribute, aro::frontend::c::parser_statement, aro::frontend::c::attribute_wip;
@@ -37,6 +38,10 @@ struct ParsedDeclarator
 	DeclaratorType declarator_type;
 	Maybe{tokens::TokenIndex} name_tok;
 	Maybe{tokens::TokenIndex} old_style_ident_tok;
+	<* Qualifiers written inside a parameter's array brackets (`int a[const 5]`);
+	   only their flags matter. They qualify the pointer the parameter decays to,
+	   unlike qualifiers on the array type itself, which reach the elements. *>
+	type_store::QualType array_param_quals;
 }
 
 struct DeclaratorShape
@@ -48,6 +53,10 @@ struct DeclaratorShape
 	tokens::TokenIndex suffix_tok;
 	Maybe{tokens::TokenIndex} name_tok;
 	Maybe{tokens::TokenIndex} old_style_ident_tok;
+	<* What is being declared; array qualifiers, `static` and `[*]` are parameter-only. *>
+	DeclaratorKind kind;
+	<* See ParsedDeclarator.array_param_quals. *>
+	type_store::QualType array_param_quals;
 }
 
 <* `(` opens a parenthesized declarator rather than a function suffix. *>
@@ -58,6 +67,33 @@ fn bool Parser.at_declarator_group_start(&self, DeclaratorKind kind)
 	if (catch next_tok) return false;
 	tokenizer::TokenId next = next_tok.id;
 	if (next == tokenizer::TokenId.ASTERISK || next == tokenizer::TokenId.L_PAREN) return true;
+	// `int ([4])`: a parenthesized abstract array declarator (a function suffix
+	// never starts with `[`).
+	if (next == tokenizer::TokenId.L_BRACKET) return true;
+	// `int (__attribute__((x)) *)(void)`: GNU attributes may open a group; look past
+	// them so a parameter list starting with an attribute stays a function suffix.
+	if (next == tokenizer::TokenId.KEYWORD_ATTRIBUTE1 || next == tokenizer::TokenId.KEYWORD_ATTRIBUTE2)
+	{
+		usz i = (usz)self.tok_i + 1;
+		usz len = self.tree.tokens.len;
+		while (i < len && (self.tree.tokens[i].id == tokenizer::TokenId.KEYWORD_ATTRIBUTE1 ||
+			self.tree.tokens[i].id == tokenizer::TokenId.KEYWORD_ATTRIBUTE2))
+		{
+			i++;
+			if (i >= len || self.tree.tokens[i].id != tokenizer::TokenId.L_PAREN) return false;
+			usz depth = 0;
+			for (; i < len; i++)
+			{
+				tokenizer::TokenId id = self.tree.tokens[i].id;
+				if (id == tokenizer::TokenId.L_PAREN) depth++;
+				if (id == tokenizer::TokenId.R_PAREN && --depth == 0) { i++; break; }
+			}
+		}
+		if (i >= len) return false;
+		tokenizer::TokenId after = self.tree.tokens[i].id;
+		return after == tokenizer::TokenId.ASTERISK || after == tokenizer::TokenId.L_PAREN ||
+			(kind != ABSTRACT && after.is_identifier() && !self.is_typedef_name_at((tokens::TokenIndex)i));
+	}
 	return kind != ABSTRACT && next.is_identifier();
 }
 
@@ -90,7 +126,9 @@ fn void? Parser.pointer_qualifiers(&self, attribute_wip::Wip* wip, type_store::Q
 				buffer.init(p.comp.gpa);
 				defer buffer.free();
 				p.parse_gnu_attribute_specifier(&buffer)!;
+				usz first_new = (usz)wip.attrs.len();
 				parser_statement::append_statement_attributes(p, &buffer, wip)!;
+				for (usz i = first_new; i < (usz)wip.attrs.len(); i++) wip.attrs[(sz)i].pointer_position = true;
 			default: return;
 		}
 	}
@@ -165,17 +203,75 @@ fn type_store::QualType Parser.declarator_splice(&self, type_store::QualType par
 <* Parse one array suffix and return its metadata through an already-parsed
    assignment-expression bound. Empty brackets and `[*]` keep their distinct
    incomplete and unspecified-VLA type forms. *>
-fn type_store::QualType? Parser.array_suffix(&self, type_store::QualType elem)
+fn type_store::QualType? Parser.array_suffix(&self, type_store::QualType elem, DeclaratorShape* shape)
 {
 	Parser* p = self;
+	DeclaratorKind kind = shape.kind;
 	tokens::TokenIndex opener = p.tok_i;
 	p.advance(); // '['
-	// C99 permits `static` before the bound of an array parameter. Keep it
-	// as part of the parsed array metadata so parameter decay retains the
-	// minimum-bound contract for later checks and diagnostics.
+	// C99 6.7.6.2: `[ type-qualifier-list(opt) static(opt) ... ]` or
+	// `[ static type-qualifier-list ... ]`. Qualifiers (glibc `[__restrict]`) and
+	// `static` only belong to parameter arrays; they apply to the pointer the
+	// parameter decays to (QualType.decay moves them). Keep `static` as array
+	// metadata so decay retains the minimum-bound contract.
+	type_store::QualType quals;
+	tokens::TokenIndex quals_tok = p.tok_i;
+	bool got_quals = p.array_bracket_qualifiers(&quals);
 	tokens::TokenIndex static_tok = p.tok_i;
 	bool has_static_bound = p.is_at(tokenizer::TokenId.KEYWORD_STATIC);
-	if (has_static_bound) p.advance();
+	if (has_static_bound)
+	{
+		p.advance();
+		if (!got_quals) got_quals = p.array_bracket_qualifiers(&quals);
+	}
+	if (kind != DeclaratorKind.PARAM)
+	{
+		if (has_static_bound) Diagnostic.STATIC_NON_PARAM.@emit(p, static_tok)!;
+		if (got_quals) Diagnostic.ARRAY_QUALIFIERS.@emit(p, quals_tok)!;
+		if (kind != DeclaratorKind.ABSTRACT && self.is_at(tokenizer::TokenId.ASTERISK) &&
+			(usz)p.tok_i + 1 < p.tree.tokens.len && p.tree.tokens[(usz)p.tok_i + 1].id == tokenizer::TokenId.R_BRACKET)
+		{
+			Diagnostic.STAR_NON_PARAM.@emit(p, p.tok_i)!;
+		}
+		has_static_bound = false;
+		got_quals = false;
+	}
+	if (got_quals)
+	{
+		shape.array_param_quals.is_const |= quals.is_const;
+		shape.array_param_quals.is_volatile |= quals.is_volatile;
+		shape.array_param_quals.is_restrict |= quals.is_restrict;
+	}
+	return p.array_suffix_bound(elem, opener, static_tok, has_static_bound);
+}
+
+<* Consume `const`/`volatile`/`restrict`/`_Atomic` inside array brackets into `quals`. *>
+fn bool Parser.array_bracket_qualifiers(&self, type_store::QualType* quals)
+{
+	Parser* p = self;
+	bool found = false;
+	while (!p.at_eof())
+	{
+		switch (p.tree.tokens[(usz)p.tok_i].id)
+		{
+			case KEYWORD_CONST: case KEYWORD_CONST1: case KEYWORD_CONST2: quals.is_const = true;
+			case KEYWORD_VOLATILE: case KEYWORD_VOLATILE1: case KEYWORD_VOLATILE2: quals.is_volatile = true;
+			case KEYWORD_RESTRICT: case KEYWORD_RESTRICT1: case KEYWORD_RESTRICT2: quals.is_restrict = true;
+			// `_Atomic` here qualifies the decayed pointer; accepted, not modelled.
+			case KEYWORD_ATOMIC: break;
+			default: return found;
+		}
+		found = true;
+		p.advance();
+	}
+	return found;
+}
+
+<* The bound part of an array suffix, after any qualifiers and `static`. *>
+fn type_store::QualType? Parser.array_suffix_bound(&self, type_store::QualType elem, tokens::TokenIndex opener,
+	tokens::TokenIndex static_tok, bool has_static_bound)
+{
+	Parser* p = self;
 	if (self.is_at(tokenizer::TokenId.R_BRACKET))
 	{
 		if (has_static_bound)
@@ -186,7 +282,8 @@ fn type_store::QualType? Parser.array_suffix(&self, type_store::QualType elem)
 		p.advance();
 		return p.comp.type_store.put(type_store::type_array(elem, type_store::ArrayLenKind.INCOMPLETE));
 	}
-	if (self.is_at(tokenizer::TokenId.ASTERISK))
+	if (self.is_at(tokenizer::TokenId.ASTERISK) &&
+		(usz)p.tok_i + 1 < p.tree.tokens.len && p.tree.tokens[(usz)p.tok_i + 1].id == tokenizer::TokenId.R_BRACKET)
 	{
 		if (has_static_bound)
 		{
@@ -233,6 +330,14 @@ fn bool Parser.at_non_typedef_identifier(&self)
 	string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(p.tok_i));
 	symbol_stack::Symbol sym;
 	return !(p.find_typedef(name, p.tok_i, true, &sym) ?? false);
+}
+
+<* Whether the identifier at `tok` names a typedef in scope. *>
+fn bool Parser.is_typedef_name_at(&self, tokens::TokenIndex tok)
+{
+	string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(tok));
+	symbol_stack::Symbol sym;
+	return self.find_typedef(name, tok, true, &sym) ?? false;
 }
 
 <* A pre-C23 identifier-list entry is an identifier, at the start of a
@@ -394,7 +499,7 @@ fn type_store::QualType? Parser.declarator_suffixes(&self, parser_declaration::D
 	Parser* p = self;
 	if (self.is_at(tokenizer::TokenId.L_BRACKET))
 	{
-		type_store::QualType maybe_suffix = self.array_suffix(base)!;
+		type_store::QualType maybe_suffix = self.array_suffix(base, shape)!;
 		type_store::QualType suffix = maybe_suffix;
 		type_store::QualType maybe_inner = self.declarator_suffixes(decls, wip, base, shape)!;
 		type_store::QualType inner = maybe_inner;
@@ -439,7 +544,7 @@ fn DeclaratorShape? Parser.parse_declarator_shape(&self, parser_declaration::Dec
 	groups.init(self.comp.gpa);
 	defer groups.free();
 
-	DeclaratorShape shape;
+	DeclaratorShape shape = { .kind = kind };
 	type_store::QualType prefix = base;
 	while (true)
 	{
@@ -460,6 +565,16 @@ fn DeclaratorShape? Parser.parse_declarator_shape(&self, parser_declaration::Dec
 		groups.push({ .prefix = prefix, .opener = p.tok_i });
 		p.advance();
 		prefix = type_store::DECLARATOR_COMBINE;
+		// GNU attributes at the start of a group apply to the declaration, as
+		// those after a pointer star do (pointer_qualifiers).
+		while (p.is_at(tokenizer::TokenId.KEYWORD_ATTRIBUTE1) || p.is_at(tokenizer::TokenId.KEYWORD_ATTRIBUTE2))
+		{
+			parser_attribute::AttributeBuffer buffer;
+			buffer.init(p.comp.gpa);
+			defer buffer.free();
+			p.parse_gnu_attribute_specifier(&buffer)!;
+			parser_statement::append_statement_attributes(p, &buffer, wip)!;
+		}
 	}
 
 	shape.suffix_tok = p.tok_i;
@@ -621,7 +736,7 @@ fn DeclaratorValidation? Parser.validate_declarator_layer(&self, type_store::Qua
 					Diagnostic.QUALIFIER_NON_OUTERMOST_ARRAY.@emit(p, source_tok)!;
 				}
 			}
-			else if (p.comp.langopts.emulate != lang_opts::Compiler.MSVC)
+			else if (p.comp.langopts.emulate != target::Compiler.MSVC)
 			{
 				if (try elem_size = elem_qt.sizeof_or_null(p.comp))
 				{
@@ -687,6 +802,7 @@ fn ParsedDeclarator? Parser.parse_declarator(&self, parser_declaration::Declarat
 		.declarator_type = declarator_type,
 		.name_tok = shape.name_tok,
 		.old_style_ident_tok = shape.old_style_ident_tok,
+		.array_param_quals = shape.array_param_quals,
 	};
 }
 

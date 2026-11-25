@@ -48,6 +48,7 @@
 //                               riscv32/riscv32be/riscv64/riscv64be -> write_riscv_defines
 //   write_common_defines        _LP64/_ILP32 ... __BLOCKS__ (the rest of generateSystemDefines)
 module aro::frontend::c::predefined_macros;
+import aro::bigint;
 import aro::frontend::c::compilation, aro::source, aro::target, aro::frontend::c::type_store, aro::frontend::c::lang_opts, aro::code_gen_options;
 import std::core::string, std::io;
 
@@ -140,7 +141,7 @@ fn Source? generate_builtin_macros(Compilation* comp, SystemDefinesMode mode)
  - standard >= C11: openbsd/driverkit/ios/maccatalyst/macos/tvos/visionos/
    watchos -> __STDC_NO_THREADS__ 1; ps4/ps5 -> __STDC_NO_THREADS__ 1 and
    __STDC_NO_COMPLEX__ 1.
- - `#define __STDC_VERSION__ <standard.std_c_version_macro()>` unless that is "".
+ - `#define __STDC_VERSION__ <standard.version_macro>` unless that is "".
  - INCLUDE_SYSTEM_DEFINES: generate_system_defines.
  Implemented by 14.3.
 *>
@@ -180,7 +181,7 @@ fn void? write_builtin_macros(Compilation* comp, SystemDefinesMode mode, OutStre
 			default: break;
 		}
 	}
-	String stdc_version = comp.langopts.standard.std_c_version_macro();
+	String stdc_version = comp.langopts.standard.version_macro;
 	if (stdc_version.len)
 	{
 		w.write("#define __STDC_VERSION__ ")!;
@@ -199,7 +200,7 @@ fn void? write_builtin_macros(Compilation* comp, SystemDefinesMode mode, OutStre
 fn void? generate_system_defines(Compilation* comp, OutStream w)
 {
 	Target* t = &comp.target;
-	bool is_gnu = comp.langopts.standard.is_gnu();
+	bool is_gnu = comp.langopts.standard.is_gnu;
 
 	write_compiler_defines(comp, w)!;
 	write_pthread_defines(comp, w)!;
@@ -321,7 +322,7 @@ fn void? write_compiler_defines(Compilation* comp, OutStream w)
  __nonnull/__null_unspecified/__nullable; __ATOMIC_* orders and *_LOCK_FREE
  (1), __ATOMIC_CHAR8_T_LOCK_FREE if langopts.has_char8_t; __CHAR_UNSIGNED__,
  __WCHAR_UNSIGNED__, __WINT_UNSIGNED__, __CHAR_BIT__ 8; the int max/width
- list (BOOL width, SCHAR ... SIG_ATOMIC, __INT24_* when has_int24 with
+ list (BOOL width, SCHAR ... SIG_ATOMIC, __INT24_* when target.has_int24() with
  "LL"/"L" suffix chosen by int bits == 8); __BITINT_MAXWIDTH__ 65535;
  __SIZEOF_*__ (incl. __SIZEOF_INT128__ if has_int128); __INTPTR_TYPE__ ...
  __CHAR32_TYPE__ (note Zig passes `intptr` to __INTMAX/__UINTMAX
@@ -417,7 +418,7 @@ fn void? write_common_defines(Compilation* comp, OutStream w)
 	generate_int_max_and_width(comp, w, "INT", type_store::INT)!;
 	generate_int_max_and_width(comp, w, "LONG", type_store::LONG)!;
 	generate_int_max_and_width(comp, w, "LONG_LONG", type_store::LONG_LONG)!;
-	if (comp.langopts.has_int24)
+	if (comp.target.has_int24())
 	{
 		bool int_is_8 = TypeInt.INT.bits(comp) == 8;
 		io::fprintf(w, "#define __INT24_MAX__ 8388607%s\n", int_is_8 ? "LL" : "L")!;

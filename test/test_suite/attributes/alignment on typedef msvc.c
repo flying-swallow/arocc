@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 // #opt: -target x86_64-windows-msvc
 __declspec(align(2))  typedef struct {
   int a;

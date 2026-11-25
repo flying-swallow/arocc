@@ -332,6 +332,14 @@ fn bool Value.is_nan(self, Compilation* comp)
 	}
 }
 
+<* Whether a float constant is a signaling NaN (__builtin_issignaling); false for non-floats. *>
+fn bool Value.is_signaling(self, Compilation* comp)
+{
+	if (self.is_none()) return false;
+	PrimitiveValue key = comp.interner.get(self.ref());
+	return key.tag.kind == FLOAT && key.is_signaling();
+}
+
 <*
  Value.isInfSign: none -> UNKNOWN; float -> POSITIVE / NEGATIVE / FINITE (NaN is
  FINITE); any other key (int included, e.g. a float 0.0 interned as REF_ZERO)

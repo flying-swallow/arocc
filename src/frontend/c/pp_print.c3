@@ -120,7 +120,7 @@ fn void? Preprocessor.pretty_print_macro(&self, OutStream w, Location loc, Macro
 {
 	Source src = self.comp.get_source(loc.id);
 	Tokenizer tz;
-	tz.init(src.buf, src.id, self.comp.langopts);
+	tz.init(src.buf, src.id, self.comp.langopts, &self.comp.target);
 	tz.index = loc.byte_offset;
 	bool prev_ws = false; // avoid printing multiple whitespace if /* */ comments are within the macro def
 	bool saw_name = false; // do not print comments before the name token is seen.

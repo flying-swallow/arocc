@@ -1,17 +1,17 @@
 // Integration coverage for the declaration grammar and its composed expressions.
 module parser_grammar_tests;
-import aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tree;
+import aro::frontend::c::parser, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tree;
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::type_store, aro::string_interner, aro::frontend::c::symbol_stack, aro::frontend::c::value;
 import aro::bigint, aro::value_interner;
 import std::core::mem::allocators;
 
-struct GrammarTypedefSeed (parser_declaration::IDeclarationTestProbe)
+struct GrammarTypedefSeed (parser::IParserTestProbe)
 {
 	string_interner::StringId name;
 	type_store::QualType qt;
 }
 
-fn void? GrammarTypedefSeed.implicit_typedefs(&seed, parser::Parser* p) @dynamic
+fn void? GrammarTypedefSeed.handle_implicit_typedefs(&seed, parser::Parser* p) @dynamic
 {
 	seed.qt = p.comp.type_store.put(type_store::type_typedef(type_store::INT, seed.name,
 		(type_store::NodeIndex)0));
@@ -44,7 +44,7 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 
 		GrammarTypedefSeed seed = { .name = comp.intern_string("Seeded") };
 		parser::Parser p;
-		p.init(&pp); p.declarations.test_probe = &seed;
+		p.init(&pp); p.test_probe = &seed;
 		tree::Tree result = p.parse()!!;
 
 		assert(result.root_decls.len() == 8, "all declarations should be retained in source order");

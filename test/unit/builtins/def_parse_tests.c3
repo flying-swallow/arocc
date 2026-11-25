@@ -32,7 +32,7 @@ const DefCounts[] COUNTS = {
 	{ AMDGCN, 844, 647, 0, 0, "__builtin_amdgcn_add_max_i32", "__builtin_r600_recipsqrt_ieeef" },
 	{ ARM, 260, 8, 115, 113, "_BitScanForward", "__yield" },
 	{ BPF, 4, 0, 0, 0, "__builtin_btf_type_id", "__builtin_preserve_type_info" },
-	{ COMMON, 1503, 0, 448, 193, "__builtin_choose_expr", "__builtin_zos_va_start" },
+	{ COMMON, 1515, 0, 448, 193, "__builtin_choose_expr", "__builtin_zos_va_start" },
 	{ HEXAGON, 2040, 2040, 0, 0, "__builtin_SI_to_SXTHI_asrh", "__builtin_HEXAGON_prefetch" },
 	{ LOONGARCH, 1517, 1503, 0, 0, "__builtin_lasx_cast_128", "__builtin_lsx_vxori_b" },
 	{ MIPS, 669, 0, 0, 0, "__builtin_mips_absq_s_ph", "__builtin_msa_xori_b" },
@@ -123,7 +123,7 @@ fn void every_def_file() @test
 			assert(f.entries[^1].name == c.last, "%s last", c.group);
 		};
 	}
-	check(total, 13552);
+	check(total, 13564);
 }
 
 fn void common_samples() @test
@@ -147,9 +147,9 @@ fn void common_samples() @test
 		e = find(&f, "__builtin_classify_type");
 		want = { .is_const = true, .custom_typecheck = true, .const_evaluable = true };
 		check((uint)e.record.attributes, (uint)want);
-		// common.def:4467-4471
+		// common.def:4515-4519
 		e = find(&f, "printf");
-		check(e.line, 4467);
+		check(e.line, 4515);
 		assert(e.record.param_str == "icC*.");
 		assert(e.record.header == STDIO);
 		assert(e.record.language == ALL_LANGUAGES);

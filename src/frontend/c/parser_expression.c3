@@ -7,6 +7,7 @@ module aro::frontend::c::parser;
 import aro::primitive_value;
 import aro::frontend::c::parser_result, aro::frontend::c::tree, aro::frontend::c::tokens, aro::frontend::c::tokenizer;
 import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::compilation, aro::bigint, aro::frontend::c::diagnostics, aro::frontend::c::lang_opts;
+import aro::frontend::c::attribute;
 import std::core::dstring;
 
 excuse NO_EXPRESSION;
@@ -384,7 +385,10 @@ fn parser_result::Result? Parser.parse_label_address(&self, tokens::TokenIndex o
 			.addr_of_label = { .label_tok = label_tok, .qt = type_store::VOID_POINTER }
 		}
 	);
-	return { .node = node, .qt = type_store::VOID_POINTER, .val = value::NONE };
+	// An address constant (GCC accepts `static void *t[] = { &&l };`): the pointer
+	// names this node, which CodeGen resolves to the label's block address.
+	value::Value address = value::pointer({ .node = (uint)node, .offset = value::ZERO.ref() }, p.comp);
+	return { .node = node, .qt = type_store::VOID_POINTER, .val = address };
 }
 
 <* `&operand` once the operand is parsed. Out of line so its locals do not enlarge every recursive
@@ -552,7 +556,8 @@ fn parser_result::Result? Parser.parse_sizeof_alignof(&self, tokenizer::TokenId 
 		Diagnostic.GNU_ALIGNOF_EXPR.@emit(p, op_tok, spelling)!;
 	}
 	type_store::QualType result_qt = p.comp.type_store.size;
-	value::Value result_val = value::int_u64(is_sizeof ? size: operand_qt.alignof(p.comp), p.comp);
+	ulong alignment = has_expression_operand ? p.expr_declared_alignment(expr.unwrap(), operand_qt) : operand_qt.alignof(p.comp);
+	value::Value result_val = value::int_u64(is_sizeof ? size: alignment, p.comp);
 	tree::NodeKind kind = is_sizeof ? tree::NodeKind.SIZEOF_EXPR : tree::NodeKind.ALIGNOF_EXPR;
 	type_store::NodeIndex node = p.tree.add_node(
 		{
@@ -560,6 +565,45 @@ fn parser_result::Result? Parser.parse_sizeof_alignof(&self, tokenizer::TokenId 
 		}
 	);
 	return { .node = node, .qt = result_qt, .val = result_val };
+}
+
+<* `__alignof__ expr` (GCC, Clang): a variable or member named by the operand
+   contributes its own `aligned` attribute on top of the type's alignment. *>
+fn uint Parser.expr_declared_alignment(&self, type_store::NodeIndex node, type_store::QualType qt)
+{
+	uint alignment = qt.alignof(self.comp);
+	type_store::NodeIndex current = node;
+	while (current.get(&self.tree).kind == tree::NodeKind.PAREN_EXPR) current = current.get(&self.tree).unary.operand;
+	tree::Node n = current.get(&self.tree);
+	type_store::NodeOptIndex decl = type_store::NODE_NULL;
+	switch (n.kind)
+	{
+		case MEMBER_ACCESS_EXPR:
+		case MEMBER_ACCESS_PTR_EXPR:
+			type_store::QualType base_qt = n.member_access.base.qt(&self.tree);
+			if (n.kind == tree::NodeKind.MEMBER_ACCESS_PTR_EXPR && base_qt.is_pointer(self.comp)) base_qt = base_qt.child_type(self.comp);
+			type_store::Record? record = base_qt.get_record(self.comp);
+			if (catch record) return alignment;
+			if ((usz)n.member_access.member_index >= record.fields.len) return alignment;
+			decl = record.fields[n.member_access.member_index].field_decl;
+			// A packed member (or a member of a packed record) is byte-aligned
+			// unless it also has its own `aligned`.
+			if (self.tree.attr_map.has_attribute(decl, attribute::AttributeTag.PACKED) ||
+				self.tree.attr_map.has_attribute(record.decl_node, attribute::AttributeTag.PACKED))
+			{
+				alignment = 1;
+			}
+		case DECL_REF_EXPR:
+			decl = (type_store::NodeOptIndex)n.decl_ref.decl;
+		default:
+			return alignment;
+	}
+	if (decl.is_null()) return alignment;
+	if (try requested = self.tree.attr_map.requested_alignment(decl, self.comp))
+	{
+		alignment = alignment == 1 ? requested : max(alignment, requested);
+	}
+	return alignment;
 }
 
 <* `__real__`/`__imag__` once the operand is parsed. Out of line so its locals do not enlarge every recursive
@@ -1077,6 +1121,12 @@ fn parser_result::Result? Parser.combine_binary(&self, parser_result::Result lhs
 				{
 					emit_shift_count_diag(p, rhs.val, calc_lhs.qt, op_tok)!;
 				}
+				// `%=`, `&=`, `^=`, `|=` compute in the common type of both operands
+				// (`u64 |= i32` sign-extends the right side); shifts keep the lhs type.
+				if (kind != tree::NodeKind.SHL_ASSIGN_EXPR && kind != tree::NodeKind.SHR_ASSIGN_EXPR)
+				{
+					convert_arithmetic_operands(&calc_lhs, &rhs, p, op_tok)!;
+				}
 			}
 			else if (kind == tree::NodeKind.ADD_ASSIGN_EXPR && calc_lhs.qt.is_pointer(p.comp))
 			{
@@ -1450,7 +1500,7 @@ fn parser_result::Result? Parser.combine_binary(&self, parser_result::Result lhs
 			{
 				emit_pointer_overflow(p, folded, result_qt, op_tok)!;
 			}
-			else if (overflowed && result_qt.is_int(p.comp) && result_qt.signedness(p.comp) != lang_opts::Signedness.UNSIGNED)
+			else if (overflowed && result_qt.is_int(p.comp) && result_qt.signedness(p.comp) != bigint::Signedness.UNSIGNED)
 			{
 				emit_integer_overflow(p, folded, result_qt, op_tok)!;
 			}

@@ -10,7 +10,7 @@ import aro::frontend::c::driver_exec, aro::frontend::c::driver_tempfiles, aro::f
 import aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::frontend::c::codegen;
 import aro::host_process;
 import aro::frontend::c::include_search, aro::frontend::c::dep_file, aro::frontend::c::diagnostics, aro::frontend::c::pragma;
-import aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::once, aro::frontend::c::pragmas::message, aro::frontend::c::pragmas::pack;
+import aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::once, aro::frontend::c::pragmas::message, aro::frontend::c::pragmas::pack, aro::frontend::c::pragmas::push_macro;
 import aro::toolchain::gcc_version, aro::toolchain::multilib;
 import aro::value_interner;
 import std::io, std::io::file, std::io::path, std::io::os, std::os::env;
@@ -50,7 +50,7 @@ fn void WholeProgram.free(&self)
 	self.origins.free();
 }
 
-const String USAGE_FORMAT = "Usage %s: [options] file..\n\nGeneral options:\n  --help      Print this message\n  --version   Print aro version\n\nPreprocessor options:\n  -C                      Do not discard comments\n  -CC                     Do not discard comments, including in macro expansions\n  -dM                     Output #define directives for all the macros defined during the execution of the preprocessor\n  -dD                     Like -dM except that it outputs both the #define directives and the result of preprocessing\n  -dN                     Like -dD, but emit only the macro names, not their expansions.\n  -D <macro>=<value>      Define <macro> to <value> (defaults to 1)\n  -E                      Only run the preprocessor\n  -fdollars-in-identifiers\n                          Allow '$' in identifiers\n  -fno-dollars-in-identifiers\n                          Disallow '$' in identifiers\n  -M                      Output dependency file instead of preprocessing result\n  -MD                     Like -M except -E is not implied\n  -MF <file>              Write dependency file to <file>\n  -MV                     Use NMake/Jom format for dependency file\n  -P, --no-line-commands  Disable linemarker output in -E mode\n\nCompile options:\n  -c, --compile           Only run preprocess, compile, and assemble steps\n  -darwin-target-variant-triple\n                          Specify the darwin target variant triple\n  -fapple-kext            Use Apple's kernel extensions ABI\n  -fexperimental-bounds-safety\n                          Enable experimental clang-style bounds safety attributes (INCOMPLETE)\n  -fno-experimental-bounds-safety\n                          Disable experimental clang-style bounds safety attributes\n  -fchar8_t               Enable char8_t (enabled by default in C23 and later)\n  -fno-char8_t            Disable char8_t (disabled by default for pre-C23)\n  -fcolor-diagnostics     Enable colors in diagnostics\n  -fno-color-diagnostics  Disable colors in diagnostics\n  -fcommon                Place uninitialized global variables in a common block\n  -fno-common             Place uninitialized global variables in the BSS section of the object file\n  -fwhole-program         Compile all inputs into one IR module and object; forces IR generation at every -O level\n  -fno-whole-program      Compile each input translation unit separately\n  -fintegrated-as         Use the integrated object emitter for IR output (default on x86_64 Linux)\n  -fno-integrated-as      Use the system assembler for IR output\n  -fdeclspec              Enable support for __declspec attributes\n  -fgnuc-version=<value>  Controls value of __GNUC__ and related macros. Set to 0 or empty to disable them.\n  -fno-declspec           Disable support for __declspec attributes\n  -ffp-eval-method=[source|double|extended]\n                          Evaluation method to use for floating-point arithmetic\n  -ffreestanding          Compilation in a freestanding environment\n  -fgnu-inline-asm        Enable GNU style inline asm (default: enabled)\n  -fno-gnu-inline-asm     Disable GNU style inline asm\n  -fhosted                Compilation in a hosted environment\n  -fms-extensions         Enable support for Microsoft extensions\n  -fno-ms-extensions      Disable support for Microsoft extensions\n  -g                      Generate debug information\n  -fmacro-backtrace-limit=<limit>\n                          Set limit on how many macro expansion traces are shown in errors (default 6)\n  -fnative-half-type      Use the native half type for __fp16 instead of promoting to float\n  -fnative-half-arguments-and-returns\n                          Allow half-precision function arguments and return values\n  -fpic                   Generate position-independent code (PIC) suitable for use in a shared library, if supported for the target machine\n  -fPIC                   Similar to -fpic but avoid any limit on the size of the global offset table\n  -fpie                   Similar to -fpic, but the generated position-independent code can only be linked into executables\n  -fPIE                   Similar to -fPIC, but the generated position-independent code can only be linked into executables\n  -frwpi                  Generate read-write position independent code (ARM only)\n  -fno-rwpi               Disable generate read-write position independent code (ARM only).\n  -fropi                  Generate read-only position independent code (ARM only)\n  -fno-ropi               Disable generate read-only position independent code (ARM only).\n  -fshort-enums           Use the narrowest possible integer type for enums\n  -fno-short-enums        Use \"int\" as the tag type for enums\n  -fsigned-char           \"char\" is signed\n  -fno-signed-char        \"char\" is unsigned\n  -fsyntax-only           Only run the preprocessor, parser, and semantic analysis stages\n  -funsigned-char         \"char\" is unsigned\n  -fno-unsigned-char      \"char\" is signed\n  -fuse-line-directives   Use `#line <num>` linemarkers in preprocessed output\n  -fno-use-line-directives\n                          Use `# <num>` linemarkers in preprocessed output\n  -fvisibility=[default|hidden|internal|protected]\n                          Set the default ELF image symbol visibility to the specified option—all symbols are marked with this unless overridden within the code\n  -fblocks                Enable support for clang's Blocks language extension\n  -fno-blocks             Disable support for clang's Blocks language extension\n  -iquote <dir>           Add directory to QUOTE include search path\n  -I <dir>                Add directory to include search path\n  -idirafter <dir>        Add directory to AFTER include search path\n  -isystem <dir>          Add directory to SYSTEM include search path\n  -F <dir>                Add directory to macOS framework search path\n  -iframework <dir>       Add directory to SYSTEM macOS framework search path\n  --embed-dir=<dir>       Add directory to `#embed` search path\n  --emulate=[clang|gcc|msvc]\n                          Select which C compiler to emulate (default from target)\n                          With gcc or clang, warn about and ignore flags only the other\n                          compiler accepts (-Wno-emulated-compiler-argument silences)\n  -imacros <file>         Include macros from <file> before parsing\n  -include <file>         Process <file> as if `#include \"file\"` appeared as the first line of the primary source file.\n  -mabicalls              Enable SVR4-style position-independent code (Mips only)\n  -mno-abicalls           Disable SVR4-style position-independent code (Mips only)\n  -mcmodel=<code-model>   Generate code for the given code model\n  -mcpu [cpu]             Specify target CPU and feature set\n  -mkernel                Enable kernel development mode\n  -nobuiltininc           Do not search the compiler's builtin directory for include files\n  -resource-dir <dir>     Override the path to the compiler's builtin resource directory\n  -nostdinc, --no-standard-includes\n                          Do not search the standard system directories or compiler builtin directories for include files.\n  -nostdlibinc            Do not search the standard system directories for include files, but do search compiler builtin include directories\n  -o <file>               Write output to <file>\n  -pedantic               Warn on language extensions\n  -pedantic-errors        Error on language extensions\n  --rtlib=<arg>           Compiler runtime library to use (libgcc or compiler-rt)\n  -std=<standard>         Specify language standard\n  -S, --assemble          Only run preprocess and compilation steps\n  --sysroot=<dir>         Use dir as the logical root directory for headers and libraries (not fully implemented)\n  --target=<value>        Generate code for the given target\n  -U <macro>              Undefine <macro>\n  -undef                  Do not predefine any system-specific macros. Standard predefined macros remain defined.\n  -w                      Ignore all warnings\n  -Werror                 Treat all warnings as errors\n  -Werror=<warning>       Treat warning as error\n  -W<warning>             Enable the specified warning\n  -Wno-<warning>          Disable the specified warning\n\nLink options:\n  -fuse-ld=[bfd|gold|lld|mold]\n                          Use specific linker\n  -nodefaultlibs          Do not use the standard system libraries when linking.\n  -nolibc                 Do not use the C library or system libraries tightly coupled with it when linking.\n  -nostdlib               Do not use the standard system startup files or libraries when linking\n  -nostartfiles           Do not use the standard system startup files when linking.\n  -pie                    Produce a dynamically linked position independent executable on targets that support it.\n  --ld-path=<path>        Use linker specified by <path>\n  -r                      Produce a relocatable object as output.\n  -rdynamic               Pass the flag -export-dynamic to the ELF linker, on targets that support it.\n  -s                      Remove all symbol table and relocation information from the executable.\n  -shared                 Produce a shared object which can then be linked with other objects to form an executable.\n  -shared-libgcc          On systems that provide libgcc as a shared library, force the use of the shared version\n  -static                 On systems that support dynamic linking, this overrides -pie and prevents linking with the shared libraries.\n  -static-libgcc          On systems that provide libgcc as a shared library, force the use of the static version\n  -static-pie             Produce a static position independent executable on targets that support it.\n  --unwindlib=<arg>       Unwind library to use (\"none\", \"libgcc\", or \"libunwind\") If not specified, will match runtime library\n\nDebug options:\n  --verbose-ast           Dump produced AST to stdout\n  --verbose-pp            Dump preprocessor state\n  --verbose-ir            Dump ir to stdout\n  --verbose-linker-args   Dump linker args to stdout\n  --codegen-todo-report  Report all unsupported codegen TODOs (not supported with -fwhole-program)\n  --x86-64-spill-all      Spill all values in x86-64 lowering\n\n\n";
+const String USAGE_FORMAT = "Usage %s: [options] file..\n\nGeneral options:\n  --help      Print this message\n  --version   Print aro version\n\nPreprocessor options:\n  -C                      Do not discard comments\n  -CC                     Do not discard comments, including in macro expansions\n  -dM                     Output #define directives for all the macros defined during the execution of the preprocessor\n  -dD                     Like -dM except that it outputs both the #define directives and the result of preprocessing\n  -dN                     Like -dD, but emit only the macro names, not their expansions.\n  -D <macro>=<value>      Define <macro> to <value> (defaults to 1)\n  -E                      Only run the preprocessor\n  -fdollars-in-identifiers\n                          Allow '$' in identifiers\n  -fno-dollars-in-identifiers\n                          Disallow '$' in identifiers\n  -M                      Output dependency file instead of preprocessing result\n  -MD                     Like -M except -E is not implied\n  -MF <file>              Write dependency file to <file>\n  -MV                     Use NMake/Jom format for dependency file\n  -P, --no-line-commands  Disable linemarker output in -E mode\n\nCompile options:\n  -c, --compile           Only run preprocess, compile, and assemble steps\n  -darwin-target-variant-triple\n                          Specify the darwin target variant triple\n  -fapple-kext            Use Apple's kernel extensions ABI\n  -fexperimental-bounds-safety\n                          Enable experimental clang-style bounds safety attributes (INCOMPLETE)\n  -fno-experimental-bounds-safety\n                          Disable experimental clang-style bounds safety attributes\n  -fchar8_t               Enable char8_t (enabled by default in C23 and later)\n  -fno-char8_t            Disable char8_t (disabled by default for pre-C23)\n  -fcolor-diagnostics     Enable colors in diagnostics\n  -fno-color-diagnostics  Disable colors in diagnostics\n  -fcommon                Place uninitialized global variables in a common block\n  -fno-common             Place uninitialized global variables in the BSS section of the object file\n  -fwhole-program         Compile all inputs into one IR module and object; forces IR generation at every -O level\n  -fno-whole-program      Compile each input translation unit separately\n  -fwrapv                 Signed integer overflow wraps (also -fno-strict-overflow)\n  -fno-wrapv              Signed integer overflow is undefined behavior (default)\n  -ftree-vectorize, -fvectorize\n                          Vectorize inner loops with SSE2 at -O2 and above (default)\n  -fno-tree-vectorize, -fno-vectorize\n                          Do not vectorize loops\n  -fintegrated-as         Use the integrated object emitter for IR output (default on x86_64 Linux)\n  -fno-integrated-as      Use the system assembler for IR output\n  -fdeclspec              Enable support for __declspec attributes\n  -fgnuc-version=<value>  Controls value of __GNUC__ and related macros. Set to 0 or empty to disable them.\n  -fno-declspec           Disable support for __declspec attributes\n  -ffp-eval-method=[source|double|extended]\n                          Evaluation method to use for floating-point arithmetic\n  -ffreestanding          Compilation in a freestanding environment\n  -fgnu-inline-asm        Enable GNU style inline asm (default: enabled)\n  -fno-gnu-inline-asm     Disable GNU style inline asm\n  -fhosted                Compilation in a hosted environment\n  -fms-extensions         Enable support for Microsoft extensions\n  -fno-ms-extensions      Disable support for Microsoft extensions\n  -g                      Generate debug information\n  -fmacro-backtrace-limit=<limit>\n                          Set limit on how many macro expansion traces are shown in errors (default 6)\n  -fnative-half-type      Use the native half type for __fp16 instead of promoting to float\n  -fnative-half-arguments-and-returns\n                          Allow half-precision function arguments and return values\n  -fpic                   Generate position-independent code (PIC) suitable for use in a shared library, if supported for the target machine\n  -fPIC                   Similar to -fpic but avoid any limit on the size of the global offset table\n  -fpie                   Similar to -fpic, but the generated position-independent code can only be linked into executables\n  -fPIE                   Similar to -fPIC, but the generated position-independent code can only be linked into executables\n  -frwpi                  Generate read-write position independent code (ARM only)\n  -fno-rwpi               Disable generate read-write position independent code (ARM only).\n  -fropi                  Generate read-only position independent code (ARM only)\n  -fno-ropi               Disable generate read-only position independent code (ARM only).\n  -fshort-enums           Use the narrowest possible integer type for enums\n  -fno-short-enums        Use \"int\" as the tag type for enums\n  -fsigned-char           \"char\" is signed\n  -fno-signed-char        \"char\" is unsigned\n  -fsyntax-only           Only run the preprocessor, parser, and semantic analysis stages\n  -funsigned-char         \"char\" is unsigned\n  -fno-unsigned-char      \"char\" is signed\n  -fuse-line-directives   Use `#line <num>` linemarkers in preprocessed output\n  -fno-use-line-directives\n                          Use `# <num>` linemarkers in preprocessed output\n  -fvisibility=[default|hidden|internal|protected]\n                          Set the default ELF image symbol visibility to the specified option—all symbols are marked with this unless overridden within the code\n  -fblocks                Enable support for clang's Blocks language extension\n  -fno-blocks             Disable support for clang's Blocks language extension\n  -iquote <dir>           Add directory to QUOTE include search path\n  -I <dir>                Add directory to include search path\n  -idirafter <dir>        Add directory to AFTER include search path\n  -isystem <dir>          Add directory to SYSTEM include search path\n  -F <dir>                Add directory to macOS framework search path\n  -iframework <dir>       Add directory to SYSTEM macOS framework search path\n  --embed-dir=<dir>       Add directory to `#embed` search path\n  --emulate=[clang|gcc|msvc]\n                          Select which C compiler to emulate (default from target)\n                          With gcc or clang, warn about and ignore flags only the other\n                          compiler accepts (-Wno-emulated-compiler-argument silences)\n  -imacros <file>         Include macros from <file> before parsing\n  -include <file>         Process <file> as if `#include \"file\"` appeared as the first line of the primary source file.\n  -mabicalls              Enable SVR4-style position-independent code (Mips only)\n  -mno-abicalls           Disable SVR4-style position-independent code (Mips only)\n  -mcmodel=<code-model>   Generate code for the given code model\n  -mcpu [cpu]             Specify target CPU and feature set\n  -mkernel                Enable kernel development mode\n  -nobuiltininc           Do not search the compiler's builtin directory for include files\n  -resource-dir <dir>     Override the path to the compiler's builtin resource directory\n  -nostdinc, --no-standard-includes\n                          Do not search the standard system directories or compiler builtin directories for include files.\n  -nostdlibinc            Do not search the standard system directories for include files, but do search compiler builtin include directories\n  -o <file>               Write output to <file>\n  -pedantic               Warn on language extensions\n  -pedantic-errors        Error on language extensions\n  --rtlib=<arg>           Compiler runtime library to use (libgcc or compiler-rt)\n  -std=<standard>         Specify language standard\n  -S, --assemble          Only run preprocess and compilation steps\n  --sysroot=<dir>         Use dir as the logical root directory for headers and libraries (not fully implemented)\n  --target=<value>        Generate code for the given target\n  -U <macro>              Undefine <macro>\n  -undef                  Do not predefine any system-specific macros. Standard predefined macros remain defined.\n  -w                      Ignore all warnings\n  -Werror                 Treat all warnings as errors\n  -Werror=<warning>       Treat warning as error\n  -W<warning>             Enable the specified warning\n  -Wno-<warning>          Disable the specified warning\n\nLink options:\n  -fuse-ld=[bfd|gold|lld|mold]\n                          Use specific linker\n  -nodefaultlibs          Do not use the standard system libraries when linking.\n  -nolibc                 Do not use the C library or system libraries tightly coupled with it when linking.\n  -nostdlib               Do not use the standard system startup files or libraries when linking\n  -nostartfiles           Do not use the standard system startup files when linking.\n  -pie                    Produce a dynamically linked position independent executable on targets that support it.\n  --ld-path=<path>        Use linker specified by <path>\n  -r                      Produce a relocatable object as output.\n  -rdynamic               Pass the flag -export-dynamic to the ELF linker, on targets that support it.\n  -s                      Remove all symbol table and relocation information from the executable.\n  -shared                 Produce a shared object which can then be linked with other objects to form an executable.\n  -shared-libgcc          On systems that provide libgcc as a shared library, force the use of the shared version\n  -static                 On systems that support dynamic linking, this overrides -pie and prevents linking with the shared libraries.\n  -static-libgcc          On systems that provide libgcc as a shared library, force the use of the static version\n  -static-pie             Produce a static position independent executable on targets that support it.\n  --unwindlib=<arg>       Unwind library to use (\"none\", \"libgcc\", or \"libunwind\") If not specified, will match runtime library\n\nDebug options:\n  --verbose-ast           Dump produced AST to stdout\n  --verbose-pp            Dump preprocessor state\n  --verbose-ir            Dump ir to stdout\n  --verbose-linker-args   Dump linker args to stdout\n  --codegen-todo-report  Report all unsupported codegen TODOs (not supported with -fwhole-program)\n  --x86-64-spill-all      Spill all values in x86-64 lowering\n  --scalar-vector-ext     Lower vector-extension operations lane by lane, not as SSE2 vectors\n\n\n";
 
 fn String usage_text(Allocator a, String program_name)
 {
@@ -140,6 +140,7 @@ fn bool? parse_frontend_flag(DriverOptions* opts, DriverArgument argument, Strin
 		case VERIFY_IR: opts.verify_ir = true;
 		case CODEGEN_TODO_REPORT: opts.codegen_todo_report = true;
 		case X86_64_SPILL_ALL: opts.x86_64_spill_all = true;
+		case SCALAR_VECTOR_EXT: opts.scalar_vector_ext = true;
 		case VERBOSE_LINKER_ARGS: opts.verbose_linker_args = true;
 		case APPLE_KEXT: opts.apple_kext = true;
 		case COMMON: opts.common = true;
@@ -162,12 +163,16 @@ fn bool? parse_frontend_flag(DriverOptions* opts, DriverArgument argument, Strin
 		case NO_GNU_INLINE_ASM: opts.gnu_asm.set(false);
 		case EXPERIMENTAL_BOUNDS_SAFETY: opts.bounds_safety.set(CLANG);
 		case NO_EXPERIMENTAL_BOUNDS_SAFETY: opts.bounds_safety.set(NONE);
-		case CHAR8_T: opts.char8_t_override.set(ON);
-		case NO_CHAR8_T: opts.char8_t_override.set(OFF);
+		case CHAR8_T: opts.char8_t_override.set(true);
+		case NO_CHAR8_T: opts.char8_t_override.set(false);
 		case NATIVE_HALF_TYPE: opts.use_native_half_type = true;
 		case NATIVE_HALF_ARGUMENTS_AND_RETURNS: opts.allow_half_args_returns = true;
 		case BLOCKS: opts.blocks.set(true);
 		case NO_BLOCKS: opts.blocks.set(false);
+		case WRAPV: opts.wrapv = true;
+		case VECTORIZE: opts.no_vectorize = false;
+		case NO_VECTORIZE: opts.no_vectorize = true;
+		case NO_WRAPV: opts.wrapv = false;
 		case PTHREAD: opts.pthread = true;
 		case VISIBILITY_DEFAULT: opts.visibility.set(DEFAULT);
 		case VISIBILITY_HIDDEN: opts.visibility.set(HIDDEN);
@@ -270,6 +275,7 @@ fn bool? parse_frontend_flag(DriverOptions* opts, DriverArgument argument, Strin
 			}
 		case NO_LTO:
 		case RANDOM_SEED_EQ:
+		case SIGNALING_NANS:
 			break; // accepted, no effect
 		case MKERNEL: opts.kernel = true;
 		case ROPI: opts.ropi = true;
@@ -395,6 +401,19 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 				result.action = VERSION;
 				result.input_count = (uint)opts.inputs.len();
 				return result;
+			case X_LANGUAGE:
+				String lang = argument_value(argument, args, &i)!;
+				switch (lang)
+				{
+					case "none": opts.input_language = "";
+					case "c":
+					case "c-header":
+					case "cpp-output": opts.input_language = lang;
+					default:
+						if (sink == null) return INVALID_ARGUMENT~;
+						add_driver_fatal(opts.a, sink, "language not recognized: '%s'", lang)!;
+						return INVALID_ARGUMENT~;
+				}
 			case LIBRARY_DIR:
 				opts.lib_dirs.push(argument_value(argument, args, &i)!);
 			case LIBRARY:
@@ -508,6 +527,24 @@ fn ArgumentResult? parse_args(DriverOptions* opts, String[] args, Diagnostics* s
 	return result;
 }
 
+<* `-m[no-]<x86 feature>` (gcc/clang spelling, `sse4.1` for `sse4_1`): record it. *>
+fn bool x86_feature_flag(DriverOptions* opts, String arg)
+{
+	String name = arg[2..];
+	bool enable = true;
+	if (name.starts_with("no-"))
+	{
+		enable = false;
+		name = name[3..];
+	}
+	DString feature;
+	feature.init(tmem);
+	foreach (c : name) feature.append_char(c == '.' ? '_' : c);
+	if (catch target::parse_feature_name(target::Arch.X86_64, feature.str_view())) return false;
+	opts.cpu_feature_flags = string::format(opts.a, "%s%c%s", opts.cpu_feature_flags, enable ? '+' : '-', feature.str_view());
+	return true;
+}
+
 <* An argument no DriverArgument spells: `-` (stdin), an unknown option, or an input. *>
 fn void? parse_unmatched_arg(DriverOptions* opts, String arg, Diagnostics* sink)
 {
@@ -515,12 +552,16 @@ fn void? parse_unmatched_arg(DriverOptions* opts, String arg, Diagnostics* sink)
 	{
 		push_source_input(opts, arg);
 	}
+	else if (arg.starts_with("-m") && x86_feature_flag(opts, arg))
+	{
+		// `-msse3`, `-mno-mmx`: enable or disable a CPU feature (predefined macros).
+	}
 	else if (arg.starts_with("-"))
 	{
 		if (sink == null) return INVALID_ARGUMENT~;
 		add_driver_warning(opts.a, sink, "unknown argument '%s'", arg)!;
 	}
-	else if (is_link_input_path(arg))
+	else if (opts.input_language.len == 0 && is_link_input_path(arg))
 	{
 		opts.link_objects.push(arg);
 	}
@@ -536,6 +577,7 @@ fn Target? parse_target(DriverOptions* opts)
 	Host h = target::host()!;
 	String triple = opts.target_triple.get() ?? "native";
 	String cpu = opts.cpu.get() ?? "";
+	if (opts.cpu_feature_flags.len != 0) cpu = string::tformat("%s%s", cpu, opts.cpu_feature_flags);
 	return target::parse_triple(triple, h, cpu);
 }
 
@@ -543,7 +585,8 @@ fn Target? parse_target(DriverOptions* opts)
  Macro effects remain in argv order for the caller to replay into its preprocessor. *>
 fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchain::Options* tc_opts, Diagnostics* sink = null)
 {
-	if (opts.target_triple.has_value)
+	// `-mcpu` and `-m<feature>` refine the host target too, not only `--target`.
+	if (opts.target_triple.has_value || opts.cpu.has_value || opts.cpu_feature_flags.len != 0)
 	{
 		Target t = parse_target(opts)!;
 		comp.target = t;
@@ -554,12 +597,10 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 		comp.darwin_target_variant = target::parse_triple(darwin_variant_triple, h)!;
 		comp.has_darwin_target_variant = true;
 	}
-	// Match src/aro/Driver.zig:855 after resolving the target and Darwin variant.
-	comp.langopts.set_target_options(&comp.target);
 	if (try standard = opts.standard.get()) comp.langopts.set_standard(standard)!;
 	if (opts.emulate.has_value || opts.target_triple.has_value)
 	{
-		lang_opts::Compiler compiler = opts.emulate.get() ?? comp.target.system_compiler();
+		target::Compiler compiler = opts.emulate.get() ?? comp.target.system_compiler();
 		comp.langopts.set_emulated_compiler(compiler);
 		if (sink != null)
 		{
@@ -581,10 +622,10 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 	comp.langopts.preserve_comments_in_macros = opts.preserve_comments_in_macros;
 	if (try short_enums = opts.short_enums.get()) comp.langopts.short_enums = short_enums;
 	if (try dollars_in_identifiers = opts.dollars_in_identifiers.get()) comp.langopts.dollars_in_identifiers = dollars_in_identifiers;
-	if (try digraphs = opts.digraphs.get()) comp.langopts.digraphs = digraphs ? ON : OFF;
+	if (opts.digraphs.has_value) comp.langopts.digraphs = opts.digraphs;
 	if (try gnu_asm = opts.gnu_asm.get()) comp.langopts.gnu_asm = gnu_asm;
 	if (try bounds_safety = opts.bounds_safety.get()) comp.langopts.bounds_safety = bounds_safety;
-	if (try char8_t_override = opts.char8_t_override.get()) comp.langopts.has_char8_t_override = char8_t_override;
+	if (opts.char8_t_override.has_value) comp.langopts.char8_t_override = opts.char8_t_override;
 	if (try visibility = opts.visibility.get()) comp.langopts.default_symbol_visibility = visibility;
 	comp.langopts.use_native_half_type = opts.use_native_half_type;
 	comp.langopts.allow_half_args_and_returns = opts.allow_half_args_returns;
@@ -594,6 +635,8 @@ fn ParseEffect[]? apply_options(DriverOptions* opts, Compilation* comp, toolchai
 		comp.langopts.blocks = comp.langopts.blocks || comp.target.is_blocks_supported();
 	}
 	comp.langopts.pthread = opts.pthread;
+	comp.langopts.wrapv = opts.wrapv;
+	comp.langopts.scalar_vector_ext = opts.scalar_vector_ext;
 	if (try char_signedness = opts.char_signedness.get()) comp.langopts.set_char_signedness(char_signedness);
 	if (try fp_eval_method = opts.fp_eval_method.get()) comp.langopts.set_fp_eval_method(fp_eval_method);
 	if (try declspec_attrs = opts.declspec_attrs.get()) comp.langopts.declspec_attrs = declspec_attrs;
@@ -946,9 +989,9 @@ fn void? apply_diagnostic_options(String[] args, Diagnostics* d)
 <* The compiler an explicit `--emulate=gcc|clang` selects, else NO. A later
    -target/--target clears it, as in parse_args. Implicit (target-default)
    emulation never filters arguments. *>
-fn lang_opts::Compiler explicit_emulation(String[] args)
+fn target::Compiler explicit_emulation(String[] args)
 {
-	lang_opts::Compiler emulate = NO;
+	target::Compiler emulate = NO;
 	for (usz i = 1; i < args.len; i++)
 	{
 		String arg = args[i];
@@ -958,7 +1001,7 @@ fn lang_opts::Compiler explicit_emulation(String[] args)
 		{
 			case EMULATE_EQ:
 				String value = argument.joined_value(arg);
-				emulate = value == "gcc" ? lang_opts::Compiler.GCC : value == "clang" ? lang_opts::Compiler.CLANG : lang_opts::Compiler.NO;
+				emulate = value == "gcc" ? target::Compiler.GCC : value == "clang" ? target::Compiler.CLANG : target::Compiler.NO;
 			case TARGET:
 			case LONG_TARGET:
 			case TARGET_EQ:
@@ -972,7 +1015,7 @@ fn lang_opts::Compiler explicit_emulation(String[] args)
 }
 
 <* Whether `supported` names only the compiler `emulate` is not. *>
-fn bool only_other_compiler(Supported supported, lang_opts::Compiler emulate)
+fn bool only_other_compiler(Supported supported, target::Compiler emulate)
 {
 	switch (emulate)
 	{
@@ -1002,7 +1045,7 @@ fn void filter_emulated_args(String[] args, List{String}* kept, List{String}* dr
 {
 	if (args.len == 0) return;
 	kept.push(args[0]);
-	lang_opts::Compiler emulate = explicit_emulation(args);
+	target::Compiler emulate = explicit_emulation(args);
 	for (usz i = 1; i < args.len; i++)
 	{
 		String arg = args[i];
@@ -1035,7 +1078,7 @@ fn void filter_emulated_args(String[] args, List{String}* kept, List{String}* dr
 fn void? warn_emulated_args(Diagnostics* d, String[] kept, String[] dropped)
 {
 	if (dropped.len == 0) return;
-	lang_opts::Compiler emulate = explicit_emulation(kept);
+	target::Compiler emulate = explicit_emulation(kept);
 	String emulated = emulate == GCC ? "gcc" : "clang";
 	String other = emulate == GCC ? "clang" : "gcc";
 	foreach (arg : dropped)
@@ -1080,6 +1123,13 @@ fn void install_default_pragmas(Compilation* comp)
 	if (catch message_handler) comp.pragmas.add("message", message::handler());
 	pragma::IPragma? pack_handler = comp.pragmas.get("pack");
 	if (catch pack_handler) comp.pragmas.add("pack", pack::make_handler(comp.gpa));
+	if (!@ok(comp.pragmas.get("push_macro")) && !@ok(comp.pragmas.get("pop_macro")))
+	{
+		push_macro::PushMacro* macro_stack = push_macro::handler(comp.gpa);
+		macro_stack.owners = 2; // registered under both names; see PushMacro.deinit
+		comp.pragmas.add("push_macro", macro_stack);
+		comp.pragmas.add("pop_macro", macro_stack);
+	}
 }
 
 fn char[]? read_stdin(Allocator a, File* input)
@@ -1416,10 +1466,11 @@ fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	ir::ErrorList errors;
 	errors.init(comp.gpa);
 	defer errors.free();
-	fault opt_fault = @catch(ir_opt::run(generated_ir,
+	fault opt_fault = @catch(ir_opt::legalize_soft_float(generated_ir, &errors));
+	if (!opt_fault) opt_fault = @catch(ir_opt::run(generated_ir,
 			{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
 			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode),
-			.compact = true },
+			.compact = true, .no_vectorize = opts.no_vectorize },
 		&errors));
 	// Drop optimizer tombstones and dead payloads before the backend runs.
 	if (!opt_fault)
@@ -1442,7 +1493,8 @@ fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 			return 1;
 		}
 	}
-	if (use_object_emitter(comp, opts, link_mode))
+	// Inline asm text is only understood by the system assembler.
+	if (use_object_emitter(comp, opts, link_mode) && !generated_ir.has_asm())
 	{
 		return emit_ir_object(comp, d, opts, link_objects, output_name, generated_ir, link_mode, &errors);
 	}
@@ -1475,10 +1527,11 @@ fn int report_ir_todos(Compilation* comp, Diagnostics* d, DriverOptions* opts, b
 	ir::ErrorList errors;
 	errors.init(comp.gpa);
 	defer errors.free();
-	fault opt_fault = @catch(ir_opt::run(generated_ir,
+	fault opt_fault = @catch(ir_opt::legalize_soft_float(generated_ir, &errors));
+	if (!opt_fault) opt_fault = @catch(ir_opt::run(generated_ir,
 			{ .level = comp.code_gen_options.optimization_level, .whole_program = opts.whole_program,
 			.verify = opts.verify_ir, .keep_external_definitions = dce_keeps_external_definitions(opts, link_mode),
-			.compact = true },
+			.compact = true, .no_vectorize = opts.no_vectorize },
 		&errors));
 	// Drop optimizer tombstones and dead payloads before the backend runs.
 	if (!opt_fault)
@@ -1502,7 +1555,8 @@ fn int report_ir_todos(Compilation* comp, Diagnostics* d, DriverOptions* opts, b
 		}
 	}
 
-	if (use_object_emitter(comp, opts, link_mode))
+	// Inline asm text is only understood by the system assembler.
+	if (use_object_emitter(comp, opts, link_mode) && !generated_ir.has_asm())
 	{
 		object::Object*? object_opt = ir::render_object(generated_ir, comp.gpa, comp.target, &errors, opts.x86_64_spill_all);
 		if (catch f = object_opt)
@@ -1950,7 +2004,9 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		d.color = extra.color ? diagnostics::ColorOverride.FORCE_ON : diagnostics::ColorOverride.FORCE_OFF;
 		d.terminal.mode = extra.color ? diagnostics::ColorMode.ESCAPE_CODES : diagnostics::ColorMode.NO_COLOR;
 	}
-	if (opts.inputs.len() == 0)
+	bool link_mode = !(opts.only_preprocess || opts.only_syntax || opts.only_compile || opts.only_preprocess_and_compile);
+	// A link step may name only objects, archives and -l libraries (`aro m.o -o m`).
+	if (opts.inputs.len() == 0 && !(link_mode && opts.link_objects.len() != 0))
 	{
 		(void)add_driver_fatal(comp.gpa, d, "no input files");
 		return 1;
@@ -1960,8 +2016,8 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		(void)add_driver_error(comp.gpa, d, "--codegen-todo-report is not supported with -fwhole-program");
 		return 1;
 	}
-	bool link_mode = !(opts.only_preprocess || opts.only_syntax || opts.only_compile || opts.only_preprocess_and_compile);
-	bool whole_program = opts.whole_program && !(opts.only_preprocess || opts.only_syntax || opts.dependency_only);
+	bool whole_program = opts.whole_program && opts.inputs.len() != 0 &&
+		!(opts.only_preprocess || opts.only_syntax || opts.dependency_only);
 	if (opts.output_name.has_value && opts.inputs.len() != 1 && !link_mode && !whole_program)
 	{
 		(void)add_driver_fatal(comp.gpa, d, "cannot specify -o when generating multiple output files");

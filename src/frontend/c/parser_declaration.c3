@@ -2,6 +2,7 @@
 // specifiers and binds them to the reusable declarator, initializer and
 // statement productions.
 module aro::frontend::c::parser_declaration;
+import aro::target;
 import aro::frontend::c::parser, aro::frontend::c::parser_statement, aro::frontend::c::parser_result;
 import aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::symbol_stack;
 import aro::string_interner, aro::frontend::c::value, aro::frontend::c::diagnostics, aro::bigint;
@@ -16,25 +17,6 @@ import std::core::dstring;
 
 excuse PARSING_FAILED;
 excuse NO_DECL_SPEC;
-
-<* Test-only overrides of the declaration grammar; compiled out of non-test builds.
-   Every method is optional: a null probe or a missing method selects the built-in
-   production, or parser::HOOK_ABSENT for type_name / implicit_typedefs, which have none.
-   An installed probe replaces the implicit typedef prelude. *>
-interface IDeclarationTestProbe @feat(TESTING)
-{
-	<* Replaces the top-level declaration production. *>
-	fn void? declaration(parser::Parser* p) @optional;
-	<* Untyped type-name production. *>
-	fn void? type_name(parser::Parser* p) @optional;
-	<* Replaces the typed type-name production. *>
-	fn type_store::QualType? typed_type_name(parser::Parser* p) @optional;
-	<* Seeds implicit typedefs before the first declaration. *>
-	fn void? implicit_typedefs(parser::Parser* p) @optional;
-	<* Builds a complete local declaration statement, or returns null when the
-	   current token sequence is not a declaration. *>
-	fn type_store::NodeIndex? local_declaration_statement(parser::Parser* p) @optional;
-}
 
 enum StorageClass : char
 {
@@ -59,6 +41,9 @@ struct DeclSpec
 	bool thread_local;
 	bool constexpr_decl;
 	bool is_inline;
+	<* `_Noreturn` function specifier (also recorded as a keyword attribute on the wip). *>
+	bool has_noreturn;
+	tokens::TokenIndex noreturn_tok;
 	bool recognized;
 }
 
@@ -67,7 +52,6 @@ struct DeclSpec
 // declarations; Parser.parse remains responsible for top-level recovery.
 struct DeclarationParser (parser::IExpressionGrammar)
 {
-	IDeclarationTestProbe test_probe @feat(TESTING);
 	parser_statement::StatementParser statements;
 	type_store::QualType function_return_qt;
 	tokens::TokenIndex function_name_tok;
@@ -227,9 +211,6 @@ fn type_store::NodeIndex? DeclarationParser.handle_body(&self, parser::Parser* p
 <* Local declaration production for the statement grammar. *>
 fn type_store::NodeIndex? DeclarationParser.parse_local_declaration(&self, parser::Parser* p)
 {
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.local_declaration_statement) return self.test_probe.local_declaration_statement(p);
-	$endif
 	type_store::NodeIndex? parsed = self.parse_local_declaration_statement(p,
 		self.statements.prefix_declaration_attributes);
 	if (@ok(parsed) && parsed!!.get(&p.tree).kind == tree::NodeKind.DECL_STMT)
@@ -257,9 +238,6 @@ fn void? parser::Parser.handle_declaration(&self)
 
 fn void? DeclarationParser.handle_declaration(&self, parser::Parser* p)
 {
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.declaration) return self.test_probe.declaration(p);
-	$endif
 	return self.parse_declaration(p);
 }
 
@@ -273,21 +251,14 @@ fn void? DeclarationParser.handle_translation_unit_end(&self, parser::Parser* p)
 fn bool? DeclarationParser.is_recoverable_parse_fault(&self, parser::Parser* p, fault parse_fault) @dynamic
 	=> parser_statement::recoverable_statement_item_fault(parse_fault);
 
-<* Only provided when a test probe implements type_name, matching the
-   legacy callback table; otherwise Parser reports the grammar as unavailable. *>
+<* There is no untyped type-name production; Parser reports the grammar as unavailable. *>
 fn void? DeclarationParser.handle_type_name(&self, parser::Parser* p) @dynamic
 {
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.type_name) return self.test_probe.type_name(p);
-	$endif
 	return parser::HOOK_ABSENT~;
 }
 
 fn type_store::QualType? DeclarationParser.handle_typed_type_name(&self, parser::Parser* p) @dynamic
 {
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.typed_type_name) return self.test_probe.typed_type_name(p);
-	$endif
 	return self.parse_typed_type_name(p);
 }
 
@@ -350,7 +321,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_underlying(&self, parser::
 fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, parser::ContainerBodySeed seed, DeclSpec spec,
 	attribute_wip::Wip* field_wip, attribute_wip::State declarator_state, tokens::TokenIndex member_start,
 	list::List{type_store::RecordField}* fields, list::List{type_store::NodeIndex}* field_nodes,
-	bool* has_flexible_field, tokens::TokenIndex* flexible_field_tok) @noinline
+	bool* has_flexible_field, tokens::TokenIndex* flexible_field_tok, usz deprecation_mark, bool* declarator_seen) @noinline
 {
 	while (true)
 	{
@@ -361,6 +332,24 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 		AttributeUseSnapshot attribute_use_state;
 		attribute_use_state.init(p, field_wip);
 		defer attribute_use_state.free();
+		usz declarator_deprecation_mark = (usz)p.deferred_deprecations.len();
+		bool declarator_deprecated = false;
+		bool deprecation_settled = false;
+		defer
+		{
+			if (deprecation_settled)
+			{
+				if (declarator_deprecated)
+				{
+					p.deprecated_context--;
+					p.drop_deprecations(declarator_deprecation_mark);
+				}
+				else
+				{
+					(void)@catch(p.flush_deprecations(deprecation_mark));
+				}
+			}
+		}
 		parser::ParsedDeclarator field_decl = p.parse_declarator(self, field_wip, spec.qt,
 			member_abstract ? parser::DeclaratorKind.ABSTRACT : parser::DeclaratorKind.NORMAL)!;
 		self.append_attributes(p, field_wip)!;
@@ -424,6 +413,10 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 		// Attributes may also follow the bit-field width (`int i : 1 __attribute__((aligned(8)));`);
 		// like Zig's second `attributeSpecifier`, they reach the field through `apply_decl_attrs` below.
 		self.append_attributes(p, field_wip)!;
+		*declarator_seen = true;
+		deprecation_settled = true;
+		declarator_deprecated = field_wip.has_deprecated();
+		if (declarator_deprecated) p.deprecated_context++;
 
 		// Zig recordDeclarator field-type checks: function fields, VLA fields and
 		// flexible array members (an incomplete array is allowed as a field).
@@ -443,9 +436,9 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 							Diagnostic.VLA_FIELD.@emit(p, first_tok)!;
 							field_qt = type_store::INVALID;
 						case INCOMPLETE:
-							if (seed.is_union)
+							if (seed.is_union(p))
 							{
-								if (p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
+								if (p.comp.langopts.emulate == target::Compiler.MSVC)
 								{
 									Diagnostic.FLEXIBLE_IN_UNION_MSVC.@emit(p, first_tok)!;
 								}
@@ -455,7 +448,7 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 									field_qt = type_store::INVALID;
 								}
 							}
-							if (*has_flexible_field && !seed.is_union)
+							if (*has_flexible_field && !seed.is_union(p))
 							{
 								Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, *flexible_field_tok)!;
 							}
@@ -469,7 +462,7 @@ fn void? DeclarationParser.parse_field_declarators(&self, parser::Parser* p, par
 						Diagnostic.FIELD_INCOMPLETE_TY.@emit(p, first_tok, p.fmt_qt(field_qt))!;
 						return PARSING_FAILED~;
 					}
-					if (*has_flexible_field && !seed.is_union)
+					if (*has_flexible_field && !seed.is_union(p))
 					{
 						Diagnostic.FLEXIBLE_NON_FINAL.@emit(p, *flexible_field_tok)!;
 					}
@@ -499,6 +492,7 @@ fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Par
 	list::List{type_store::RecordField}* fields, list::List{type_store::NodeIndex}* field_nodes) @noinline
 {
 	if (catch p.expect(tokenizer::TokenId.R_BRACE)) return PARSING_FAILED~;
+	bool is_union = seed.is_union(p);
 	attribute::Attribute? header_storage = p.tree.attr_map.get_attribute(seed.decl_node.pack(), attribute::AttributeTag.SCALAR_STORAGE_ORDER);
 	seed.tags.apply_body_end(p, seed.qt, seed.decl_node)!;
 
@@ -518,7 +512,7 @@ fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Par
 	}
 
 	pack::PackValue current_pack = seed.pack_value;
-	if (p.comp.langopts.emulate == lang_opts::Compiler.GCC || p.comp.langopts.emulate == lang_opts::Compiler.MSVC)
+	if (p.comp.langopts.emulate == target::Compiler.GCC || p.comp.langopts.emulate == target::Compiler.MSVC)
 	{
 		current_pack = {};
 		if (try pack_handler = p.comp.pragmas.get("pack"))
@@ -529,13 +523,13 @@ fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Par
 	}
 	uint pragma_pack = current_pack.has_value ? (uint)current_pack.value : 0;
 	type_store::RecordLayout? maybe_layout = type_store::compute(record_fields,
-		seed.decl_node.pack(), seed.is_union, p.comp, &p.tree.attr_map, pragma_pack);
+		seed.decl_node.pack(), is_union, p.comp, &p.tree.attr_map, pragma_pack);
 	if (catch f = maybe_layout) return f~;
 	type_store::RecordLayout layout = maybe_layout;
-	type_store::Type record_type = type_store::type_record(seed.name, record_fields,
-		layout, seed.is_union, seed.decl_node.pack());
+	type_store::Type record_type = type_store::type_record(seed.name(p), record_fields,
+		layout, is_union, seed.decl_node.pack());
 	p.comp.type_store.set(record_type, seed.qt.index);
-	tree::NodeKind decl_kind = seed.is_union ? tree::NodeKind.UNION_DECL : tree::NodeKind.STRUCT_DECL;
+	tree::NodeKind decl_kind = is_union ? tree::NodeKind.UNION_DECL : tree::NodeKind.STRUCT_DECL;
 	type_store::NodeIndex[] nodes = field_nodes.array_view();
 	p.tree.set_node({ .kind = decl_kind, .container_decl = {
 		.name_or_kind_tok = seed.name_tok != 0 ? seed.name_tok : seed.keyword_tok,
@@ -546,7 +540,7 @@ fn type_store::QualType? DeclarationParser.finish_record_body(&self, parser::Par
 
 fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::Parser* p, parser::ContainerBodySeed seed)
 {
-	if (seed.is_enum) return self.parse_enum_body(p, seed);
+	if (seed.is_enum(p)) return self.parse_enum_body(p, seed);
 	attribute_wip::Wip field_wip;
 	field_wip.init(p.comp.gpa);
 	defer field_wip.free();
@@ -571,6 +565,13 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		{
 			if (handled) continue;
 		}
+		// GNU/clang extension: an empty member declaration (`int a;;`) is skipped.
+		if (p.is_at(tokenizer::TokenId.SEMICOLON))
+		{
+			Diagnostic.EXTRA_SEMI_IN_RECORD.@emit(p, p.tok_i, seed.is_union(p) ? "union" : "struct")!;
+			p.advance();
+			continue;
+		}
 		// Zig recordDeclItem: a static assertion is a member item, not a field. Its node
 		// goes to root declarations, where Parser.zig's decl_buf also ends up.
 		type_store::NodeIndex? maybe_member_assert = self.parse_static_assert(p);
@@ -593,6 +594,10 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 			p.advance();
 			p.extension_suppressed = true;
 		}
+		// Like declarations: deprecated uses wait for each member declarator.
+		usz member_deprecation_mark = p.begin_deprecation_deferral();
+		bool member_declarator_seen = false;
+		defer (void)@catch(p.end_deprecation_deferral(member_deprecation_mark, !member_declarator_seen));
 		tokens::TokenIndex member_start = p.tok_i;
 		attribute_wip::State member_state = field_wip.state(true);
 		DeclSpec? maybe_spec = self.parse_decl_spec(p, &field_wip, record_member: true);
@@ -604,13 +609,13 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 		}
 		DeclSpec spec = maybe_spec;
 		attribute_wip::State declarator_state = field_wip.state(false);
-		if (spec.storage_class != StorageClass.NONE || spec.thread_local || spec.constexpr_decl || spec.is_inline)
+		if (spec.storage_class != StorageClass.NONE || spec.thread_local || spec.constexpr_decl || spec.is_inline || spec.has_noreturn)
 		{
 			Diagnostic.EXPECTED_RECORD_DECL.@emit(p, member_start)!;
 		}
 		if (spec.qt.is_auto())
 		{
-			String context = seed.is_union ? "union member" : "struct member";
+			String context = seed.is_union(p) ? "union member" : "struct member";
 			if (spec.qt.is_auto_type())
 			{
 				Diagnostic.AUTO_TYPE_NOT_ALLOWED.@emit(p, spec.auto_type_tok, context)!;
@@ -645,7 +650,7 @@ fn type_store::QualType? DeclarationParser.parse_container_body(&self, parser::P
 			continue;
 		}
 
-		self.parse_field_declarators(p, seed, spec, &field_wip, declarator_state, member_start, &fields, &field_nodes, &has_flexible_field, &flexible_field_tok)!;
+		self.parse_field_declarators(p, seed, spec, &field_wip, declarator_state, member_start, &fields, &field_nodes, &has_flexible_field, &flexible_field_tok, member_deprecation_mark, &member_declarator_seen)!;
 		if (catch p.expect(tokenizer::TokenId.SEMICOLON)) return PARSING_FAILED~;
 		field_wip.restore(member_state);
 	}
@@ -674,12 +679,12 @@ fn type_store::QualType next_larger_enum_int(type_store::QualType qt, compilatio
 		type_store::LONG, type_store::LONG_LONG };
 	type_store::QualType[5] unsigned_types = { type_store::USHORT, type_store::UINT, type_store::UINT24,
 		type_store::ULONG, type_store::ULONG_LONG };
-	type_store::QualType[] candidates = qt.signedness(comp) == lang_opts::Signedness.SIGNED ? signed_types[..] : unsigned_types[..];
+	type_store::QualType[] candidates = qt.signedness(comp) == bigint::Signedness.SIGNED ? signed_types[..] : unsigned_types[..];
 	ulong bits = qt.bit_sizeof(comp);
 	foreach (candidate : candidates)
 	{
-		if (!comp.langopts.has_int24 && candidate.eql(type_store::INT24, comp)) continue;
-		if (!comp.langopts.has_int24 && candidate.eql(type_store::UINT24, comp)) continue;
+		if (!comp.target.has_int24() && candidate.eql(type_store::INT24, comp)) continue;
+		if (!comp.target.has_int24() && candidate.eql(type_store::UINT24, comp)) continue;
 		if (candidate.bit_sizeof(comp) > bits) return candidate;
 	}
 	return type_store::INVALID;
@@ -694,12 +699,13 @@ struct Enumerator
 	bool fixed;
 }
 
-fn Enumerator enum_enumerator(parser::ContainerBodySeed seed)
+fn Enumerator enum_enumerator(type_store::QualType fixed_qt)
 {
+	bool fixed = !fixed_qt.is_invalid();
 	return {
 		.val = value::NONE,
-		.qt = seed.has_fixed ? seed.fixed_qt : type_store::INT,
-		.fixed = seed.has_fixed,
+		.qt = fixed ? fixed_qt : type_store::INT,
+		.fixed = fixed,
 	};
 }
 
@@ -780,7 +786,7 @@ fn void? Enumerator.set(&self, parser::Parser* p, parser_result::Result* result,
 
 fn void Enumerator.update_bits(&self, compilation::Compilation* comp)
 {
-	if (self.qt.signedness(comp) == lang_opts::Signedness.UNSIGNED ||
+	if (self.qt.signedness(comp) == bigint::Signedness.UNSIGNED ||
 		value::compare(self.val, bigint::CompareOperator.GTE, value::ZERO, comp))
 	{
 		usz bits = (usz)self.val.min_unsigned_bits(comp);
@@ -797,7 +803,7 @@ fn bool enum_value_fits_type(value::Value val, type_store::QualType src_qt,
 	type_store::QualType dest_qt, compilation::Compilation* comp)
 {
 	if (!value::compare(val, bigint::CompareOperator.LTE, value::max_int(dest_qt, comp), comp)) return false;
-	return src_qt.signedness(comp) == lang_opts::Signedness.UNSIGNED ||
+	return src_qt.signedness(comp) == bigint::Signedness.UNSIGNED ||
 		value::compare(val, bigint::CompareOperator.GTE, value::min_int(dest_qt, comp), comp);
 }
 
@@ -812,7 +818,7 @@ fn type_store::QualType? Enumerator.get_type_specifier(&self, parser::Parser* p,
 		if (is_packed && self.num_negative_bits <= char_width && self.num_positive_bits < char_width) return type_store::SCHAR;
 		if (is_packed && self.num_negative_bits <= short_width && self.num_positive_bits < short_width) return type_store::SHORT;
 		if (self.num_negative_bits <= int_width && self.num_positive_bits < int_width) return type_store::INT;
-		if (self.num_negative_bits == 24 && self.num_positive_bits < 24 && p.comp.langopts.has_int24) return type_store::INT24;
+		if (self.num_negative_bits == 24 && self.num_positive_bits < 24 && p.comp.target.has_int24()) return type_store::INT24;
 		usz long_width = (usz)type_store::LONG.bit_sizeof(p.comp);
 		if (self.num_negative_bits <= long_width && self.num_positive_bits < long_width) return type_store::LONG;
 		usz long_long_width = (usz)type_store::LONG_LONG.bit_sizeof(p.comp);
@@ -825,7 +831,7 @@ fn type_store::QualType? Enumerator.get_type_specifier(&self, parser::Parser* p,
 	if (is_packed && self.num_positive_bits <= char_width) return type_store::UCHAR;
 	if (is_packed && self.num_positive_bits <= short_width) return type_store::USHORT;
 	if (self.num_positive_bits <= int_width) return type_store::UINT;
-	if (self.num_positive_bits == 24 && p.comp.langopts.has_int24) return type_store::UINT24;
+	if (self.num_positive_bits == 24 && p.comp.target.has_int24()) return type_store::UINT24;
 	if (self.num_positive_bits <= (usz)type_store::LONG.bit_sizeof(p.comp)) return type_store::ULONG;
 	return type_store::ULONG_LONG;
 }
@@ -874,7 +880,9 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 	{
 		if (!done) skip_to_enum_close(p);
 	}
-	Enumerator enumerator = enum_enumerator(seed);
+	type_store::QualType fixed_qt = seed.enum_fixed_qt(p);
+	bool has_fixed = !fixed_qt.is_invalid();
+	Enumerator enumerator = enum_enumerator(fixed_qt);
 
 	while (!p.at_eof() && !p.is_at(tokenizer::TokenId.R_BRACE))
 	{
@@ -946,6 +954,7 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 			.enum_field = { .name_tok = name_tok, .qt = enumerator.qt, .init = init } });
 		enum_wip.apply_decl_attrs(p, node, type_store::NODE_NULL)!;
 		p.tree.set_value(node, enumerator.val);
+		p.enumerator_enum.set((uint)node, (uint)seed.decl_node);
 		p.symbols.define_enumeration(p, name, enumerator.qt, name_tok, enumerator.val, node)!;
 		enum_fields.push({ .qt = enumerator.qt, .name = name, .name_tok = (type_store::TokenIndex)name_tok });
 		field_nodes.push(node);
@@ -963,8 +972,8 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 
 	type_store::EnumField[] fields = enum_fields.array_view();
 	type_store::NodeIndex[] fixup_nodes = field_nodes.array_view();
-	type_store::QualType tag_qt = seed.has_fixed ? seed.fixed_qt : type_store::INVALID;
-	if (!seed.has_fixed)
+	type_store::QualType tag_qt = fixed_qt;
+	if (!has_fixed)
 	{
 		bool is_packed = p.comp.langopts.short_enums || p.comp.target.pack_all_enums() ||
 			seed.qt.has_attribute(&p.tree, attribute::AttributeTag.PACKED);
@@ -996,8 +1005,8 @@ fn type_store::QualType? DeclarationParser.parse_enum_body(&self, parser::Parser
 	}
 	p.comp.type_store.set({ .tag = type_store::TypeTag.ENUM, .enum_ty = {
 		.has_tag = true, .tag = tag_qt,
-		.fixed = seed.has_fixed, .incomplete = false,
-		.name = seed.name, .decl_node = seed.decl_node, .fields = fields,
+		.fixed = has_fixed, .incomplete = false,
+		.name = seed.name(p), .decl_node = seed.decl_node, .fields = fields,
 	} }, seed.qt.index);
 	type_store::NodeIndex[] nodes = field_nodes.array_view();
 	p.tree.set_node({ .kind = tree::NodeKind.ENUM_DECL, .container_decl = {
@@ -1048,6 +1057,16 @@ fn type_store::BuilderSpecifier? type_specifier_token(tokenizer::TokenId id)
 	return { .tag = tag };
 }
 
+<* C 6.7.6.3p7: an array parameter becomes a pointer qualified by the
+   qualifiers inside its brackets. *>
+fn type_store::QualType with_array_param_quals(type_store::QualType decayed, type_store::QualType quals)
+{
+	decayed.is_const |= quals.is_const;
+	decayed.is_volatile |= quals.is_volatile;
+	decayed.is_restrict |= quals.is_restrict;
+	return decayed;
+}
+
 fn bool DeclarationParser.starts_decl_specifier(&self, parser::Parser* p)
 {
 	if (p.at_eof()) return false;
@@ -1058,7 +1077,7 @@ fn bool DeclarationParser.starts_decl_specifier(&self, parser::Parser* p)
 		case KEYWORD_BIT_INT: case KEYWORD_TYPEOF: case KEYWORD_TYPEOF1: case KEYWORD_TYPEOF2: case KEYWORD_TYPEOF_UNQUAL:
 		case KEYWORD_AUTO: case KEYWORD_AUTO_TYPE: case KEYWORD_TYPEDEF: case KEYWORD_EXTERN:
 		case KEYWORD_STATIC: case KEYWORD_REGISTER: case KEYWORD_THREAD_LOCAL: case KEYWORD_THREAD:
-		case KEYWORD_CONSTEXPR: case KEYWORD_INLINE: case KEYWORD_INLINE1: case KEYWORD_INLINE2:
+		case KEYWORD_CONSTEXPR: case KEYWORD_INLINE: case KEYWORD_INLINE1: case KEYWORD_INLINE2: case KEYWORD_NORETURN:
 		case KEYWORD_ALIGNAS: case KEYWORD_C23_ALIGNAS:
 		case KEYWORD_ATOMIC: case KEYWORD_STRUCT: case KEYWORD_UNION: case KEYWORD_ENUM:
 		case KEYWORD_CDECL: case KEYWORD_CDECL2:
@@ -1119,6 +1138,17 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 			result.recognized = true;
 			self.parse_alignas_specifier(p, wip, tok, id)!;
 			consumed = true; continue;
+		}
+		if (id == KEYWORD_NORETURN)
+		{
+			// Function specifier, accepted in any declaration-specifier context like
+			// upstream declSpec; non-function uses are diagnosed by the attribute.
+			if (result.has_noreturn) Diagnostic.DUPLICATE_DECL_SPEC.@emit(p, tok, "_Noreturn")!;
+			result.has_noreturn = true;
+			result.noreturn_tok = tok;
+			wip.add_keyword(p, tok, {});
+			p.advance();
+			consumed = true; result.recognized = true; continue;
 		}
 		if (id == KEYWORD_BIT_INT)
 		{
@@ -1196,6 +1226,7 @@ fn DeclSpec? DeclarationParser.parse_decl_spec(&self, parser::Parser* p, attribu
 				result.recognized = true;
 				p.mark_used(typedef_symbol.node);
 				if (!builder.combine_typedef(typedef_symbol.qt)) break;
+				p.check_deprecated_unavailable((type_store::NodeOptIndex)typedef_symbol.node, tok)!;
 				p.advance(); consumed = true; result.recognized = true; continue;
 			}
 		}
@@ -1374,13 +1405,6 @@ fn parser::TypeNameProbe? DeclarationParser.probe_typed_type_name(&self, parser:
 
 fn void? DeclarationParser.handle_implicit_typedefs(&self, parser::Parser* p) @dynamic
 {
-	$if env::TESTING:
-		if (self.test_probe)
-		{
-			if (&self.test_probe.implicit_typedefs) return self.test_probe.implicit_typedefs(p);
-			return parser::HOOK_ABSENT~;
-		}
-	$endif
 	return implicit_typedef_prelude(p);
 }
 
@@ -1423,7 +1447,7 @@ fn void? implicit_typedef_prelude(parser::Parser* p)
 	if (p.comp.langopts.has_char8_t()) add_implicit_typedef(p, "char8_t", type_store::UCHAR)!;
 	add_implicit_typedef(p, "__int128_t", type_store::INT128)!;
 	add_implicit_typedef(p, "__uint128_t", type_store::UINT128)!;
-	if (p.comp.langopts.has_int24)
+	if (p.comp.target.has_int24())
 	{
 		add_implicit_typedef(p, "__int24__", type_store::INT24)!;
 		add_implicit_typedef(p, "__uint24", type_store::UINT24)!;
@@ -1559,6 +1583,7 @@ fn type_store::FuncParam? DeclarationParser.parse_parameter_declaration(&self, p
 	if (!qt.is_invalid() && (qt.is(p.comp, type_store::TypeTag.ARRAY) || qt.is(p.comp, type_store::TypeTag.FUNC)))
 	{
 		qt = qt.decay(p.comp);
+		qt = with_array_param_quals(qt, parsed.array_param_quals);
 	}
 
 	type_store::NodeOptIndex param_node = type_store::NODE_NULL;
@@ -1792,7 +1817,8 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
-			parser::ParsedDeclarator parsed = p.parse_declarator(self, &wip, spec.qt)!;
+			// K&R parameter declarations: array qualifiers and `static` are allowed.
+			parser::ParsedDeclarator parsed = p.parse_declarator(self, &wip, spec.qt, parser::DeclaratorKind.PARAM)!;
 			self.append_attributes(p, &wip)!;
 			type_store::QualType parsed_qt = wip.apply_type_attrs(p, parsed.qt)!;
 			parsed_qt = wip.apply_pending_calling_conventions(p, parsed_qt)!;
@@ -1807,6 +1833,7 @@ fn type_store::QualType? DeclarationParser.parse_kr_definition_parameters(&self,
 			if (qt.is(p.comp, type_store::TypeTag.ARRAY) || qt.is(p.comp, type_store::TypeTag.FUNC))
 			{
 				qt = qt.decay(p.comp);
+				qt = with_array_param_quals(qt, parsed.array_param_quals);
 			}
 
 			usz match = param_entries.len;
@@ -2122,6 +2149,40 @@ fn DeclSpec? DeclarationParser.implicit_int_decl_spec(&self, parser::Parser* p)
 	return { .qt = builder.finish()!, .recognized = true };
 }
 
+<*
+ clang reports declaring objects whose type is a deprecated tag reached through
+ the specifiers without naming it: a tag defined right here
+ (`struct S {...} __attribute__((deprecated)) x;`) or `typeof(...)` of a
+ deprecated tag type (through typedefs). Named tags and typedef names report
+ on their own use.
+*>
+fn void? DeclarationParser.check_spec_type_deprecated(&self, parser::Parser* p, DeclSpec spec, usz first_spec_node, tokens::TokenIndex tok)
+{
+	type_store::QualType qt = spec.qt;
+	if (qt.is_invalid() || qt.is_auto() || qt.is_declarator_combine()) return;
+	bool defined_here = spec.has_tag_decl_node && (usz)spec.tag_decl_node >= first_spec_node &&
+		(usz)spec.tag_decl_node < (usz)p.tree.nodes.len();
+	if (defined_here)
+	{
+		tree::NodeKind kind = spec.tag_decl_node.get(&p.tree).kind;
+		defined_here = kind == tree::NodeKind.STRUCT_DECL || kind == tree::NodeKind.UNION_DECL || kind == tree::NodeKind.ENUM_DECL;
+	}
+	type_store::Type t = qt.get_type(p.comp);
+	if (!defined_here && t.tag != type_store::TypeTag.TYPEOF) return;
+	while (t.tag == type_store::TypeTag.TYPEOF || t.tag == type_store::TypeTag.TYPEDEF)
+	{
+		type_store::QualType next = t.tag == type_store::TypeTag.TYPEOF ? t.type_of.base : t.type_def.base;
+		if (next.is_invalid() || next.is_auto() || next.is_declarator_combine()) return;
+		t = next.get_type(p.comp);
+	}
+	switch (t.tag)
+	{
+		case STRUCT: case UNION: return p.check_deprecated_unavailable(t.record.decl_node, tok);
+		case ENUM: return p.check_deprecated_unavailable((type_store::NodeOptIndex)t.enum_ty.decl_node, tok);
+		default: return;
+	}
+}
+
 <* Parse a complete declaration and append its declaration nodes to a local
    DECL_STMT or to Tree.root_decls. *>
 fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser::Parser* p, bool local = false,
@@ -2199,6 +2260,11 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 		if (!self.starts_decl_specifier(p)) return tree::NULL_NODE~;
 		parser_statement::append_statement_attributes(p, prefix_attributes, &wip)!;
 	}
+	// Uses of deprecated declarations are held until each declarator shows whether it
+	// is deprecated itself; a declaration without declarators reports them at its end.
+	usz deprecation_mark = p.begin_deprecation_deferral();
+	bool saw_declarator = false;
+	defer (void)@catch(p.end_deprecation_deferral(deprecation_mark, !saw_declarator));
 	tokens::TokenIndex first_tok = p.tok_i;
 	usz first_spec_node = (usz)p.tree.nodes.len();
 	DeclSpec? maybe_spec = self.parse_decl_spec(p, &wip);
@@ -2289,6 +2355,7 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			// Zig `declarator_attr_state`: taken before the declarator, so attributes
 			// after `*` do not leak into the next declarator.
 			attribute_wip::State declarator_wip_state = wip.state(false);
+			usz declarator_deprecation_mark = (usz)p.deferred_deprecations.len();
 			AttributeUseSnapshot attribute_use_state;
 			attribute_use_state.init(p, &wip);
 			defer attribute_use_state.free();
@@ -2308,6 +2375,25 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 			}
 			tokens::TokenIndex name_tok = parsed.name_tok.value;
 			string_interner::StringId name = p.comp.intern_string(p.tree.tok_slice(name_tok));
+			// A deprecated declarator (or its initializer / function body) does not report
+			// uses of deprecated declarations; otherwise the held uses, including the
+			// shared specifiers' on the first such declarator, are reported.
+			if (!saw_declarator) self.check_spec_type_deprecated(p, spec, first_spec_node, name_tok)!;
+			saw_declarator = true;
+			bool declarator_deprecated = wip.has_deprecated();
+			if (declarator_deprecated) p.deprecated_context++;
+			defer
+			{
+				if (declarator_deprecated)
+				{
+					p.deprecated_context--;
+					p.drop_deprecations(declarator_deprecation_mark);
+				}
+				else
+				{
+					(void)@catch(p.flush_deprecations(deprecation_mark));
+				}
+			}
 			type_store::QualType qt = wip.apply_type_attrs(p, parsed.qt)!;
 			qt = wip.apply_pending_calling_conventions(p, qt)!;
 			bool has_auto_type = spec.qt.is_auto();
@@ -2461,6 +2547,25 @@ fn type_store::NodeIndex? DeclarationParser.parse_declaration_impl(&self, parser
 				self.bind_declaration_symbol(p, name, qt, name_tok, function_node,
 					false, true, false, &previous)!;
 				wip.apply_decl_attrs(p, function_node, previous)!;
+				// A definition of a function declared deprecated earlier is a deprecated context too.
+				if (!declarator_deprecated && (p.tree.attr_map.has_attribute(previous, attribute::AttributeTag.DEPRECATED) ||
+					p.tree.attr_map.has_attribute(function_node.pack(), attribute::AttributeTag.DEPRECATED)))
+				{
+					declarator_deprecated = true;
+					p.deprecated_context++;
+				}
+				// Settle the held uses now; declarations in the body defer on their own.
+				if (declarator_deprecated)
+				{
+					p.drop_deprecations(declarator_deprecation_mark);
+				}
+				else
+				{
+					p.flush_deprecations(deprecation_mark)!;
+				}
+				uint saved_deprecation_depth = p.deprecation_defer_depth;
+				p.deprecation_defer_depth = 0;
+				defer p.deprecation_defer_depth = saved_deprecation_depth;
 				if (name == p.comp.intern_string("main") && !qt.is_invalid())
 				{
 					type_store::Func main_func = qt.get(p.comp, type_store::TypeTag.FUNC)!.func;

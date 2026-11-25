@@ -1,6 +1,7 @@
 // Reusable command-line state derived from src/aro/Driver.zig and
 // src/aro/Toolchain.zig. Strings in this structure are borrowed from argv.
 module aro::frontend::c::driver_options;
+import aro::bigint, aro::target;
 import std::collections::list, std::collections::maybe;
 import aro::frontend::c::compilation;
 import aro::frontend::c::lang_opts;
@@ -48,6 +49,10 @@ struct DriverOptions
 	Allocator a;
 	ParseAction action;
 	List{String} inputs;
+	<* `-x <lang>` in effect for the inputs that follow; "" means by extension (`-x none`). *>
+	String input_language;
+	<* `-m<feature>` / `-mno-<feature>` as `+name` / `-name`, appended to the `-mcpu` features. *>
+	String cpu_feature_flags;
 	List{String} link_objects;
 	List{String} lib_dirs;
 	List{usz} input_link_slots;
@@ -65,7 +70,7 @@ struct DriverOptions
 	Maybe{String} darwin_variant_triple;
 	Maybe{String} cpu;
 	Maybe{String} standard;
-	Maybe{lang_opts::Compiler} emulate;
+	Maybe{target::Compiler} emulate;
 	Maybe{String} gnuc_version;
 	Maybe{uint} macro_backtrace_limit;
 	Maybe{bool} short_enums;
@@ -74,14 +79,18 @@ struct DriverOptions
 	Maybe{bool} dollars_in_identifiers;
 	Maybe{bool} digraphs;
 	Maybe{bool} gnu_asm;
-	Maybe{lang_opts::Signedness} char_signedness;
-	Maybe{lang_opts::FPEvalMethod} fp_eval_method;
+	Maybe{bigint::Signedness} char_signedness;
+	Maybe{target::FPEvalMethod} fp_eval_method;
 	Maybe{lang_opts::BoundsSafety} bounds_safety;
-	Maybe{lang_opts::Tristate} char8_t_override;
+	Maybe{bool} char8_t_override;
 	Maybe{lang_opts::Visibility} visibility;
 	bool use_native_half_type;
 	bool allow_half_args_returns;
 	Maybe{bool} blocks;
+	<* `-fwrapv` / `-fno-strict-overflow`: signed integer overflow wraps. *>
+	bool wrapv;
+	<* `-fno-tree-vectorize` / `-fno-vectorize`. *>
+	bool no_vectorize;
 	bool pthread;
 	Maybe{bool} hosted;
 	Maybe{String} optimization;
@@ -110,6 +119,8 @@ struct DriverOptions
 	bool verify_ir;
 	bool codegen_todo_report;
 	bool x86_64_spill_all;
+	<* `--scalar-vector-ext`: see `LangOpts.scalar_vector_ext`. *>
+	bool scalar_vector_ext;
 	bool verbose_linker_args;
 	bool apple_kext;
 	bool common;

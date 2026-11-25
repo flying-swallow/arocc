@@ -8,6 +8,7 @@
 // `default_function_alignment`), never from the host's sizeof. Record sizes
 // and alignments come from the stored `RecordLayout`.
 module aro::frontend::c::type_store;
+import aro::bigint;
 import aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::target;
 
 <* std.mem.alignForward for a power-of-two (or 1) alignment. *>
@@ -58,7 +59,7 @@ fn QualType smallest_n_bit_int_target_independent(Compilation* comp, ulong bits,
 <* Compilation.intLeastN: lowest-rank integer type with at least N bits; subject to platform idiosyncrasies. *>
 fn QualType int_least_n(Compilation* comp, ulong bits, Signedness signedness)
 {
-	if (bits <= 24 && bits > TypeInt.INT.bits(comp) && comp.langopts.has_int24)
+	if (bits <= 24 && bits > TypeInt.INT.bits(comp) && comp.target.has_int24())
 	{
 		return signedness == SIGNED ? INT24 : UINT24;
 	}
@@ -219,7 +220,9 @@ fn uint QualType.alignof(self, Compilation* comp)
 		{
 			switch (comp.langopts.emulate)
 			{
-				case GCC: use_requested = false; // gcc does not respect alignment on enums
+				case GCC:
+					// gcc ignores `aligned` on the enum itself, but honours it on a typedef of one.
+					use_requested = self.get_type(comp).tag == TYPEDEF && @ok(comp.type_store.get_requested_alignment(self));
 				case MSVC:
 					uint base_align = self.base(comp).qt.alignof(comp);
 					return max(requested, base_align);

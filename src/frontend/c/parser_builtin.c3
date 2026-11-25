@@ -143,7 +143,7 @@ fn void? Parser.check_offsetof_array_bounds(&self, parser_result::Result index,
 			}
 		}
 		ulong index_int = index.val.to_u64(p.comp) ?? ulong::max;
-		if (index.qt.signedness(p.comp) == lang_opts::Signedness.UNSIGNED)
+		if (index.qt.signedness(p.comp) == bigint::Signedness.UNSIGNED)
 		{
 			if (index_int >= len)
 			{

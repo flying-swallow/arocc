@@ -105,3 +105,14 @@ fn void diagnostic_matching() @test
 	assert(!matches("int a; // #error: x\n", "m.c:1:1: error: x\nm.c:1:2: error: x\n"));
 	assert(matches("int a; // #error: x // #error: x\n", "m.c:1:1: error: x\nm.c:1:2: error: x\n"));
 }
+
+fn void column_expectations_match_before_column_less() @test
+{
+	// The column-less expectation comes first but must not take the col-5 error.
+	String src = "int a; // #error: x // #error@5: x\n";
+	assert(matches(src, "m.c:1:5: error: x\nm.c:1:9: error: x\n"));
+	assert(matches(src, "m.c:1:9: error: x\nm.c:1:5: error: x\n"));
+	assert(!matches(src, "m.c:1:9: error: x\nm.c:1:8: error: x\n"));
+	// A located diagnostic still falls back to header expectations.
+	assert(matches("// #warning: m.c:1:3: w\nint a;\n", "m.c:1:3: warning: w\n"));
+}

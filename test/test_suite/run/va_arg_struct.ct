@@ -1,0 +1,30 @@
+// #kind: run
+// #exit: 0
+// va_arg of structs: register-class ones come from the GP/XMM save areas while
+// all their eightbytes fit, the rest from the overflow area (16-byte aligned for
+// long double members, matching the caller's stack slot).
+#include <stdarg.h>
+#include <stdio.h>
+struct DL { double d; long l; };
+struct FF { float a, b; };
+struct Big { long a, b, c; };
+struct Ch { char c; };
+struct LDb { long double x; };
+double sum(int n, ...) {
+  va_list ap; va_start(ap, n); double t = 0;
+  for (int i = 0; i < n; i++) {
+    struct DL a = va_arg(ap, struct DL); struct FF b = va_arg(ap, struct FF);
+    struct Big c = va_arg(ap, struct Big); struct Ch d = va_arg(ap, struct Ch);
+    struct LDb e = va_arg(ap, struct LDb);
+    t += a.d + a.l + b.a + b.b + c.a + c.b + c.c + d.c + (double)e.x;
+  }
+  va_end(ap); return t;
+}
+int main(void) {
+  struct DL a = {1.5, 2}; struct FF b = {3, 4}; struct Big c = {5, 6, 7}; struct Ch d = {8}; struct LDb e = {9};
+  printf("%g\n", sum(4, a, b, c, d, e, a, b, c, d, e, a, b, c, d, e, a, b, c, d, e));
+  return 0;
+}
+
+// #expect: stdout
+182

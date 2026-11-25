@@ -12,6 +12,14 @@ fn void diagnostic_annotations() @test
  String reason = clang_testsuite::expectations("int x; // c99-error@+1 2 {{message}}\nint y; // c99-note@1 {{note}}", prefixes[..], &want, &none);
  assert(!reason.len && want.len() == 3 && want[0].line == 2 && want[2].line == 1);
 }
+fn void comment_anchored_annotations() @test
+{
+ List{Expected} want; want.init(tmem); bool none = false; String[1] prefixes = { "expected" };
+ // A backslash-continued line comment and a multi-line block comment anchor at their first line.
+ String text = "int a; // expected-warning {{x}} \\\n// expected-warning {{y}}\nint b; /* expected-note {{z}}\n expected-error@+1 {{w}} */\nint c;";
+ assert(!clang_testsuite::expectations(text, prefixes[..], &want, &none).len);
+ assert(want.len() == 4 && want[0].line == 1 && want[1].line == 1 && want[2].line == 3 && want[3].line == 4);
+}
 fn void unsupported_annotation() @test
 {
  List{Expected} want; want.init(tmem); bool none = false; String[1] prefixes = { "expected" };
@@ -35,6 +43,9 @@ fn void controlled_outcomes() @test
  String error_path = string::format(tmem, "%s/error.c", dir);
  Invocation excluded = { .path = error_path, .rel = "exclusion", .command = "%clang_cc1 %s -verify -verify-ignore-unexpected=error", .text = "int x;\n// expected-error {{still required}}" };
  assert((clang_testsuite::execute(excluded, &opts).get_string("status") ?? "") == "PASS");
+ // Macro-backtrace notes, in this or another file, are not -verify diagnostics.
+ Invocation macro_note = { .path = string::format(tmem, "%s/macro_note.c", dir), .rel = "macro_note", .command = "%clang_cc1 %s -verify", .text = "#define M 1\n// expected-error {{controlled}}" };
+ assert((clang_testsuite::execute(macro_note, &opts).get_string("status") ?? "") == "PASS");
  Invocation pipeline = { .command = "%clang_cc1 %s | FileCheck %s" };
  assert((clang_testsuite::execute(pipeline, &opts).get_string("status") ?? "") == "UNSUPPORTED");
 }

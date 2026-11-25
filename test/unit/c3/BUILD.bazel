@@ -1,0 +1,20 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# Unit tests: C3 frontend (src/frontend/c3). Per-area suites live in subpackages.
+
+sh_test(
+    name = "isolation_test",
+    srcs = ["isolation_test.sh"],
+    args = ["$(locations //:c3_frontend_srcs)"],
+    data = ["//:c3_frontend_srcs"],
+)
+
+test_suite(
+    name = "all",
+    tests = [
+        ":isolation_test",
+        "//test/unit/c3/ast:all",
+        "//test/unit/c3/lexer:all",
+        "//test/unit/c3/parser:all",
+    ],
+)

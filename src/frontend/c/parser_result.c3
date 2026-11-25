@@ -2,6 +2,7 @@
 // Diagnostics and the full parser grammar are intentionally owned by the
 // parser layer; these helpers preserve the typed AST and constant value.
 module aro::frontend::c::parser_result;
+import aro::bigint, aro::target;
 import aro::primitive_value;
 import aro::frontend::c::parser, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::tokens, aro::frontend::c::diagnostics;
 import aro::frontend::c::compilation;
@@ -206,6 +207,10 @@ fn value::Value pointer_value(parser::Parser* p, type_store::NodeIndex node, val
 			{
 				return value::NONE;
 			}
+		case tree::NodeKind.COMPOUND_LITERAL_EXPR:
+			// `(int[]){1, 2}` decaying at file scope: the literal's static address.
+			value::Value offset_copy = offset;
+			return compute_offset_extra(p, node, &offset_copy);
 		default: return value::NONE;
 	}
 }
@@ -265,6 +270,13 @@ fn value::Value compute_offset_extra(parser::Parser* p, type_store::NodeIndex no
 			return compute_offset_extra(p, n.unary.operand, offset_so_far);
 		case tree::NodeKind.DECL_REF_EXPR:
 			return pointer_value(p, node, *offset_so_far);
+		case tree::NodeKind.COMPOUND_LITERAL_EXPR:
+			// A compound literal outside a function, or a C23 `static` one, has
+			// static storage: `&(struct S){1, 2}` is an address constant.
+			if (n.compound_literal.thread_local) return value::NONE;
+			if (n.compound_literal.storage_class != tree::CompoundLiteralStorageClass.STATIC && p.function_context.active) return value::NONE;
+			if (offset_so_far.is_none()) return value::NONE;
+			return value::pointer({ .node = (uint)node, .offset = offset_so_far.ref() }, p.comp);
 		case tree::NodeKind.DEREF_EXPR:
 			return compute_saved_pointer_offset(p, n.unary.operand, *offset_so_far);
 		case tree::NodeKind.ARRAY_ACCESS_EXPR:
@@ -393,7 +405,7 @@ fn void? Result.usual_unary_conversion(&self, parser::Parser* p, tokens::TokenIn
 			if (try width = p.tree.bitfield_width(self.node, true))
 			{
 				if (try field_promotion = self.qt.promote_bitfield(p.comp, width)) { promoted = field_promotion; }
-				else if (p.comp.langopts.emulate == lang_opts::Compiler.GCC && width < self.qt.bit_sizeof(p.comp) && !self.qt.is(p.comp, type_store::TypeTag.BIT_INT))
+				else if (p.comp.langopts.emulate == target::Compiler.GCC && width < self.qt.bit_sizeof(p.comp) && !self.qt.is(p.comp, type_store::TypeTag.BIT_INT))
 				{
 					type_store::Type precise = type_store::type_bit_int((ushort)width, self.qt.signedness(p.comp));
 					precise.bit_int.bitfield_origin = true;
@@ -998,6 +1010,21 @@ fn bool? Result.explicit_cast(&self, parser::Parser* p, type_store::QualType des
 		self.val = value::NONE;
 		return true;
 	}
+	// GNU: a cast of a struct/union value to its own type is a no-op.
+	if (@ok(dest.get_record(p.comp)) && dest.unqualified().eql(self.qt.unqualified(), p.comp))
+	{
+		self.val = value::NONE;
+		self.qt = dest.unqualified();
+		self.node = p.tree.add_node(
+			{
+				.kind = tree::NodeKind.CAST, .cast = {
+					.l_paren = l_paren, .kind = tree::CastKind.NO_OP, .operand = self.node,
+					.qt = self.qt, .implicit = false,
+				}
+			}
+		);
+		return true;
+	}
 	type_store::Type? dst_vec = dest.get(p.comp, type_store::TypeTag.VECTOR);
 	type_store::Type? src_vec = self.qt.get(p.comp, type_store::TypeTag.VECTOR);
 	if (try dv = dst_vec)
@@ -1136,8 +1163,8 @@ fn void? Result.usual_arithmetic_conversion(&self, Result* rhs, parser::Parser* 
 	type_store::QualType a = self.qt.to_real(p.comp);
 	type_store::QualType b = rhs.qt.to_real(p.comp);
 	type_store::Order order = self.qt.int_rank_order(rhs.qt, p.comp);
-	bool as = self.qt.signedness(p.comp) == lang_opts::Signedness.SIGNED;
-	bool bs = rhs.qt.signedness(p.comp) == lang_opts::Signedness.SIGNED;
+	bool as = self.qt.signedness(p.comp) == bigint::Signedness.SIGNED;
+	bool bs = rhs.qt.signedness(p.comp) == bigint::Signedness.SIGNED;
 	type_store::QualType target;
 	if (as == bs)
 	{
@@ -1218,6 +1245,10 @@ fn tokens::TokenIndex? first_missing_value(parser::Parser* p, type_store::NodeIn
 				if (!saved.is_none()) return NO_MISSING_VALUE~;
 			}
 			return first_missing_value(p, node.cast.operand);
+		case tree::NodeKind.COMPOUND_LITERAL_EXPR:
+			// A compound literal used as a value (`struct S s = (struct S){1, 2};`,
+			// GNU at file scope) is constant when its own initializer is.
+			return first_missing_value(p, node.compound_literal.initializer);
 		case tree::NodeKind.PAREN_EXPR:
 			// Parentheses are transparent: `(void *)(2)` (sqlite SQLITE_INT_TO_PTR).
 			if (try saved = p.tree.value_of(node_index))

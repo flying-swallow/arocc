@@ -5,6 +5,7 @@
 // Not here: the usual arithmetic conversions live on Parser.Result in Zig and
 // are ported with the parser.
 module aro::frontend::c::type_store;
+import aro::bigint;
 import aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::target;
 
 <* std.math.Order *>

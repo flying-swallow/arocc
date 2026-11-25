@@ -1,7 +1,7 @@
 // Port of the data model and builder in src/backend/Ir.zig. This C3 IR is a
 // stable, index-based representation; references remain valid when lists grow.
 module aro::backend::ir;
-import aro::value_interner, std::collections::list, std::collections::map;
+import aro::value_interner, aro::primitive_value, std::collections::list, std::collections::map;
 
 typedef Ref = uint;
 const Ref NONE = (Ref)uint::max;
@@ -25,7 +25,7 @@ enum InstTag : char(String name)
 	SELECT { "select" },
 	JMP_VAL { "jmp_val" },
 	CALL { "call" },
-	<* High eightbyte of the immediately preceding CALL result. *>
+	<* High eightbyte (i64 or f64) of the immediately preceding CALL result. *>
 	CALL_HI { "call_hi" },
 	<* Initialize the SysV va_list using this variadic function's register save area. *>
 	VA_START { "va_start" },
@@ -74,12 +74,14 @@ enum InstTag : char(String name)
 	FCMP_OGT { "fcmp_ogt" },
 	FCMP_OGE { "fcmp_oge" },
 	RET { "ret" },
-	<* Return two i64 eightbytes in RAX and RDX. *>
+	<* Return two eightbytes, each i64 (RAX, then RDX) or f64 (XMM0, then XMM1). *>
 	RET_PAIR { "ret_pair" },
 	LOAD { "load" },
 	BIT_NOT { "bit_not" },
 	NEGATE { "negate" },
 	FNEG { "fneg" },
+	<* Floating-point absolute value: clears the sign bit (NaNs included). *>
+	FABS { "fabs" },
 	TRUNC { "trunc" },
 	ZEXT { "zext" },
 	SEXT { "sext" },
@@ -99,6 +101,28 @@ enum InstTag : char(String name)
 	CLZ { "clz" },
 	<* Count trailing zero bits of `ref`; undefined for zero (`__builtin_ctz`). *>
 	CTZ { "ctz" },
+	<* Vector (see `Ir.vector_shape`) with every lane set to scalar `ref`. *>
+	VSPLAT { "vsplat" },
+	<* Scalar lane `bin.rhs` (an integer CONSTANT) of vector `bin.lhs`. *>
+	VEXTRACT { "vextract" },
+	<* Wrapping sum of the lanes of integer vector `ref`, as the lane type. *>
+	VREDUCE_ADD { "vreduce_add" },
+	<* Lane `i` of the result is lane `shuffle.mask[i]` of the concatenation
+	   `shuffle.lhs ++ shuffle.rhs` (both of type `ty`); `SHUFFLE_UNDEF` lanes are
+	   unspecified. Only masks `sse2_shuffle_kind` accepts are valid. *>
+	VSHUFFLE { "vshuffle" },
+}
+
+<* A `ShuffleData.mask` entry whose result lane is unspecified. *>
+const char SHUFFLE_UNDEF = 0xFF;
+
+<* `lhs` / `rhs` lead like `BinData`'s, so operand walkers read a VSHUFFLE's
+   operands through `data.bin` like any binary instruction. *>
+struct ShuffleData
+{
+	Ref lhs; Ref rhs;
+	<* One entry per result lane (up to 16): an index below 2 * lanes, or SHUFFLE_UNDEF. *>
+	char[16] mask;
 }
 
 <* C11 / GCC `__ATOMIC_*` memory orders, as stored in `AtomicData.order`. *>
@@ -179,6 +203,13 @@ struct CallData
 {
 	Ref func; Ref[] args; bool[] stack_only; uint[] memory_copy_bytes;
 }
+
+<* Set in a `memory_copy_bytes` entry when the copied argument needs a 16-byte
+   aligned stack slot (SysV: MEMORY-class aggregates aligned to 16). *>
+const uint MEMORY_COPY_ALIGN16 = 1u << 31;
+
+fn uint memory_copy_size(uint entry) => entry & ~MEMORY_COPY_ALIGN16;
+fn bool memory_copy_align16(uint entry) => entry & MEMORY_COPY_ALIGN16 != 0;
 
 struct PhiInput
 {
@@ -265,6 +296,7 @@ struct InstData
 		DynAllocData dyn_alloc;
 		AtomicData atomic;
 		BinData bin;
+		ShuffleData shuffle;
 		BranchData branch;
 		SwitchData switch_data;
 		CallData call;
@@ -275,14 +307,189 @@ struct InstData
 
 <* `is_volatile` marks a volatile LOAD/STORE (C volatile-qualified lvalue): the
    access is observable and must not be removed, merged, reordered with other
-   volatile accesses, or promoted, whatever its address. Ignored on other tags. *>
+   volatile accesses, or promoted, whatever its address. Ignored on other tags.
+   `nsw` ("no signed wrap") is valid only on integer ADD / SUB / MUL: when the
+   exact signed result does not fit the type, the value is poison (any value may
+   be substituted), not immediate UB, so speculation stays sound. The C frontend
+   sets it on signed arithmetic at `int` rank or wider unless `-fwrapv`. A pass
+   that rewrites the operation or merges two of them must clear it unless it
+   proves the new form cannot overflow either (`and` the flags on a merge). *>
 struct Inst
 {
-	InstTag tag; 
-	bool is_volatile; 
-	InstData data; 
+	InstTag tag;
+	bool is_volatile;
+	bool nsw;
+	InstData data;
 	value_interner::InternerRef ty;
 }
+
+<* A 128-bit SIMD vector IR type (`VECTOR_TY` key). Lane-wise ops on vector
+   values reuse the scalar tags: LOAD / STORE (16 bytes, any alignment), ADD /
+   SUB / MUL / BIT_AND / BIT_OR / BIT_XOR on integer lanes (wrapping, never
+   nsw), FADD / FSUB / FMUL / FDIV on float lanes; plus VSPLAT, VEXTRACT,
+   VREDUCE_ADD and VSHUFFLE. Only the shapes in `vector_shape` are valid, and
+   only the operations `sse2_vector_op` / `sse2_vector_cast` /
+   `sse2_shuffle_kind` accept: there is no legalization, so producers (the loop
+   vectorizer, the C frontend for GNU vector-extension values) check first and
+   fall back to scalar lanes otherwise.
+   Integer CMP_* and FCMP_* on vectors yield a mask: an integer vector with the
+   operand's lane count and width, each lane 0 or -1. A shift takes a VSPLAT
+   count (SSE2 shifts every lane by one amount). *>
+struct VectorShape
+{
+	uint lanes;
+	value_interner::InternerRef elem;
+	ushort elem_bits;
+	bool is_float;
+}
+
+<* The lane layout of `ty` when it is a supported 128-bit vector type. *>
+fn VectorShape? Ir.vector_shape(&self, value_interner::InternerRef ty) => vector_shape_of(self.interner, ty);
+
+<* `Ir.vector_shape` for callers that hold only the interner (the C frontend's builder). *>
+fn VectorShape? vector_shape_of(value_interner::Interner* interner, value_interner::InternerRef ty)
+{
+	if (ty == value_interner::REF_PTR || ty == value_interner::REF_VOID || ty == value_interner::REF_NORETURN) return NOT_FOUND~;
+	primitive_value::PrimitiveValue key = interner.get(ty);
+	if (key.tag != primitive_value::PrimitiveType.VECTOR_TY) return NOT_FOUND~;
+	value_interner::InternerRef elem = key.vector_ty.child;
+	if (elem == value_interner::REF_PTR) return NOT_FOUND~;
+	primitive_value::PrimitiveValue lane = interner.get(elem);
+	bool is_float = lane.tag == primitive_value::PrimitiveType.FLOAT_TY;
+	if (!is_float && lane.tag != primitive_value::PrimitiveType.INT_TY) return NOT_FOUND~;
+	ushort bits = lane.ty_bits;
+	if (is_float ? (bits != 32 && bits != 64) : (bits != 8 && bits != 16 && bits != 32 && bits != 64)) return NOT_FOUND~;
+	if ((ulong)key.vector_ty.len * bits != 128) return NOT_FOUND~;
+	return { .lanes = key.vector_ty.len, .elem = elem, .elem_bits = bits, .is_float = is_float };
+}
+
+fn bool Ir.is_vector(&self, value_interner::InternerRef ty) => @ok(self.vector_shape(ty));
+
+<* The 128-bit vector type with `elem` lanes (i8/i16/i32/i64/f32/f64). *>
+fn value_interner::InternerRef Ir.vector_type(&self, value_interner::InternerRef elem)
+{
+	primitive_value::PrimitiveValue lane = self.interner.get(elem);
+	uint lanes = 128 / lane.ty_bits;
+	return self.interner.put({ .tag = VECTOR_TY, .vector_ty = { .len = lanes, .child = elem } });
+}
+
+<* Whether the x86_64 backend selects lane-wise `tag` on `shape` operands with
+   SSE2 alone (no SSE4.1). Compares are keyed by the operand shape. Shifts also
+   need a VSPLAT count (`BIT_*` shift tags). *>
+fn bool sse2_vector_op(InstTag tag, VectorShape shape)
+{
+	ushort bits = shape.elem_bits;
+	switch (tag)
+	{
+		case ADD: case SUB: case BIT_AND: case BIT_OR: case BIT_XOR: case NEGATE: case BIT_NOT:
+			return !shape.is_float;
+		case MUL:
+			return !shape.is_float && (bits == 16 || bits == 32);
+		case BIT_SHL: case BIT_LSHR:
+			return !shape.is_float && bits != 8;
+		case BIT_ASHR:
+			return !shape.is_float && (bits == 16 || bits == 32);
+		case CMP_EQ: case CMP_NE: case CMP_SLT: case CMP_SLTE: case CMP_SGT: case CMP_SGTE:
+		case CMP_ULT: case CMP_ULTE: case CMP_UGT: case CMP_UGTE:
+			return !shape.is_float && bits != 64;
+		case FADD: case FSUB: case FMUL: case FDIV: case FNEG: case FABS:
+		case FCMP_OEQ: case FCMP_UNE: case FCMP_OLT: case FCMP_OLE: case FCMP_OGT: case FCMP_OGE:
+			return shape.is_float;
+		case VSPLAT: case VEXTRACT:
+			return true;
+		default:
+			return false;
+	}
+}
+
+<* Whether the x86_64 backend selects lane conversion `tag` from `from` to `to` with SSE2. *>
+fn bool sse2_vector_cast(InstTag tag, VectorShape from, VectorShape to)
+{
+	if (from.lanes != 4 || to.lanes != 4 || from.elem_bits != 32 || to.elem_bits != 32) return false;
+	switch (tag)
+	{
+		case SITOFP: return !from.is_float && to.is_float;
+		case FPTOSI: return from.is_float && !to.is_float;
+		default: return false;
+	}
+}
+
+<* How lowering selects a VSHUFFLE; NONE: not selectable. *>
+enum ShuffleKind : char
+{
+	NONE,
+	<* Lanes all come from one operand (`ShuffleSelect.swap`: rhs); 32/64-bit lanes: PSHUFD. *>
+	PERMUTE,
+	<* 32-bit lanes: result lanes 0-1 from the first source, 2-3 from the second (SHUFPS);
+	   64-bit lanes: lane 0 from the first, lane 1 from the second (SHUFPD). *>
+	SHUFFLE_PAIRS,
+	<* Interleave the low halves: result 2k = first[k], 2k+1 = second[k] (PUNPCKL*). *>
+	UNPACK_LO,
+	<* Interleave the high halves (PUNPCKH*). *>
+	UNPACK_HI,
+}
+
+struct ShuffleSelect
+{
+	ShuffleKind kind;
+	<* The first source is `rhs` (and the second `lhs`). *>
+	bool swap;
+}
+
+<* Mask entry `i` names lane `lane` of the first source (`swap`: of rhs), or is undefined. *>
+fn bool shuffle_lane_is(char[] mask, usz i, uint lanes, uint lane, bool second, bool swap) @local
+{
+	if (mask[i] == SHUFFLE_UNDEF) return true;
+	bool from_rhs = second != swap;
+	return (uint)mask[i] == (from_rhs ? lanes + lane : lane);
+}
+
+<* Whether every defined entry of `mask[from..to)` reads the rhs (`rhs`) or the lhs. *>
+fn bool shuffle_range_from(char[] mask, usz from, usz to, uint lanes, bool rhs) @local
+{
+	for (usz i = from; i < to; i++)
+	{
+		if (mask[i] == SHUFFLE_UNDEF) continue;
+		if (((uint)mask[i] >= lanes) != rhs) return false;
+	}
+	return true;
+}
+
+<* The SSE2 selection for a VSHUFFLE of `shape` with `mask` (one entry per lane). *>
+fn ShuffleSelect sse2_shuffle_kind(VectorShape shape, char[] mask)
+{
+	uint lanes = shape.lanes;
+	if (mask.len != lanes) return { .kind = NONE };
+	foreach (m : mask) if (m != SHUFFLE_UNDEF && (uint)m >= 2 * lanes) return { .kind = NONE };
+	foreach (swap : (bool[2]){ false, true })
+	{
+		bool lo = true;
+		bool hi = true;
+		for (uint k = 0; k < lanes / 2; k++)
+		{
+			usz even = (usz)k * 2;
+			lo = lo && shuffle_lane_is(mask, even, lanes, k, false, swap) && shuffle_lane_is(mask, even + 1, lanes, k, true, swap);
+			hi = hi && shuffle_lane_is(mask, even, lanes, lanes / 2 + k, false, swap)
+				&& shuffle_lane_is(mask, even + 1, lanes, lanes / 2 + k, true, swap);
+		}
+		if (lo) return { .kind = UNPACK_LO, .swap = swap };
+		if (hi) return { .kind = UNPACK_HI, .swap = swap };
+	}
+	if (shape.elem_bits != 32 && shape.elem_bits != 64) return { .kind = NONE };
+	if (shuffle_range_from(mask, 0, lanes, lanes, false)) return { .kind = PERMUTE };
+	if (shuffle_range_from(mask, 0, lanes, lanes, true)) return { .kind = PERMUTE, .swap = true };
+	foreach (swap : (bool[2]){ false, true })
+	{
+		if (shuffle_range_from(mask, 0, lanes / 2, lanes, swap) && shuffle_range_from(mask, lanes / 2, lanes, lanes, !swap))
+		{
+			return { .kind = SHUFFLE_PAIRS, .swap = swap };
+		}
+	}
+	return { .kind = NONE };
+}
+
+<* `nsw` may appear on this tag. *>
+fn bool InstTag.allows_nsw(self) => self == ADD || self == SUB || self == MUL;
 
 <* A volatile LOAD or STORE. *>
 fn bool Inst.is_volatile_access(&self) => self.is_volatile && (self.tag == InstTag.LOAD || self.tag == InstTag.STORE);
@@ -330,6 +537,8 @@ struct Decl
 	}
 	<* Conservatively inferred properties for a function definition. *>
 	FnAttrs attrs;
+	<* FUNCTION: requested code alignment in bytes (GNU `aligned`); 0 = target default. *>
+	uint code_align;
 	Inst[] instructions;
 	Ref[] body;
 	GlobalData global;
@@ -356,11 +565,75 @@ fn bool Decl.is_definition(&self)
 	}
 }
 
+<* One GNU inline-asm operand of an AsmBlock. The matching CALL argument is
+   the operand's value (input), or the address of its lvalue (output, and any
+   memory operand). *>
+struct AsmOperand
+{
+	<* Constraint letters without the `=`/`+`/`&` modifiers. *>
+	String constraint;
+	<* `[name]` or "". *>
+	String name;
+	<* Index of the CALL argument. *>
+	uint arg;
+	bool is_output;
+	<* `+`: the output also reads the lvalue's value. *>
+	bool read_write;
+	<* The argument is an address (`m` operand, or any output). *>
+	bool by_address;
+	<* Size in bytes of the operand's C type. *>
+	uint size;
+	bool is_float;
+}
+
+<* A GNU inline-asm statement, referenced by a CALL to the symbol `name`
+   (`__aro.asm.*`): every pass already treats a call as an opaque side effect. *>
+struct AsmBlock
+{
+	String name;
+	<* AT&T template, operand references still unexpanded. *>
+	String template;
+	AsmOperand[] operands;
+	String[] clobbers;
+	<* Basic asm (no operand list): `%` is not special. *>
+	bool basic;
+}
+
+fn AsmBlock AsmBlock.copy(&self, Allocator a)
+{
+	AsmBlock out = { .name = self.name.copy(a), .template = self.template.copy(a), .basic = self.basic };
+	out.operands = alloc::new_array(a, AsmOperand, self.operands.len);
+	foreach (i, op : self.operands)
+	{
+		out.operands[i] = op;
+		out.operands[i].constraint = op.constraint.copy(a);
+		out.operands[i].name = op.name.copy(a);
+	}
+	out.clobbers = alloc::new_array(a, String, self.clobbers.len);
+	foreach (i, c : self.clobbers) out.clobbers[i] = c.copy(a);
+	return out;
+}
+
+fn void AsmBlock.free(&self, Allocator a)
+{
+	alloc::free(a, self.name.ptr);
+	alloc::free(a, self.template.ptr);
+	foreach (op : self.operands) { alloc::free(a, op.constraint.ptr); alloc::free(a, op.name.ptr); }
+	alloc::free(a, self.operands.ptr);
+	foreach (c : self.clobbers) alloc::free(a, c.ptr);
+	alloc::free(a, self.clobbers.ptr);
+}
+
 struct Ir
 {
 	Allocator allocator;
 	value_interner::Interner* interner;
 	List{Decl} decls;
+	<* Inline-asm statements and file-scope `asm("...")` text; their presence makes
+	   the driver go through the system assembler. Strings live in the builder arena
+	   of the translation unit (alive while the Ir is). *>
+	List{AsmBlock} asm_blocks;
+	List{String} global_asm;
 	<* Byte order of `GlobalData.bytes` (the target's). Hand-built IR defaults to little-endian. *>
 	bool big_endian;
 	<* Optional `ir_opt::DeclLookup*` installed by the optimizer while the decl list is stable. *>
@@ -385,6 +658,10 @@ fn void Ir.free(&self)
 {
 	foreach (decl : self.decls) decl.free();
 	self.decls.free();
+	foreach (&block : self.asm_blocks) block.free(self.allocator);
+	self.asm_blocks.free();
+	foreach (text : self.global_asm) alloc::free(self.allocator, text.ptr);
+	self.global_asm.free();
 	*self = {};
 }
 
@@ -393,6 +670,20 @@ fn void Ir.take_decls(&self, Ir* other)
 {
 	self.decls.push_all(other.decls.array_view());
 	other.decls.clear();
+	if (!self.asm_blocks.allocator) self.asm_blocks.init(self.allocator);
+	if (!self.global_asm.allocator) self.global_asm.init(self.allocator);
+	self.asm_blocks.push_all(other.asm_blocks.array_view());
+	other.asm_blocks.clear();
+	self.global_asm.push_all(other.global_asm.array_view());
+	other.global_asm.clear();
+}
+
+fn bool Ir.has_asm(&self) => self.asm_blocks.len() != 0 || self.global_asm.len() != 0;
+
+fn AsmBlock* Ir.find_asm(&self, String name)
+{
+	foreach (&block : self.asm_blocks) if (block.name == name) return block;
+	return null;
 }
 
 <* Function builder. Each finished declaration owns stable instruction/body slices. *>
@@ -402,6 +693,8 @@ struct Builder
 	value_interner::Interner* interner;
 	DynamicArenaAllocator arena;
 	List{Decl} decls;
+	List{AsmBlock} asm_blocks;
+	List{String} global_asm;
 	<* Name to index in `decls`, so `merge_global` finds redeclarations without a scan. Keys are copied. *>
 	HashMap{String, usz} decl_index;
 	List{Inst} instructions;
@@ -431,6 +724,8 @@ fn void Builder.init(&self, Allocator allocator, value_interner::Interner* inter
 {
 	*self = { .allocator = allocator, .interner = interner };
 	self.decls.init(allocator);
+	self.asm_blocks.init(allocator);
+	self.global_asm.init(allocator);
 	self.decl_index.init(allocator);
 	self.instructions.init(allocator);
 	self.body.init(allocator);
@@ -441,6 +736,10 @@ fn void Builder.free(&self)
 {
 	foreach (decl : self.decls) decl.free();
 	self.decls.free();
+	foreach (&block : self.asm_blocks) block.free(self.allocator);
+	self.asm_blocks.free();
+	foreach (text : self.global_asm) alloc::free(self.allocator, text.ptr);
+	self.global_asm.free();
 	self.decl_index.free();
 	self.instructions.free(); self.body.free(); self.arena.free(); *self = {};
 }
@@ -448,11 +747,21 @@ fn void Builder.free(&self)
 <* Transfer completed declarations from the builder into the finished IR. *>
 fn Ir Builder.finish(&self)
 {
-	Ir ir = { .allocator = self.allocator, .interner = self.interner, .decls = self.decls };
+	// Asm blocks are already owned by `allocator` (add_asm_block / add_global_asm).
+	Ir ir = { .allocator = self.allocator, .interner = self.interner, .decls = self.decls,
+		.asm_blocks = self.asm_blocks, .global_asm = self.global_asm };
+	self.asm_blocks.init(self.allocator);
+	self.global_asm.init(self.allocator);
 	self.decls.init(self.allocator);
 	self.decl_index.clear();
 	return ir;
 }
+
+<* Record an inline-asm statement; its strings may live in the per-function
+   arena, so the builder keeps a copy in its allocator. *>
+fn void Builder.add_asm_block(&self, AsmBlock block) => self.asm_blocks.push(block.copy(self.allocator));
+
+fn void Builder.add_global_asm(&self, String text) => self.global_asm.push(text.copy(self.allocator));
 
 fn Ref Builder.append(&self, Inst inst)
 {
@@ -548,11 +857,19 @@ fn void Builder.add_fence(&self, AtomicOrder order)
 	self.add_inst(FENCE, { .atomic = { .ptr = NONE, .val = NONE, .order = order } }, value_interner::REF_VOID);
 }
 
-fn Ref Builder.add_inst(&self, InstTag tag, InstData data, value_interner::InternerRef ty)
+fn Ref Builder.add_shuffle(&self, Ref lhs, Ref rhs, char[] mask, value_interner::InternerRef ty)
+{
+	ShuffleData data = { .lhs = lhs, .rhs = rhs };
+	data.mask[..] = SHUFFLE_UNDEF;
+	foreach (i, m : mask) data.mask[i] = m;
+	return self.add_inst(VSHUFFLE, { .shuffle = data }, ty);
+}
+
+fn Ref Builder.add_inst(&self, InstTag tag, InstData data, value_interner::InternerRef ty, bool nsw = false)
 {
 	Ref ref = self.append(
 	{
-		.tag = tag, .data = data, .ty = ty
+		.tag = tag, .nsw = nsw, .data = data, .ty = ty
 	}
 	);
 	self.body.push(ref);
@@ -661,14 +978,15 @@ fn Ref Builder.add_call_abi(&self, Ref func, Ref[] args, bool[] stack_only,
 	return self.add_inst(CALL, { .call = { func, owned_args, owned_stack_only, owned_memory_copy_bytes } }, ty);
 }
 
-<* Add the high i64 result half for the immediately preceding CALL. *>
-fn Ref Builder.add_call_hi(&self, Ref call)
+<* Add the high eightbyte (i64 or f64) of the result of the immediately preceding CALL. *>
+fn Ref Builder.add_call_hi(&self, Ref call, value_interner::InternerRef ty = value_interner::REF_I64)
 {
 	assert((usz)call < (usz)self.instructions.len(), "CALL_HI must reference an existing instruction");
 	assert(self.instructions[(sz)call].tag == CALL, "CALL_HI must reference a CALL");
 	assert(self.body.len() != 0 && self.body[(sz)(self.body.len() - 1)] == call,
 	"CALL_HI must be added immediately after its CALL");
-	return self.add_inst(CALL_HI, { .ref = call }, value_interner::REF_I64);
+	assert(ty == value_interner::REF_I64 || ty == value_interner::REF_F64, "CALL_HI must be i64 or f64");
+	return self.add_inst(CALL_HI, { .ref = call }, ty);
 }
 
 fn void Builder.add_va_start(&self, Ref va_list)

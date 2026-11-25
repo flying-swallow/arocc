@@ -13,6 +13,8 @@ struct OptOptions
 	<* When true, root all external declarations even if main exists; defaults to false. *>
 	bool keep_external_definitions;
 	bool verify;
+	<* `-fno-tree-vectorize` / `-fno-vectorize`: skip `loop_vectorize`. *>
+	bool no_vectorize;
 	<* Compact sparse functions between passes (see `compact`). This renumbers
 	   instructions, invalidating every Ref held outside the IR, so only callers
 	   that keep no Refs across `run` (the driver) set it. *>
@@ -28,6 +30,7 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case BIT_NOT:
 		case NEGATE:
 		case FNEG:
+		case FABS:
 		case TRUNC:
 		case ZEXT:
 		case SEXT:
@@ -41,6 +44,8 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case VA_START:
 		case CLZ:
 		case CTZ:
+		case VSPLAT:
+		case VREDUCE_ADD:
 		case JMP_VAL: // the indirect jump target address
 			@body(&inst.data.ref);
 		case ATOMIC_LOAD:
@@ -89,6 +94,8 @@ macro @each_value_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case FCMP_OLE:
 		case FCMP_OGT:
 		case FCMP_OGE:
+		case VEXTRACT:
+		case VSHUFFLE:
 			@body(&inst.data.bin.lhs);
 			@body(&inst.data.bin.rhs);
 		case BRANCH:
@@ -146,6 +153,10 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 			{
 				@body(&inst.data.phi[i].label);
 			}
+		case VSPLAT:
+		case VEXTRACT:
+		case VSHUFFLE:
+		case VREDUCE_ADD:
 		case CONSTANT:
 		case ARG:
 		case SYMBOL:
@@ -198,6 +209,7 @@ macro @each_label_operand(ir::Inst* inst; @body(ir::Ref* slot))
 		case BIT_NOT:
 		case NEGATE:
 		case FNEG:
+		case FABS:
 		case TRUNC:
 		case ZEXT:
 		case SEXT:
@@ -3569,6 +3581,11 @@ struct TailCallSite
 	ir::Ref return_phi;
 	ir::Ref symbol_ref;
 	bool needs_jump;
+	<* `return f(...) op x` (op = integer ADD or MUL): the op instruction and
+	   x, folded into an accumulator instead (gcc's tail recursion with
+	   accumulator). NONE for a plain tail call. *>
+	ir::Ref accum;
+	ir::Ref accum_operand;
 }
 
 <* Convert direct self calls returned by RET into backedges to a loop header.
@@ -3620,6 +3637,26 @@ fn bool tail_call_elim(ir::Decl* decl, value_interner::Interner* interner)
 			ir::Inst* ret = needs_jump ? null : &decl.instructions[(sz)ret_ref];
 			ir::Ref call_ref = decl.body[term_pos - 1];
 			if ((usz)call_ref >= (usz)decl.instructions.len) continue;
+			// `call; v = call op x; <return v>` accumulates x instead.
+			ir::Ref accum_ref = ir::NONE;
+			ir::Ref accum_operand = ir::NONE;
+			{
+				ir::Inst* last = &decl.instructions[(sz)call_ref];
+				if ((last.tag == ir::InstTag.ADD || last.tag == ir::InstTag.MUL) && last.ty != value_interner::REF_PTR &&
+					term_pos >= block.start + 3)
+				{
+					ir::Ref before = decl.body[term_pos - 2];
+					if ((usz)before < (usz)decl.instructions.len && decl.instructions[(sz)before].tag == ir::InstTag.CALL &&
+						(last.data.bin.lhs == before) != (last.data.bin.rhs == before) &&
+						interner.get(last.ty).tag == primitive_value::PrimitiveType.INT_TY)
+					{
+						accum_ref = call_ref;
+						accum_operand = last.data.bin.lhs == before ? last.data.bin.rhs : last.data.bin.lhs;
+						call_ref = before;
+					}
+				}
+			}
+			ir::Ref value_ref = accum_ref != ir::NONE ? accum_ref : call_ref;
 			ir::Inst* call = &decl.instructions[(sz)call_ref];
 			ir::Ref return_phi = ir::NONE;
 			if (needs_jump || ret.tag == ir::InstTag.JMP)
@@ -3643,11 +3680,11 @@ fn bool tail_call_elim(ir::Decl* decl, value_interner::Interner* interner)
 					if ((usz)phi_ref >= (usz)decl.instructions.len || decl.instructions[(sz)phi_ref].tag != ir::InstTag.PHI ||
 						phi_ref != ret.data.ref || uses.count[(sz)phi_ref] != 1) continue;
 					foreach (input : decl.instructions[(sz)phi_ref].data.phi)
-						if (input.label == block.label && input.value == call_ref) return_phi = phi_ref;
+						if (input.label == block.label && input.value == value_ref) return_phi = phi_ref;
 					if (return_phi == ir::NONE) continue;
 				}
 				else if (target_term_pos != target_block.start + 1 || target_term_pos + 1 != target_block.end ||
-					uses.count[(sz)call_ref] != 0)
+					uses.count[(sz)call_ref] != 0 || accum_ref != ir::NONE)
 				{
 					continue;
 				}
@@ -3657,7 +3694,8 @@ fn bool tail_call_elim(ir::Decl* decl, value_interner::Interner* interner)
 				continue;
 			}
 			bool has_return_value = ret.data.ref != ir::NONE;
-			if (call.tag != ir::InstTag.CALL || (has_return_value && return_phi == ir::NONE && call_ref != ret.data.ref) ||
+			if (accum_ref != ir::NONE && (!has_return_value || uses.count[(sz)accum_ref] != 1)) continue;
+			if (call.tag != ir::InstTag.CALL || (has_return_value && return_phi == ir::NONE && value_ref != ret.data.ref) ||
 				uses.count[(sz)call_ref] != (has_return_value ? 1 : 0) || uses.has_call_hi[(sz)call_ref]) continue;
 			if ((usz)call.data.call.func >= (usz)decl.instructions.len || call.data.call.args.len != arg_count) continue;
 			ir::Inst* target = &decl.instructions[(sz)call.data.call.func];
@@ -3680,9 +3718,38 @@ fn bool tail_call_elim(ir::Decl* decl, value_interner::Interner* interner)
 			}
 			if (unsupported_abi) continue;
 			sites.push({ .block_label = block.label, .call_ref = call_ref, .ret_ref = ret_ref,
-				.return_phi = return_phi, .symbol_ref = call.data.call.func, .needs_jump = needs_jump });
+				.return_phi = return_phi, .symbol_ref = call.data.call.func, .needs_jump = needs_jump,
+				.accum = accum_ref, .accum_operand = accum_operand });
 		}
 		if (!sites.len()) return false;
+		// Accumulator sites must agree on the operation and type; then every
+		// other return must carry a value to combine with the accumulator.
+		ir::InstTag accum_tag = ir::InstTag.CONSTANT;
+		value_interner::InternerRef accum_ty;
+		foreach (site : sites)
+		{
+			if (site.accum == ir::NONE) continue;
+			ir::Inst op = decl.instructions[(sz)site.accum];
+			if (accum_tag == ir::InstTag.CONSTANT)
+			{
+				accum_tag = op.tag;
+				accum_ty = op.ty;
+			}
+			else if (op.tag != accum_tag || op.ty != accum_ty)
+			{
+				return false;
+			}
+		}
+		bool accumulate = accum_tag != ir::InstTag.CONSTANT;
+		if (accumulate)
+		{
+			foreach (ref : decl.body)
+			{
+				ir::Inst inst = decl.instructions[(sz)ref];
+				if (inst.tag == ir::InstTag.RET_PAIR) return false;
+				if (inst.tag == ir::InstTag.RET && (inst.data.ref == ir::NONE || decl.instructions[(sz)inst.data.ref].ty != accum_ty)) return false;
+			}
+		}
 		// The parameter ARGs must be the conventional leading ARG placements.
 		ir::Ref[] args = alloc::new_array(mem, ir::Ref, (sz)arg_count);
 		defer alloc::free(mem, args.ptr);
@@ -3762,9 +3829,44 @@ fn bool tail_call_elim(ir::Decl* decl, value_interner::Interner* interner)
 			header_pos++;
 		}
 		ir::Ref preheader_jump = editor.append({ .tag = ir::InstTag.JMP, .data.ref = loop_label, .ty = value_interner::REF_NORETURN });
+		// The accumulator: identity on entry, `acc op x` from accumulating
+		// sites, unchanged from plain ones; returns yield `acc op value`.
+		ir::Ref acc = ir::NONE;
+		ir::Ref identity = ir::NONE;
+		if (accumulate)
+		{
+			identity = editor.append({ .tag = ir::InstTag.CONSTANT,
+				.data.constant = accum_tag == ir::InstTag.ADD ? value_interner::REF_ZERO : value_interner::REF_ONE, .ty = accum_ty });
+			acc = editor.append({ .tag = ir::InstTag.PHI, .ty = accum_ty });
+		}
 		editor.insert_body(header_pos, preheader_jump);
 		editor.insert_body(header_pos + 1, loop_label);
 		for (usz i = 0; i < arg_count; i++) editor.insert_body(header_pos + 2 + (sz)i, phis[(sz)i]);
+		if (accumulate)
+		{
+			editor.insert_body(header_pos + 2 + (sz)arg_count, acc);
+			ir::PhiInput[] acc_inputs = alloc::new_array(&decl.arena, ir::PhiInput, (sz)(sites.len() + 1));
+			acc_inputs[0] = { .label = entry_label, .value = identity };
+			foreach (site_index, site : sites)
+			{
+				ir::Ref pred_label = site.block_label == entry_label ? loop_label : site.block_label;
+				ir::Ref next = acc;
+				if (site.accum != ir::NONE)
+				{
+					// Parameter uses were redirected to the loop PHIs above; the
+					// operand must be too.
+					ir::Ref operand = site.accum_operand;
+					for (usz i = 0; i < arg_count; i++) if (operand == args[(sz)i]) operand = phis[(sz)i];
+					next = editor.append({ .tag = accum_tag, .data.bin = { .lhs = acc, .rhs = operand }, .ty = accum_ty });
+					sz call_pos = -1;
+					for (sz p = 0; p < editor.body.len(); p++) if (editor.body.entries[p] == site.call_ref) { call_pos = p; break; }
+					if (call_pos < 0) { editor.free(); return false; }
+					editor.insert_body(call_pos, next);
+				}
+				acc_inputs[(sz)site_index + 1] = { .label = pred_label, .value = next };
+			}
+			editor.insts.entries[(sz)acc].data.phi = acc_inputs;
+		}
 		foreach (site : sites)
 		{
 			if (site.needs_jump)
@@ -3793,17 +3895,38 @@ fn bool tail_call_elim(ir::Decl* decl, value_interner::Interner* interner)
 				phi.data.phi = kept;
 			}
 		}
-		// The call value has become a tombstone and must no longer be body-placed.
+		// The call value has become a tombstone and must no longer be body-placed,
+		// nor the `call op x` that combined it.
 		sz write = 0;
 		for (sz read = 0; read < editor.body.len(); read++)
 		{
 			ir::Ref ref = editor.body.entries[read];
 			bool is_tail_call = false;
-			foreach (site : sites) if (site.call_ref == ref) is_tail_call = true;
+			foreach (site : sites) if (site.call_ref == ref || (site.accum != ir::NONE && site.accum == ref)) is_tail_call = true;
 			if (is_tail_call) continue;
 			editor.body.entries[write++] = ref;
 		}
 		while (editor.body.len() > write) editor.body.pop()!!;
+		foreach (site : sites)
+		{
+			if (site.accum == ir::NONE) continue;
+			editor.insts.entries[(sz)site.accum].tag = ir::InstTag.ARG;
+			editor.insts.entries[(sz)site.accum].data = {};
+		}
+		if (accumulate)
+		{
+			// Every remaining return combines its value with the accumulator.
+			for (sz pos = 0; pos < editor.body.len(); pos++)
+			{
+				ir::Ref ref = editor.body.entries[pos];
+				if (editor.insts.entries[(sz)ref].tag != ir::InstTag.RET) continue;
+				ir::Ref value = editor.insts.entries[(sz)ref].data.ref;
+				ir::Ref combined = editor.append({ .tag = accum_tag, .data.bin = { .lhs = acc, .rhs = value }, .ty = accum_ty });
+				editor.insert_body(pos, combined);
+				editor.insts.entries[(sz)ref].data.ref = combined;
+				pos++;
+			}
+		}
 		foreach (site : sites) inline_retire_unused_call_symbol(&editor, site.symbol_ref);
 		editor.commit();
 		return true;
@@ -4006,6 +4129,11 @@ fn bool verify_decl(ir::Decl* decl, ir::ErrorList* errors)
 			{
 				return verify_error(errors, decl.name, "CALL argument metadata must match the argument count");
 			}
+			if (inst.nsw && (!inst.tag.allows_nsw() || inst.ty == value_interner::REF_PTR))
+			{
+				return verify_error(errors, decl.name,
+					string::tformat("nsw on %s %d, which is not an integer ADD/SUB/MUL", inst.tag.name, ref));
+			}
 			if (inst.tag == ir::InstTag.CALL_HI)
 			{
 				if (i == 0 || inst.data.ref != decl.body[i - 1] ||
@@ -4013,18 +4141,18 @@ fn bool verify_decl(ir::Decl* decl, ir::ErrorList* errors)
 				{
 					return verify_error(errors, decl.name, "CALL_HI must immediately follow its referenced CALL");
 				}
-				if (inst.ty != value_interner::REF_I64)
+				if (inst.ty != value_interner::REF_I64 && inst.ty != value_interner::REF_F64)
 				{
-					return verify_error(errors, decl.name, "CALL_HI result must be i64");
+					return verify_error(errors, decl.name, "CALL_HI result must be i64 or f64");
 				}
 			}
 			if (inst.tag == ir::InstTag.RET_PAIR)
 			{
 				if ((usz)inst.data.bin.lhs >= inst_count || (usz)inst.data.bin.rhs >= inst_count ||
-					decl.instructions[(sz)inst.data.bin.lhs].ty != value_interner::REF_I64 ||
-					decl.instructions[(sz)inst.data.bin.rhs].ty != value_interner::REF_I64)
+					!is_eightbyte_type(decl.instructions[(sz)inst.data.bin.lhs].ty) ||
+					!is_eightbyte_type(decl.instructions[(sz)inst.data.bin.rhs].ty))
 				{
-					return verify_error(errors, decl.name, "RET_PAIR operands must be i64");
+					return verify_error(errors, decl.name, "RET_PAIR operands must be i64 or f64");
 				}
 			}
 			if (i == arg_end && inst.tag != ir::InstTag.LABEL)
@@ -4355,6 +4483,16 @@ fn bool fp_licm(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyse
 	=> loop_invariant_code_motion(graph, decl, fa);
 fn bool fp_indvar_simplify(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
 	=> indvar_simplify(graph, decl, fa);
+fn bool fp_narrow_truncated_arith(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
+	=> narrow_truncated_arith(graph, decl, fa);
+fn bool fp_indvar_widen(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
+	=> indvar_widen(graph, decl, fa);
+fn bool fp_loop_strength_reduce(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
+	=> loop_strength_reduce(graph, decl, fa);
+fn bool fp_loop_vectorize(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
+	=> !opts.no_vectorize && loop_vectorize(graph, decl, fa);
+fn bool fp_lftr(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
+	=> linear_function_test_replace(graph, decl, fa);
 fn bool fp_loop_deletion(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
 	=> loop_deletion(graph, decl, fa);
 fn bool fp_loop_full_unroll(ir::Ir* graph, ir::Decl* decl, OptOptions* opts, FunctionAnalyses* fa)
@@ -4437,6 +4575,10 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 		{ "indvar_simplify", &fp_indvar_simplify, true },
 		{ "loop_deletion", &fp_loop_deletion, true },
 		{ "loop_full_unroll", &fp_loop_full_unroll, true },
+		{ "indvar_widen", &fp_indvar_widen, true },
+		{ "narrow_truncated_arith", &fp_narrow_truncated_arith, false },
+		{ "loop_vectorize", &fp_loop_vectorize, true },
+		{ "loop_strength_reduce", &fp_loop_strength_reduce, true },
 		{ "mem_opt", &fp_mem_opt, false },
 		{ "correlated_value_prop", &fp_correlated_value_prop, false },
 		{ "jump_thread", &fp_jump_thread, false },
@@ -4444,6 +4586,8 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 		{ "simplify_cfg", &fp_simplify_cfg, false },
 		{ "inst_simplify", &fp_inst_simplify, false },
 		{ "dead_instruction_elim", &fp_dead_instruction_elim, false },
+		// Last: it needs the dead index arithmetic strength reduction left behind gone.
+		{ "linear_function_test_replace", &fp_lftr, true },
 	};
 	switch (opts.level)
 	{
@@ -4489,3 +4633,6 @@ fn void? run(ir::Ir* graph, OptOptions opts, ir::ErrorList* errors)
 			if (!pass_checkpoint(graph, &opts, errors)) return VERIFY_FAIL~;
 	}
 }
+
+<* RET_PAIR / CALL_HI carry one SysV eightbyte: INTEGER as i64, SSE as f64. *>
+fn bool is_eightbyte_type(value_interner::InternerRef ty) => ty == value_interner::REF_I64 || ty == value_interner::REF_F64;

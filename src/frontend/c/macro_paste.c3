@@ -88,7 +88,7 @@ fn void? Preprocessor.stringify(&self, TokenWithExpansionLocs[] toks)
 	self.char_buf.push(0);
 	String view = (String)self.char_buf.array_view();
 	Tokenizer tokenizer;
-	tokenizer.init(view[:view.len - 1], source::GENERATED_ID, self.comp.langopts);
+	tokenizer.init(view[:view.len - 1], source::GENERATED_ID, self.comp.langopts, &self.comp.target);
 	tokenizer.line = 0;
 	Token item = tokenizer.next();
 	if (item.id == UNTERMINATED_STRING_LITERAL)
@@ -224,7 +224,7 @@ fn void? Preprocessor.paste_tokens(&self, ExpandBuf* lhs_toks, TokenWithExpansio
 
 	// Try to tokenize the result.
 	Tokenizer tmp_tokenizer;
-	tmp_tokenizer.init((String)gen.array_view(), source::GENERATED_ID, self.comp.langopts);
+	tmp_tokenizer.init((String)gen.array_view(), source::GENERATED_ID, self.comp.langopts, &self.comp.target);
 	tmp_tokenizer.index = (uint)start;
 	Token pasted_token = tmp_tokenizer.next_no_ws_comments();
 	Token next = tmp_tokenizer.next_no_ws_comments();

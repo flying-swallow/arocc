@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 void foo(int x) {
     int arr[x];
     _Static_assert(sizeof(arr) > 0, "sizeof VLA"); // #error@20: static assertion expression is not an integral constant expression

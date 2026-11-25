@@ -12,7 +12,8 @@ import std::core::dstring, std::core::string, std::collections::list;
 <* Struct and union expressions are represented by the address of their storage. *>
 fn bool CodeGen.is_record_value(&self, type_store::QualType qt)
 {
-	return @ok(qt.get_record(self.comp));
+	// Vectors are memory values too (codegen_vector.c3).
+	return @ok(qt.get_record(self.comp)) || qt.is(self.comp, type_store::TypeTag.VECTOR);
 }
 
 <* The IR type of an expression value; records use their storage address. *>
@@ -41,6 +42,11 @@ struct BitfieldLval
 	uint width;
 	type_store::QualType field_qt;
 	bool is_volatile;
+	<* When no single typed unit holds the field (a straddling or wide field),
+	   `unit_ptr` is a 16-byte temporary: its first `spill_bytes` bytes mirror
+	   the record bytes at `spill_src`, copied in before and back after access. *>
+	ir::Ref spill_src;
+	uint spill_bytes;
 }
 
 <* Parentheses do not change whether a member designates a bitfield. *>
@@ -57,7 +63,7 @@ fn bool CodeGen.is_bitfield_compound_dummy(&self, type_store::NodeIndex node_ind
 {
 	tree::Node node = node_index.get(self.tree);
 	if (node.kind != tree::NodeKind.COMPOUND_ASSIGN_DUMMY_EXPR) return false;
-	return self.is_bitfield_lvalue(node.unary.operand);
+	return self.compound_dummy_is_value || self.is_bitfield_lvalue(node.unary.operand);
 }
 
 <* Resolve the base address and field for `.` or `->` member access. *>
@@ -183,8 +189,28 @@ fn BitfieldLval? CodeGen.bitfield_lval(&self, ir::Ref record_ptr, type_store::Re
 			.is_volatile = is_volatile,
 		};
 	}
-	self.fail("TODO lower struct bitfields")!;
-	return compilation::FATAL_ERROR~;
+	// Straddling (e.g. a packed 64-bit field at bit 7) or wider than 64 bits:
+	// access the field's bytes through a 128-bit window on a temporary copy.
+	uint spill_bytes = (uint)((initial_shift + field.bit_width + 7) / 8);
+	if (field.bit_width > 64 || field.reverse_storage)
+	{
+		self.fail("TODO lower struct bitfields")!;
+		return compilation::FATAL_ERROR~;
+	}
+	ir::Ref temp = self.builder.add_alloc(16, 16);
+	self.gen_zero_fill(temp, 16)!;
+	return
+	{
+		.unit_ptr = temp,
+		.unit_ty = value_interner::REF_I128,
+		.unit_bits = 128,
+		.shift = initial_shift,
+		.width = field.bit_width,
+		.field_qt = field.qt,
+		.is_volatile = is_volatile,
+		.spill_src = self.ptr_at(record_ptr, offset_byte),
+		.spill_bytes = spill_bytes,
+	};
 }
 
 fn ir::Ref CodeGen.unit_constant(&self, ulong value, value_interner::InternerRef unit_ty)
@@ -269,6 +295,7 @@ fn ir::Ref CodeGen.reverse_bitfield_unit(&self, ir::Ref operand, BitfieldLval lv
 <* Load and extract a bitfield using its typed storage unit. *>
 fn ir::Ref? CodeGen.load_bitfield(&self, BitfieldLval lval)
 {
+	if (lval.spill_bytes != 0) self.gen_copy(lval.unit_ptr, lval.spill_src, lval.spill_bytes)!;
 	ir::Ref unit = self.reverse_bitfield_unit(self.builder.add_load(lval.unit_ptr, lval.unit_ty, lval.is_volatile), lval);
 	if (lval.field_qt.is(self.comp, type_store::TypeTag.BOOL))
 	{
@@ -280,7 +307,7 @@ fn ir::Ref? CodeGen.load_bitfield(&self, BitfieldLval lval)
 		}
 		if (lval.shift + lval.width != lval.unit_bits)
 		{
-			ulong field_mask = ((ulong)1 << lval.width) - 1;
+			ulong field_mask = lval.width >= 64 ? ulong::max : ((ulong)1 << lval.width) - 1;
 			unit = self.builder.add_inst(ir::InstTag.BIT_AND,
 				{ .bin = { .lhs = unit, .rhs = self.unit_constant(field_mask, lval.unit_ty) } }, lval.unit_ty);
 		}
@@ -306,7 +333,7 @@ fn ir::Ref? CodeGen.load_bitfield(&self, BitfieldLval lval)
 		}
 		if (lval.shift + lval.width != lval.unit_bits)
 		{
-			ulong field_mask = ((ulong)1 << lval.width) - 1;
+			ulong field_mask = lval.width >= 64 ? ulong::max : ((ulong)1 << lval.width) - 1;
 			unit = self.builder.add_inst(ir::InstTag.BIT_AND,
 				{ .bin = { .lhs = unit, .rhs = self.unit_constant(field_mask, lval.unit_ty) } }, lval.unit_ty);
 		}
@@ -335,8 +362,22 @@ fn ir::Ref? CodeGen.store_bitfield(&self, BitfieldLval lval, ir::Ref value)
 			{ .bin = { .lhs = field_value, .rhs = self.unit_constant(field_mask, lval.unit_ty) } }, lval.unit_ty);
 	}
 	ir::Ref normalized_value = field_value;
-	ulong shifted_mask = field_mask << lval.shift;
-	ir::Ref field_mask_ref = self.unit_constant(shifted_mask, lval.unit_ty);
+	ir::Ref field_mask_ref;
+	if (lval.unit_bits > 64)
+	{
+		// The shifted mask may not fit in 64 bits: shift it in the unit type.
+		field_mask_ref = self.unit_constant(field_mask, lval.unit_ty);
+		if (lval.shift != 0)
+		{
+			field_mask_ref = self.builder.add_inst(ir::InstTag.BIT_SHL,
+				{ .bin = { .lhs = field_mask_ref, .rhs = self.unit_constant(lval.shift, lval.unit_ty) } }, lval.unit_ty);
+		}
+	}
+	else
+	{
+		field_mask_ref = self.unit_constant(field_mask << lval.shift, lval.unit_ty);
+	}
+	if (lval.spill_bytes != 0) self.gen_copy(lval.unit_ptr, lval.spill_src, lval.spill_bytes)!;
 	ir::Ref outside_mask = self.builder.add_inst(ir::InstTag.BIT_NOT, { .ref = field_mask_ref }, lval.unit_ty);
 	ir::Ref old_unit = self.reverse_bitfield_unit(self.builder.add_load(lval.unit_ptr, lval.unit_ty, lval.is_volatile), lval);
 	ir::Ref outside = self.builder.add_inst(ir::InstTag.BIT_AND,
@@ -350,6 +391,7 @@ fn ir::Ref? CodeGen.store_bitfield(&self, BitfieldLval lval, ir::Ref value)
 	ir::Ref merged = self.builder.add_inst(ir::InstTag.BIT_OR,
 		{ .bin = { .lhs = outside, .rhs = field_value } }, lval.unit_ty);
 	self.builder.add_store(lval.unit_ptr, self.reverse_bitfield_unit(merged, lval), lval.is_volatile);
+	if (lval.spill_bytes != 0) self.gen_copy(lval.spill_src, lval.unit_ptr, lval.spill_bytes)!;
 	return self.bitfield_store_result(normalized_value, lval);
 }
 
@@ -360,6 +402,7 @@ fn void? CodeGen.gen_stmt(&self, type_store::NodeIndex node)
 
 fn ir::Ref? CodeGen.gen_expr(&self, type_store::NodeIndex node_index)
 {
+	if (self.has_cached_expr && node_index == self.cached_expr_node) return self.cached_expr_value;
 	ir::Ref result = self.gen_expr_inner(node_index)!;
 	type_store::QualType qt = node_index.qt(self.tree);
 	if (try ty = qt.get(self.comp, type_store::TypeTag.BIT_INT))
@@ -390,6 +433,15 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 	if (self.is_record_value(node_index.qt(self.tree)) && self.tree.is_lval(node_index))
 	{
 		return self.gen_lval(node_index);
+	}
+	ir::Ref? vector_result = self.gen_vector_expr(node_index, node);
+	if (catch f = vector_result)
+	{
+		if (f != NOT_VECTOR_OP) return f~;
+	}
+	else
+	{
+		return vector_result;
 	}
 	// Array/function decay casts and saved pointer values lower through their operands,
 	// not as IR constants.
@@ -471,9 +523,20 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 		case GOTO_STMT:
 			self.gen_goto(self.goto_label(node.goto_stmt.label_tok));
 			self.builder.start_block(self.builder.make_label("goto.after"));
-		case COMPUTED_GOTO_STMT:
-		case NULLPTR_LITERAL:
 		case ASM_STMT:
+			// An operand-free empty template (`asm volatile ("" ::: "memory")`) is only a
+			// compiler barrier; the IR keeps program order for memory, so emit nothing.
+			if (self.is_empty_asm_barrier(node.asm_stmt)) return ir::NONE;
+			return self.gen_asm(node.asm_stmt);
+		case COMPUTED_GOTO_STMT:
+			// GNU `goto *expr`: an indirect jump to a block whose address `&&label` took.
+			ir::Ref target = self.gen_expr(node.computed_goto_stmt.expr)!;
+			if (!self.builder.block_terminated())
+			{
+				self.builder.add_inst(ir::InstTag.JMP_VAL, { .ref = target }, value_interner::REF_VOID);
+			}
+			self.builder.start_block(self.builder.make_label("goto.after"));
+		case NULLPTR_LITERAL:
 			self.fail(string::tformat("TODO CodeGen.genStmt %s\n", node.kind.name))!;
 			return ir::NONE;
 		case DECL_STMT:
@@ -486,7 +549,7 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 			{
 				ir::Ref rhs_address = self.gen_expr(node.binary.rhs)!;
 				ir::Ref lhs_address = self.gen_lval(node.binary.lhs)!;
-				self.gen_copy(lhs_address, rhs_address, node.binary.qt.sizeof(self.comp))!;
+				self.gen_copy_value(lhs_address, rhs_address, node.binary.qt)!;
 				return lhs_address;
 			}
 			ir::Ref rhs = self.gen_expr(node.binary.rhs)!;
@@ -497,7 +560,7 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 				return self.store_bitfield(lval, rhs);
 			}
 			ir::Ref lhs = self.gen_lval(node.binary.lhs)!;
-			self.builder.add_store(lhs, rhs, self.access_is_volatile(node.binary.lhs.qt(self.tree)));
+			self.store_assigned(lhs, rhs, node.binary.lhs.qt(self.tree));
 			return rhs;
 		case MUL_ASSIGN_EXPR:
 		case DIV_ASSIGN_EXPR:
@@ -615,6 +678,8 @@ fn ir::Ref? CodeGen.gen_expr_inner(&self, type_store::NodeIndex node_index)
 			builtins::Expanded builtin = self.comp.builtins.lookup(self.tree.tok_slice(node.builtin_call.builtin_tok));
 			return self.gen_builtin_call(builtin, node.builtin_call.args, node.builtin_call.qt);
 		case ADDR_OF_LABEL:
+			sz label_index = self.goto_label(node.addr_of_label.label_tok);
+			return self.builder.add_inst(ir::InstTag.LABEL_ADDR, { .ref = self.goto_labels[label_index].label }, value_interner::REF_PTR);
 		case IMAG_EXPR:
 		case REAL_EXPR:
 		case ARRAY_ACCESS_EXPR:  // only reached for an rvalue vector element
@@ -717,9 +782,11 @@ fn ir::Ref? CodeGen.gen_labeled_stmt(&self, type_store::NodeIndex node_index, tr
 <* `gen_expr` case COMPOUND_STMT. *>
 fn ir::Ref? CodeGen.gen_compound_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
 {
-	// Preserve the Zig implementation's current (no-op) scope-length reset.
+	// Declarations of this block go out of scope at its end: symbols are found by
+	// name, so a leftover inner `arg` would shadow an outer `arg` declared before
+	// the block in later statements (chibicc preprocess.c `subst`).
 	sz old_symbol_count = self.symbols.len();
-	while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
+	defer while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
 	type_store::NodeIndex old_compound = self.current_compound;
 	defer self.current_compound = old_compound;
 	self.current_compound = node_index;
@@ -733,9 +800,119 @@ fn ir::Ref? CodeGen.gen_compound_stmt(&self, type_store::NodeIndex node_index, t
 	return ir::NONE;
 }
 
+<* static_condition: the condition's value is only known at run time. *>
+faultdef NOT_STATIC_CONDITION;
+
+<*
+ A condition whose truth is known at compile time: a folded constant, or an
+ ordered compare no value satisfies (`x > +inf`, `+inf < x`, `x < -inf`,
+ `-inf > x`) whose other operand has no side effects. gcc folds the latter
+ (aro does not model FP exceptions); the tree keeps no value for it, so it is
+ not an integer constant expression.
+*>
+fn bool? CodeGen.static_condition(&self, type_store::NodeIndex base)
+{
+	type_store::NodeIndex node = base;
+	while (node.get(self.tree).kind == tree::NodeKind.PAREN_EXPR) node = node.get(self.tree).unary.operand;
+	if (try folded = self.tree.value_of(node))
+	{
+		if (!folded.is_pointer(self.comp)) return folded.to_bool(self.comp);
+		return NOT_STATIC_CONDITION~;
+	}
+	tree::Node n = node.get(self.tree);
+	if (n.kind != tree::NodeKind.GREATER_THAN_EXPR && n.kind != tree::NodeKind.LESS_THAN_EXPR) return NOT_STATIC_CONDITION~;
+	if (!n.binary.lhs.qt(self.tree).is(self.comp, type_store::TypeTag.FLOAT)) return NOT_STATIC_CONDITION~;
+	value::IsInfKind lhs_inf = self.inf_kind(n.binary.lhs);
+	value::IsInfKind rhs_inf = self.inf_kind(n.binary.rhs);
+	bool greater = n.kind == tree::NodeKind.GREATER_THAN_EXPR;
+	// `a > b` is never true when b is +inf or a is -inf; `a < b` mirrors that.
+	value::IsInfKind never_rhs = greater ? value::IsInfKind.POSITIVE : value::IsInfKind.NEGATIVE;
+	value::IsInfKind never_lhs = greater ? value::IsInfKind.NEGATIVE : value::IsInfKind.POSITIVE;
+	if (rhs_inf == never_rhs && self.is_side_effect_free(n.binary.lhs)) return false;
+	if (lhs_inf == never_lhs && self.is_side_effect_free(n.binary.rhs)) return false;
+	return NOT_STATIC_CONDITION~;
+}
+
+<* Infinity sign of a constant operand (through casts), else UNKNOWN. *>
+fn value::IsInfKind CodeGen.inf_kind(&self, type_store::NodeIndex node)
+{
+	if (try v = self.tree.value_of(node)) return v.is_inf_sign(self.comp);
+	return value::IsInfKind.UNKNOWN;
+}
+
+<* A constant or a plain variable read, through parens and casts. *>
+fn bool CodeGen.is_side_effect_free(&self, type_store::NodeIndex base)
+{
+	type_store::NodeIndex node = base;
+	while (true)
+	{
+		if (@ok(self.tree.value_of(node))) return true;
+		tree::Node n = node.get(self.tree);
+		switch (n.kind)
+		{
+			case PAREN_EXPR: node = n.unary.operand;
+			case CAST: node = n.cast.operand;
+			case DECL_REF_EXPR: return !self.type_contains_volatile(n.decl_ref.qt);
+			default: return false;
+		}
+	}
+}
+
+<* Whether a statement may define a label or a switch case, which keeps a
+   dead branch reachable by goto or switch. Unknown statements answer true. *>
+fn bool CodeGen.may_contain_label(&self, type_store::NodeIndex node_index)
+{
+	tree::Node n = node_index.get(self.tree);
+	switch (n.kind)
+	{
+		case COMPOUND_STMT:
+			foreach (stmt : n.compound_stmt.body) if (self.may_contain_label(stmt)) return true;
+			return false;
+		case IF_STMT:
+			if (self.may_contain_label(n.if_stmt.then_body)) return true;
+			return !n.if_stmt.else_body.is_null() && self.may_contain_label(n.if_stmt.else_body.unwrap());
+		case WHILE_STMT: return self.may_contain_label(n.while_stmt.body);
+		case DO_WHILE_STMT: return self.may_contain_label(n.do_while_stmt.body);
+		case FOR_STMT: return self.may_contain_label(n.for_stmt.body);
+		case LABELED_STMT:
+		case CASE_STMT:
+		case DEFAULT_STMT:
+		case SWITCH_STMT:
+			return true;
+		default:
+			// Expressions and simple statements (return, break, goto, ...). A
+			// label inside a GNU statement expression cannot be jumped into.
+			return false;
+	}
+}
+
 <* `gen_expr` case IF_STMT. *>
 fn ir::Ref? CodeGen.gen_if_stmt(&self, type_store::NodeIndex node_index, tree::Node node) @noinline
 {
+	// A branch that can never run is not generated when nothing can jump
+	// into it (gcc and clang do this at -O0 too: `if (0) link_error();`).
+	if (node.if_stmt.init.is_null())
+	{
+		if (try known = self.static_condition(node.if_stmt.cond))
+		{
+			type_store::NodeOptIndex dead = known ? node.if_stmt.else_body : (type_store::NodeOptIndex)node.if_stmt.then_body;
+			if (dead.is_null() || !self.may_contain_label(dead.unwrap()))
+			{
+				if (known)
+				{
+					self.gen_stmt(node.if_stmt.then_body)!;
+				}
+				else if (!node.if_stmt.else_body.is_null())
+				{
+					self.gen_stmt(node.if_stmt.else_body.unwrap())!;
+				}
+				// Code after an arm that returned or jumped goes in a fresh
+				// (unreachable) block, as after an ordinary if.
+				if (self.builder.block_terminated()) self.builder.start_block(self.builder.make_label("if.end"));
+				return ir::NONE;
+			}
+		}
+	}
 	ir::Ref then_label = self.builder.make_label("if.then");
 	if (node.if_stmt.else_body.is_null())
 	{
@@ -911,6 +1088,9 @@ fn ir::Ref? CodeGen.gen_for_stmt(&self, type_store::NodeIndex node_index, tree::
 	sz old_continue_vla_depth = self.continue_vla_depth;
 	defer self.continue_vla_depth = old_continue_vla_depth;
 	self.continue_vla_depth = self.vla_scopes.len();
+	// `for (int i = ...)`: the declaration's scope ends with the loop.
+	sz old_symbol_count = self.symbols.len();
+	defer while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
 	if (!node.for_stmt.init.is_null()) self.gen_stmt(node.for_stmt.init.unwrap())!;
 	if (node.for_stmt.cond.is_null())
 	{
@@ -965,9 +1145,10 @@ fn ir::Ref? CodeGen.gen_return_stmt(&self, type_store::NodeIndex node_index, tre
 				{
 					self.gen_copy(self.sret_pointer, result, self.aggregate_return_size)!;
 				}
-				else if (self.aggregate_return_class == AggClass.INTEGER)
+				else if (self.aggregate_return_class == AggClass.REGISTER || self.aggregate_return_class == AggClass.X87 ||
+					self.aggregate_return_class == AggClass.VECTOR128)
 				{
-					self.gen_copy(self.aggregate_return_slot, result, self.aggregate_return_size)!;
+					self.gen_copy_value(self.aggregate_return_slot, result, self.aggregate_return_qt)!;
 				}
 			case NONE:
 			case IMPLICIT:
@@ -993,7 +1174,8 @@ fn ir::Ref? CodeGen.gen_return_stmt(&self, type_store::NodeIndex node_index, tre
 		case NONE:
 			break;
 		case IMPLICIT:
-			if (node.return_stmt.implicit_value && !self.builder.block_terminated())
+			if ((node.return_stmt.implicit_value || self.is_int_main(node.return_stmt.return_qt)) &&
+				!self.builder.block_terminated())
 			{
 				ir::Ref zero = self.builder.add_constant(value::ZERO.ref(), self.gen_type(node.return_stmt.return_qt)!);
 				self.ret_nodes.push(
@@ -1006,6 +1188,17 @@ fn ir::Ref? CodeGen.gen_return_stmt(&self, type_store::NodeIndex node_index, tre
 	}
 	self.builder.add_jump(self.return_label);
 	return ir::NONE;
+}
+
+<* C99 5.1.2.2.3: reaching the `}` of `int main` returns 0. The parser sets
+   `implicit_value` only when the last statement plainly falls through; after a
+   trailing loop, switch or goto the end can still be reached. *>
+fn bool CodeGen.is_int_main(&self, type_store::QualType return_qt)
+{
+	if (self.current_fn != "main") return false;
+	type_store::Type? maybe_int = return_qt.get(self.comp, type_store::TypeTag.INT);
+	if (try int_type = maybe_int) return int_type.int_ty == type_store::TypeInt.INT;
+	return false;
 }
 
 <* `gen_expr` case ADD_EXPR. *>
@@ -1097,6 +1290,7 @@ fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tr
 	}
 	bool is_float = node.unary.qt.is(self.comp, type_store::TypeTag.FLOAT);
 	if (is_float) self.ensure_scalar_float_width(node.unary.qt)!;
+	if (try atomic = self.gen_atomic_inc_dec(node)) return atomic;
 	ir::Ref addr = self.gen_lval(node.unary.operand)!;
 	bool access_volatile = self.access_is_volatile(node.unary.operand.qt(self.tree));
 	ir::Ref val = self.builder.add_load(addr, self.gen_type(node.unary.qt)!, access_volatile);
@@ -1116,6 +1310,153 @@ fn ir::Ref? CodeGen.gen_pre_inc_expr(&self, type_store::NodeIndex node_index, tr
 	ir::Ref updated = self.add_bin(update, val, one, node.unary.qt)!;
 	self.builder.add_store(addr, updated, access_volatile);
 	return is_post ? val : updated;
+}
+
+<* `++`/`--` on an `_Atomic` integer or pointer: one `lock xadd`. *>
+fn ir::Ref? CodeGen.gen_atomic_inc_dec(&self, tree::Node node)
+{
+	type_store::QualType operand_qt = node.unary.operand.qt(self.tree);
+	if (!operand_qt.is(self.comp, type_store::TypeTag.ATOMIC)) return NOT_ATOMIC_COMPOUND~;
+	type_store::QualType value_qt = operand_qt.non_atomic(self.comp).unqualified();
+	bool is_pointer = value_qt.is_pointer(self.comp);
+	if (!value_qt.is_int(self.comp) && !is_pointer) return NOT_ATOMIC_COMPOUND~;
+	uint bits = (uint)value_qt.bit_sizeof(self.comp);
+	if (bits != 8 && bits != 16 && bits != 32 && bits != 64) return NOT_ATOMIC_COMPOUND~;
+	value_interner::InternerRef value_ty = self.gen_type(value_qt)!;
+	if (value_ty == value_interner::REF_I1) return NOT_ATOMIC_COMPOUND~;
+	value_interner::InternerRef op_ty = is_pointer ? value_interner::REF_I64 : value_ty;
+	ulong step = 1;
+	if (is_pointer)
+	{
+		if (try size = value_qt.child_type(self.comp).sizeof_or_null(self.comp)) step = size;
+	}
+	bool decrement = node.kind == tree::NodeKind.PRE_DEC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
+	bool is_post = node.kind == tree::NodeKind.POST_INC_EXPR || node.kind == tree::NodeKind.POST_DEC_EXPR;
+	ir::Ref ptr = self.gen_lval(node.unary.operand)!;
+	ir::Ref delta = self.builder.add_constant(value::int_u64(step, self.comp).ref(), op_ty);
+	ir::Ref old = self.atomic_intrinsic_call(decrement ? "sub" : "add", bits, { ptr, delta }, op_ty);
+	ir::Ref result = old;
+	if (!is_post) result = self.builder.add_inst(decrement ? ir::InstTag.SUB : ir::InstTag.ADD, { .bin = { .lhs = old, .rhs = delta } }, op_ty);
+	if (is_pointer) result = self.builder.add_inst(ir::InstTag.ZEXT, { .ref = result }, value_interner::REF_PTR);
+	return result;
+}
+
+<* The text of a string-literal node (asm template, constraint, clobber). *>
+fn String? CodeGen.asm_string(&self, type_store::NodeIndex node)
+{
+	value::Value? val = self.tree.value_of(node);
+	if (catch val)
+	{
+		self.fail("TODO CodeGen inline asm: string operand has no value\n")!;
+		return compilation::FATAL_ERROR~;
+	}
+	if (!val.is(primitive_value::PrimitiveType.BYTES, self.comp))
+	{
+		self.fail("TODO CodeGen inline asm: operand is not a string literal\n")!;
+		return compilation::FATAL_ERROR~;
+	}
+	String bytes = (String)val.to_bytes(self.comp);
+	if (bytes.len > 0 && bytes[^1] == 0) bytes = bytes[:bytes.len - 1];
+	return bytes.copy(&self.builder.arena);
+}
+
+<* GNU inline asm: a CALL to the reserved symbol of an ir::AsmBlock that holds
+   the template and constraints. Inputs are passed by value (by address for
+   memory-only constraints), outputs by the address of their lvalue. *>
+fn ir::Ref? CodeGen.gen_asm(&self, tree::NodeAsmStmt asm_stmt)
+{
+	if (asm_stmt.labels.len != 0)
+	{
+		self.fail("TODO CodeGen inline asm goto\n")!;
+		return ir::NONE;
+	}
+	String template = self.asm_string(asm_stmt.asm_str)!;
+	List{ir::Ref} args;
+	args.init(&self.builder.arena);
+	List{ir::AsmOperand} operands;
+	operands.init(&self.builder.arena);
+	foreach (out : asm_stmt.outputs)
+	{
+		String raw = self.asm_string(out.constraint)!;
+		type_store::QualType qt = out.expr.qt(self.tree);
+		ir::AsmOperand op = {
+			.constraint = asm_constraint_letters(raw),
+			.name = out.name == 0 ? "" : self.tree.tok_slice(out.name),
+			.arg = (uint)args.len(),
+			.is_output = true,
+			.read_write = raw.contains("+"),
+			.by_address = true,
+			.size = (uint)(qt.sizeof_or_null(self.comp) ?? 8),
+			.is_float = qt.is(self.comp, type_store::TypeTag.FLOAT),
+		};
+		args.push(self.gen_lval(out.expr)!);
+		operands.push(op);
+	}
+	foreach (input : asm_stmt.inputs)
+	{
+		String raw = self.asm_string(input.constraint)!;
+		String letters = asm_constraint_letters(raw);
+		type_store::QualType qt = input.expr.qt(self.tree);
+		bool memory_only = false;
+		foreach (c : letters) if (c == 'm' || c == 'o' || c == 'V' || c == 'p') memory_only = true;
+		foreach (c : letters) if (c == 'r' || c == 'g' || c == 'q' || c == 'x' || (c >= '0' && c <= '9')) memory_only = false;
+		ir::AsmOperand op = {
+			.constraint = letters,
+			.name = input.name == 0 ? "" : self.tree.tok_slice(input.name),
+			.arg = (uint)args.len(),
+			.by_address = memory_only,
+			.size = (uint)(qt.sizeof_or_null(self.comp) ?? 8),
+			.is_float = qt.is(self.comp, type_store::TypeTag.FLOAT),
+		};
+		ir::Ref arg;
+		if (memory_only && self.tree.is_lval(input.expr))
+		{
+			arg = self.gen_lval(input.expr)!;
+		}
+		else if (memory_only)
+		{
+			ir::Ref value = self.gen_expr(input.expr)!;
+			arg = self.builder.add_alloc(op.size, qt.alignof(self.comp));
+			self.builder.add_store(arg, value);
+		}
+		else
+		{
+			arg = self.gen_expr(input.expr)!;
+		}
+		args.push(arg);
+		operands.push(op);
+	}
+	List{String} clobbers;
+	clobbers.init(&self.builder.arena);
+	foreach (clobber : asm_stmt.clobbers) clobbers.push(self.asm_string(clobber)!);
+	bool basic = asm_stmt.outputs.len == 0 && asm_stmt.inputs.len == 0 && asm_stmt.clobbers.len == 0;
+	DString name;
+	name.init(&self.builder.arena);
+	name.appendf("__aro.asm.%s.%d", self.current_fn, self.builder.asm_blocks.len());
+	if (self.tu_id >= 0) name.appendf(".tu%d", self.tu_id);
+	self.builder.add_asm_block({
+		.name = name.str_view(),
+		.template = template,
+		.operands = operands.array_view(),
+		.clobbers = clobbers.array_view(),
+		.basic = basic,
+	});
+	ir::Ref callee = self.builder.add_symbol(name.str_view(), value_interner::REF_PTR);
+	self.builder.add_call(callee, args.array_view(), value_interner::REF_VOID);
+	return ir::NONE;
+}
+
+<* Constraint letters without the `=`, `+`, `&`, `%` and `*` modifiers. *>
+fn String asm_constraint_letters(String raw)
+{
+	DString out;
+	out.init(tmem);
+	foreach (c : raw)
+	{
+		if (c == '=' || c == '+' || c == '&' || c == '%' || c == '*' || c == ' ') continue;
+		out.append_char(c);
+	}
+	return out.copy_str(tmem);
 }
 
 <* `gen_expr` case CAST. *>
@@ -1150,7 +1491,7 @@ fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node
 			if (src_bits == dest_bits) return operand;
 			if (src_bits < dest_bits)
 			{
-				return self.add_un(src_type.signedness(self.comp) == lang_opts::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT, operand, node.cast.qt);
+				return self.add_un(src_type.signedness(self.comp) == bigint::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT, operand, node.cast.qt);
 			}
 			return self.add_un(ir::InstTag.TRUNC, operand, node.cast.qt);
 		case BOOL_TO_INT: return self.add_un(ir::InstTag.ZEXT, self.gen_expr(node.cast.operand)!, node.cast.qt);
@@ -1177,7 +1518,7 @@ fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node
 			ir::Ref integer = self.gen_expr(node.cast.operand)!;
 			type_store::QualType int_type = node.cast.operand.qt(self.tree);
 			ir::InstTag widen = int_type.bit_sizeof(self.comp) >= 64 ||
-				int_type.signedness(self.comp) == lang_opts::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT;
+				int_type.signedness(self.comp) == bigint::Signedness.UNSIGNED ? ir::InstTag.ZEXT : ir::InstTag.SEXT;
 			return self.builder.add_inst(widen, { .ref = integer }, value_interner::REF_PTR);
 		case NULL_TO_POINTER:
 			if (!node.cast.operand.qt(self.tree).is_pointer(self.comp)) self.gen_expr(node.cast.operand)!;
@@ -1233,10 +1574,26 @@ fn ir::Ref? CodeGen.gen_cast(&self, type_store::NodeIndex node_index, tree::Node
 		case REAL_TO_COMPLEX_FLOAT:
 		case UNION_CAST:
 		case VECTOR_SPLAT:
-		case ATOMIC_TO_NON_ATOMIC:
-		case NON_ATOMIC_TO_ATOMIC:
 			self.fail(string::tformat("TODO CodeGen gen CastKind %s\n", node.cast.kind.name))!;
 			return ir::NONE;
+		case ATOMIC_TO_NON_ATOMIC:
+			// Reading an `_Atomic` object (C11 6.2.6.1p9/7.17.7.2): a seq_cst load.
+			tree::Node atomic_operand = node.cast.operand.get(self.tree);
+			if (atomic_operand.kind == tree::NodeKind.CAST && atomic_operand.cast.kind == tree::CastKind.LVAL_TO_RVAL &&
+				self.is_bitfield_compound_dummy(atomic_operand.cast.operand))
+			{
+				return self.compound_assign_dummy;
+			}
+			if (atomic_operand.kind == tree::NodeKind.CAST && atomic_operand.cast.kind == tree::CastKind.LVAL_TO_RVAL &&
+				!self.is_record_value(node.cast.qt))
+			{
+				ir::Ref atomic_ptr = self.gen_lval(atomic_operand.cast.operand)!;
+				return self.builder.add_atomic_load(atomic_ptr, ir::AtomicOrder.SEQ_CST, self.gen_type(node.cast.qt)!);
+			}
+			return self.gen_expr(node.cast.operand);
+		case NON_ATOMIC_TO_ATOMIC:
+			// The representation is unchanged; stores through the object are atomic.
+			return self.gen_expr(node.cast.operand);
 	}
 }
 
@@ -1369,10 +1726,16 @@ fn ir::Ref? CodeGen.gen_stmt_expr(&self, type_store::NodeIndex node_index, tree:
 {
 	tree::Node compound = node.unary.operand.get(self.tree);
 	sz old_symbol_count = self.symbols.len();
-	while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
-	usz body_end = compound.compound_stmt.body.len > 0 ? compound.compound_stmt.body.len - 1 : 0;
-	for (usz i = 0; i < body_end; i++) self.gen_stmt(compound.compound_stmt.body[i])!;
-	return self.gen_expr(compound.compound_stmt.body[compound.compound_stmt.body.len - 1]);
+	defer
+	{
+		// The statement expression's block scope ends here.
+		while (self.symbols.len() > old_symbol_count) self.symbols.pop()!!;
+	}
+	type_store::NodeIndex[] body = compound.compound_stmt.body;
+	// `({})` is a void expression.
+	if (body.len == 0) return ir::NONE;
+	for (usz i = 0; i + 1 < body.len; i++) self.gen_stmt(body[i])!;
+	return self.gen_expr(body[^1]);
 }
 
 <* `gen_expr` case CODEGEN_DIAGNOSTIC. *>
@@ -1429,10 +1792,14 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 		case DEREF_EXPR:
 			return self.gen_expr(node.unary.operand);
 		case COMPOUND_LITERAL_EXPR:
-			if (node.compound_literal.storage_class == tree::CompoundLiteralStorageClass.STATIC || node.compound_literal.thread_local)
+			if (node.compound_literal.thread_local)
 			{
-				self.fail("TODO CodeGen.compound_literal_expr static or thread_local\n")!;
+				self.fail("TODO CodeGen.compound_literal_expr thread_local\n")!;
 				return ir::NONE;
+			}
+			if (node.compound_literal.storage_class == tree::CompoundLiteralStorageClass.STATIC)
+			{
+				return self.builder.add_symbol(self.compound_literal_global(node_index)!, value_interner::REF_PTR);
 			}
 			// `(int[]){4, 5, 6}`: the completed type is the initializer's.
 			type_store::QualType literal_qt = node.compound_literal.qt;
@@ -1446,6 +1813,8 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 		case BUILTIN_CHOOSE_EXPR:
 			value::Value cond = self.tree.value_of(node.conditional.cond)!!;
 			return self.gen_lval(cond.to_bool(self.comp) ? node.conditional.then_expr: node.conditional.else_expr);
+		case GENERIC_EXPR:
+			return self.gen_lval(self.tree.generic_result(node_index));
 		case COMPOUND_ASSIGN_DUMMY_EXPR:
 			return self.compound_assign_dummy;
 		case ARRAY_ACCESS_EXPR:
@@ -1453,8 +1822,7 @@ fn ir::Ref? CodeGen.gen_lval(&self, type_store::NodeIndex node_index)
 			type_store::NodeIndex index = node.array_access.index;
 			if (base.qt(self.tree).is(self.comp, type_store::TypeTag.VECTOR) || index.qt(self.tree).is(self.comp, type_store::TypeTag.VECTOR))
 			{
-				self.fail("TODO CodeGen.genLval vector element\n")!;
-				return ir::NONE;
+				return self.gen_vector_element_address(node.array_access);
 			}
 			// `i[p]` is `p[i]`.
 			if (!base.qt(self.tree).is_pointer(self.comp)) @swap(base, index);
@@ -1491,12 +1859,9 @@ fn void? CodeGen.gen_bool_expr(&self, type_store::NodeIndex base, BoolTarget on_
 	while (node.get(self.tree).kind == tree::NodeKind.PAREN_EXPR) node = node.get(self.tree).unary.operand;
 	// Zig genBoolExpr: a folded condition jumps straight to its target without
 	// lowering operands (which may have no IR form, e.g. alignof).
-	if (try folded = self.tree.value_of(node))
+	if (try known = self.static_condition(node))
 	{
-		if (!folded.is_pointer(self.comp))
-		{
-			return self.jump_to(folded.to_bool(self.comp) != negate ? on_true : on_false);
-		}
+		return self.jump_to(known != negate ? on_true : on_false);
 	}
 	tree::Node n = node.get(self.tree);
 	switch (n.kind)
@@ -1604,8 +1969,8 @@ fn ir::Ref? CodeGen.gen_truth_compare(&self, ir::Ref value, type_store::QualType
 <*
  Lower a builtin call. Upstream Zig leaves this a TODO; the C3 port lowers the
  integer/libc subset and SysV integer/pointer varargs that the native backend
- can express. Scalar float va_arg, atomic load/store/fences and clz/ctz are
- handled here; aggregate va_arg, atomic read-modify-write, alloca and setjmp remain TODO.
+ can express: va_arg, atomic load/store/fences and read-modify-write, clz/ctz;
+ alloca and setjmp remain TODO.
 *>
 fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_store::NodeIndex[] arg_nodes, type_store::QualType qt)
 {
@@ -1645,6 +2010,16 @@ fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_sto
 		ulong unknown = kind & 2 ? 0 : (bits >= 64 ? ~(ulong)0 : (1UL << bits) - 1);
 		return self.builder.add_constant(value::int_u64(unknown, self.comp).ref(), self.gen_type(qt)!);
 	}
+	if ((tag == common::TAG___BUILTIN_FABS || tag == common::TAG___BUILTIN_FABSF || tag == common::TAG___BUILTIN_FABSL) &&
+		arg_nodes.len == 1 && qt.is(self.comp, type_store::TypeTag.FLOAT))
+	{
+		self.ensure_scalar_float_width(qt)!;
+		return self.add_un(ir::InstTag.FABS, self.convert_scalar(self.gen_expr(arg_nodes[0])!, arg_nodes[0].qt(self.tree), qt)!, qt);
+	}
+	if (tag == common::TAG___BUILTIN_ISSIGNALING)
+	{
+		return self.gen_issignaling(arg_nodes[0], qt);
+	}
 	if (builtin_call::is_overflow_builtin(tag))
 	{
 		return self.gen_overflow_builtin(tag, arg_nodes);
@@ -1664,6 +2039,7 @@ fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_sto
 		self.builder.add_atomic_store(ptr, val, order);
 		return ir::NONE;
 	}
+	if (try handled = self.gen_atomic_rmw_builtin(tag, arg_nodes, qt)) return handled;
 	if (tag == common::TAG___ATOMIC_THREAD_FENCE || tag == common::TAG___C11_ATOMIC_THREAD_FENCE)
 	{
 		self.builder.add_fence(self.atomic_order_arg(arg_nodes[0])!);
@@ -1825,6 +2201,7 @@ fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_sto
 			ir::Ref address = self.builder.add_phi(incoming[..], value_interner::REF_PTR);
 			return self.builder.add_inst(ir::InstTag.LOAD, { .ref = address }, self.gen_type(qt)!);
 		}
+		if (self.is_record_value(qt)) return self.gen_va_arg_record(arg_nodes[0], qt);
 		self.fail("TODO CodeGen.genBuiltinCall __builtin_va_arg <type>\n")!;
 		return ir::NONE;
 	}
@@ -1845,6 +2222,110 @@ fn ir::Ref? CodeGen.gen_builtin_call(&self, builtins::Expanded builtin, type_sto
 	}
 	self.fail(string::tformat("TODO CodeGen.genBuiltinCall %s\n", builtins::name_from_tag(tag)))!;
 	return ir::NONE;
+}
+
+<* Whether an asm statement has no operands or labels and a blank template. *>
+fn bool CodeGen.is_empty_asm_barrier(&self, tree::NodeAsmStmt asm_node)
+{
+	if (asm_node.outputs.len != 0 || asm_node.inputs.len != 0 || asm_node.labels.len != 0) return false;
+	value::Value? text = self.tree.value_of(asm_node.asm_str);
+	if (catch text) return false;
+	if (!text.is(primitive_value::PrimitiveType.BYTES, self.comp)) return false;
+	foreach (c : text.to_bytes(self.comp))
+	{
+		if (c != 0 && c != ' ' && c != '\t' && c != '\n') return false;
+	}
+	return true;
+}
+
+<*
+ `__builtin_issignaling(x)`: the IR has no bitcast, so spill `x` to a stack slot and
+ reload its storage as integer words, then test the encoding as glibc does: exponent
+ all ones, quiet bit (top stored fraction bit) clear, fraction nonzero. For x87
+ long double the explicit integer bit must also be set (pseudo-NaNs are not signaling).
+*>
+fn ir::Ref? CodeGen.gen_issignaling(&self, type_store::NodeIndex arg_node, type_store::QualType qt) @noinline
+{
+	type_store::QualType arg_qt = arg_node.qt(self.tree);
+	type_store::ScalarKind arg_kind = arg_qt.scalar_kind(self.comp);
+	if (!arg_kind.is_float || !arg_kind.is_real)
+	{
+		self.fail("TODO CodeGen.genBuiltinCall __builtin_issignaling <non-real-floating>\n")!;
+		return ir::NONE;
+	}
+	ulong bits = arg_qt.bit_sizeof(self.comp);
+	primitive_value::PrimitiveType ftag = primitive_value::float_tag_of_width(bits);
+	ir::Ref value = self.gen_expr(arg_node)!;
+	uint size = (uint)arg_qt.sizeof(self.comp);
+	ir::Ref slot = self.builder.add_alloc(size, (uint)arg_qt.alignof(self.comp));
+	self.builder.add_store(slot, value);
+
+	ir::Ref is_snan;
+	switch (ftag)
+	{
+		case F16:
+		case F32:
+		case F64:
+			// glibc: ((w ^ quiet) & ~sign) > (exp_mask | quiet), unsigned.
+			value_interner::InternerRef ity = bits == 16 ? value_interner::REF_I16 : bits == 32 ? value_interner::REF_I32 : value_interner::REF_I64;
+			uint frac_bits = ftag.format.frac_bits;
+			ulong quiet = 1UL << (frac_bits - 1);
+			ulong sign = 1UL << (bits - 1);
+			ulong exp_mask = (sign - 1) & ~((1UL << frac_bits) - 1);
+			ir::Ref w = self.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, ity);
+			ir::Ref flipped = self.int_binop(ir::InstTag.BIT_XOR, w, quiet, ity);
+			ir::Ref magnitude = self.int_binop(ir::InstTag.BIT_AND, flipped, sign - 1, ity);
+			is_snan = self.int_cmp(ir::InstTag.CMP_UGT, magnitude, exp_mask | quiet, ity);
+		case F80:
+			// Mantissa (with explicit integer bit 63) at offset 0, sign+exponent at 8.
+			ir::Ref mant = self.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, value_interner::REF_I64);
+			ir::Ref se = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.ptr_at(slot, 8) }, value_interner::REF_I16);
+			ir::Ref exp = self.int_binop(ir::InstTag.BIT_AND, se, 0x7FFF, value_interner::REF_I16);
+			ir::Ref exp_max = self.int_cmp(ir::InstTag.CMP_EQ, exp, 0x7FFF, value_interner::REF_I16);
+			// Top two mantissa bits == 0b10: integer bit set, quiet bit clear.
+			ir::Ref top = self.int_binop(ir::InstTag.BIT_LSHR, mant, 62, value_interner::REF_I64);
+			ir::Ref int_not_quiet = self.int_cmp(ir::InstTag.CMP_EQ, top, 2, value_interner::REF_I64);
+			ir::Ref payload = self.int_binop(ir::InstTag.BIT_AND, mant, (1UL << 62) - 1, value_interner::REF_I64);
+			ir::Ref nonzero = self.int_cmp(ir::InstTag.CMP_NE, payload, 0, value_interner::REF_I64);
+			is_snan = self.bool_and(self.bool_and(exp_max, int_not_quiet), nonzero);
+		case F128:
+			// Little-endian halves: fraction low 64 bits at 0; sign, exponent and top 48 fraction bits at 8.
+			ir::Ref lo = self.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, value_interner::REF_I64);
+			ir::Ref hi = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.ptr_at(slot, 8) }, value_interner::REF_I64);
+			ulong exp_hi = 0x7FFF_0000_0000_0000UL;
+			ulong quiet_hi = 1UL << 47;
+			ir::Ref exp = self.int_binop(ir::InstTag.BIT_AND, hi, exp_hi, value_interner::REF_I64);
+			ir::Ref exp_max = self.int_cmp(ir::InstTag.CMP_EQ, exp, exp_hi, value_interner::REF_I64);
+			ir::Ref quiet = self.int_binop(ir::InstTag.BIT_AND, hi, quiet_hi, value_interner::REF_I64);
+			ir::Ref not_quiet = self.int_cmp(ir::InstTag.CMP_EQ, quiet, 0, value_interner::REF_I64);
+			ir::Ref frac_hi = self.int_binop(ir::InstTag.BIT_AND, hi, quiet_hi - 1, value_interner::REF_I64);
+			ir::Ref frac = self.builder.add_inst(ir::InstTag.BIT_OR, { .bin = { .lhs = frac_hi, .rhs = lo } }, value_interner::REF_I64);
+			ir::Ref nonzero = self.int_cmp(ir::InstTag.CMP_NE, frac, 0, value_interner::REF_I64);
+			is_snan = self.bool_and(self.bool_and(exp_max, not_quiet), nonzero);
+		default:
+			unreachable("not a float tag");
+	}
+	return self.builder.add_inst(ir::InstTag.ZEXT, { .ref = is_snan }, self.gen_type(qt)!);
+}
+
+<* `lhs <op> constant` on an integer of type `ty`. *>
+fn ir::Ref CodeGen.int_binop(&self, ir::InstTag op, ir::Ref lhs, ulong rhs, value_interner::InternerRef ty)
+{
+	ir::Ref constant = self.builder.add_constant(value::int_u64(rhs, self.comp).ref(), ty);
+	return self.builder.add_inst(op, { .bin = { .lhs = lhs, .rhs = constant } }, ty);
+}
+
+<* `lhs <cmp> constant` on an integer of type `ty`, yielding i1. *>
+fn ir::Ref CodeGen.int_cmp(&self, ir::InstTag op, ir::Ref lhs, ulong rhs, value_interner::InternerRef ty)
+{
+	ir::Ref constant = self.builder.add_constant(value::int_u64(rhs, self.comp).ref(), ty);
+	return self.builder.add_inst(op, { .bin = { .lhs = lhs, .rhs = constant } }, value_interner::REF_I1);
+}
+
+<* Branch-free `a && b` on i1 values. *>
+fn ir::Ref CodeGen.bool_and(&self, ir::Ref a, ir::Ref b)
+{
+	return self.builder.add_inst(ir::InstTag.BIT_AND, { .bin = { .lhs = a, .rhs = b } }, value_interner::REF_I1);
 }
 
 <*
@@ -1882,6 +2363,180 @@ fn type_store::QualType CodeGen.atomic_pointee(&self, type_store::NodeIndex poin
 	return pointer.pointer.child.non_atomic(self.comp).unqualified();
 }
 
+<* gen_atomic_rmw_builtin: the builtin is not an atomic read-modify-write. *>
+faultdef NOT_ATOMIC_RMW;
+
+<* An atomic read-modify-write builtin's operation (`add`, `cmpxchg`, ...),
+   whether it returns the new value, and its argument shape. *>
+enum AtomicRmwShape : char
+{
+	NONE,
+	FETCH_OP, // (ptr, value, ...) -> old
+	OP_FETCH, // (ptr, value, ...) -> new
+	EXCHANGE, // (ptr, value, ...) -> old
+	C11_CMPXCHG, // (ptr, expected_ptr, desired, ...) -> bool
+	GENERIC_CMPXCHG, // (ptr, expected_ptr, desired_ptr, ...) -> bool
+	SYNC_BOOL_CAS, // (ptr, old, new) -> bool
+	SYNC_VAL_CAS, // (ptr, old, new) -> previous value
+	TEST_AND_SET, // (ptr, order) -> bool
+	CLEAR, // (ptr, ...) store 0
+}
+
+fn AtomicRmwShape atomic_rmw_shape(builtin_properties::BuiltinTag tag, String* op, bool* scale_pointer)
+{
+	*scale_pointer = false;
+	switch (tag)
+	{
+		case common::TAG___C11_ATOMIC_FETCH_ADD: *op = "add"; *scale_pointer = true; return FETCH_OP;
+		case common::TAG___C11_ATOMIC_FETCH_SUB: *op = "sub"; *scale_pointer = true; return FETCH_OP;
+		case common::TAG___C11_ATOMIC_FETCH_AND: *op = "and"; return FETCH_OP;
+		case common::TAG___C11_ATOMIC_FETCH_OR: *op = "or"; return FETCH_OP;
+		case common::TAG___C11_ATOMIC_FETCH_XOR: *op = "xor"; return FETCH_OP;
+		case common::TAG___C11_ATOMIC_FETCH_NAND: *op = "nand"; return FETCH_OP;
+		case common::TAG___ATOMIC_FETCH_ADD: case common::TAG___SYNC_FETCH_AND_ADD: *op = "add"; return FETCH_OP;
+		case common::TAG___ATOMIC_FETCH_SUB: case common::TAG___SYNC_FETCH_AND_SUB: *op = "sub"; return FETCH_OP;
+		case common::TAG___ATOMIC_FETCH_AND: case common::TAG___SYNC_FETCH_AND_AND: *op = "and"; return FETCH_OP;
+		case common::TAG___ATOMIC_FETCH_OR: case common::TAG___SYNC_FETCH_AND_OR: *op = "or"; return FETCH_OP;
+		case common::TAG___ATOMIC_FETCH_XOR: case common::TAG___SYNC_FETCH_AND_XOR: *op = "xor"; return FETCH_OP;
+		case common::TAG___ATOMIC_FETCH_NAND: case common::TAG___SYNC_FETCH_AND_NAND: *op = "nand"; return FETCH_OP;
+		case common::TAG___ATOMIC_ADD_FETCH: case common::TAG___SYNC_ADD_AND_FETCH: *op = "add"; return OP_FETCH;
+		case common::TAG___ATOMIC_SUB_FETCH: case common::TAG___SYNC_SUB_AND_FETCH: *op = "sub"; return OP_FETCH;
+		case common::TAG___ATOMIC_AND_FETCH: case common::TAG___SYNC_AND_AND_FETCH: *op = "and"; return OP_FETCH;
+		case common::TAG___ATOMIC_OR_FETCH: case common::TAG___SYNC_OR_AND_FETCH: *op = "or"; return OP_FETCH;
+		case common::TAG___ATOMIC_XOR_FETCH: case common::TAG___SYNC_XOR_AND_FETCH: *op = "xor"; return OP_FETCH;
+		case common::TAG___ATOMIC_NAND_FETCH: case common::TAG___SYNC_NAND_AND_FETCH: *op = "nand"; return OP_FETCH;
+		case common::TAG___C11_ATOMIC_EXCHANGE: case common::TAG___ATOMIC_EXCHANGE_N:
+		case common::TAG___SYNC_LOCK_TEST_AND_SET:
+		case common::TAG___SYNC_SWAP:
+			*op = "xchg"; return EXCHANGE;
+		case common::TAG___C11_ATOMIC_COMPARE_EXCHANGE_STRONG: case common::TAG___C11_ATOMIC_COMPARE_EXCHANGE_WEAK:
+		case common::TAG___ATOMIC_COMPARE_EXCHANGE_N:
+			*op = "cmpxchg"; return C11_CMPXCHG;
+		case common::TAG___ATOMIC_COMPARE_EXCHANGE: *op = "cmpxchg"; return GENERIC_CMPXCHG;
+		case common::TAG___SYNC_BOOL_COMPARE_AND_SWAP: *op = "cmpxchg"; return SYNC_BOOL_CAS;
+		case common::TAG___SYNC_VAL_COMPARE_AND_SWAP: *op = "cmpxchg"; return SYNC_VAL_CAS;
+		case common::TAG___ATOMIC_TEST_AND_SET: *op = "xchg"; return TEST_AND_SET;
+		case common::TAG___ATOMIC_CLEAR: case common::TAG___SYNC_LOCK_RELEASE: return CLEAR;
+		default: return NONE;
+	}
+}
+
+<* A call of the lowering's inline atomic intrinsic `__aro.atomic.<op>.<bits>`. *>
+fn ir::Ref CodeGen.atomic_intrinsic_call(&self, String op, uint bits, ir::Ref[] args, value_interner::InternerRef ty)
+{
+	String name = string::format(&self.builder.arena, "__aro.atomic.%s.%d", op, bits);
+	ir::Ref callee = self.builder.add_symbol(name, value_interner::REF_PTR);
+	return self.builder.add_call(callee, args, ty);
+}
+
+<* `__c11_atomic_*`, `__atomic_*` and `__sync_*` read-modify-write builtins
+   (always sequentially consistent: every lowering uses a locked instruction).
+   Faults with NOT_ATOMIC_RMW for other builtins. *>
+fn ir::Ref? CodeGen.gen_atomic_rmw_builtin(&self, builtin_properties::BuiltinTag tag, type_store::NodeIndex[] arg_nodes, type_store::QualType qt)
+{
+	String op;
+	bool scale_pointer;
+	AtomicRmwShape shape = atomic_rmw_shape(tag, &op, &scale_pointer);
+	if (shape == AtomicRmwShape.NONE) return NOT_ATOMIC_RMW~;
+	type_store::QualType pointee = self.atomic_pointee(arg_nodes[0]);
+	ir::Ref ptr = self.gen_expr(arg_nodes[0])!;
+	if (shape == AtomicRmwShape.CLEAR)
+	{
+		value_interner::InternerRef clear_ty = pointee.is(self.comp, type_store::TypeTag.VOID) ? value_interner::REF_I8 : self.gen_type(pointee)!;
+		if (clear_ty == value_interner::REF_I1) clear_ty = value_interner::REF_I8;
+		self.builder.add_atomic_store(ptr, self.builder.add_constant(value_interner::REF_ZERO, clear_ty), ir::AtomicOrder.SEQ_CST);
+		foreach (extra : arg_nodes[1..]) self.gen_expr(extra)!;
+		return ir::NONE;
+	}
+	if (shape == AtomicRmwShape.TEST_AND_SET)
+	{
+		ir::Ref one = self.builder.add_constant(value::int_u64(1, self.comp).ref(), value_interner::REF_I8);
+		ir::Ref old = self.atomic_intrinsic_call("xchg", 8, { ptr, one }, value_interner::REF_I8);
+		ir::Ref zero = self.builder.add_constant(value_interner::REF_ZERO, value_interner::REF_I8);
+		return self.builder.add_inst(ir::InstTag.CMP_NE, { .bin = { .lhs = old, .rhs = zero } }, value_interner::REF_I1);
+	}
+	value_interner::InternerRef value_ty = self.gen_type(pointee)!;
+	bool is_bool = value_ty == value_interner::REF_I1;
+	value_interner::InternerRef op_ty = is_bool ? value_interner::REF_I8 : value_ty;
+	uint bits = (uint)pointee.bit_sizeof(self.comp);
+	if (is_bool) bits = 8;
+	if (bits != 8 && bits != 16 && bits != 32 && bits != 64)
+	{
+		self.fail(string::tformat("TODO CodeGen.genBuiltinCall atomic read-modify-write of a %d-bit object\n", bits))!;
+		return ir::NONE;
+	}
+	switch (shape)
+	{
+		case C11_CMPXCHG:
+		case GENERIC_CMPXCHG:
+			ir::Ref expected = self.gen_expr(arg_nodes[1])!;
+			ir::Ref desired;
+			if (shape == AtomicRmwShape.GENERIC_CMPXCHG)
+			{
+				desired = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.gen_expr(arg_nodes[2])! }, op_ty);
+			}
+			else
+			{
+				desired = self.convert_scalar(self.gen_expr(arg_nodes[2])!, arg_nodes[2].qt(self.tree), pointee)!;
+				if (is_bool) desired = self.builder.add_inst(ir::InstTag.ZEXT, { .ref = desired }, value_interner::REF_I8);
+			}
+			foreach (extra : arg_nodes[3..]) self.gen_expr(extra)!;
+			return self.atomic_intrinsic_call(op, bits, { ptr, expected, desired }, value_interner::REF_I1);
+		case SYNC_BOOL_CAS:
+		case SYNC_VAL_CAS:
+			ir::Ref old_value = self.convert_scalar(self.gen_expr(arg_nodes[1])!, arg_nodes[1].qt(self.tree), pointee)!;
+			ir::Ref new_value = self.convert_scalar(self.gen_expr(arg_nodes[2])!, arg_nodes[2].qt(self.tree), pointee)!;
+			if (is_bool)
+			{
+				old_value = self.builder.add_inst(ir::InstTag.ZEXT, { .ref = old_value }, value_interner::REF_I8);
+				new_value = self.builder.add_inst(ir::InstTag.ZEXT, { .ref = new_value }, value_interner::REF_I8);
+			}
+			ir::Ref slot = self.builder.add_alloc(bits / 8, bits / 8);
+			self.builder.add_store(slot, old_value);
+			ir::Ref swapped = self.atomic_intrinsic_call(op, bits, { ptr, slot, new_value }, value_interner::REF_I1);
+			if (shape == AtomicRmwShape.SYNC_BOOL_CAS) return swapped;
+			ir::Ref previous = self.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, op_ty);
+			return is_bool ? self.builder.add_inst(ir::InstTag.TRUNC, { .ref = previous }, value_interner::REF_I1) : previous;
+		default:
+			break;
+	}
+	ir::Ref operand = self.convert_scalar(self.gen_expr(arg_nodes[1])!, arg_nodes[1].qt(self.tree),
+		pointee.is_pointer(self.comp) ? self.comp.type_store.ptrdiff : pointee)!;
+	if (is_bool) operand = self.builder.add_inst(ir::InstTag.ZEXT, { .ref = operand }, value_interner::REF_I8);
+	if (pointee.is_pointer(self.comp) && scale_pointer)
+	{
+		ulong? elem_size = pointee.child_type(self.comp).sizeof_or_null(self.comp);
+		if (try size = elem_size)
+		{
+			ir::Ref scale = self.builder.add_constant(value::int_u64(size, self.comp).ref(), value_interner::REF_I64);
+			operand = self.builder.add_inst(ir::InstTag.MUL, { .bin = { .lhs = operand, .rhs = scale } }, value_interner::REF_I64);
+		}
+	}
+	foreach (extra : arg_nodes[2..]) self.gen_expr(extra)!;
+	value_interner::InternerRef call_ty = pointee.is_pointer(self.comp) ? value_interner::REF_I64 : op_ty;
+	ir::Ref old = self.atomic_intrinsic_call(op, bits, { ptr, operand }, call_ty);
+	ir::Ref result = old;
+	if (shape == AtomicRmwShape.OP_FETCH)
+	{
+		ir::InstTag combine;
+		switch (op)
+		{
+			case "add": combine = ir::InstTag.ADD;
+			case "sub": combine = ir::InstTag.SUB;
+			case "and": combine = ir::InstTag.BIT_AND;
+			case "or": combine = ir::InstTag.BIT_OR;
+			case "xor": combine = ir::InstTag.BIT_XOR;
+			default: combine = ir::InstTag.BIT_AND; // nand: ~(old & value)
+		}
+		result = self.builder.add_inst(combine, { .bin = { .lhs = old, .rhs = operand } }, call_ty);
+		if (op == "nand") result = self.builder.add_inst(ir::InstTag.BIT_NOT, { .ref = result }, call_ty);
+	}
+	// Pointers stay ptr-typed in the IR; a same-width ZEXT converts (see INT_TO_POINTER).
+	if (pointee.is_pointer(self.comp)) return self.builder.add_inst(ir::InstTag.ZEXT, { .ref = result }, value_interner::REF_PTR);
+	if (is_bool) return self.builder.add_inst(ir::InstTag.TRUNC, { .ref = result }, value_interner::REF_I1);
+	return result;
+}
+
 <* A `__ATOMIC_*` memory-order argument. A non-constant order is evaluated and treated as seq_cst. *>
 fn ir::AtomicOrder? CodeGen.atomic_order_arg(&self, type_store::NodeIndex order_arg)
 {
@@ -1906,7 +2561,7 @@ fn ir::Ref? CodeGen.convert_scalar(&self, ir::Ref value, type_store::QualType fr
 	ulong to_bits = to.bit_sizeof(self.comp);
 	if (from_bits == to_bits) return value;
 	if (from_bits > to_bits) return self.add_un(ir::InstTag.TRUNC, value, to);
-	bool unsigned_source = from.is_pointer(self.comp) || from.signedness(self.comp) == lang_opts::Signedness.UNSIGNED;
+	bool unsigned_source = from.is_pointer(self.comp) || from.signedness(self.comp) == bigint::Signedness.UNSIGNED;
 	return self.add_un(unsigned_source ? ir::InstTag.ZEXT : ir::InstTag.SEXT, value, to);
 }
 
@@ -1944,6 +2599,7 @@ fn ir::Ref? CodeGen.gen_integer_abs(&self, type_store::NodeIndex operand, type_s
 fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 {
 	ir::Ref fn_ref;
+	bool knr_callee = false;
 	tree::Node callee = call.callee.get(self.tree);
 	if (callee.kind != tree::NodeKind.CAST || callee.cast.kind != tree::CastKind.FUNCTION_TO_POINTER)
 	{
@@ -1973,6 +2629,7 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 				case DECL_REF_EXPR:
 					String name_text = self.tree.tok_slice(current.decl_ref.name_tok);
 					string_interner::StringId name = self.comp.intern_string(name_text);
+					knr_callee = self.is_knr_function(name);
 					bool local = false;
 					for (sz i = self.symbols.len(); i > 0; i--)
 					{
@@ -1989,6 +2646,21 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 					{
 						// Hosted standard-library abs functions have builtin semantics even
 						// when a translation unit supplies an out-of-line definition.
+						if (self.comp.target.os.tag != target::OsTag.FREESTANDING &&
+							!self.has_internal_linkage(current.decl_ref.decl) && call.args.len == 1 &&
+							(name_text == "fabs" || name_text == "fabsf" || name_text == "fabsl"))
+						{
+							type_store::QualType expected = name_text == "fabs" ? type_store::DOUBLE :
+								(name_text == "fabsf" ? type_store::FLOAT : type_store::LONG_DOUBLE);
+							type_store::Func function = call.callee.qt(self.tree).get_func(self.comp)!;
+							if (call.qt.eql(expected, self.comp) && function.params.len == 1 &&
+								function.kind != type_store::FuncKind.VARIADIC && function.params[0].qt.eql(expected, self.comp))
+							{
+								self.ensure_scalar_float_width(expected)!;
+								// The parser already converted the argument to the parameter type.
+								return self.add_un(ir::InstTag.FABS, self.gen_expr(call.args[0])!, expected);
+							}
+						}
 						if (self.comp.target.os.tag != target::OsTag.FREESTANDING &&
 							!self.has_internal_linkage(current.decl_ref.decl) && call.args.len == 1 &&
 							(name_text == "abs" || name_text == "labs" || name_text == "llabs"))
@@ -2064,11 +2736,21 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 				continue;
 			}
 			ir::Ref source = self.gen_expr(arg_node)!;
-			if (class.kind == AggClass.MEMORY)
+			if (class.kind == AggClass.VECTOR128 && sse_index < 8)
+			{
+				args[arg_count] = self.builder.add_inst(ir::InstTag.LOAD, { .ref = source }, self.vector128_carrier(arg_type));
+				stack_only[arg_count] = false;
+				memory_copy_bytes[arg_count] = 0;
+				arg_count++;
+				sse_index++;
+				continue;
+			}
+			if (class.kind == AggClass.MEMORY || class.kind == AggClass.X87 || class.kind == AggClass.VECTOR128)
 			{
 				args[arg_count] = source;
 				stack_only[arg_count] = false;
 				memory_copy_bytes[arg_count] = (uint)arg_type.sizeof(self.comp);
+				if (arg_type.alignof(self.comp) > 8) memory_copy_bytes[arg_count] |= ir::MEMORY_COPY_ALIGN16;
 				arg_count++;
 				continue;
 			}
@@ -2078,20 +2760,36 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 			ir::Ref padded = self.builder.add_alloc(padded_size, arg_type.alignof(self.comp) < 8 ? 8 : arg_type.alignof(self.comp));
 			self.gen_zero_fill(padded, padded_size)!;
 			self.gen_copy(padded, source, arg_type.sizeof(self.comp))!;
-			bool in_registers = gp_index + words <= 6;
+			// All eightbytes go in registers, or the whole aggregate goes on the stack.
+			bool in_registers = gp_index + class.gp_words() <= 6 && sse_index + class.sse_words() <= 8;
 			for (uint word = 0; word < words; word++)
 			{
+				if (in_registers && class.words[word] == WordClass.NONE) continue;
+				// On the stack the words are plain bytes; keep them integer.
+				value_interner::InternerRef word_type = in_registers ? word_value_type(class.words[word]) : value_interner::REF_I64;
 				args[arg_count] = self.builder.add_inst(ir::InstTag.LOAD,
-					{ .ref = self.ptr_at(padded, (ulong)word * 8) }, value_interner::REF_I64);
+					{ .ref = self.ptr_at(padded, (ulong)word * 8) }, word_type);
 				stack_only[arg_count] = !in_registers;
 				memory_copy_bytes[arg_count] = 0;
 				arg_count++;
 			}
-			if (in_registers) gp_index += words;
+			if (in_registers)
+			{
+				gp_index += class.gp_words();
+				sse_index += class.sse_words();
+			}
 			continue;
 		}
 
 		ir::Ref scalar_arg = self.gen_expr(arg_node)!;
+		if (fixed_parameter && (self.is_knr_float_param(func_type, arg_type) ||
+			(knr_callee && arg_type.is(self.comp, type_store::TypeTag.FLOAT) && arg_type.bit_sizeof(self.comp) == 32)))
+		{
+			// A K&R definition is not a prototype: its `float` parameters
+			// arrive as the default-promoted double (gcc and clang ABI).
+			scalar_arg = self.builder.add_inst(ir::InstTag.FPEXT, { .ref = scalar_arg }, value_interner::REF_F64);
+			arg_type = type_store::DOUBLE;
+		}
 		if (self.is_int128(arg_type))
 		{
 			// Two i64 words in consecutive GPRs, matching the callee side in gen_fn.
@@ -2139,9 +2837,19 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 	}
 
 	value_interner::InternerRef call_type;
-	if (aggregate_result && result_class.kind == AggClass.INTEGER)
+	if (aggregate_result && result_class.kind == AggClass.REGISTER)
 	{
-		call_type = value_interner::REF_I64;
+		uint[2] active;
+		result_class.active_words(&active);
+		call_type = word_value_type(result_class.words[active[0]]);
+	}
+	else if (aggregate_result && result_class.kind == AggClass.X87)
+	{
+		call_type = value_interner::REF_F80;
+	}
+	else if (aggregate_result && result_class.kind == AggClass.VECTOR128)
+	{
+		call_type = self.vector128_carrier(call.qt);
 	}
 	else if (aggregate_result)
 	{
@@ -2168,26 +2876,193 @@ fn ir::Ref? CodeGen.gen_call(&self, tree::NodeCall call)
 	}
 	ir::Ref result = self.builder.add_call_abi(fn_ref, call_args, call_stack_only,
 		call_memory_copy_bytes, call_type);
-	if (aggregate_result && result_class.kind == AggClass.INTEGER)
+	if (aggregate_result && (result_class.kind == AggClass.REGISTER || result_class.kind == AggClass.X87 ||
+		result_class.kind == AggClass.VECTOR128))
 	{
-		if (result_class.eightbyte_count > 1)
+		uint[2] active;
+		uint active_count = result_class.kind == AggClass.REGISTER ? result_class.active_words(&active) : 1;
+		if (active_count > 1)
 		{
-			ir::Ref high = self.builder.add_call_hi(result);
-			self.builder.add_store(self.ptr_at(result_slot, 8), high);
+			ir::Ref high = self.builder.add_call_hi(result, word_value_type(result_class.words[active[1]]));
+			self.builder.add_store(self.ptr_at(result_slot, (ulong)active[1] * 8), high);
 		}
-		self.builder.add_store(result_slot, result);
+		self.builder.add_store(self.ptr_at(result_slot, (ulong)active[0] * 8), result);
 		return result_slot;
 	}
 	if (aggregate_result) return result_slot;
 	return result;
 }
 
+<* A `float` parameter of an old-style (K&R) function type, which is passed
+   as the default-promoted double. *>
+fn bool CodeGen.is_knr_float_param(&self, type_store::Func func_type, type_store::QualType param_qt)
+{
+	return func_type.kind == type_store::FuncKind.OLD_STYLE && param_qt.is(self.comp, type_store::TypeTag.FLOAT) &&
+		param_qt.bit_sizeof(self.comp) == 32;
+}
+
+<* `pointer + offset` for an i32 va_list offset field. *>
+fn ir::Ref CodeGen.va_offset_address(&self, ir::Ref base, ir::Ref offset32)
+{
+	ir::Ref wide = self.builder.add_inst(ir::InstTag.ZEXT, { .ref = offset32 }, value_interner::REF_I64);
+	return self.builder.add_inst(ir::InstTag.ADD, { .bin = { .lhs = base, .rhs = wide } }, value_interner::REF_PTR);
+}
+
+<*
+ SysV `va_arg(list, struct/union)`: a register-class aggregate comes from the
+ register save area when all its eightbytes still fit (INTEGER words from
+ gp_offset, SSE words from fp_offset), otherwise from the overflow area like a
+ MEMORY-class one. The value is copied into a fresh temporary, whose address is
+ the record value.
+*>
+fn ir::Ref? CodeGen.gen_va_arg_record(&self, type_store::NodeIndex list_node, type_store::QualType qt)
+{
+	AggClassResult class = self.classify_record(qt)!;
+	self.gen_type(qt)!;
+	ulong size = qt.sizeof(self.comp);
+	uint alignment = qt.alignof(self.comp);
+	uint padded_size = (uint)((size + 7) / 8 * 8);
+	ir::Ref result = self.builder.add_alloc(padded_size == 0 ? 1 : padded_size, alignment < 8 ? 8 : alignment);
+	ir::Ref list = self.gen_expr(list_node)!;
+	if (class.kind == AggClass.IGNORE) return result;
+
+	ir::Ref overflow_label = self.builder.make_label("va_arg.agg_mem");
+	ir::Ref join_label = self.builder.make_label("va_arg.agg_join");
+	if (class.kind == AggClass.VECTOR128)
+	{
+		// One whole XMM save slot (16 bytes at fp_offset).
+		ir::Ref fp_offset = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.ptr_at(list, 4) }, value_interner::REF_I32);
+		ir::Ref fp_limit = self.builder.add_constant(value::int_u64(161, self.comp).ref(), value_interner::REF_I32);
+		ir::Ref fits = self.builder.add_inst(ir::InstTag.CMP_ULT, { .bin = { .lhs = fp_offset, .rhs = fp_limit } }, value_interner::REF_I1);
+		ir::Ref register_label = self.builder.make_label("va_arg.vec_reg");
+		self.add_branch(fits, register_label, overflow_label)!;
+		self.builder.start_block(register_label);
+		ir::Ref save_area = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.ptr_at(list, 16) }, value_interner::REF_PTR);
+		self.gen_copy(result, self.va_offset_address(save_area, fp_offset), 16)!;
+		ir::Ref step = self.builder.add_constant(value::int_u64(16, self.comp).ref(), value_interner::REF_I32);
+		self.builder.add_store(self.ptr_at(list, 4), self.builder.add_inst(ir::InstTag.ADD, { .bin = { .lhs = fp_offset, .rhs = step } }, value_interner::REF_I32));
+		self.builder.add_jump(join_label);
+	}
+	else if (class.kind == AggClass.REGISTER)
+	{
+		uint gp_words = class.gp_words();
+		uint sse_words = class.sse_words();
+		ir::Ref gp_offset = self.builder.add_inst(ir::InstTag.LOAD, { .ref = list }, value_interner::REF_I32);
+		ir::Ref fp_offset = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.ptr_at(list, 4) }, value_interner::REF_I32);
+		// gp_offset <= 48 - 8 * gp_words and fp_offset <= 176 - 16 * sse_words.
+		ir::Ref gp_limit = self.builder.add_constant(value::int_u64((ulong)(48 - 8 * gp_words + 1), self.comp).ref(), value_interner::REF_I32);
+		ir::Ref fp_limit = self.builder.add_constant(value::int_u64((ulong)(176 - 16 * sse_words + 1), self.comp).ref(), value_interner::REF_I32);
+		ir::Ref gp_fits = self.builder.add_inst(ir::InstTag.CMP_ULT, { .bin = { .lhs = gp_offset, .rhs = gp_limit } }, value_interner::REF_I1);
+		ir::Ref fp_fits = self.builder.add_inst(ir::InstTag.CMP_ULT, { .bin = { .lhs = fp_offset, .rhs = fp_limit } }, value_interner::REF_I1);
+		ir::Ref fits = self.builder.add_inst(ir::InstTag.BIT_AND, { .bin = { .lhs = gp_fits, .rhs = fp_fits } }, value_interner::REF_I1);
+		ir::Ref register_label = self.builder.make_label("va_arg.agg_reg");
+		self.add_branch(fits, register_label, overflow_label)!;
+
+		self.builder.start_block(register_label);
+		ir::Ref save_area = self.builder.add_inst(ir::InstTag.LOAD, { .ref = self.ptr_at(list, 16) }, value_interner::REF_PTR);
+		ir::Ref gp_address = self.va_offset_address(save_area, gp_offset);
+		ir::Ref fp_address = self.va_offset_address(save_area, fp_offset);
+		uint gp_used;
+		uint sse_used;
+		for (uint word = 0; word < (uint)class.eightbyte_count; word++)
+		{
+			ir::Ref source;
+			if (class.words[word] == WordClass.NONE) continue;
+			if (class.is_sse(word))
+			{
+				source = self.ptr_at(fp_address, (ulong)sse_used++ * 16);
+			}
+			else
+			{
+				source = self.ptr_at(gp_address, (ulong)gp_used++ * 8);
+			}
+			ir::Ref value = self.builder.add_inst(ir::InstTag.LOAD, { .ref = source }, value_interner::REF_I64);
+			self.builder.add_store(self.ptr_at(result, (ulong)word * 8), value);
+		}
+		if (gp_words != 0)
+		{
+			ir::Ref step = self.builder.add_constant(value::int_u64((ulong)(8 * gp_words), self.comp).ref(), value_interner::REF_I32);
+			self.builder.add_store(list, self.builder.add_inst(ir::InstTag.ADD, { .bin = { .lhs = gp_offset, .rhs = step } }, value_interner::REF_I32));
+		}
+		if (sse_words != 0)
+		{
+			ir::Ref step = self.builder.add_constant(value::int_u64((ulong)(16 * sse_words), self.comp).ref(), value_interner::REF_I32);
+			self.builder.add_store(self.ptr_at(list, 4), self.builder.add_inst(ir::InstTag.ADD, { .bin = { .lhs = fp_offset, .rhs = step } }, value_interner::REF_I32));
+		}
+		self.builder.add_jump(join_label);
+	}
+	else
+	{
+		self.builder.add_jump(overflow_label);
+	}
+
+	self.builder.start_block(overflow_label);
+	ir::Ref overflow_field = self.ptr_at(list, 8);
+	ir::Ref overflow_address = self.builder.add_inst(ir::InstTag.LOAD, { .ref = overflow_field }, value_interner::REF_PTR);
+	if (alignment > 8)
+	{
+		ir::Ref bias = self.builder.add_constant(value::int_u64((ulong)alignment - 1, self.comp).ref(), value_interner::REF_I64);
+		ir::Ref mask = self.builder.add_constant(value::int_u64(~((ulong)alignment - 1), self.comp).ref(), value_interner::REF_PTR);
+		ir::Ref biased = self.builder.add_inst(ir::InstTag.ADD, { .bin = { .lhs = overflow_address, .rhs = bias } }, value_interner::REF_PTR);
+		overflow_address = self.builder.add_inst(ir::InstTag.BIT_AND, { .bin = { .lhs = biased, .rhs = mask } }, value_interner::REF_PTR);
+	}
+	self.gen_copy(result, overflow_address, size)!;
+	self.builder.add_store(overflow_field, self.ptr_at(overflow_address, padded_size));
+	self.builder.add_jump(join_label);
+
+	self.builder.start_block(join_label);
+	return result;
+}
+
+<* The right operand of the calculation `CAST*(op(CAST*(<dummy>), operand))`
+   that a compound assignment's rhs holds, if it has that shape. *>
+fn bool CodeGen.compound_assign_operand(&self, tree::NodeBinary bin, type_store::NodeIndex* operand)
+{
+	type_store::NodeIndex calc = bin.rhs;
+	while (calc.get(self.tree).kind == tree::NodeKind.CAST) calc = calc.get(self.tree).cast.operand;
+	tree::Node calc_node = calc.get(self.tree);
+	switch (calc_node.kind)
+	{
+		case ADD_EXPR:
+		case SUB_EXPR:
+		case MUL_EXPR:
+		case DIV_EXPR:
+		case MOD_EXPR:
+		case SHL_EXPR:
+		case SHR_EXPR:
+		case BIT_AND_EXPR:
+		case BIT_OR_EXPR:
+		case BIT_XOR_EXPR:
+			break;
+		default:
+			return false;
+	}
+	type_store::NodeIndex dummy = calc_node.binary.lhs;
+	while (dummy.get(self.tree).kind == tree::NodeKind.CAST) dummy = dummy.get(self.tree).cast.operand;
+	if (dummy.get(self.tree).kind != tree::NodeKind.COMPOUND_ASSIGN_DUMMY_EXPR) return false;
+	*operand = calc_node.binary.rhs;
+	return true;
+}
+
+<*
+ `x op= y`. As gcc does (PR c/58943), `y` is evaluated before `x` is read, so
+ `x |= f()` sees f's own writes to x. The precomputed operand is served from
+ the expression cache when the calculation is generated.
+*>
 fn ir::Ref? CodeGen.gen_compound_assign(&self, tree::NodeBinary bin)
 {
+	bool old_cached = self.has_cached_expr;
+	type_store::NodeIndex old_cached_node = self.cached_expr_node;
+	ir::Ref old_cached_value = self.cached_expr_value;
+	defer
+	{
+		self.has_cached_expr = old_cached; self.cached_expr_node = old_cached_node; self.cached_expr_value = old_cached_value;
+	}
 	if (self.is_bitfield_lvalue(bin.lhs))
 	{
 		MemberBase member = self.gen_member_base(bin.lhs)!;
 		BitfieldLval lval = self.bitfield_lval(member.ptr, member.field, member.record_size, member.is_volatile)!;
+		self.precompute_compound_operand(bin)!;
 		ir::Ref old_value = self.load_bitfield(lval)!;
 		bool old_has_dummy = self.has_compound_assign_dummy;
 		ir::Ref old_dummy = self.compound_assign_dummy;
@@ -2201,7 +3076,9 @@ fn ir::Ref? CodeGen.gen_compound_assign(&self, tree::NodeBinary bin)
 		ir::Ref rhs = self.gen_expr(bin.rhs)!;
 		return self.store_bitfield(lval, rhs);
 	}
+	if (try atomic = self.gen_atomic_compound_assign(bin)) return atomic;
 	ir::Ref lhs = self.gen_lval(bin.lhs)!;
+	self.precompute_compound_operand(bin)!;
 	bool old_has_dummy = self.has_compound_assign_dummy;
 	ir::Ref old_dummy = self.compound_assign_dummy;
 	defer
@@ -2211,8 +3088,91 @@ fn ir::Ref? CodeGen.gen_compound_assign(&self, tree::NodeBinary bin)
 	self.has_compound_assign_dummy = true;
 	self.compound_assign_dummy = lhs;
 	ir::Ref rhs = self.gen_expr(bin.rhs)!;
-	self.builder.add_store(lhs, rhs, self.access_is_volatile(bin.lhs.qt(self.tree)));
+	if (!self.store_vector_assigned(lhs, rhs, bin.lhs.qt(self.tree))) self.store_assigned(lhs, rhs, bin.lhs.qt(self.tree));
 	return rhs;
+}
+
+<* Evaluate a compound assignment's right operand now and cache it (the
+   caller restores the cache). Vector operands keep the generic order. *>
+fn void? CodeGen.precompute_compound_operand(&self, tree::NodeBinary bin)
+{
+	type_store::NodeIndex operand;
+	if (!self.compound_assign_operand(bin, &operand)) return;
+	if (self.is_vector(operand.qt(self.tree)) || self.is_vector(bin.lhs.qt(self.tree))) return;
+	ir::Ref value = self.gen_expr(operand)!;
+	self.has_cached_expr = true;
+	self.cached_expr_node = operand;
+	self.cached_expr_value = value;
+}
+
+<* gen_atomic_compound_assign: not an `_Atomic` integer or pointer lhs. *>
+faultdef NOT_ATOMIC_COMPOUND;
+
+<* `x op= y` on an `_Atomic` integer or pointer object as one atomic
+   read-modify-write: evaluate `y` once, then load x, compute, and
+   compare-exchange, retrying with the value found until it succeeds. *>
+fn ir::Ref? CodeGen.gen_atomic_compound_assign(&self, tree::NodeBinary bin)
+{
+	type_store::QualType lhs_qt = bin.lhs.qt(self.tree);
+	if (!lhs_qt.is(self.comp, type_store::TypeTag.ATOMIC)) return NOT_ATOMIC_COMPOUND~;
+	type_store::QualType value_qt = lhs_qt.non_atomic(self.comp).unqualified();
+	if (!value_qt.is_int(self.comp) && !value_qt.is_pointer(self.comp)) return NOT_ATOMIC_COMPOUND~;
+	uint bits = (uint)value_qt.bit_sizeof(self.comp);
+	if (bits != 8 && bits != 16 && bits != 32 && bits != 64) return NOT_ATOMIC_COMPOUND~;
+	value_interner::InternerRef value_ty = self.gen_type(value_qt)!;
+	if (value_ty == value_interner::REF_I1) return NOT_ATOMIC_COMPOUND~;
+	// The calculation is `op(<dummy>, y)` under implicit conversions.
+	type_store::NodeIndex calc = bin.rhs;
+	while (calc.get(self.tree).kind == tree::NodeKind.CAST) calc = calc.get(self.tree).cast.operand;
+	tree::Node calc_node = calc.get(self.tree);
+	type_store::NodeIndex operand = calc_node.binary.rhs;
+
+	ir::Ref ptr = self.gen_lval(bin.lhs)!;
+	ir::Ref operand_value = self.gen_expr(operand)!;
+	bool old_cached = self.has_cached_expr;
+	type_store::NodeIndex old_cached_node = self.cached_expr_node;
+	ir::Ref old_cached_value = self.cached_expr_value;
+	bool old_has_dummy = self.has_compound_assign_dummy;
+	bool old_dummy_is_value = self.compound_dummy_is_value;
+	ir::Ref old_dummy = self.compound_assign_dummy;
+	defer
+	{
+		self.has_cached_expr = old_cached; self.cached_expr_node = old_cached_node; self.cached_expr_value = old_cached_value;
+		self.has_compound_assign_dummy = old_has_dummy; self.compound_dummy_is_value = old_dummy_is_value;
+		self.compound_assign_dummy = old_dummy;
+	}
+	self.has_cached_expr = true;
+	self.cached_expr_node = operand;
+	self.cached_expr_value = operand_value;
+
+	ir::Ref slot = self.builder.add_alloc(bits / 8, bits / 8);
+	self.builder.add_store(slot, self.builder.add_atomic_load(ptr, ir::AtomicOrder.SEQ_CST, value_ty));
+	ir::Ref retry = self.builder.make_label("atomic.retry");
+	ir::Ref done = self.builder.make_label("atomic.done");
+	self.builder.add_jump(retry);
+	self.builder.start_block(retry);
+	ir::Ref current = self.builder.add_inst(ir::InstTag.LOAD, { .ref = slot }, value_ty);
+	self.has_compound_assign_dummy = true;
+	self.compound_dummy_is_value = true;
+	self.compound_assign_dummy = current;
+	ir::Ref updated = self.gen_expr(bin.rhs)!;
+	ir::Ref swapped = self.atomic_intrinsic_call("cmpxchg", bits, { ptr, slot, updated }, value_interner::REF_I1);
+	self.add_branch(swapped, done, retry)!;
+	self.builder.start_block(done);
+	return updated;
+}
+
+<* Store an assigned scalar: a seq_cst atomic store for an `_Atomic` object
+   (C11 7.17.1p6; integer/pointer compound assignment is gen_atomic_compound_assign),
+   otherwise an ordinary (possibly volatile) store. *>
+fn void CodeGen.store_assigned(&self, ir::Ref ptr, ir::Ref value, type_store::QualType lhs_qt)
+{
+	if (lhs_qt.is(self.comp, type_store::TypeTag.ATOMIC))
+	{
+		self.builder.add_atomic_store(ptr, value, ir::AtomicOrder.SEQ_CST);
+		return;
+	}
+	self.builder.add_store(ptr, value, self.access_is_volatile(lhs_qt));
 }
 
 <* `signed_tag` for a signed integer `qt`, else `unsigned_tag` (pointers compare unsigned). *>
@@ -2243,6 +3203,10 @@ fn void? CodeGen.ensure_scalar_float_width(&self, type_store::QualType qt)
 	ulong bits = qt.bit_sizeof(self.comp);
 	if (bits == 32 || bits == 64) return;
 	if (bits == 80 && self.comp.target.cpu.arch == target::Arch.X86_64) return;
+	// `__float128`: arithmetic becomes libgcc calls (ir_soft_float.c3).
+	if (bits == 128 && self.comp.target.cpu.arch == target::Arch.X86_64) return;
+	// `_Float16`: computed in float through libgcc conversions (ir_soft_float.c3).
+	if (bits == 16 && self.comp.target.cpu.arch == target::Arch.X86_64) return;
 	self.fail("TODO lower non-f32/f64 floating point\n")!;
 }
 
@@ -2375,7 +3339,7 @@ fn ir::Ref? CodeGen.gen_ptr_difference(&self, ir::Ref lhs, ir::Ref rhs, type_sto
 fn void? CodeGen.gen_initializer(&self, ir::Ref ptr, type_store::QualType dest_type, type_store::NodeIndex initializer)
 {
 	tree::Node node = initializer.get(self.tree);
-	bool aggregate = dest_type.is(self.comp, type_store::TypeTag.ARRAY) || @ok(dest_type.get_record(self.comp));
+	bool aggregate = self.is_array_like(dest_type) || @ok(dest_type.get_record(self.comp));
 	switch (node.kind)
 	{
 		case ARRAY_INIT_EXPR:
@@ -2410,7 +3374,7 @@ fn void? CodeGen.gen_initializer(&self, ir::Ref ptr, type_store::QualType dest_t
 		if (self.is_record_value(dest_type) && self.is_record_value(initializer.qt(self.tree)))
 		{
 			ir::Ref source = self.gen_expr(initializer)!;
-			return self.gen_copy(ptr, source, dest_type.sizeof(self.comp));
+			return self.gen_copy_value(ptr, source, dest_type);
 		}
 		return self.fail(string::tformat("TODO CodeGen.genInitializer aggregate %s\n", node.kind.name));
 	}
@@ -2490,13 +3454,13 @@ fn void? CodeGen.gen_init_elements(&self, ir::Ref ptr, type_store::QualType qt, 
 		case PAREN_EXPR:
 			return self.gen_init_elements(ptr, qt, node.unary.operand);
 		case COMPOUND_LITERAL_EXPR:
-			if (qt.is(self.comp, type_store::TypeTag.ARRAY) || @ok(qt.get_record(self.comp)))
+			if (self.is_array_like(qt) || @ok(qt.get_record(self.comp)))
 			{
 				return self.gen_init_elements(ptr, qt, node.compound_literal.initializer);
 			}
 		case ARRAY_INIT_EXPR:
-			if (!qt.is(self.comp, type_store::TypeTag.ARRAY)) break;
-			type_store::QualType elem = qt.child_type(self.comp);
+			if (!self.is_array_like(qt)) break;
+			type_store::QualType elem = self.is_vector(qt) ? self.vector_elem(qt) : qt.child_type(self.comp);
 			ulong elem_size = self.object_size(elem);
 			ulong index = 0;
 			foreach (item : node.container_init.items)
@@ -2540,19 +3504,19 @@ fn void? CodeGen.gen_init_elements(&self, ir::Ref ptr, type_store::QualType qt, 
 		default:
 			break;
 	}
-	if (qt.is(self.comp, type_store::TypeTag.ARRAY) || @ok(qt.get_record(self.comp)))
+	if (self.is_array_like(qt) || @ok(qt.get_record(self.comp)))
 	{
 		if (self.is_record_value(qt) && self.is_record_value(initializer.qt(self.tree)))
 		{
 			ir::Ref source = self.gen_expr(initializer)!;
-			return self.gen_copy(ptr, source, qt.sizeof(self.comp));
+			return self.gen_copy_value(ptr, source, qt);
 		}
 		return self.fail(string::tformat("TODO CodeGen.genInitializer aggregate element %s\n", node.kind.name));
 	}
-	// Scalars whose value is zero are already in place.
+	// Integer and pointer zeros are already in place (not -0.0: its sign bit is set).
 	if (try val = self.tree.value_of(initializer))
 	{
-		if (!val.is_pointer(self.comp) && val.is_zero(self.comp)) return;
+		if (!val.is_pointer(self.comp) && val.is_zero(self.comp) && !qt.is_float(self.comp)) return;
 	}
 	self.builder.add_store(ptr, self.gen_expr(initializer)!);
 }
@@ -2866,6 +3830,42 @@ fn String? CodeGen.string_global(&self, type_store::NodeIndex node)
 	return name;
 }
 
+<* The internal global holding a compound literal with static storage duration
+   (file scope, or C23 `static`), emitted once per literal. *>
+fn String? CodeGen.compound_literal_global(&self, type_store::NodeIndex node)
+{
+	String existing = self.find_emitted_string(node);
+	if (existing.len != 0) return existing;
+	tree::Node literal = node.get(self.tree);
+	type_store::QualType qt = literal.compound_literal.qt;
+	if (!@ok(qt.sizeof_or_null(self.comp))) qt = literal.compound_literal.initializer.qt(self.tree);
+	ulong size = self.object_size(qt);
+	char[] data = alloc::new_array(&self.builder.arena, char, (sz)size);
+	for (usz i = 0; i < data.len; i++) data[i] = 0;
+	List{ir::DataReloc} relocations;
+	relocations.init(&self.builder.arena);
+	self.write_global_initializer(qt, literal.compound_literal.initializer, data, &relocations)!;
+	DString generated;
+	generated.init(&self.builder.arena);
+	generated.appendf(".compoundliteral.%s.%d", self.current_fn, self.string_counter);
+	self.string_counter++;
+	if (self.tu_id >= 0) generated.appendf(".tu%d", self.tu_id);
+	String name = generated.str_view();
+	ir::GlobalData global = {
+		.size = size,
+		.align = qt.alignof(self.comp),
+		.bytes = data,
+		.relocs = relocations.array_view(),
+		.section = ir::DataSection.DATA,
+		.tentative = false,
+		.own_section = false,
+		.is_volatile = self.type_contains_volatile(qt),
+	};
+	self.builder.add_global(name, ir::Linkage.INTERNAL, global);
+	self.emitted_strings.push({ .node = node, .name = name });
+	return name;
+}
+
 <* The constant value of an initializer expression: its saved value, else the
    value under parentheses and value-preserving casts (the parser saves values
    on the innermost operand only, e.g. `(void *)(long)(2)`). *>
@@ -2944,6 +3944,14 @@ fn void? CodeGen.write_initializer_at(&self, type_store::QualType qt, type_store
 			{
 				return self.write_initializer_at(qt, init_node.unary.operand, data, offset, relocs);
 			}
+		case CAST:
+			// `static struct S s = ((struct S){...});`: the aggregate rvalue reaches
+			// here through a value-preserving cast around the literal.
+			if ((init_node.cast.kind == tree::CastKind.LVAL_TO_RVAL || init_node.cast.kind == tree::CastKind.NO_OP) &&
+				(qt.is(self.comp, type_store::TypeTag.ARRAY) || @ok(qt.get_record(self.comp))))
+			{
+				return self.write_initializer_at(qt, init_node.cast.operand, data, offset, relocs);
+			}
 		case COMPOUND_LITERAL_EXPR:
 			// `(struct S){...}` at file scope: its initializer list is the value.
 			if (!qt.is_pointer(self.comp))
@@ -2993,6 +4001,25 @@ fn void? CodeGen.write_initializer_at(&self, type_store::QualType qt, type_store
 	return self.write_scalar_initializer(qt, initializer, data[(usz)offset:(usz)size], offset, relocs);
 }
 
+<* Bit `b` of `v` in two's complement, for bit-fields wider than one limb
+   (`__int128 y : 66`). Negative: ~|v| + 1, the carry reaching limb b/64 only
+   while every lower limb of |v| is zero. *>
+fn bool twos_complement_bit(bigint::BigIntConst v, uint b)
+{
+	usz index = b / bigint::LIMB_BITS;
+	bigint::Limb limb = index < v.limbs.len ? v.limbs[index] : 0;
+	if (!v.positive)
+	{
+		bool carry = true;
+		for (usz i = 0; i < index && i < v.limbs.len; i++)
+		{
+			if (v.limbs[i] != 0) { carry = false; break; }
+		}
+		limb = ~limb + (carry ? 1UL : 0UL);
+	}
+	return (limb >> (b % bigint::LIMB_BITS)) & 1 != 0;
+}
+
 <* One record member: a byte-aligned field recurses; a bitfield is merged into
    its storage bits (little-endian). *>
 fn void? CodeGen.write_field_initializer(&self, type_store::RecordField field, type_store::NodeIndex item,
@@ -3015,8 +4042,6 @@ fn void? CodeGen.write_field_initializer(&self, type_store::RecordField field, t
 	value::Value? val = self.const_init_value(item);
 	if (catch val) return self.fail("TODO CodeGen.genVar bitfield initializer\n");
 	bigint::BigIntConst integer = val.to_big_int(self.comp);
-	ulong bits = integer.limbs.len ? (ulong)integer.limbs[0] : 0;
-	if (!integer.positive) bits = ~bits + 1;
 	ulong start_bit = offset * 8 + field.layout.offset_bits;
 	for (uint b = 0; b < field.bit_width; b++)
 	{
@@ -3029,7 +4054,7 @@ fn void? CodeGen.write_field_initializer(&self, type_store::RecordField field, t
 		usz byte = (usz)(pos / 8);
 		if (byte >= data.len) break;
 		char mask = (char)(1 << (pos % 8));
-		if ((bits >> b) & 1)
+		if (twos_complement_bit(integer, b))
 		{
 			data[byte] |= mask;
 		}
@@ -3178,6 +4203,10 @@ fn void? CodeGen.write_scalar_initializer(&self, type_store::QualType qt, type_s
 				symbol = self.symbol_name(self.tree.tok_slice(target.function.name_tok), self.has_internal_linkage(target_node));
 			case STRING_LITERAL_EXPR:
 				symbol = self.string_global(target_node)!;
+			case ADDR_OF_LABEL:
+				symbol = self.static_label_address(target.addr_of_label.label_tok)!;
+			case COMPOUND_LITERAL_EXPR:
+				symbol = self.compound_literal_global(target_node)!;
 			default:
 				return self.fail("TODO CodeGen.genVar address initializer target\n");
 		}
@@ -3219,8 +4248,7 @@ fn void? CodeGen.write_scalar_initializer(&self, type_store::QualType qt, type_s
 	if (scalar == type_store::ScalarKind.FLOAT)
 	{
 		ulong bit_count = qt.bit_sizeof(self.comp);
-		if (bit_count == 128) return self.fail("TODO CodeGen.genVar long double initializer\n");
-		if (bit_count != 16 && bit_count != 32 && bit_count != 64 && bit_count != 80)
+		if (bit_count != 16 && bit_count != 32 && bit_count != 64 && bit_count != 80 && bit_count != 128)
 		{
 			return self.fail("TODO CodeGen.genVar unsupported float width\n");
 		}
@@ -3261,6 +4289,12 @@ fn ir::Ref? CodeGen.gen_type_size(&self, type_store::QualType qt)
 		return self.builder.add_constant(value::int_u64(self.object_size(qt), self.comp).ref(), value_interner::REF_I64);
 	}
 	type_store::BaseType base = qt.base(self.comp);
+	if (base.ty.tag == ARRAY && (base.ty.array.len.kind == FIXED || base.ty.array.len.kind == STATIC))
+	{
+		// A fixed number of runtime-sized elements: `char[2][n]`.
+		ir::Ref count = self.builder.add_constant(value::int_u64(base.ty.array.len.len, self.comp).ref(), value_interner::REF_I64);
+		return self.builder.add_inst(ir::InstTag.MUL, { .bin = { .lhs = count, .rhs = self.gen_type_size(base.ty.array.elem)! } }, value_interner::REF_I64);
+	}
 	if (base.ty.tag != ARRAY || base.ty.array.len.kind != VARIABLE)
 	{
 		self.fail("TODO VLAs")!;
@@ -3319,13 +4353,32 @@ fn sz CodeGen.goto_label(&self, tokens::TokenIndex tok)
 	string_interner::StringId name = self.comp.intern_string(self.tree.tok_slice(tok));
 	if (try index = self.goto_label_index.get((uint)name)) return index;
 	sz index = self.goto_labels.len();
+	// `user.<name>`: lowering gives address-taken C labels a stable symbol.
 	self.goto_labels.push(
 	{
-		.label = self.builder.make_label("label")
+		.label = self.builder.make_label(string::format(&self.builder.arena, "user.%s", self.tree.tok_slice(tok)))
 	}
 	);
 	self.goto_label_index.set((uint)name, index);
 	return index;
+}
+
+<* The data symbol for `&&label` in a static initializer of the current
+   function. The lowering names the block `.Lblockaddr.<fn>.<label>` while some
+   LABEL_ADDR takes its address; a volatile store keeps that LABEL_ADDR (and so
+   the block) alive however the optimizer treats the table. *>
+fn String? CodeGen.static_label_address(&self, tokens::TokenIndex label_tok)
+{
+	if (self.current_fn.len == 0)
+	{
+		self.fail("TODO CodeGen.genVar label address outside a function\n")!;
+		return compilation::FATAL_ERROR~;
+	}
+	sz index = self.goto_label(label_tok);
+	ir::Ref address = self.builder.add_inst(ir::InstTag.LABEL_ADDR, { .ref = self.goto_labels[index].label }, value_interner::REF_PTR);
+	ir::Ref keep = self.builder.add_alloc(8, 8, true);
+	self.builder.add_store(keep, address, true);
+	return string::format(&self.builder.arena, ".Lblockaddr.%s.%s", self.current_fn, self.tree.tok_slice(label_tok));
 }
 
 <* The first of `saves` that is not live at the target, i.e. the outermost scope the jump leaves. *>
@@ -3395,7 +4448,12 @@ fn void? CodeGen.gen_runtime_type(&self, type_store::QualType qt)
  {
   case TYPEOF:
    if (!ty.type_of.base.is_variably_modified(self.comp)) return;
-   if (ty.type_of.has_expr) self.gen_expr(ty.type_of.expr)!;
+   // A variably modified typeof operand is evaluated (for its side effects);
+   // an lvalue operand (`typeof(vla)`) is evaluated as an address.
+   if (ty.type_of.has_expr)
+   {
+    if (self.tree.is_lval(ty.type_of.expr)) { self.gen_lval(ty.type_of.expr)!; } else { self.gen_expr(ty.type_of.expr)!; }
+   }
    self.gen_runtime_type(ty.type_of.base)!;
   case POINTER: self.gen_runtime_type(ty.pointer.child)!;
   case ARRAY:

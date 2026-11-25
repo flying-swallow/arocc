@@ -17,7 +17,7 @@ int fooo(bar, baz)
 int foooo(n, bar)
     int n;
     int bar[n];
-{} // #warning@2: non-void function 'foooo' does not return a value [-Wreturn-type]
+{}
 
 int bar(int) = foo; // #error@14: illegal initializer (only variables can be initialized)
 

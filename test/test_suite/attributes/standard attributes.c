@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 // #opt: -std=c23
 #pragma GCC diagnostic ignored "-Wgnu-alignof-expression"
 

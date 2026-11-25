@@ -69,6 +69,11 @@ const String[*] INTEL_OPERATOR_WORDS = {
 	"and", "eq", "ge", "gt", "le", "lt", "mod", "ne", "not", "or", "shl", "shr", "xor",
 	"byte", "word", "dword", "fword", "qword", "mmword", "tbyte", "oword", "xmmword",
 	"ymmword", "zmmword", "ptr", "offset", "flat", "short", "near", "far",
+	// Registers GNU as knows that the lowering never uses.
+	"cs", "ds", "es", "fs", "gs", "ss", "rip", "eip", "ip", "st",
+	"mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6", "mm7",
+	"k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7",
+	"cr0", "cr2", "cr3", "cr4", "cr8", "dr0", "dr1", "dr2", "dr3", "dr6", "dr7",
 };
 
 <* Whether GNU as in Intel syntax would read `name` as an operator, size keyword or register. *>
@@ -193,9 +198,15 @@ fn void? Lowering.write_text(&self, DString* out)
 	ir::Decl* decl = self.decl;
 	out.append_string("\t.text\n");
 	write_linkage(out, decl.linkage, decl.name, decl.is_weak);
-	out.appendf("\t.p2align 4\n\t.type %s, @function\n%s:\n", asm_symbol(decl.name), asm_symbol(decl.name));
+	out.appendf("\t.p2align %d\n\t.type %s, @function\n%s:\n", log2_alignment(function_alignment(decl)),
+		asm_symbol(decl.name), asm_symbol(decl.name));
 	foreach (&line : self.lines)
 	{
+		if (line.is_raw)
+		{
+			out.appendf("%s\n", line.label);
+			continue;
+		}
 		if (line.is_label)
 		{
 			out.appendf("%s:\n", line.label);
@@ -237,6 +248,11 @@ fn String? render_asm(ir::Ir* ir, Allocator allocator, ir::ErrorList* errors, bo
 		defer lowering.lines.free();
 		lowering.scratch.init(mem, 64 * 1024);
 		defer lowering.scratch.free();
+		if (ir.global_asm.len() != 0)
+		{
+			out.append_string("\t.att_syntax prefix\n");
+			foreach (text : ir.global_asm) out.appendf("%s\n", text);
+		}
 		out.append_string("\t.intel_syntax noprefix\n");
 		foreach (&decl : ir.decls)
 		{
@@ -282,4 +298,15 @@ fn String? render_asm(ir::Ir* ir, Allocator allocator, ir::ErrorList* errors, bo
 	defer out.free();
 	if (errors.len() != 0) return ir::LOWER_FAIL~;
 	return out.copy_str(allocator);
+}
+
+<* Byte alignment of a function's code: 16, or more when `aligned` asks. *>
+fn ulong function_alignment(ir::Decl* decl) => decl.code_align > 16 ? (ulong)decl.code_align : 16;
+
+<* log2 of a power-of-two alignment. *>
+fn int log2_alignment(ulong align)
+{
+	int shift = 0;
+	while (((ulong)1 << shift) < align) shift++;
+	return shift;
 }

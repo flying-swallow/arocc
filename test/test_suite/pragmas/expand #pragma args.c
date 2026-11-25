@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 // #opt: --target=x86_64-linux-gnu
 #undef _CRT_PACKING
 #define _CRT_PACKING 16

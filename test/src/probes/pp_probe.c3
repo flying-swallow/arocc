@@ -250,8 +250,8 @@ fn void? parse_args(String[] args, Options* o, Compilation* comp, Diagnostics* d
 				o.ms_extensions.set(false);
 			case "-fdollars-in-identifiers": comp.langopts.dollars_in_identifiers = true;
 			case "-fno-dollars-in-identifiers": comp.langopts.dollars_in_identifiers = false;
-			case "-fdigraphs": comp.langopts.digraphs = ON;
-			case "-fno-digraphs": comp.langopts.digraphs = OFF;
+			case "-fdigraphs": comp.langopts.digraphs.set(true);
+			case "-fno-digraphs": comp.langopts.digraphs.set(false);
 			case "-pedantic": d.state.extensions = WARNING;
 			case "-pedantic-errors": d.state.extensions = ERROR;
 			case "-w": d.state.ignore_warnings = true;

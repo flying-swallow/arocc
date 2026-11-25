@@ -49,7 +49,6 @@ macro @with_target(String triple; @body(Compilation* comp))
 		Compilation comp;
 		comp.init(&ta);
 		comp.target = tgt(triple);
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		@body(&comp);
 		comp.free();
@@ -92,7 +91,7 @@ const GroupCount[] COUNTS = {
 	{ AMDGCN, 844, 0 },
 	{ ARM, 260, 0 },
 	{ BPF, 4, 0 },
-	{ COMMON, 1503, 2 },   // _Exit / _exit
+	{ COMMON, 1515, 2 },   // _Exit / _exit
 	{ HEXAGON, 2040, 0 },
 	{ LOONGARCH, 1517, 0 },
 	{ MIPS, 669, 0 },
@@ -134,8 +133,8 @@ fn void counts_and_collisions() @test
 		}
 		check(collisions, c.upper_collisions);
 	}
-	check(total, 13552);
-	check(common::COUNT, 1503);
+	check(total, 13564);
+	check(common::COUNT, 1515);
 	check(ve::COUNT, 1263);
 }
 

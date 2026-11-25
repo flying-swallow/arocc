@@ -165,7 +165,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 
 	self.preprocess_count++;
 	Tokenizer tokenizer;
-	tokenizer.init(src.buf, src.id, self.comp.langopts, src.splice_locs);
+	tokenizer.init(src.buf, src.id, self.comp.langopts, &self.comp.target, src.splice_locs);
 
 	// Estimate how many new tokens this source will contain.
 	self.ensure_total_token_capacity(self.tokens.len() + src.buf.len / 8);
@@ -448,6 +448,13 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 					case KEYWORD_LINE:
 						// #line number "file"
 						RawToken digits = tokenizer.next_no_ws();
+						// C 6.10.4p5: other than the digit-sequence form, the operands
+						// are macro-expanded first (`#line LINE` with `#define LINE 1000`).
+						if (digits.id != PP_NUM && digits.id != NL && digits.id != EOF)
+						{
+							self.line_directive_expanded(&tokenizer, digits, tok.start)!;
+							continue;
+						}
 						if (digits.id != PP_NUM) self.err_raw(digits, Diagnostic.LINE_SIMPLE_DIGIT)!;
 						uint new_line;
 						bool has_new_line = parse_u32_decimal(self.tok_slice(digits), &new_line);
@@ -600,7 +607,7 @@ fn String strip_quotes(String s) @local
 fn String? Preprocessor.find_include_guard(&self, Source src)
 {
 	Tokenizer tokenizer;
-	tokenizer.init(src.buf, src.id, self.comp.langopts);
+	tokenizer.init(src.buf, src.id, self.comp.langopts, &self.comp.target);
 	RawToken hash = tokenizer.next_no_ws();
 	while (hash.id == NL) hash = tokenizer.next_no_ws();
 	if (hash.id != HASH) return NO_INCLUDE_GUARD~;
@@ -823,5 +830,58 @@ fn void? Preprocessor.expect_nl(&self, Tokenizer* tokenizer)
 			sent_err = true;
 			self.err_raw(tok, Diagnostic.EXTRA_TOKENS_DIRECTIVE_END)!;
 		}
+	}
+}
+
+<* `#line` whose operands need macro expansion: expand the rest of the line, then
+   apply `digit-sequence "s-char-sequence"(opt)` from the expanded tokens. *>
+fn void? Preprocessor.line_directive_expanded(&self, Tokenizer* tokenizer, RawToken first, uint directive_start)
+{
+	Allocator gpa = self.comp.gpa;
+	ExpandBuf buf;
+	buf.init(gpa);
+	defer free_expand_buf(gpa, &buf);
+	RawToken tok = first;
+	while (true)
+	{
+		if (tok.id == EOF) break;
+		if (tok.id != WHITESPACE)
+		{
+			sz index = buf.len();
+			buf.push(tokens::from_raw(tok));
+			if (tok.id == NL) break;
+			self.expand_macro_exhaustive(tokenizer, &buf, index, index + 1, NO_PRAGMA)!;
+		}
+		tok = tokenizer.next();
+	}
+	TokenWithExpansionLocs[2] operands;
+	usz count = 0;
+	bool extra = false;
+	foreach (t : buf)
+	{
+		if (t.id == NL || t.id == WHITESPACE || t.id == MACRO_WS || t.id == PLACEMARKER) continue;
+		if (count < 2) { operands[count++] = t; } else { extra = true; }
+	}
+	// Same diagnostics as the unexpanded form: a non-number reports both the
+	// digit-sequence and the positive-integer errors and leaves the line alone.
+	if (count == 0 || operands[0].id != PP_NUM) self.err_raw(first, Diagnostic.LINE_SIMPLE_DIGIT)!;
+	uint new_line;
+	bool has_new_line = count != 0 && parse_u32_decimal(self.expanded_slice(operands[0]), &new_line);
+	if (!has_new_line) self.err_raw(first, Diagnostic.LINE_INVALID_NUMBER, "#line")!;
+	if (count == 2 && operands[1].id != STRING_LITERAL)
+	{
+		self.err_raw(first, Diagnostic.LINE_INVALID_FILENAME)!;
+		return;
+	}
+	if (!has_new_line) return;
+	if (extra) self.err_raw(first, Diagnostic.EXTRA_TOKENS_DIRECTIVE_END)!;
+	tokenizer.line = new_line;
+	if (count == 2)
+	{
+		tokenizer.source = self.comp.add_source_alias(tokenizer.source, strip_quotes(self.expanded_slice(operands[1])), USER);
+	}
+	if (self.linemarkers != NONE)
+	{
+		self.add_token({ .id = LINEMARKER, .loc = { .id = tokenizer.source, .byte_offset = directive_start, .line = tokenizer.line } })!;
 	}
 }

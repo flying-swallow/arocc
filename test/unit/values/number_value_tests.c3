@@ -34,7 +34,6 @@ macro @with_comp(String triple, Compiler emu = NO; @body(Compilation* comp))
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.target = target::parse_triple(triple, HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		comp.langopts.set_emulated_compiler(emu);
 		type_store::init_named_types(&comp);
 		@body(&comp);

@@ -242,7 +242,6 @@ fn void check_infl_target_format(Compilation* comp, parser::Parser* p, String tr
 	ulong width, primitive_value::PrimitiveType tag, uint128 raw)
 {
 	comp.target = target::parse_triple(triple, HOST)!!;
-	comp.langopts.set_target_options(&comp.target);
 	type_store::init_named_types(comp);
 	assert(type_store::LONG_DOUBLE.bit_sizeof(comp) == width);
 	builtins::Expanded infl_builtin = { .tag = common::TAG___BUILTIN_INFL,
@@ -291,7 +290,6 @@ fn void builtin_eval_nan_sign_predicates_and_constant_p_cases() @test
 		Diagnostics d; d.init_list(&ta);
 		Compilation comp; comp.init(&ta, null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		type_store::init_named_types(&comp);
 		// Parser holds Tree by value: nodes and values must go through p.tree.
 		// A separate Tree copied into p.tree would miss later add_node/set_value.
@@ -404,7 +402,6 @@ fn void check_builtin_constant_p_string_subscript(String text, long expected, bo
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		comp.langopts.standard = lang_opts::Standard.C17;
 		type_store::init_named_types(&comp);
 		Preprocessor pp;
@@ -472,7 +469,6 @@ fn void check_constant_expression_no_diagnostics(String text, long expected)
 		Compilation comp;
 		comp.init(&ta, null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		comp.langopts.set_target_options(&comp.target);
 		comp.langopts.standard = lang_opts::Standard.C17;
 		type_store::init_named_types(&comp);
 		Preprocessor pp;

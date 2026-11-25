@@ -1,6 +1,6 @@
 // IEEE constant folding for scalar floating point IR.
 module aro::backend::ir_opt;
-import aro::backend::ir, aro::primitive_value, aro::value_interner, aro::bigint, aro::frontend::c::lang_opts;
+import aro::backend::ir, aro::primitive_value, aro::value_interner, aro::bigint;
 import std::collections::list;
 
 fn bool float_fold_type(ir::Ir* graph, value_interner::InternerRef ty, primitive_value::PrimitiveType* tag)
@@ -92,7 +92,7 @@ fn ir::Ref float_fold_value(ir::Ir* graph, DeclEditor* editor, ir::Inst inst)
 	ushort int_width;
 	switch (inst.tag)
 	{
-		case FNEG: return ir::NONE;
+		case FNEG: case FABS: return ir::NONE;
 		case FADD: case FSUB: case FMUL: case FDIV:
 		case FCMP_OEQ: case FCMP_UNE: case FCMP_OLT: case FCMP_OLE: case FCMP_OGT: case FCMP_OGE:
 			if (!float_fold_type(graph, inst.ty, &result_tag))
@@ -150,20 +150,20 @@ fn ir::Ref float_fold_value(ir::Ir* graph, DeclEditor* editor, ir::Inst inst)
 				!float_fold_constant(graph, editor.insts.array_view(), inst.data.ref, result_tag, &lhs) || !lhs.is_finite()) return ir::NONE;
 			if (!const_prop_int_width(graph, inst.ty, &int_width)) return ir::NONE;
 			primitive_value::F128Bits wide = lhs.to_f128();
-			lang_opts::Signedness sign = inst.tag == ir::InstTag.FPTOSI ? lang_opts::Signedness.SIGNED : lang_opts::Signedness.UNSIGNED;
+			bigint::Signedness sign = inst.tag == ir::InstTag.FPTOSI ? bigint::Signedness.SIGNED : bigint::Signedness.UNSIGNED;
 			int unbiased = (int)primitive_value::f128_exp_field(wide) - 16383;
 			bool negative = lhs.signbit();
 			// Keep the software conversion's two-limb buffer bounded. Unsigned
 			// values in (-1, 0) truncate to zero and are valid.
-			if (unbiased > 63 || (sign == lang_opts::Signedness.UNSIGNED && negative && unbiased >= 0) ||
-				(sign == lang_opts::Signedness.SIGNED && !negative && unbiased >= 63)) return ir::NONE;
+			if (unbiased > 63 || (sign == bigint::Signedness.UNSIGNED && negative && unbiased >= 0) ||
+				(sign == bigint::Signedness.SIGNED && !negative && unbiased >= 63)) return ir::NONE;
 			bigint::Limb[2] limbs;
 			bigint::BigIntMutable converted = { .limbs = limbs[..] };
 			primitive_value::f128_to_big_int_trunc(wide, &converted);
 			bigint::BigIntConst integer = converted.to_const();
 			if (!integer.fits_in_twos_comp(sign, int_width)) return ir::NONE;
 			ulong output_bits;
-			if (sign == lang_opts::Signedness.SIGNED)
+			if (sign == bigint::Signedness.SIGNED)
 			{
 				output_bits = (ulong)integer.to_i64()!!;
 			}

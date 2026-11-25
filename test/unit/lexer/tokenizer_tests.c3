@@ -2,7 +2,7 @@
 // aro::frontend::c::identifier_tables.
 //
 // The expect_tokens cases are ported verbatim from the `test` blocks in
-// src/aro/Tokenizer.zig; "ArmLdrex versions" from src/aro/LangOpts.zig;
+// src/aro/Tokenizer.zig; "ArmLdrex versions" from src/aro/LangOpts.zig (now aro::target);
 // is_xid_start / is_xid_continue from src/aro/char_info.zig. The per-standard
 // gating, byte-range and line-accounting cases are source-derived: their
 // expected values come from reading Tokenizer.zig / LangOpts.zig (no Zig
@@ -10,6 +10,7 @@
 // ("Tokenizer fuzz test") with a deterministic PRNG and checks the same
 // progress invariant.
 module tokenizer_tests;
+import aro::target;
 import aro::frontend::c::tokenizer, aro::frontend::c::tokens, aro::frontend::c::lang_opts, aro::frontend::c::char_info, aro::source, aro::frontend::c::compilation;
 import std::io, std::core::mem::allocators;
 
@@ -31,7 +32,7 @@ fn LangOpts std_opts(Standard s)
 }
 
 <* Zig's expectTokensExtra: whitespace is skipped, and the token after the expected ones must be EOF. *>
-fn void expect_tokens_extra(String contents, TokenId[] expected, LangOpts opts)
+fn void expect_tokens_extra(String contents, TokenId[] expected, LangOpts opts, String triple = "")
 {
 	TrackingAllocator ta;
 	ta.init(mem);
@@ -39,9 +40,10 @@ fn void expect_tokens_extra(String contents, TokenId[] expected, LangOpts opts)
 	{
 		Compilation comp;
 		comp.init(&ta);
+		if (triple.len) comp.target = target::from_triple(triple)!!;
 		Source src = comp.add_source_from_buffer("path", contents)!!;
 		Tokenizer t;
-		t.init(src.buf, src.id, opts);
+		t.init(src.buf, src.id, opts, &comp.target);
 		usz i = 0;
 		while (i < expected.len)
 		{
@@ -83,7 +85,7 @@ fn void expect_ranges(String contents, Expected[] expected, LangOpts opts = lang
 	defer comp.free();
 	Source src = comp.add_source_from_buffer("path", contents)!!;
 	Tokenizer t;
-	t.init(src.buf, src.id, opts, src.splice_locs);
+	t.init(src.buf, src.id, opts, &comp.target, src.splice_locs);
 	foreach (i, e : expected)
 	{
 		Token tok = t.next();
@@ -276,9 +278,7 @@ fn void c23_keywords() @test
 fn void gcc_integer_keywords() @test
 {
 	expect_tokens("__int24", { IDENTIFIER });
-	LangOpts o = lang_opts::DEFAULT;
-	o.has_int24 = true;
-	expect_tokens_extra("__int24", { KEYWORD_INT24 }, o);
+	expect_tokens_extra("__int24", { KEYWORD_INT24 }, lang_opts::DEFAULT, "avr-freestanding-none");
 }
 
 fn void universal_character_names() @test
@@ -394,10 +394,10 @@ fn void digraphs_by_standard() @test
 	expect_tokens_extra("<: :> <% %> %:", { L_BRACKET, R_BRACKET, L_BRACE, R_BRACE, HASH }, std_opts(C11));
 	expect_tokens_extra("<: :> <% %> %:", { L_BRACKET, R_BRACKET, L_BRACE, R_BRACE, HASH }, std_opts(C23));
 	LangOpts on = std_opts(C89);
-	on.digraphs = ON;
+	on.digraphs.set(true);
 	expect_tokens_extra("<: %:%:", { L_BRACKET, HASH_HASH }, on);
 	LangOpts off = lang_opts::DEFAULT;
-	off.digraphs = OFF;
+	off.digraphs.set(false);
 	expect_tokens_extra("<: %:%:", { ANGLE_BRACKET_LEFT, COLON, PERCENT, COLON, PERCENT, COLON }, off);
 }
 
@@ -515,12 +515,12 @@ fn void next_no_ws_variants() @test
 	LangOpts o = lang_opts::DEFAULT;
 	o.preserve_comments = true;
 	Tokenizer t;
-	t.init(src.buf, src.id, o);
+	t.init(src.buf, src.id, o, &comp.target);
 	test::eq(t.next_no_ws().id, TokenId.IDENTIFIER);
 	test::eq(t.next_no_ws().id, TokenId.NL);
 	test::eq(t.next_no_ws().id, TokenId.IDENTIFIER);
 	test::eq(t.next_no_ws().id, TokenId.EOF);
-	t.init(src.buf, src.id, o);
+	t.init(src.buf, src.id, o, &comp.target);
 	test::eq(t.next_no_ws_comments().id, TokenId.IDENTIFIER);
 	test::eq(t.next_no_ws_comments().id, TokenId.COMMENT);
 	test::eq(t.next_no_ws_comments().id, TokenId.COMMENT);
@@ -622,7 +622,7 @@ fn void run_progress(char[] contents, LangOpts opts)
 	defer comp.free();
 	Source src = comp.add_source_from_buffer("fuzz.c", contents)!!;
 	Tokenizer t;
-	t.init(src.buf, src.id, opts, src.splice_locs);
+	t.init(src.buf, src.id, opts, &comp.target, src.splice_locs);
 	uint len = (uint)src.buf.len;
 	uint prev_line = 1;
 	for (usz steps = 0; ; steps++)
@@ -653,7 +653,7 @@ fn void randomized_progress() @test
 	configs[4].set_ms_extensions(true);
 	configs[4].dollars_in_identifiers = false;
 	configs[5] = std_opts(C99);
-	configs[5].digraphs = OFF;
+	configs[5].digraphs.set(false);
 	char[256] buf;
 	for (int iter = 0; iter < 3000; iter++)
 	{
@@ -687,12 +687,12 @@ fn void arm_ldrex_versions() @test
 	check((char)(ArmLdrex){ .b = true, .h = true }, 3);
 	check((char)(ArmLdrex){ .b = true, .h = true, .w = true }, 7);
 	check((char)(ArmLdrex){ .b = true, .h = true, .w = true, .d = true }, 15);
-	check((char)(ArmLdrex){ .b = true }, lang_opts::ARM_LDREX_B_INT);
-	check((char)(ArmLdrex){ .h = true }, lang_opts::ARM_LDREX_H_INT);
-	check((char)(ArmLdrex){ .w = true }, lang_opts::ARM_LDREX_W_INT);
-	check((char)(ArmLdrex){ .d = true }, lang_opts::ARM_LDREX_D_INT);
-	ArmLdrex none = lang_opts::ARM_LDREX_NONE;
-	ArmLdrex all = lang_opts::ARM_LDREX_ALL;
+	check((char)(ArmLdrex){ .b = true }, target::ARM_LDREX_B_INT);
+	check((char)(ArmLdrex){ .h = true }, target::ARM_LDREX_H_INT);
+	check((char)(ArmLdrex){ .w = true }, target::ARM_LDREX_W_INT);
+	check((char)(ArmLdrex){ .d = true }, target::ARM_LDREX_D_INT);
+	ArmLdrex none = target::ARM_LDREX_NONE;
+	ArmLdrex all = target::ARM_LDREX_ALL;
 	check((char)none, 0);
 	check((char)all, 15);
 }
@@ -714,11 +714,11 @@ fn void standards() @test
 
 	assert(Standard.C23.at_least(C11));
 	assert(!Standard.C17.at_least(DEFAULT));
-	assert(Standard.DEFAULT.is_gnu() && !Standard.DEFAULT.is_explicit_gnu());
-	assert(Standard.GNU89.is_explicit_gnu() && !Standard.C99.is_gnu());
-	test::eq(Standard.C89.std_c_version_macro(), "");
-	test::eq(Standard.DEFAULT.std_c_version_macro(), "201710L");
-	test::eq(Standard.GNU2Y.std_c_version_macro(), "202400L");
+	assert(Standard.DEFAULT.is_gnu && !Standard.DEFAULT.is_explicit_gnu());
+	assert(Standard.GNU89.is_explicit_gnu() && !Standard.C99.is_gnu);
+	test::eq(Standard.C89.version_macro, "");
+	test::eq(Standard.DEFAULT.version_macro, "201710L");
+	test::eq(Standard.GNU2Y.version_macro, "202400L");
 
 	LangOpts dflt = lang_opts::DEFAULT;
 	assert(!dflt.has_char8_t());
@@ -846,7 +846,7 @@ fn void token_id_properties_are_consistent() @test
 	}
 	test::eq((long)tokens::precedence(TokenId.ASTERISK), (long)tokens::Precedence.MULTIPLICATIVE);
 	test::eq((long)tokens::precedence(TokenId.SEMICOLON), (long)tokens::Precedence.INVALID);
-	lang_opts::LangOpts off = { .digraphs = OFF };
-	lang_opts::LangOpts on = { .digraphs = ON };
+	lang_opts::LangOpts off = { .digraphs = { .value = false, .has_value = true } };
+	lang_opts::LangOpts on = { .digraphs = { .value = true, .has_value = true } };
 	assert(TokenId.HASH_HASH.allows_digraphs(on) && !TokenId.HASH_HASH.allows_digraphs(off) && !TokenId.PLUS.allows_digraphs(on));
 }

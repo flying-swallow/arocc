@@ -32,7 +32,6 @@ fn void AssemblyFixture.init(&self)
 	self.diagnostics.init_list(&self.ta);
 	self.comp.init(&self.ta, null, &self.diagnostics);
 	self.comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-	self.comp.langopts.set_target_options(&self.comp.target);
 	type_store::init_named_types(&self.comp);
 
 	DString text;

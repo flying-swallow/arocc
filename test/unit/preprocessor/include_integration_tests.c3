@@ -851,7 +851,7 @@ fn void include_resume_uses_next_token_end_and_line() @test
 		pp.preprocess(main)!!;
 
 		Tokenizer source_tokens;
-		source_tokens.init(main.buf, main.id, comp.langopts);
+		source_tokens.init(main.buf, main.id, comp.langopts, &comp.target);
 		Token after_directive;
 		while (true)
 		{

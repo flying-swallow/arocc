@@ -42,7 +42,7 @@ fn String translate(Invocation c, Options* opts, List{String}* cmd, List{String}
  bool cc1 = words[i] == "%clang_cc1";
  i++;
  cmd.push(opts.aro); cmd.push("-fno-color-diagnostics"); cmd.push("-fsyntax-only");
- if (cc1) cmd.push("-nostdinc");
+ if (cc1) cmd.push("-nostdlibinc");
  bool source = false;
  for (; i < words.len; i++)
  {
@@ -79,9 +79,32 @@ fn String translate(Invocation c, Options* opts, List{String}* cmd, List{String}
 fn String expectations(String text, String[] prefixes, List{Expected}* expected, bool* no_diags)
 {
  long line_num = 0;
+ // clang -verify anchors a directive at the start of its comment: a `//` comment
+ // continued with a trailing backslash, or a `/* */` comment spanning lines.
+ long comment_line = 0;
+ bool line_comment_continues = false;
+ bool in_block_comment = false;
  foreach (line : aro_harness::split_lines(heap(), text))
  {
   line_num++;
+  long anchor = (line_comment_continues || in_block_comment) ? comment_line : line_num;
+  bool starts_in_comment = line_comment_continues || in_block_comment;
+  line_comment_continues = false;
+  for (sz k = 0; k < line.len; k++)
+  {
+   if (in_block_comment)
+   {
+    if (line[k] == '*' && k + 1 < line.len && line[k + 1] == '/') { in_block_comment = false; k++; }
+    continue;
+   }
+   if (starts_in_comment && k == 0 && anchor != line_num) { line_comment_continues = line.trim_right().ends_with("\\"); break; }
+   if (line[k] == '/' && k + 1 < line.len && line[k + 1] == '/')
+   {
+    if (line.trim_right().ends_with("\\")) { line_comment_continues = true; comment_line = anchor; }
+    break;
+   }
+   if (line[k] == '/' && k + 1 < line.len && line[k + 1] == '*') { in_block_comment = true; comment_line = line_num; k++; }
+  }
   foreach (prefix : prefixes)
   {
    if (line.contains(string::format(heap(), "%s-no-diagnostics", prefix))) *no_diags = true;
@@ -93,7 +116,7 @@ fn String expectations(String text, String[] prefixes, List{Expected}* expected,
     {
      sz? found = rest.index_of(marker); if (catch found) break;
      rest = rest[found + marker.len..];
-     long target = line_num;
+     long target = anchor;
      if (rest.starts_with("-re")) rest = rest[3..];
      if (rest.starts_with("@"))
      {
@@ -185,6 +208,8 @@ fn Object* execute(Invocation c, Options* opts)
    if (pieces.len < 5 || !digits(pieces[1]) || !digits(pieces[2])) continue;
    String sev = strip(pieces[3]); if (sev == "fatal error") sev = "error";
    if (sev != "error" && sev != "warning" && sev != "note") continue;
+   // Macro-backtrace notes are part of the diagnostic rendering, not separate diagnostics -verify sees.
+   if (sev == "note" && strip(string::tjoin(pieces[4..], ":")).starts_with("expanded from")) continue;
    if (pieces[0] != c.path && pieces[0] != aro_harness::basename_of(c.path)) { ok = false; continue; }
    actual.push({ pieces[1].to_long() ?? -1, sev });
   }

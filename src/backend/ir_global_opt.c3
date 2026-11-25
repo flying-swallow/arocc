@@ -173,22 +173,26 @@ fn bool global_opt(ir::Ir* graph, OptOptions opts,
 					ir::Inst* inst = &decl.instructions[(sz)ref];
 					@each_value_operand(inst; ir::Ref* slot)
 					{
-						if ((usz)*slot >= inst_count) continue;
-						uint target = global_opt_origin(decl.instructions, origins, *slot);
-						if (target == GLOBAL_OPT_NO_ORIGIN) continue;
-						bool allowed = false;
-						switch (inst.tag)
+						// No `continue` in this trailing-body macro: it would leave the
+						// `foreach (ref ...)` iteration and skip the remaining operands
+						// (e.g. the stored value of `store %slot, @g`, missing the escape).
+						uint target = (usz)*slot < inst_count ? global_opt_origin(decl.instructions, origins, *slot) : GLOBAL_OPT_NO_ORIGIN;
+						if (target != GLOBAL_OPT_NO_ORIGIN)
 						{
-							case LOAD: allowed = slot == &inst.data.ref;
-							case STORE: allowed = slot == &inst.data.bin.lhs && inst.data.bin.rhs != *slot;
-							case ADD: allowed = slot == &inst.data.bin.lhs && inst.ty == value_interner::REF_PTR && inst.data.bin.rhs != *slot;
-							default: break;
+							bool allowed = false;
+							switch (inst.tag)
+							{
+								case LOAD: allowed = slot == &inst.data.ref;
+								case STORE: allowed = slot == &inst.data.bin.lhs && inst.data.bin.rhs != *slot;
+								case ADD: allowed = slot == &inst.data.bin.lhs && inst.ty == value_interner::REF_PTR && inst.data.bin.rhs != *slot;
+								default: break;
+							}
+							// A volatile access may observe or change the object outside
+							// the program's view, like an escape.
+							if (!allowed || inst.is_volatile_access()) { facts[(sz)target].escaped = true; }
+							else if (inst.tag == ir::InstTag.LOAD) { facts[(sz)target].read = true; }
+							else if (inst.tag == ir::InstTag.STORE) { facts[(sz)target].written = true; }
 						}
-						// A volatile access may observe or change the object outside
-						// the program's view, like an escape.
-						if (!allowed || inst.is_volatile_access()) { facts[(sz)target].escaped = true; }
-						else if (inst.tag == ir::InstTag.LOAD) { facts[(sz)target].read = true; }
-						else if (inst.tag == ir::InstTag.STORE) { facts[(sz)target].written = true; }
 					};
 				}
 			};

@@ -1,4 +1,3 @@
-// #skip: diagnostics differ (aro_c3 gap)
 // #opt: -fexperimental-bounds-safety
 // #todo: TODO: reimplement bounds safety attributes
 // #note: ptrcheck.h:11:33: expanded from here

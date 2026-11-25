@@ -1,4 +1,3 @@
-// #skip: stdout differs (aro_c3 gap)
 // #opt: --target=x86_64-linux
 void foo(void) {
     __float80 x = 1.0w;

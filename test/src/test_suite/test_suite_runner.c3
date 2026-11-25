@@ -26,11 +26,14 @@
 // Removing directives keeps the compiled source byte-identical to the case's
 // code, so line, column and comment-preserving output are not disturbed.
 // Diagnostics are matched as a set: each one must match a distinct
-// expectation and every expectation must be matched.
+// expectation and every expectation must be matched. Expectations with a column
+// are tried first, then column-less ones on the line, then header ones. A case
+// that expects an error must also see a nonzero compiler exit (unless `#exit`).
+// Every child process is killed after CHILD_TIMEOUT_MS on POSIX hosts.
 module test_suite_runner;
 import std::io, std::io::path, std::io::file, std::collections::list, std::sort;
 import std::atomic, std::thread, std::os::env, std::time;
-import aro_runner;
+import aro_runner, aro_harness;
 
 // ---------------------------------------------------------------------------
 // Case model
@@ -485,10 +488,24 @@ fn bool parse_diag(String line, Diag* out)
 	return true;
 }
 
-fn bool find_and_mark(CaseSpec* spec, Diag* d)
+<*
+ Matching pass: EXACT_COLUMN takes only `@col` line expectations, ANY_COLUMN
+ only column-less ones, ANYWHERE the header (`line == 0`) expectations. Running
+ the passes over all diagnostics in order keeps a column-less expectation from
+ absorbing a diagnostic a more specific one on the same line needs.
+*>
+enum MatchPass
 {
-	if (d.line)
+	EXACT_COLUMN,
+	ANY_COLUMN,
+	ANYWHERE,
+}
+
+fn bool find_and_mark(CaseSpec* spec, Diag* d, MatchPass pass)
+{
+	if (pass != ANYWHERE)
 	{
+		if (!d.line) return false;
 		String base = aro_runner::basename(d.file);
 		foreach (f : spec.files)
 		{
@@ -496,12 +513,13 @@ fn bool find_and_mark(CaseSpec* spec, Diag* d)
 			foreach (&e : f.diags)
 			{
 				if (e.found || e.line != d.line || e.kind != d.kind) continue;
-				if (e.col && e.col != d.col) continue;
+				if (pass == EXACT_COLUMN ? e.col != d.col : e.col != 0) continue;
 				if (!d.msg.contains(e.text)) continue;
 				e.found = true;
 				return true;
 			}
 		}
+		return false;
 	}
 	String full = d.loc.len ? string::tformat("%s: %s", d.loc, d.msg) : d.msg;
 	foreach (&e : spec.anywhere)
@@ -523,14 +541,31 @@ fn void print_list(DString* out, String title, List{String}* items)
 <* Checks stderr against the case's expectations; failures are written to `out`. *>
 fn bool check_diagnostics(CaseSpec* spec, String stderr, DString* out)
 {
-	List{String} unexpected;
-	unexpected.tinit();
+	List{Diag} diags;
+	diags.tinit();
 	foreach (line : aro_runner::tokenize_scalar(tmem, stderr, '\n'))
 	{
 		Diag d;
 		if (!parse_diag(line, &d)) continue;
 		if (d.text == "note: --sysroot may be required when cross-compiling to Darwin targets") continue;
-		if (!find_and_mark(spec, &d)) unexpected.push(string::tformat(" - %s", d.text));
+		diags.push(d);
+	}
+	List{bool} matched;
+	matched.tinit();
+	foreach (d : diags) matched.push(false);
+	MatchPass[3] passes = { EXACT_COLUMN, ANY_COLUMN, ANYWHERE };
+	foreach (pass : passes)
+	{
+		foreach (i, &d : diags)
+		{
+			if (!matched[i] && find_and_mark(spec, d, pass)) matched[i] = true;
+		}
+	}
+	List{String} unexpected;
+	unexpected.tinit();
+	foreach (i, d : diags)
+	{
+		if (!matched[i]) unexpected.push(string::tformat(" - %s", d.text));
 	}
 	List{String} missed;
 	missed.tinit();
@@ -656,6 +691,37 @@ enum TestResult
 
 fn String[] child_env(CaseSpec* spec) => aro_runner::child_environment(tmem, spec.env.array_view());
 
+<* Per child process (compiler, extra unit, link, `run` program). *>
+const long CHILD_TIMEOUT_MS = 120_000;
+
+struct CaseChild
+{
+	inline ChildResult result;
+	bool timed_out;
+}
+
+<* Runs one child with CHILD_TIMEOUT_MS on POSIX (killing its process group). *>
+fn CaseChild run_case_child(String[] argv, String cwd, String[] environment)
+{
+	$if env::POSIX:
+		RunResult r = aro_harness::run(tmem, argv, { .cwd = cwd, .env = environment, .timeout_ms = CHILD_TIMEOUT_MS });
+		return {
+			.result = { .spawned = r.spawned, .exited = r.exited && !r.timed_out, .exit_code = r.exit_code,
+				.signal = r.signal, .stdout = r.stdout, .stderr = r.stderr, .max_rss_kib = -1 },
+			.timed_out = r.timed_out,
+		};
+	$else
+		return { .result = aro_runner::run_child(tmem, argv, cwd, environment) };
+	$endif
+}
+
+fn bool report_timeout(CaseChild* c, String what, DString* out)
+{
+	if (!c.timed_out) return false;
+	out.appendf("FAILED - %s timed out after %ds\n", what, CHILD_TIMEOUT_MS / 1000);
+	return true;
+}
+
 fn TestResult test_file(String file_path, String test_dir, DString* out)
 {
 	char[]? bytes = file::load_temp(file_path);
@@ -708,8 +774,9 @@ fn TestResult test_file(String file_path, String test_dir, DString* out)
 	cmd.push_all(spec.opts.array_view());
 
 	if (context.should_quit.load()) return FAILED;
-	ChildResult r = aro_runner::run_child(tmem, cmd.array_view(), test_dir, child_env(&spec));
+	CaseChild r = run_case_child(cmd.array_view(), test_dir, child_env(&spec));
 	String command = string::join(tmem, cmd.array_view(), " ");
+	if (report_timeout(&r, string::tformat("compiler (%s)", command), out)) return FAILED;
 	if (!r.spawned)
 	{
 		out.appendf("FAILED - unable to spawn: %s\n", command);
@@ -762,8 +829,9 @@ fn TestResult test_file(String file_path, String test_dir, DString* out)
 			unit_cmd.push_all(context.extra_flags);
 			unit_cmd.push_all({ context.opt_level, "-c", f.name, "-o", unit_object });
 			unit_cmd.push_all(spec.opts.array_view());
-			ChildResult unit = aro_runner::run_child(tmem, unit_cmd.array_view(), test_dir, child_env(&spec));
+			CaseChild unit = run_case_child(unit_cmd.array_view(), test_dir, child_env(&spec));
 			link_cmd.push(unit_object);
+			if (report_timeout(&unit, "extra unit", out)) return FAILED;
 			if (!unit.spawned || !unit.exited || unit.exit_code != 0 || unit.stderr.len)
 			{
 				out.appendf("FAILED - extra unit failed: %s\n", string::join(tmem, unit_cmd.array_view(), " "));
@@ -774,14 +842,16 @@ fn TestResult test_file(String file_path, String test_dir, DString* out)
 		String exe_name = string::tformat("%s.exe", main_name);
 		defer (void)file::delete(aro_runner::join_path(tmem, test_dir, exe_name));
 		link_cmd.push_all({ "-o", exe_name });
-		ChildResult link = aro_runner::run_child(tmem, link_cmd.array_view(), test_dir, child_env(&spec));
+		CaseChild link = run_case_child(link_cmd.array_view(), test_dir, child_env(&spec));
+		if (report_timeout(&link, "link", out)) return FAILED;
 		if (!link.spawned || !link.exited || link.exit_code != 0)
 		{
 			out.appendf("FAILED - link failed:\n");
 			aro_runner::append_escaped(out, link.stderr);
 			return FAILED;
 		}
-		ChildResult prog = aro_runner::run_child(tmem, { aro_runner::join_path(tmem, test_dir, exe_name) }, test_dir, child_env(&spec));
+		CaseChild prog = run_case_child({ aro_runner::join_path(tmem, test_dir, exe_name) }, test_dir, child_env(&spec));
+		if (report_timeout(&prog, "program", out)) return FAILED;
 		int status = !prog.spawned ? 127 : prog.exited ? prog.exit_code : 128 + prog.signal;
 		if (status != spec.exit_code)
 		{
@@ -812,6 +882,11 @@ fn TestResult test_file(String file_path, String test_dir, DString* out)
 	else if (r.exit_code != 0 && spec.kind != SYNTAX_IGNORE_ERRORS && !spec.expects_errors())
 	{
 		out.appendf("FAILED - compiler exited with %d but no errors were expected: %s\n", r.exit_code, command);
+		return FAILED;
+	}
+	else if (r.exit_code == 0 && spec.kind != SYNTAX_IGNORE_ERRORS && spec.expects_errors())
+	{
+		out.appendf("FAILED - compiler reported the expected errors but exited with 0: %s\n", command);
 		return FAILED;
 	}
 

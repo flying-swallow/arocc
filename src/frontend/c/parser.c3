@@ -3,7 +3,7 @@
 // `DeclarationParser`; this module owns token/tree context, recovery,
 // diagnostics and teardown.
 module aro::frontend::c::parser;
-import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::pragma, aro::frontend::c::parser_result, aro::frontend::c::attribute, aro::frontend::c::parser_declaration;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interner, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::pragma, aro::frontend::c::parser_result, aro::frontend::c::attribute, aro::frontend::c::attribute_map, aro::frontend::c::parser_declaration;
 import std::collections::list, std::collections::map, std::core::dstring, std::io;
 
 excuse PARSING_FAILED;
@@ -134,8 +134,6 @@ struct Parser (IQueryable)
 	parser_declaration::DeclarationParser declarations;
 	IParserTestProbe test_probe @feat(TESTING);
 	IAddressOfLabel address_of_label;
-	<* Test-only replacement for the initializer's element productions. *>
-	IExpressionGrammar initializer_test_probe @feat(TESTING);
 	tokens::TokenIndex tok_i;
 	tokens::TokenIndex tok_end;
 	bool extension_suppressed;
@@ -149,9 +147,21 @@ struct Parser (IQueryable)
 	<* Zig `maybe_unused_decl`: pending local declarations keyed by `(uint)NodeIndex`;
 	   value is true once the declaration is used. Owned; released by `Parser.free`. *>
 	HashMap{uint, bool} maybe_unused_decl;
+	<* Enumerator ENUM_FIELD node -> its enum declaration node (both `(uint)NodeIndex`), for
+	   reporting uses of enumerators of a deprecated enum. Owned; released by `Parser.free`. *>
+	HashMap{uint, uint} enumerator_enum;
 	<* Insertion order of `maybe_unused_decl` keys, so reports follow declaration order
 	   (Zig's array hash map iterates in insertion order; C3 `HashMap` does not). *>
 	List{type_store::NodeIndex} maybe_unused_order;
+	<* Deprecated-declaration uses seen inside a declaration whose declarators are not
+	   yet known to be deprecated themselves (clang delays them the same way); see
+	   `begin_deprecation_deferral`. Owned; released with `maybe_unused_order`. *>
+	List{DeferredDeprecation} deferred_deprecations;
+	<* Nesting depth of declarations deferring deprecation warnings. *>
+	uint deprecation_defer_depth;
+	<* Non-zero inside a deprecated declarator, its initializer or its function body:
+	   uses of deprecated declarations are not reported there. *>
+	uint deprecated_context;
 	<* Name index over file-scope FUNCTION/VARIABLE entries of `tree.root_decls`, filled
 	   lazily by `DeclarationParser.index_file_scope_decls`. Entries with the same name form
 	   a chain through `FileScopeDeclEntry.prev`; `file_scope_decl_head` maps a StringId to
@@ -217,12 +227,6 @@ fn void Parser.pop_scope(&self)
 fn void Parser.define_symbol(&self, symbol_stack::Symbol symbol)
 {
 	self.symbols.define(symbol);
-}
-
-<* Substitute the initializer's element productions (tests only). *>
-fn void Parser.set_initializer_test_probe(&self, IExpressionGrammar grammar) @feat(TESTING)
-{
-	self.initializer_test_probe = grammar;
 }
 
 fn parser_result::Result? Parser.parse_initializer(&self, type_store::QualType target, bool eval = true)
@@ -321,7 +325,9 @@ fn void Parser.init(&self, preprocessor::Preprocessor* pp)
 	self.symbols.init(pp.comp.gpa);
 	self.symbols.push_scope();
 	self.maybe_unused_decl.init(pp.comp.gpa);
+	self.enumerator_enum.init(pp.comp.gpa);
 	self.maybe_unused_order.init(pp.comp.gpa);
+	self.deferred_deprecations.init(pp.comp.gpa);
 	self.file_scope_decls.init(pp.comp.gpa);
 	self.file_scope_decl_head.init(pp.comp.gpa);
 	// The implicit-typedef callback may append generated tokens and grow the
@@ -867,7 +873,9 @@ fn Tree? Parser.parse(&self)
 	// unused-local tracking on every success and error return. The returned
 	// Tree has independent ownership and remains with the caller.
 	defer self.maybe_unused_decl.free();
+	defer self.enumerator_enum.free();
 	defer self.maybe_unused_order.free();
+	defer self.deferred_deprecations.free();
 	defer self.file_scope_decls.free();
 	defer self.file_scope_decl_head.free();
 	self.comp.pragmas.before_parse(self.comp);
@@ -989,6 +997,142 @@ fn void? Parser.add_maybe_unused(&self, type_store::NodeIndex decl_node)
 	self.maybe_unused_order.push(decl_node);
 }
 
+<*
+ Zig `checkDeprecatedUnavailable`: report a use at `usage_tok` of a declaration
+ marked `unavailable` (error, then PARSING_FAILED) or `deprecated` (warning,
+ optional replacement note), each followed by a note at the attribute.
+*>
+fn void? Parser.check_deprecated_unavailable(&self, type_store::NodeOptIndex node, tokens::TokenIndex usage_tok,
+	bool name_from_usage = false)
+{
+	if (!@ok(node.unpack())) return;
+	attribute_map::AttributeMap* am = &self.tree.attr_map;
+	if (try attr = am.get_attribute(node, attribute::AttributeTag.UNAVAILABLE))
+	{
+		attribute::ArgsOptMsg u = attr.args.unavailable;
+		self.err_deprecated(usage_tok, self.used_name(node, usage_tok, name_from_usage), true, u.has_msg, u.msg)!;
+		Diagnostic.UNAVAILABLE_NOTE.@emit(self, attr.tok, self.decl_name(node))!;
+		return PARSING_FAILED~;
+	}
+	if (!am.has_attribute(node, attribute::AttributeTag.DEPRECATED)) return;
+	if (self.deprecated_context > 0) return;
+	if (self.deprecation_defer_depth > 0)
+	{
+		self.deferred_deprecations.push({ node, usage_tok, name_from_usage, false });
+		return;
+	}
+	return self.report_deprecated(node, usage_tok, name_from_usage);
+}
+
+<* An enumerator without its own deprecated/unavailable attribute reports its enum's, under the enumerator's name. *>
+fn void? Parser.check_enumerator_parent_deprecated(&self, symbol_stack::Symbol symbol, tokens::TokenIndex usage_tok)
+{
+	type_store::NodeOptIndex own = (type_store::NodeOptIndex)symbol.node;
+	if (self.tree.attr_map.has_attribute(own, attribute::AttributeTag.DEPRECATED) ||
+		self.tree.attr_map.has_attribute(own, attribute::AttributeTag.UNAVAILABLE)) return;
+	uint? parent = self.enumerator_enum.get((uint)symbol.node);
+	if (catch parent) return;
+	return self.check_deprecated_unavailable((type_store::NodeOptIndex)parent, usage_tok, name_from_usage: true);
+}
+
+fn String Parser.decl_name(&self, type_store::NodeOptIndex node) @local
+{
+	return self.tree.tok_slice(node.unwrap().tok(&self.tree));
+}
+
+fn String Parser.used_name(&self, type_store::NodeOptIndex node, tokens::TokenIndex usage_tok, bool name_from_usage) @local
+{
+	return name_from_usage ? self.tree.tok_slice(usage_tok) : self.decl_name(node);
+}
+
+fn void? Parser.report_deprecated(&self, type_store::NodeOptIndex node, tokens::TokenIndex usage_tok, bool name_from_usage) @local
+{
+	attribute::Attribute attr = self.tree.attr_map.get_attribute(node, attribute::AttributeTag.DEPRECATED)!!;
+	attribute::ArgsDeprecated d = attr.args.deprecated;
+	self.err_deprecated(usage_tok, self.used_name(node, usage_tok, name_from_usage), false, d.has_msg, d.msg)!;
+	if (d.has_replacement) Diagnostic.DEPRECATED_ALTERNATIVE.@emit(self, usage_tok, d.replacement)!;
+	Diagnostic.DEPRECATED_NOTE.@emit(self, attr.tok, self.decl_name(node))!;
+}
+
+<*
+ Start deferring deprecation warnings for one declaration (clang's delayed
+ diagnostics): uses in its specifiers and declarators are held until each
+ declarator shows whether it is itself deprecated. Returns the mark that
+ `flush_deprecations` / `drop_deprecations` take.
+*>
+fn usz Parser.begin_deprecation_deferral(&self)
+{
+	self.deprecation_defer_depth++;
+	return (usz)self.deferred_deprecations.len();
+}
+
+<* End the deferral begun at `mark`; held uses are reported when `flush`, else dropped. *>
+fn void? Parser.end_deprecation_deferral(&self, usz mark, bool flush)
+{
+	self.deprecation_defer_depth--;
+	if (flush) return self.flush_deprecations(mark);
+	// Every declarator was deprecated: forget the specifiers' uses, but keep the
+	// ones nested declarations (members) already settled for the enclosing one.
+	usz keep = mark;
+	for (usz i = mark; i < (usz)self.deferred_deprecations.len(); i++)
+	{
+		DeferredDeprecation d = self.deferred_deprecations[(sz)i];
+		if (d.committed) self.deferred_deprecations[(sz)keep++] = d;
+	}
+	self.drop_deprecations(keep);
+}
+
+<* Report the uses held since `mark`. An enclosing declaration keeps holding them. *>
+fn void? Parser.flush_deprecations(&self, usz mark)
+{
+	if (self.deprecation_defer_depth > 1)
+	{
+		// Settled here; the enclosing declaration reports or drops them.
+		for (usz i = mark; i < (usz)self.deferred_deprecations.len(); i++) self.deferred_deprecations[(sz)i].committed = true;
+		return;
+	}
+	defer self.drop_deprecations(mark);
+	for (usz i = mark; i < (usz)self.deferred_deprecations.len(); i++)
+	{
+		DeferredDeprecation d = self.deferred_deprecations[(sz)i];
+		self.report_deprecated(d.node, d.usage_tok, d.name_from_usage)!;
+	}
+}
+
+<* Forget the uses held since `mark` (a deprecated declarator). *>
+fn void Parser.drop_deprecations(&self, usz mark)
+{
+	while ((usz)self.deferred_deprecations.len() > mark) self.deferred_deprecations.pop()!!;
+}
+
+struct DeferredDeprecation
+{
+	type_store::NodeOptIndex node;
+	tokens::TokenIndex usage_tok;
+	bool name_from_usage;
+	<* Settled by a nested declaration; survives its enclosing declaration's specifier drop. *>
+	bool committed;
+}
+
+<* Zig `errDeprecated`: "'name' is deprecated[: msg]" / "'name' is unavailable[: msg]". *>
+fn void? Parser.err_deprecated(&self, tokens::TokenIndex tok, String name, bool unavailable, bool has_msg, String msg) @local
+{
+	@pool()
+	{
+		DString escaped = dstring::temp();
+		if (has_msg) parser_result::append_escaped(&escaped, msg)!;
+		String colon = has_msg ? ": " : "";
+		if (unavailable)
+		{
+			Diagnostic.UNAVAILABLE.@emit(self, tok, name, colon, escaped.str_view())!;
+		}
+		else
+		{
+			Diagnostic.DEPRECATED_DECLARATIONS.@emit(self, tok, name, colon, escaped.str_view())!;
+		}
+	};
+}
+
 <* Zig `markUsed`: clear the pending report for `decl_node`. Untracked nodes are ignored. *>
 fn void Parser.mark_used(&self, type_store::NodeIndex decl_node)
 {
@@ -1034,7 +1178,9 @@ fn void Parser.free(&self)
 {
 	self.tree.free();
 	self.maybe_unused_decl.free();
+	self.enumerator_enum.free();
 	self.maybe_unused_order.free();
+	self.deferred_deprecations.free();
 	self.file_scope_decls.free();
 	self.file_scope_decl_head.free();
 	// Drop every active scope (including the outer one from init) before freeing storage.

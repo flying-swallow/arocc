@@ -128,7 +128,7 @@ int source_counter;
 fn void lex_range(Compilation* comp, Source src, uint from, uint to, ExpandBuf* out)
 {
 	Tokenizer t;
-	t.init(src.buf, src.id, comp.langopts);
+	t.init(src.buf, src.id, comp.langopts, &comp.target);
 	while (true)
 	{
 		Token raw = t.next();

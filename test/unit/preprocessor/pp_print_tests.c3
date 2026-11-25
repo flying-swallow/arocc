@@ -41,7 +41,7 @@ fn Source add_src(Compilation* comp, String path, String text) => comp.add_sourc
 fn void push_all(Preprocessor* pp, Source src, bool skip_ws = false)
 {
 	Tokenizer tz;
-	tz.init(src.buf, src.id, pp.comp.langopts);
+	tz.init(src.buf, src.id, pp.comp.langopts, &pp.comp.target);
 	while (true)
 	{
 		Token t = tz.next();
@@ -196,7 +196,7 @@ fn void pragma_line() @test
 	{
 		Source s = add_src(comp, "p.c", "#pragma foo  bar(1)\nx\n");
 		Tokenizer tz;
-		tz.init(s.buf, s.id, comp.langopts);
+		tz.init(s.buf, s.id, comp.langopts, &comp.target);
 		tz.next(); // '#'
 		Token t;
 		while ((t = tz.next()).id != EOF)
@@ -219,7 +219,7 @@ fn void registered_pragma_can_be_dropped() @test
 		assert(added);
 		Source s = add_src(comp, "p.c", "#pragma foo\nx\n");
 		Tokenizer tz;
-		tz.init(s.buf, s.id, comp.langopts);
+		tz.init(s.buf, s.id, comp.langopts, &comp.target);
 		tz.next(); // '#', absent from preprocessor token lists
 		Token t;
 		while ((t = tz.next()).id != EOF)

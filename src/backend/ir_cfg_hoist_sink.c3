@@ -64,6 +64,7 @@ fn bool cfg_hoist_identical_leading(ir::Ir* graph, ir::Decl* decl, Cfg* cfg, Fun
 				// reference is replaced by it, and both arm placements are removed.
 				editor.insert_body(branch_pos, tr);
 				editor_replace_all_uses(&editor, er, tr);
+				if (!ei.nsw) editor.insts.entries[(sz)tr].nsw = false;
 				bool[] remove = alloc::new_array(mem, bool, decl.instructions.len);
 				remove[..] = false;
 				remove[(sz)er] = true;
@@ -169,7 +170,9 @@ fn bool cfg_sink_join_expression(ir::Ir* graph, ir::Decl* decl, Cfg* cfg, Functi
 			if (!unary && tk.b != fk.b) { merged_b = ir::NONE; }
 			DeclEditor editor;
 			editor.begin(decl);
-			if (merged_a == ir::NONE || merged_b == ir::NONE)
+			// A unary expression has no rhs (tk.b is NONE): only a differing
+			// operand needs a PHI (csmith seed 307 indexed instructions[NONE]).
+			if (differing != 0)
 			{
 				ir::PhiInput[] inputs = alloc::new_array(&decl.arena, ir::PhiInput, 2);
 				inputs[0] = { .label = tb.label, .value = tk.a };
@@ -187,6 +190,7 @@ fn bool cfg_sink_join_expression(ir::Ir* graph, ir::Decl* decl, Cfg* cfg, Functi
 				if (tk.a != fk.a) { merged_a = operand_phi; } else { merged_b = operand_phi; }
 			}
 			ir::Inst moved = tii;
+			moved.nsw = tii.nsw && fii.nsw;
 			if (unary) { moved.data.ref = merged_a; } else { moved.data.bin = { .lhs = merged_a, .rhs = merged_b }; }
 			ir::Ref moved_ref = editor.append(moved);
 			sz phi_pos = join.start + 1;
