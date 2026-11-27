@@ -22,10 +22,10 @@ fn void CodeGenFixture.init(&self)
 {
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
-	self.comp.init(&self.ta, null, &self.diagnostics);
+	self.comp.init(&self.ta, compilation::native_definition(), null, &self.diagnostics);
 	// These fixtures construct SysV-specific ASTs and expected IR explicitly.
 	self.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
-	type_store::init_named_types(&self.comp);
+	type_store::init_named_types(&self.comp.type_store, &self.comp.target, &self.comp.string_interner);
 	String source_text = "answer __builtin_longjmp target ptr va_start va_end va_copy __builtin_va_start __builtin_va_end __builtin_va_copy __builtin_va_arg";
 	Source src = self.comp.add_source_from_buffer("codegen.c", source_text)!!;
 	self.tokens[0] = { .id = tokenizer::TokenId.IDENTIFIER,
@@ -221,8 +221,7 @@ fn String dump_to_string(ir::Ir* graph, Allocator allocator)
 	DString output;
 	output.init(allocator);
 	defer output.free();
-	Terminal term = { .writer = &output, .mode = diagnostics::ColorMode.NO_COLOR };
-	graph.dump(term)!!;
+	graph.dump(&output, false)!!;
 	return output.copy_str(allocator);
 }
 

@@ -39,11 +39,11 @@ fn void expect_tokens_extra(String contents, TokenId[] expected, LangOpts opts, 
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		if (triple.len) comp.target = target::from_triple(triple)!!;
 		Source src = comp.add_source_from_buffer("path", contents)!!;
 		Tokenizer t;
-		t.init(src.buf, src.id, opts, &comp.target);
+		t.init(src.storage.bytes(), src.id, opts, &comp.target);
 		usz i = 0;
 		while (i < expected.len)
 		{
@@ -81,11 +81,11 @@ struct Expected
 fn void expect_ranges(String contents, Expected[] expected, LangOpts opts = lang_opts::DEFAULT)
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	Source src = comp.add_source_from_buffer("path", contents)!!;
 	Tokenizer t;
-	t.init(src.buf, src.id, opts, &comp.target, src.splice_locs);
+	t.init(src.storage.bytes(), src.id, opts, &comp.target, src.splice_locs);
 	foreach (i, e : expected)
 	{
 		Token tok = t.next();
@@ -509,18 +509,18 @@ fn void splice_line_accounting() @test
 fn void next_no_ws_variants() @test
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	Source src = comp.add_source_from_buffer("path", "a /*c*/ //d\n b")!!;
 	LangOpts o = lang_opts::DEFAULT;
 	o.preserve_comments = true;
 	Tokenizer t;
-	t.init(src.buf, src.id, o, &comp.target);
+	t.init(src.storage.bytes(), src.id, o, &comp.target);
 	test::eq(t.next_no_ws().id, TokenId.IDENTIFIER);
 	test::eq(t.next_no_ws().id, TokenId.NL);
 	test::eq(t.next_no_ws().id, TokenId.IDENTIFIER);
 	test::eq(t.next_no_ws().id, TokenId.EOF);
-	t.init(src.buf, src.id, o, &comp.target);
+	t.init(src.storage.bytes(), src.id, o, &comp.target);
 	test::eq(t.next_no_ws_comments().id, TokenId.IDENTIFIER);
 	test::eq(t.next_no_ws_comments().id, TokenId.COMMENT);
 	test::eq(t.next_no_ws_comments().id, TokenId.COMMENT);
@@ -618,12 +618,12 @@ const char[*] INTERESTING = {
 fn void run_progress(char[] contents, LangOpts opts)
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	Source src = comp.add_source_from_buffer("fuzz.c", contents)!!;
 	Tokenizer t;
-	t.init(src.buf, src.id, opts, &comp.target, src.splice_locs);
-	uint len = (uint)src.buf.len;
+	t.init(src.storage.bytes(), src.id, opts, &comp.target, src.splice_locs);
+	uint len = (uint)src.storage.bytes().len;
 	uint prev_line = 1;
 	for (usz steps = 0; ; steps++)
 	{

@@ -3,7 +3,7 @@
 // so the two can be diffed. Diagnostics go to stderr; exit 1 if any error.
 module c3_lex_probe;
 import aro::frontend::c3::lexer, aro::frontend::c3::tokens, aro::frontend::c3::symtab, aro::frontend::c3::diagnostics;
-import aro::terminal, std::io, std::io::file, std::core::mem::alloc;
+import std::io, std::io::file, std::core::mem::alloc;
 
 fn int main(String[] args)
 {
@@ -11,7 +11,7 @@ fn int main(String[] args)
 	st.init(mem);
 	defer st.free();
 	Diagnostics d;
-	d.init_writer(mem, io::stderr(), NO_COLOR);
+	d.init_writer(mem, io::stderr(), false);
 	defer d.free();
 	foreach (path : args[1..])
 	{

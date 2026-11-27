@@ -3,20 +3,21 @@ module parser_grammar_tests;
 import aro::frontend::c::parser, aro::frontend::c::preprocessor, aro::source, aro::frontend::c::tree;
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::type_store, aro::string_interner, aro::frontend::c::symbol_stack, aro::frontend::c::value;
 import aro::bigint, aro::value_interner;
+import aro::target;
 import std::core::mem::allocators;
 
-struct GrammarTypedefSeed (parser::IParserTestProbe)
-{
-	string_interner::StringId name;
-	type_store::QualType qt;
-}
+const target::Host TEST_HOST = { target::Arch.X86_64, target::OsTag.LINUX, target::Abi.GNU };
 
-fn void? GrammarTypedefSeed.handle_implicit_typedefs(&seed, parser::Parser* p) @dynamic
+fn sz first_user_root(tree::Tree* result)
 {
-	seed.qt = p.comp.type_store.put(type_store::type_typedef(type_store::INT, seed.name,
-		(type_store::NodeIndex)0));
-	p.define_symbol({ .kind = symbol_stack::SymbolKind.TYPEDEF, .name = seed.name,
-		.tok = 0, .qt = seed.qt, .node = (type_store::NodeIndex)0, .val = value::NONE });
+	sz i = 0;
+	while (i < result.root_decls.len())
+	{
+		tree::Node node = result.root_decls[i].get(result);
+		if (node.kind != tree::NodeKind.TYPEDEF || !node.type_def.implicit) break;
+		i++;
+	}
+	return i;
 }
 
 fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @test
@@ -28,11 +29,13 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		compilation::CompilationDefinition definition = compilation::definition_for_target(
+			target::parse_triple("x86_64-linux-gnu", TEST_HOST)!!);
+		comp.init(&ta, definition, null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("grammar.c",
-			"Seeded seed = 1; typedef int Word; Word source = 1; " +++
+			"typedef int Seeded; Seeded seed = 1; typedef int Word; Word source = 1; " +++
 			"struct Pair { int key; unsigned ready : 1; }; " +++
 			"enum State { STATE_ZERO, STATE_READY = 4, }; " +++
 			"struct Pair *pair; enum State *state; " +++
@@ -42,17 +45,19 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 			"return total ? total : source + seed; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 
-		GrammarTypedefSeed seed = { .name = comp.intern_string("Seeded") };
 		parser::Parser p;
-		p.init(&pp); p.test_probe = &seed;
+		p.init(&pp);
 		tree::Tree result = p.parse()!!;
 
-		assert(result.root_decls.len() == 8, "all declarations should be retained in source order");
-		tree::Node seeded_var = result.root_decls[0].get(&result);
-		tree::Node word_typedef = result.root_decls[1].get(&result);
-		tree::Node later_var = result.root_decls[2].get(&result);
+		sz first = first_user_root(&result);
+		assert(result.root_decls.len() == first + 9, "all declarations should be retained after implicit typedefs");
+		tree::Node seeded_typedef = result.root_decls[first + 0].get(&result);
+		tree::Node seeded_var = result.root_decls[first + 1].get(&result);
+		tree::Node word_typedef = result.root_decls[first + 2].get(&result);
+		tree::Node later_var = result.root_decls[first + 3].get(&result);
+		assert(seeded_typedef.kind == tree::NodeKind.TYPEDEF);
 		assert(seeded_var.kind == tree::NodeKind.VARIABLE);
-		assert(seeded_var.variable.qt.eql(seed.qt, &comp), "the seeded typedef should resolve in a declaration specifier");
+		assert(seeded_var.variable.qt.eql(seeded_typedef.type_def.qt, &comp), "the source typedef should resolve in a declaration specifier");
 		assert(word_typedef.kind == tree::NodeKind.TYPEDEF);
 		assert(later_var.kind == tree::NodeKind.VARIABLE);
 		assert(later_var.variable.qt.eql(word_typedef.type_def.qt, &comp),
@@ -60,10 +65,10 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 
 		// Record fields, bit fields, enumerators, and later tag references share
 		// the declarations' type identities.
-		tree::Node struct_decl = result.root_decls[3].get(&result);
-		tree::Node enum_decl = result.root_decls[4].get(&result);
-		tree::Node pair_var = result.root_decls[5].get(&result);
-		tree::Node state_var = result.root_decls[6].get(&result);
+		tree::Node struct_decl = result.root_decls[first + 4].get(&result);
+		tree::Node enum_decl = result.root_decls[first + 5].get(&result);
+		tree::Node pair_var = result.root_decls[first + 6].get(&result);
+		tree::Node state_var = result.root_decls[first + 7].get(&result);
 		assert(struct_decl.kind == tree::NodeKind.STRUCT_DECL);
 		assert(struct_decl.container_decl.fields.len == 2);
 		type_store::Type pair_type = struct_decl.container_decl.container_qt.get(&comp, type_store::TypeTag.STRUCT)!!;
@@ -80,7 +85,7 @@ fn void integrated_declarations_seed_typedefs_and_compose_function_grammar() @te
 		assert(pair_pointer.pointer.child.is(&comp, type_store::TypeTag.STRUCT));
 		assert(state_pointer.pointer.child.is(&comp, type_store::TypeTag.ENUM));
 
-		tree::Node function = result.root_decls[7].get(&result);
+		tree::Node function = result.root_decls[first + 8].get(&result);
 		assert(function.kind == tree::NodeKind.FUNCTION);
 		type_store::Func function_type = function.function.qt.get_func(&comp)!!;
 		assert(function_type.params.len == 2);

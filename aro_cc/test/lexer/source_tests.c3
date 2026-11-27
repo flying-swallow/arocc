@@ -25,7 +25,7 @@ macro @tracked(; @body(Compilation* comp))
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		@body(&comp);
 		comp.free();
 	}
@@ -37,8 +37,8 @@ fn void check_add(String str, String expected, uint warning_count, uint[] splice
 	@tracked(; Compilation* comp)
 	{
 		Source src = comp.add_source_from_buffer("path", str)!!;
-		check(src.buf, expected);
-		check(src.buf.ptr[src.buf.len], 0);
+		check(src.storage.bytes(), expected);
+		check(src.storage.bytes().ptr[src.storage.bytes().len], 0);
 		check(comp.warning_count(), warning_count);
 		check(src.splice_locs.len, splices.len);
 		foreach (i, s : splices) check(src.splice_locs[i], s);
@@ -112,7 +112,7 @@ fn void exhaustive_carriage_return_elimination() @test
 			// path == contents, as in the Zig test; the path is copied so `buf` may change.
 			Source src = comp.add_source_from_buffer((String)buf[..], buf[..])!!;
 			source_count++;
-			foreach (c : src.buf) assert(c != '\r');
+			foreach (c : src.storage.bytes()) assert(c != '\r');
 
 			bool all_last = true;
 			foreach (c : buf) if (c != alphabet[alen - 1]) all_last = false;
@@ -153,8 +153,8 @@ fn void check_bom(String buf)
 	{
 		Source src = comp.add_source_from_buffer("file.c", buf)!!;
 		String expected = buf.starts_with(BOM) ? buf[BOM.len..] : buf;
-		check(src.buf, expected);
-		check(src.buf.ptr[src.buf.len], 0);
+		check(src.storage.bytes(), expected);
+		check(src.storage.bytes().ptr[src.storage.bytes().len], 0);
 	};
 }
 
@@ -178,8 +178,8 @@ fn void bom_prefix_then_newline_truncates() @test
 	// Zig: a partial BOM followed by \r, \n or whitespace stops normalization ("invalid utf-8").
 	@tracked(; Compilation* comp)
 	{
-		check(comp.add_source_from_buffer("a", "\xEF\nrest")!!.buf, "\xEF");
-		check(comp.add_source_from_buffer("b", "\xEF\xBB rest")!!.buf, "\xEF\xBB");
+		check(comp.add_source_from_buffer("a", "\xEF\nrest")!!.storage.bytes(), "\xEF");
+		check(comp.add_source_from_buffer("b", "\xEF\xBB rest")!!.storage.bytes(), "\xEF\xBB");
 	};
 }
 
@@ -190,7 +190,7 @@ fn void same_path_returns_existing_source() @test
 		Source a = comp.add_source_from_buffer("p.c", "one")!!;
 		Source b = comp.add_source_from_buffer("p.c", "two")!!;
 		check(a.id.index, b.id.index);
-		check(b.buf, "one");
+		check(b.storage.bytes(), "one");
 		check(comp.sources.len(), 1);
 	};
 }
@@ -204,8 +204,8 @@ fn void owned_buffer_is_adopted() @test
 		mem::copy(p, raw.ptr, raw.len);
 		p[raw.len] = 0;
 		Source src = comp.add_source_from_owned_buffer("own.c", p[:raw.len], SYSTEM)!!;
-		check(src.buf, "a\nb");
-		check(src.buf.ptr[src.buf.len], 0);
+		check(src.storage.bytes(), "a\nb");
+		check(src.storage.bytes().ptr[src.storage.bytes().len], 0);
 		assert(src.kind == SYSTEM);
 		// caller keeps ownership of path: path bytes are a copy
 		check(src.path, "own.c");
@@ -219,7 +219,7 @@ fn void stable_ids_and_no_dangling_after_growth() @test
 		Source first = comp.add_source_from_buffer("first.c", "int x;\\\n int y;\n")!!;
 		check(first.id.index, 0);
 		assert(!first.id.is_alias);
-		char* buf_ptr = first.buf.ptr;
+		char* buf_ptr = first.storage.bytes().ptr;
 		char* path_ptr = first.path.ptr;
 		uint* splice_ptr = first.splice_locs.ptr;
 
@@ -232,11 +232,11 @@ fn void stable_ids_and_no_dangling_after_growth() @test
 		}
 
 		Source again = comp.get_source(first.id);
-		assert(again.buf.ptr == buf_ptr);
+		assert(again.storage.bytes().ptr == buf_ptr);
 		assert(again.path.ptr == path_ptr);
 		assert(again.splice_locs.ptr == splice_ptr);
 		// The value captured before growth still reads valid memory.
-		check(first.buf, "int x; int y;\n");
+		check(first.storage.bytes(), "int x; int y;\n");
 		check(first.path, "first.c");
 		check(first.splice_locs[0], 6);
 
@@ -270,7 +270,7 @@ fn void sentinels() @test
 		comp.generated_buf.push_all("abc");
 		Source gen = comp.get_source(source::GENERATED_ID);
 		check(gen.path, "<scratch space>");
-		check(gen.buf, "abc");
+		check(gen.storage.bytes(), "abc");
 		assert(gen.id.is_generated());
 		assert(gen.kind == USER);
 		assert(comp.ms_cwd_source_id.is_unused());
@@ -292,7 +292,7 @@ fn void source_aliases() @test
 		check(a.path, "line_marker.h");
 		assert(a.kind == EXTERN_C_SYSTEM);
 		assert(a.id == alias_id);
-		assert(a.buf.ptr == orig.buf.ptr);
+		assert(a.storage.bytes().ptr == orig.storage.bytes().ptr);
 		assert(a.splice_locs.ptr == orig.splice_locs.ptr);
 
 		// alias of an alias
@@ -300,7 +300,7 @@ fn void source_aliases() @test
 		check(alias2.index, 1);
 		Source b = comp.get_source(alias2);
 		check(b.path, "second.h");
-		assert(b.buf.ptr == orig.buf.ptr);
+		assert(b.storage.bytes().ptr == orig.storage.bytes().ptr);
 
 		// locations in an alias expand with the alias path and kind
 		Location aloc = { .id = alias_id, .byte_offset = 1, .line = 1 };
@@ -366,7 +366,7 @@ fn void intern_stability() @test
 
 fn Source tmp_source(String buf, uint[] splices)
 {
-	return { .path = "t.c", .buf = buf, .id = { .index = 0 }, .splice_locs = splices, .kind = USER };
+	return { .path = "t.c", .storage = { .raw = buf }, .id = { .index = 0 }, .splice_locs = splices, .kind = USER };
 }
 
 fn ExpandedLocation at(Source* s, uint offset, uint line = 1)
@@ -402,7 +402,7 @@ fn void location_with_splices() @test
 	@tracked(; Compilation* comp)
 	{
 		Source s = comp.add_source_from_buffer("s.c", "ab\\\ncd\nef")!!;
-		check(s.buf, "abcd\nef");
+		check(s.storage.bytes(), "abcd\nef");
 		ExpandedLocation e = at(&s, 3);
 		check(e.line, "cd");
 		check(e.col, 2);
@@ -419,7 +419,7 @@ fn void location_with_splices() @test
 
 		// repeated splices at the same offset
 		Source r = comp.add_source_from_buffer("r.c", "x\\\n\\\nyz")!!;
-		check(r.buf, "xyz");
+		check(r.storage.bytes(), "xyz");
 		check(r.splice_locs.len, 2);
 		e = at(&r, 2);
 		check(e.line, "yz");
@@ -496,7 +496,7 @@ fn void newline_escape_diagnostic() @test
 		Diagnostics diags;
 		diags.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		comp.add_source_from_buffer("path", "ab\\ \nc")!!;
 		check(diags.messages.len(), 1);
 		Message d = diags.messages[0];

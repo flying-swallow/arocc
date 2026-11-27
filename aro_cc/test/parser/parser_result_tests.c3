@@ -21,8 +21,8 @@ fn void compute_offset_uses_declaration_and_constant_lvalue_offsets() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition());
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -120,7 +120,7 @@ fn void integer_promotion_and_usual_conversions() @test
 	diags.init_list(&ta);
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
@@ -150,7 +150,7 @@ fn void lvalue_conversion_preserves_type_and_value() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -177,7 +177,7 @@ fn void array_decay_carries_declaration_pointer_value() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -210,7 +210,7 @@ fn void string_literal_array_decay_preserves_bytes_value() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -246,7 +246,7 @@ fn void pointer_to_integer_conversion_keeps_value_unavailable() @test
 	diags.init_list(&ta);
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
@@ -274,7 +274,7 @@ fn void explicit_integer_cast_builds_explicit_ast_node() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -302,7 +302,7 @@ fn void implicit_integer_cast_reports_truncation() @test
 	diags.init_list(&ta);
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
@@ -334,7 +334,7 @@ fn void implicit_integer_cast_reports_signedness_change() @test
 	diags.set("sign-conversion", diagnostics::MessageKind.WARNING)!!;
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
@@ -368,7 +368,7 @@ fn void implicit_float_to_integer_reports_value_change() @test
 	diags.set("float-conversion", diagnostics::MessageKind.WARNING)!!;
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
@@ -398,7 +398,7 @@ fn void implicit_pointer_to_integer_reports_conversion() @test
 	diags.set("int-conversion", diagnostics::MessageKind.WARNING)!!;
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = &diags };
 			p.tree.init(&comp, {});
@@ -426,7 +426,7 @@ fn void complex_float_to_bool_checks_both_components() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -452,7 +452,7 @@ fn void bool_coercion_does_not_append_cast() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -480,7 +480,7 @@ fn void implicit_integer_conversion_diagnostic_uses_expanded_token_location() @t
 	diags.init_list(&ta);
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		{
 			Source src = comp.add_source_from_buffer("conversion.c", "300;\nmacro_value;\n")!!;
 			Preprocessor pp;
@@ -532,7 +532,7 @@ fn void invalid_type_keeps_explicit_sentinel_and_known_value() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			parser::Parser p = { .comp = &comp, .diagnostics = comp.diagnostics };
 			p.tree.init(&comp, {});
@@ -560,7 +560,7 @@ fn void initializer_value_requirements_follow_context_and_compound_storage() @te
 	diags.init_list(&ta);
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		Source src = comp.add_source_from_buffer("initializer-context.c", "7 7 x { 7, x } x x x")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -648,7 +648,7 @@ fn void variable_length_array_initializers_are_diagnosed_and_defaulted() @test
 	diags.init_list(&ta);
 	{
 		Compilation comp;
-		comp.init(&ta, diagnostics: &diags);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &diags);
 		Source src = comp.add_source_from_buffer("vla-initializer.c", "{ 7 } { 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;

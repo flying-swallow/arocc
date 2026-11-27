@@ -27,7 +27,6 @@ enum UCNKind : char (uint consumed)
 }
 
 
-
 <*
  In the classification phase we do not care if the escape represents a valid
  universal character name, e.g. \UFFFFFFFF is acceptable.

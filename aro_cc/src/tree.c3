@@ -1167,7 +1167,7 @@ fn void Tree.set_node(&self, Node node, sz index)
 	{
 		case DECL: repr = self.encode_decl(node);
 		case STMT:
-		case EXPR: self.encode_expr_stmt(node, &repr);
+		case EXPR: repr = self.encode_expr_stmt(&node);
 	}
 	self.nodes[index] = repr;
 }
@@ -1268,10 +1268,10 @@ fn String Tree.tok_slice(&self, tokens::TokenIndex tok_i)
 	if (try fixed = tok.id.lexeme()) return fixed;
 	Source src = self.comp.get_source(tok.loc.id);
 	Tokenizer scanner;
-	scanner.init(src.buf, source::GENERATED_ID, self.comp.langopts, &self.comp.target, src.splice_locs);
+	scanner.init(src.storage.bytes(), source::GENERATED_ID, self.comp.langopts, &self.comp.target, src.splice_locs);
 	scanner.index = tok.loc.byte_offset;
 	Token span = scanner.next();
-	return src.buf[(usz)span.start :(usz)(span.end - span.start)];
+	return src.storage.bytes()[(usz)span.start :(usz)(span.end - span.start)];
 }
 
 <* Zig `tree.value_map.get(node)`: the constant value recorded for a node (fault NOT_FOUND). *>

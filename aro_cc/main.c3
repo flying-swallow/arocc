@@ -38,11 +38,11 @@ fn int aro_main(String[] args)
 {
 	process_util::stack_limit_increase(STACK_LIMIT);
 	Diagnostics diagnostics;
-	ColorMode color_mode = io::stderr().isatty() ? ESCAPE_CODES : NO_COLOR;
-	diagnostics.init_writer(io::stderr(), color_mode);
+	bool use_ansi = io::stderr().isatty();
+	diagnostics.init_writer(io::stderr(), use_ansi);
 
 	Compilation comp;
-	comp.init(mem, null, &diagnostics);
+	comp.init(mem, compilation::native_definition(), null, &diagnostics);
 	comp.environment.process = host_process::SERVICE;
 	comp.pragmas.add("GCC", gcc::make_handler(mem));
 	comp.pragmas.add("once", once::handler(mem));

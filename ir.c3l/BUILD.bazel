@@ -84,7 +84,6 @@ c3_library(
         "support/target.c3",
         "support/target_cpu.c3",
         "support/target_data.c3",
-        "support/terminal.c3",
         "support/bitset.c3",
     ],
     deps = [":core", ":optimizer"],

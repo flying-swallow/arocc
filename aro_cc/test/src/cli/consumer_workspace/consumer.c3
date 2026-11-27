@@ -80,7 +80,7 @@ fn int main(String[] args)
 		diagnostics::Diagnostics diags;
 		diags.init_list(&allocator);
 		compilation::Compilation comp;
-		comp.init(&allocator, null, &diags);
+		comp.init(&allocator, compilation::native_definition(), null, &diags);
 		IncludeFixture fixture = {
 			.path = "/consumer/consumer_fixture.h",
 			.contents = "int from_include;\n",

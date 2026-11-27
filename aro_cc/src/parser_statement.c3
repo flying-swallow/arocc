@@ -218,6 +218,32 @@ fn parser_result::Result? StatementParser.handle_address_of_label(&self, parser:
  them to the temporary Wip state. The expression parser advances only inside
  the range selected by the attribute syntax reader; restore the statement
  cursor on both success and failure. *>
+fn void? validate_availability_attribute(parser::Parser* p,
+	parser_attribute::AttributeBuffer* buffer, parser_attribute::ParsedAttribute parsed)
+{
+	if (parsed.args_len == 0)
+	{
+		Diagnostic.MALFORMED_AVAILABILITY.@emit(p, parsed.tok)!;
+		return PARSING_FAILED~;
+	}
+	for (uint i = 0; i < parsed.args_len; i++)
+	{
+		parser_attribute::AttributeArgTokens range = buffer.arguments[(sz)(parsed.args_offset + i)];
+		bool valid = range.start < range.end && p.tree.tokens[(usz)range.start].id.is_macro_identifier();
+		if (valid && i == 0) valid = range.end == range.start + 1;
+		if (valid && i != 0 && range.end != range.start + 1)
+		{
+			valid = range.end >= range.start + 3 &&
+				p.tree.tokens[(usz)(range.start + 1)].id == tokenizer::TokenId.EQUAL;
+		}
+		if (!valid)
+		{
+			Diagnostic.MALFORMED_AVAILABILITY.@emit(p, range.start)!;
+			return PARSING_FAILED~;
+		}
+	}
+}
+
 fn void? append_statement_attributes(parser::Parser* p,
 	parser_attribute::AttributeBuffer* buffer, attribute_wip::Wip* wip)
 {
@@ -228,6 +254,13 @@ fn void? append_statement_attributes(parser::Parser* p,
 	foreach (parsed : buffer.attributes)
 	{
 		if (!parsed.has_name) continue;
+		// Availability clauses name platforms and versions, not C expressions.
+		// Preserve their syntax check while semantic availability is unimplemented.
+		if (parsed.name.ns == attribute::AttrNamespace.CLANG && parsed.name.clang == attribute::AttrClang.AVAILABILITY)
+		{
+			validate_availability_attribute(p, buffer, parsed)!;
+			continue;
+		}
 		list::List{parser_result::Result} args;
 		args.init(p.comp.gpa);
 		defer args.free();

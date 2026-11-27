@@ -5,7 +5,10 @@ import aro::frontend::c::preprocessor, aro::frontend::c::tokens, aro::frontend::
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::source;
 import aro::frontend::c::type_store, aro::frontend::c::symbol_stack, aro::string_interner, aro::frontend::c::value;
 import aro::frontend::c::attribute, aro::frontend::c::attribute_map;
+import aro::target;
 import std::core::mem::allocators, std::io;
+
+const target::Host TEST_HOST = { target::Arch.X86_64, target::OsTag.LINUX, target::Abi.GNU };
 
 excuse CALLBACK_FAILURE;
 excuse SYMBOL_TEST_WRITE_FAILURE;
@@ -15,37 +18,6 @@ struct RejectSymbolWriter (OutStream) { char unused; }
 fn sz? RejectSymbolWriter.write(&self, char[] bytes) @dynamic => SYMBOL_TEST_WRITE_FAILURE~;
 fn void? RejectSymbolWriter.write_byte(&self, char byte) @dynamic => SYMBOL_TEST_WRITE_FAILURE~;
 fn void? RejectSymbolWriter.flush(&self) @dynamic => SYMBOL_TEST_WRITE_FAILURE~;
-
-<* Declaration grammar that consumes one token; the implicit-typedef hook appends EOF. *>
-struct CursorDeclarationHandler (parser::IParserTestProbe) { char unused; }
-
-fn void? CursorDeclarationHandler.handle_declaration(&self, Parser* p) @dynamic
-{
-	p.advance();
-}
-
-fn void? CursorDeclarationHandler.handle_implicit_typedefs(&self, Parser* p) @dynamic
-{
-	p.pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
-}
-
-<* Supplies only the untyped type-name production. *>
-struct LegacyTypeNameHandler (parser::IParserTestProbe) { bool fail; }
-
-fn void? LegacyTypeNameHandler.handle_type_name(&self, Parser* p) @dynamic
-{
-	if (self.fail) return CALLBACK_FAILURE~;
-	p.advance();
-}
-
-<* Supplies only the typed type-name production. *>
-struct TypedTypeNameHandler (parser::IParserTestProbe) { bool fail; }
-
-fn QualType? TypedTypeNameHandler.handle_typed_type_name(&self, Parser* p) @dynamic
-{
-	if (self.fail) return CALLBACK_FAILURE~;
-	return type_store::INT;
-}
 
 struct FunctionContextBodyCheck
 {
@@ -89,7 +61,9 @@ fn void parser_starts_at_index_zero_and_bounds_empty_and_eof_buffers() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		comp.target = target::parse_triple("x86_64-linux-gnu", TEST_HOST)!!;
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 
@@ -107,8 +81,7 @@ fn void parser_starts_at_index_zero_and_bounds_empty_and_eof_buffers() @test
 
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 		Parser p;
-		NoPrelude no_prelude;
-		p.init(&pp); p.test_probe = &no_prelude;
+		p.init(&pp);
 		// The EOF token prevents a declaration callback from running, so
 		// exercise the bounded cursor directly against the borrowed slice.
 		p.bind_finalized_tokens();
@@ -135,7 +108,7 @@ fn void parser_eat_and_expect_preserve_cursor_on_mismatch() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("tokens.c", "name")!!;
@@ -168,7 +141,7 @@ fn void missing_closing_delimiter_reports_opener_note() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("delim.c", "(name")!!;
@@ -201,101 +174,21 @@ fn void empty_translation_unit_owns_tree_only() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		comp.target = target::parse_triple("x86_64-linux-gnu", TEST_HOST)!!;
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
 
 		Parser p;
-		NoPrelude no_prelude;
-		p.init(&pp); p.test_probe = &no_prelude;
+		p.init(&pp);
 		Tree result = p.parse()!!;
 		assert(result.tokens.ptr == pp.tokens.array_view().ptr);
-		assert(result.tokens.len == 1);
-		assert(result.root_decls.len() == 0);
+		assert(result.tokens.len > 1, "the implicit typedef prelude adds generated tokens");
+		assert(result.root_decls.len() > 0, "the empty translation unit still has its implicit typedef roots");
 		result.free();
 		p.free();
-
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void declaration_callback_controls_cursor() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
-
-		CursorDeclarationHandler handler;
-		Parser p;
-		p.init(&pp); p.test_probe = &handler;
-		Tree result = p.parse()!!;
-		assert(p.current() == 1);
-		assert(result.tokens.len == 2);
-		result.free();
-		p.free();
-
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void legacy_and_typed_type_name_callbacks_are_distinct() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		Source src = comp.add_source_from_buffer("type-name-callback.c", "name")!!;
-		pp.tokens.push({ .id = IDENTIFIER, .loc = parser_loc(src, 0, 1) });
-		LegacyTypeNameHandler legacy_callbacks;
-		Parser p;
-		p.init(&pp); p.test_probe = &legacy_callbacks;
-		p.bind_finalized_tokens();
-		p.parse_type_name()!!;
-		assert(p.current() == 1);
-		p.free();
-
-		legacy_callbacks.fail = true;
-		Parser failing;
-		failing.init(&pp); failing.test_probe = &legacy_callbacks;
-		failing.bind_finalized_tokens();
-		assert(@catch(failing.parse_type_name()) == CALLBACK_FAILURE);
-		failing.free();
-
-		TypedTypeNameHandler typed_callbacks;
-		Parser typed;
-		typed.init(&pp); typed.test_probe = &typed_callbacks;
-		typed.bind_finalized_tokens();
-		assert(typed.parse_typed_type_name()!!.eql(type_store::INT, &comp));
-		typed.free();
-
-		typed_callbacks.fail = true;
-		Parser typed_failing;
-		typed_failing.init(&pp); typed_failing.test_probe = &typed_callbacks;
-		typed_failing.bind_finalized_tokens();
-		assert(@catch(typed_failing.parse_typed_type_name()) == CALLBACK_FAILURE);
-		typed_failing.free();
-
 
 		pp.free();
 		comp.free();
@@ -313,7 +206,7 @@ fn void parser_can_be_abandoned_before_parse() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
@@ -341,7 +234,7 @@ fn void grammar_diagnostics_follow_macro_expansion_order() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("macro.c", "FIRST SECOND\nmacro body\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -390,132 +283,9 @@ fn void grammar_diagnostics_follow_macro_expansion_order() @test
 	assert(ta.allocation_count() == 0);
 }
 
-struct FailingDeclarationHandler (parser::IParserTestProbe) { char unused; }
-
-fn void? FailingDeclarationHandler.handle_declaration(&self, Parser* p) @dynamic
-{
-	p.tree.add_node({ .kind = tree::NodeKind.EMPTY_DECL });
-	return p.diagnostics.add({ .kind = diagnostics::MessageKind.FATAL_ERROR, .text = "fatal parser diagnostic" });
-}
-
-<* Replaces the implicit typedef prelude with nothing, for tests over raw token buffers. *>
-struct NoPrelude (parser::IParserTestProbe) { char unused; }
-
-fn void? NoPrelude.handle_implicit_typedefs(&self, Parser* p) @dynamic {}
-
-struct RecoveringDeclarationHandler (parser::IParserTestProbe) { char unused; }
-
-fn void? RecoveringDeclarationHandler.handle_declaration(&self, Parser* p) @dynamic
-{
-	p.advance();
-}
-
-fn void? RecoveringDeclarationHandler.handle_implicit_typedefs(&self, Parser* p) @dynamic {}
-
 fn symbol_stack::Symbol parser_test_symbol(string_interner::StringId name, symbol_stack::SymbolKind kind, uint tok, uint node, QualType qt = type_store::INT)
 {
 	return { .name = name, .kind = kind, .qt = qt, .tok = tok, .node = (NodeIndex)node, .val = value::NONE };
-}
-
-struct ImplicitTypedefState (parser::IParserTestProbe)
-{
-	string_interner::StringId name;
-	bool declaration_saw_typedef;
-}
-
-fn void? ImplicitTypedefState.handle_implicit_typedefs(&state, Parser* p) @dynamic
-{
-	p.define_symbol(parser_test_symbol(state.name, symbol_stack::SymbolKind.TYPEDEF, 0, 90));
-}
-
-fn void? ImplicitTypedefState.handle_declaration(&state, Parser* p) @dynamic
-{
-	symbol_stack::Symbol found;
-	state.declaration_saw_typedef = p.find_typedef(state.name, 0, false, &found)!! && found.kind == symbol_stack::SymbolKind.TYPEDEF;
-	p.advance();
-}
-
-fn void parser_symbol_lookup_shadowing_and_scope_reuse() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		Parser p;
-		p.init(&pp);
-		assert(p.symbols.active_len == 1);
-
-		string_interner::StringId ordinary = comp.intern_string("item");
-		string_interner::StringId alias_name = comp.intern_string("Alias");
-		string_interner::StringId tag = comp.intern_string("Record");
-		p.define_symbol(parser_test_symbol(ordinary, symbol_stack::SymbolKind.DEF, 1, 11));
-		p.define_symbol(parser_test_symbol(alias_name, symbol_stack::SymbolKind.TYPEDEF, 2, 12));
-		p.define_symbol(parser_test_symbol(tag, symbol_stack::SymbolKind.STRUCT, 3, 13));
-		assert(p.find_symbol(ordinary)!!.node == (NodeIndex)11);
-		symbol_stack::Symbol found;
-		assert(p.find_typedef(alias_name, 0, false, &found)!! && found.node == (NodeIndex)12);
-		assert(p.find_tag(tag, KEYWORD_STRUCT, 0, IDENTIFIER, &found)!! && found.node == (NodeIndex)13);
-
-		p.push_scope();
-		p.define_symbol(parser_test_symbol(ordinary, symbol_stack::SymbolKind.DECL, 4, 21, type_store::LONG));
-		assert(p.find_symbol(ordinary)!!.node == (NodeIndex)21);
-		p.pop_scope();
-		assert(p.find_symbol(ordinary)!!.node == (NodeIndex)11);
-
-		string_interner::StringId scoped = comp.intern_string("scoped");
-		p.push_scope();
-		p.define_symbol(parser_test_symbol(scoped, symbol_stack::SymbolKind.DEF, 5, 31, type_store::LONG));
-		p.pop_scope();
-		assert(!@ok(p.find_symbol(scoped)));
-
-		p.push_scope(); // Reuses the popped scope after clearing its old entries.
-		assert(!@ok(p.find_symbol(scoped)));
-		p.define_symbol(parser_test_symbol(scoped, symbol_stack::SymbolKind.DEF, 6, 32, type_store::LONG));
-		assert(p.find_symbol(scoped)!!.node == (NodeIndex)32);
-		p.pop_scope();
-		p.free();
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void implicit_typedefs_run_inside_outer_scope_before_declarations() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
-		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
-		ImplicitTypedefState state = { .name = comp.intern_string("Implicit") };
-		Parser p;
-		p.init(&pp); p.test_probe = &state;
-		Tree result = p.parse()!!;
-		assert(state.declaration_saw_typedef);
-		assert(p.symbols.active_len == 1);
-		assert(result.tokens.len == 2);
-		result.free();
-		p.free();
-		assert(p.symbols.active_len == 0);
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
 }
 
 fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() @test
@@ -527,7 +297,7 @@ fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() 
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("symbol-macro.c", "Record\nMACRO\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -556,7 +326,7 @@ fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() 
 		// through find_typedef, and explicit free still releases the scope.
 		d.free();
 		RejectSymbolWriter reject = {};
-		d.init_writer(&reject, diagnostics::ColorMode.NO_COLOR);
+		d.init_writer(&reject, false);
 		Parser fatal;
 		fatal.init(&pp);
 		fatal.bind_finalized_tokens();
@@ -565,50 +335,6 @@ fn void parser_symbol_diagnostics_keep_token_macro_locations_and_fatal_errors() 
 		assert(d.errors == 1);
 		fatal.free();
 		assert(fatal.symbols.active_len == 0);
-		pp.free();
-		comp.free();
-		d.free();
-	}
-	assert(ta.allocation_count() == 0);
-}
-
-fn void parser_failure_cleanup_allows_later_success() @test
-{
-	TrackingAllocator ta;
-	ta.init(mem);
-	defer ta.free();
-	{
-		Diagnostics d;
-		d.init_list(&ta);
-		Compilation comp;
-		comp.init(&ta, null, &d);
-		Preprocessor pp;
-		pp.init(&comp, preprocessor::TESTING)!!;
-		pp.tokens.push({ .id = IDENTIFIER, .loc = source::UNUSED_LOCATION });
-		pp.tokens.push({ .id = EOF, .loc = source::UNUSED_LOCATION });
-
-		Parser p;
-		FailingDeclarationHandler failing_handler;
-		p.init(&pp); p.test_probe = &failing_handler;
-		assert(@catch(p.parse()) == compilation::FATAL_ERROR);
-		// A failed parse leaves its partial tree and scopes for Parser.free.
-		assert(p.symbols.active_len == 1);
-		p.free();
-		assert(p.symbols.active_len == 0);
-		assert(d.messages.len() == 1);
-		test::eq(d.messages[0].kind, diagnostics::MessageKind.FATAL_ERROR);
-		test::eq(d.messages[0].text, "fatal parser diagnostic");
-
-		// Reinitialize over the same borrowed token buffer; Parser.free above released
-		// the failed tree, so a clean parse succeeds without leaking.
-		RecoveringDeclarationHandler recovering_handler;
-		p.init(&pp); p.test_probe = &recovering_handler;
-		Tree result = p.parse()!!;
-		assert(result.root_decls.len() == 0);
-		assert(p.symbols.active_len == 1);
-		result.free();
-		p.free();
-
 		pp.free();
 		comp.free();
 		d.free();
@@ -625,7 +351,7 @@ fn void declaration_body_installs_only_supplied_function_context_and_restores_it
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("function-context.c", "{ 1; } { 2; }\n")!!;
@@ -677,7 +403,7 @@ fn void va_pack_function_context_requires_named_variadic_inline_function() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Parser p;
@@ -738,7 +464,7 @@ fn void va_pack_postfix_context_is_direct_typed_and_restored() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("va-pack-context.c",

@@ -33,7 +33,7 @@ fn void parser_record_spec_creates_and_reuses_forward_tag() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("record.c", "struct Node")!!;
@@ -75,7 +75,7 @@ fn void source_derived_compound_literal_deduced_type_self_initialization_recover
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("auto_type_compound_self_init.c",
@@ -131,8 +131,8 @@ fn void source_derived_failed_file_scope_initializers_do_not_redefine() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("failed_offsetof_redefinition.c",
@@ -180,9 +180,9 @@ fn void implicit_typedef_prelude_seeds_x86_64_linux_roots_and_symbols() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", X86_64_LINUX_HOST)!!;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("implicit_typedef_prelude.c",
@@ -258,7 +258,7 @@ fn void parser_replays_pragma_inside_struct_and_enum_bodies() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		PragmaBodyProbe probe = {};
 		bool added_probe = comp.pragmas.add("probe", &probe);
 		assert(added_probe);

@@ -24,10 +24,10 @@ macro @with_comp(String triple, Compiler emu = NO; @body(Compilation* comp, Diag
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple(triple, HOST)!!;
 		comp.langopts.set_emulated_compiler(emu);
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		@body(&comp, &d);
 		comp.free();
 		d.free();

@@ -75,7 +75,7 @@ fn String read(String path) => (String)file::load(tmem, path)!!;
 fn int run_driver(String[] args, diagnostics::Diagnostics* d, FakeFiles* files = null, FakeChild* child = null, String executable_dir = "", String runfiles_dir = "")
 {
 	compilation::Compilation comp;
-	comp.init(mem, null, d);
+	comp.init(mem, compilation::native_definition(), null, d);
 	if (files != null)
 	{
 		comp.include_files = { .ctx = (void*)files, .exists = &fake_exists, .read = &fake_read, .mtime = &fake_mtime };
@@ -255,7 +255,7 @@ fn void stdin_dash_reads_the_injected_file_stream() @test
 	diagnostics::Diagnostics d;
 	d.init_list(mem);
 	compilation::Compilation comp;
-	comp.init(mem, null, &d);
+	comp.init(mem, compilation::native_definition(), null, &d);
 	comp.environment.source_date_epoch.set("0");
 	int status = driver::run_with_stdin(&comp, &d,
 		{ "aro", "-E", "-P", "-nostdinc", "-nobuiltininc", "-o", output, "-" }, "", &stdin_stream);
@@ -383,7 +383,7 @@ fn String? production_executable_from_manifest(String manifest_path, String work
 	char[]? manifest_data = file::load(tmem, manifest_path);
 	if (catch manifest_data) return NOT_FOUND~;
 	String contents = (String)manifest_data;
-	String expected = string::tformat("%s/aro_cc%s", workspace, suffix);
+	String expected = string::tformat("%s/aro_cc/aro_cc%s", workspace, suffix);
 	usz start = 0;
 	while (start < contents.len)
 	{
@@ -417,7 +417,7 @@ fn String production_executable()
 	assert(workspace.len, "TEST_WORKSPACE is required to resolve aro_cc from runfiles");
 	if (root.len)
 	{
-		String candidate = aro_runner::join_path(tmem, aro_runner::join_path(tmem, root, workspace), string::tformat("aro_cc%s", suffix));
+		String candidate = aro_runner::join_path(tmem, aro_runner::join_path(tmem, root, workspace), string::tformat("aro_cc/aro_cc%s", suffix));
 		if (file::is_file(candidate)) return candidate;
 	}
 	if (try manifest = env::get_var(tmem, "RUNFILES_MANIFEST_FILE"))

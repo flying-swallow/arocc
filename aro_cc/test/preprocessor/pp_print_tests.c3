@@ -24,7 +24,7 @@ macro @with_pp(; @body(Compilation* comp, Preprocessor* pp))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		@body(&comp, &pp);
@@ -41,7 +41,7 @@ fn Source add_src(Compilation* comp, String path, String text) => comp.add_sourc
 fn void push_all(Preprocessor* pp, Source src, bool skip_ws = false)
 {
 	Tokenizer tz;
-	tz.init(src.buf, src.id, pp.comp.langopts, &pp.comp.target);
+	tz.init(src.storage.bytes(), src.id, pp.comp.langopts, &pp.comp.target);
 	while (true)
 	{
 		Token t = tz.next();
@@ -196,7 +196,7 @@ fn void pragma_line() @test
 	{
 		Source s = add_src(comp, "p.c", "#pragma foo  bar(1)\nx\n");
 		Tokenizer tz;
-		tz.init(s.buf, s.id, comp.langopts, &comp.target);
+		tz.init(s.storage.bytes(), s.id, comp.langopts, &comp.target);
 		tz.next(); // '#'
 		Token t;
 		while ((t = tz.next()).id != EOF)
@@ -219,7 +219,7 @@ fn void registered_pragma_can_be_dropped() @test
 		assert(added);
 		Source s = add_src(comp, "p.c", "#pragma foo\nx\n");
 		Tokenizer tz;
-		tz.init(s.buf, s.id, comp.langopts, &comp.target);
+		tz.init(s.storage.bytes(), s.id, comp.langopts, &comp.target);
 		tz.next(); // '#', absent from preprocessor token lists
 		Token t;
 		while ((t = tz.next()).id != EOF)
@@ -246,7 +246,7 @@ fn void macro_printing() @test
 		pp.pretty_print_macro(&out, loc, NAME_ONLY)!!;
 		out.append('|');
 		loc = { .id = s.id, .byte_offset = 43, .line = 2 };
-		test::eq(s.buf[42:6], "#undef");
+		test::eq(s.storage.bytes()[42:6], "#undef");
 		pp.pretty_print_macro(&out, loc, NAME_AND_BODY)!!;
 		test::eq(out.str_view(), "define FOO /*b*/ 1 /*c*/ + 2 // d|define FOO|undef FOO");
 	};

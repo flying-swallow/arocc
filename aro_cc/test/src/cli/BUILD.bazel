@@ -1,4 +1,5 @@
 load("//aro_cc/tools:c3.bzl", "c3_library", "c3_main_test", "c3_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Production frontend driver lifecycle and CLI behavior. The executable is a
 # runfile as well, so resource-header lookup follows the same Bazel layout.
@@ -91,6 +92,21 @@ c3_main_test(
         "//aro_cc/test:native/darwin_arm64_abi.c",
         "//aro_cc/test:native/darwin_arm64_consumer.c",
         "//aro_cc/test:native/darwin_arm64_abi.h",
+    ],
+    tags = ["no-sandbox"],
+)
+
+# SDK header parsing and a native compile/link/run smoke test on ARM64 macOS.
+sh_test(
+    name = "darwin_stdio_integration",
+    srcs = ["darwin_stdio_integration.sh"],
+    args = [
+        "$(location //:aro_cc)",
+        "$(location //aro_cc/test:native/darwin_stdio.c)",
+    ],
+    data = [
+        "//:aro_cc",
+        "//aro_cc/test:native/darwin_stdio.c",
     ],
     tags = ["no-sandbox"],
 )

@@ -5,7 +5,7 @@
 // Isolation: nothing under src/frontend/c3 may reference aro::frontend::c::*
 // or aro::api (checked by //aro_cc/test/unit/c3:isolation_test). Shared layers only:
 // aro::backend::*, aro::target, aro::bigint, aro::value_interner,
-// aro::primitive_value, aro::string_interner, aro::source, aro::terminal.
+// aro::primitive_value, aro::string_interner, aro::source.
 module aro::frontend::c3;
 
 <* c3c revision this frontend is ported from (~/projects/c3c). *>

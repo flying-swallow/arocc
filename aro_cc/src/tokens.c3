@@ -186,7 +186,7 @@ fn bool TokenWithExpansionLocs.is_generated(self) => self.loc.id.is_generated();
 *>
 fn void? TokenWithExpansionLocs.check_ms_eof(self, Source src, Compilation* comp)
 {
-	if (src.buf.len > self.loc.byte_offset && src.buf[self.loc.byte_offset] == 0x1A)
+	if (src.storage.bytes().len > self.loc.byte_offset && src.storage.bytes()[self.loc.byte_offset] == 0x1A)
 	{
 		ExpandedLocation loc = src.line_col(
 		{

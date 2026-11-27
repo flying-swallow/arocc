@@ -8,18 +8,6 @@ import aro::frontend::c::type_store, aro::frontend::c::value, aro::value_interne
 import aro::frontend::c::parser_declaration;
 import std::core::mem::allocators;
 
-alias TypeNameProbeFn = fn parser::TypeNameProbe?(void* context, parser::Parser* p);
-
-<* Parser handler that only supplies the speculative type-name probe. The
-   probe function can be swapped to exercise different probe outcomes. *>
-struct ProbeHandler (parser::IParserTestProbe)
-{
-	TypeNameProbeFn probe;
-}
-
-fn parser::TypeNameProbe? ProbeHandler.handle_typed_type_name_probe(&self, parser::Parser* p) @dynamic
-	=> self.probe(null, p);
-
 <* Parse `text` as one expression and check its node kind and folded value.
    With `expect_failure` the parse must fail instead. A successful parse must
    emit no diagnostic: unevaluated operands (the skipped arm of `&&`, `||`,
@@ -140,9 +128,7 @@ fn void assignment_expression_is_right_associative() @test
 	assert(inner.binary.rhs.get(&f.parser.tree).kind == tree::NodeKind.ASSIGN_EXPR);
 }
 
-// Expression fixture over the finalized token stream and the real expression
-// grammar. The small type name probe models the grammar-owned typedef lookup
-// needed for cast ambiguity.
+// Expression fixture over the finalized token stream and the real expression grammar.
 struct ExpressionFixture
 {
 	TrackingAllocator allocator;
@@ -150,58 +136,7 @@ struct ExpressionFixture
 	compilation::Compilation comp;
 	preprocessor::Preprocessor pp;
 	parser::Parser parser;
-	ProbeHandler probe_handler;
 	bool active;
-}
-
-fn parser::TypeNameProbe? expression_type_name_probe(void* context, parser::Parser* p)
-{
-	if (p.at_eof()) return { .matched = false };
-	tokenizer::TokenId id = p.tree.tokens[(usz)p.tok_i].id;
-	switch (id)
-	{
-		case KEYWORD_INT:
-			p.advance();
-			return { .matched = true, .qt = type_store::INT };
-		case KEYWORD_LONG:
-			p.advance();
-			return { .matched = true, .qt = type_store::LONG };
-		case KEYWORD_FLOAT:
-			p.advance();
-			return { .matched = true, .qt = type_store::FLOAT };
-		case KEYWORD_CHAR:
-			p.advance();
-			return { .matched = true, .qt = type_store::CHAR };
-		default: break;
-	}
-	if (id != tokenizer::TokenId.IDENTIFIER) return { .matched = false };
-	StringId name = p.comp.intern_string(p.tree.tok_slice(p.tok_i));
-	symbol_stack::Symbol? maybe_symbol = p.find_symbol(name);
-	if (catch maybe_symbol) return { .matched = false };
-	symbol_stack::Symbol symbol = maybe_symbol;
-	if (symbol.kind != symbol_stack::SymbolKind.TYPEDEF) return { .matched = false };
-	p.advance();
-	return { .matched = true, .qt = symbol.qt };
-}
-
-fn parser::TypeNameProbe? expression_type_name_probe_consuming_miss(void* context, parser::Parser* p)
-{
-	if (!p.at_eof()) p.advance();
-	return { .matched = false };
-}
-
-fn parser::TypeNameProbe? expression_type_name_probe_diagnosed_failure(void* context, parser::Parser* p)
-{
-	tokens::TokenIndex probe_tok = p.tok_i;
-	p.advance();
-	Diagnostic.TODO.@emit(p, probe_tok, "diagnosed probe failure")!;
-	return parser::PARSING_FAILED~;
-}
-
-fn parser::TypeNameProbe? expression_type_name_probe_fatal_failure(void* context, parser::Parser* p)
-{
-	p.advance();
-	return compilation::FATAL_ERROR~;
 }
 
 fn void ExpressionFixture.init(&self, String input, String path = "expr.c",
@@ -209,15 +144,13 @@ fn void ExpressionFixture.init(&self, String input, String path = "expr.c",
 {
 	self.allocator.init(mem);
 	self.diagnostics.init_list(&self.allocator);
-	self.comp.init(&self.allocator, null, &self.diagnostics);
+	self.comp.init(&self.allocator, compilation::native_definition(), null, &self.diagnostics);
 	self.comp.langopts.standard = standard;
 	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 	source::Source src = self.comp.add_source_from_buffer(path, input)!!;
 	TokenWithExpansionLocs eof = self.pp.preprocess(src)!!;
 	self.pp.add_token(eof)!!;
-	self.probe_handler = { .probe = &expression_type_name_probe };
 	self.parser.init(&self.pp);
-	self.parser.test_probe = &self.probe_handler;
 	self.parser.bind_finalized_tokens();
 	self.active = true;
 }
@@ -305,57 +238,6 @@ fn void parser_owned_sizeof_alignof_disambiguate_type_names_and_expressions() @t
 	assert(sized_operand_node.unary.operand.get(&f.parser.tree).decl_ref.decl == object_decl);
 	assert(sized_expression_node.type_info.operand_qt.eql(type_store::INT, &f.comp));
 	assert(f.parser.at_eof());
-}
-
-fn void parser_owned_type_name_probe_restores_only_nonmatches_and_propagates_faults() @test
-{
-	ExpressionFixture f;
-	f.init("sizeof(object)\n");
-	defer f.free();
-	f.seed_symbol("object", symbol_stack::SymbolKind.DEF, type_store::INT);
-	f.probe_handler.probe = &expression_type_name_probe_consuming_miss;
-	parser_result::Result miss = f.parser.expr()!!;
-	assert(miss.node.kind(&f.parser.tree) == tree::NodeKind.SIZEOF_EXPR);
-	assert(miss.node.get(&f.parser.tree).type_info.expr != type_store::NODE_NULL);
-	assert(f.parser.at_eof(), "a consuming non-match must restore the expression cursor");
-	assert(f.diagnostics.messages.len() == 0);
-
-	f.free();
-	f.init("sizeof(int)\n");
-	f.probe_handler.probe = &expression_type_name_probe_diagnosed_failure;
-	parser_result::Result? diagnosed = f.parser.expr();
-	if (catch diagnosed_fault = diagnosed)
-	{
-		assert(diagnosed_fault == parser::PARSING_FAILED);
-	}
-	else { assert(false, "a diagnosed type-name probe failure must propagate"); }
-	assert(f.parser.tok_i == 3 && f.parser.is_at(tokenizer::TokenId.R_PAREN),
-		"a diagnosed probe failure must preserve its consumed cursor");
-	assert(has_expression_diagnostic(&f, "TODO: diagnosed probe failure"));
-
-	f.free();
-	f.init("sizeof(int)\n");
-	f.probe_handler.probe = &expression_type_name_probe_fatal_failure;
-	parser_result::Result? fatal = f.parser.expr();
-	if (catch fatal_fault = fatal)
-	{
-		assert(fatal_fault == compilation::FATAL_ERROR);
-	}
-	else { assert(false, "a fatal type-name probe fault must propagate"); }
-	assert(f.parser.tok_i == 3 && f.parser.is_at(tokenizer::TokenId.R_PAREN),
-		"a fatal probe fault must preserve its consumed cursor");
-
-	f.free();
-	f.init("sizeof(int + 1)\n");
-	parser_result::Result? malformed_type_operand = f.parser.expr();
-	if (catch malformed_type_operand_fault = malformed_type_operand)
-	{
-		assert(malformed_type_operand_fault == parser::PARSING_FAILED);
-	}
-	else { assert(false, "a matched type name without its closing parenthesis must fail"); }
-	assert(f.parser.tok_i == 3 && f.parser.is_at(tokenizer::TokenId.PLUS),
-		"a matched type-name parse must not backtrack into an expression");
-	assert(f.diagnostics.messages.len() > 0);
 }
 
 fn void parser_owned_unary_folding_respects_eval_suppression() @test
@@ -792,7 +674,7 @@ fn void predefined_func_identifier_is_valid_inside_function() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("predefined_inside.c",
@@ -826,7 +708,7 @@ fn void predefined_func_identifier_warns_at_file_scope() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("predefined_top_level.c",

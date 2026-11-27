@@ -20,7 +20,7 @@ fn void default_provider_expands_builtin_macros_and_attribute_features() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("builtin-integration.c",
 			"int line = __LINE__;\n"
 			"#if __has_feature(attribute_deprecated_with_message)\n"

@@ -542,9 +542,9 @@ fn int run(String[] args, Compilation* comp, Diagnostics* d)
 fn int main(String[] args)
 {
 	Diagnostics d;
-	d.init_writer(io::stderr(), NO_COLOR);
+	d.init_writer(io::stderr(), false);
 	Compilation comp;
-	comp.init(mem, null, &d);
+	comp.init(mem, compilation::native_definition(), null, &d);
 	comp.pragmas.add("GCC", gcc::make_handler(mem));
 	comp.pragmas.add("once", once::handler(mem));
 	comp.pragmas.add("message", message::handler());

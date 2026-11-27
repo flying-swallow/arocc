@@ -46,14 +46,13 @@ fn void empty_tree_dump_is_empty() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
 			DString output;
 			output.init(&ta);
-			Terminal term = { .writer = &output, .mode = diagnostics::ColorMode.NO_COLOR };
-			tree.dump(term)!!;
+			tree.dump(&output, false)!!;
 			assert(output.str_view().len == 0);
 			output.free();
 			tree.free();
@@ -71,7 +70,7 @@ fn void source_locations_and_expression_write() @test
 	ta.init(mem);
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		Source src = comp.add_source_from_buffer("expr.c", "x + 1\n")!!;
 		tokens::TreeToken[3] toks = {
 			{ .id = tokenizer::TokenId.IDENTIFIER, .loc = { .id = src.id, .byte_offset = 0, .line = 1 } },
@@ -90,8 +89,7 @@ fn void source_locations_and_expression_write() @test
 		check(rendered.str_view(), "x + 1");
 		DString output;
 		output.init(&ta);
-		Terminal term = { .writer = &output, .mode = diagnostics::ColorMode.NO_COLOR };
-		tree.dump(term)!!;
+		tree.dump(&output, false)!!;
 		check(output.str_view(),
 			"add_expr: 'int'\n"
 			" lhs:\n"
@@ -115,7 +113,7 @@ fn void attribute_order_and_no_color_format() @test
 	ta.init(mem);
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		Tree tree;
 		tree.init(&comp, {});
 		NodeIndex literal = tree.add_node({ .kind = INT_LITERAL, .literal = { .literal_tok = 0, .qt = type_store::INT } });
@@ -126,8 +124,7 @@ fn void attribute_order_and_no_color_format() @test
 		tree.root_decls.push(literal);
 		DString output;
 		output.init(&ta);
-		Terminal term = { .writer = &output, .mode = diagnostics::ColorMode.NO_COLOR };
-		tree.dump(term)!!;
+		tree.dump(&output, false)!!;
 		check(output.str_view(), "int_literal: 'int'\n packed\n unused\n\n");
 		output.free();
 		tree.free();
@@ -140,20 +137,17 @@ fn void attribute_order_and_no_color_format() @test
 fn void writer_errors_propagate() @test
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	Tree tree;
 	tree.init(&comp, {});
 	NodeIndex literal = tree.add_node({ .kind = INT_LITERAL, .literal = { .literal_tok = 0, .qt = type_store::INT } });
 	tree.root_decls.push(literal);
 	RejectWriter write_failure = { .fail_write = true };
-	Terminal write_term = { .writer = &write_failure, .mode = diagnostics::ColorMode.NO_COLOR };
-	assert(@catch(tree.dump(write_term)) == DUMP_WRITE_FAILED);
+	assert(@catch(tree.dump(&write_failure, false)) == DUMP_WRITE_FAILED);
 	RejectWriter byte_failure = { .fail_byte = true };
-	Terminal byte_term = { .writer = &byte_failure, .mode = diagnostics::ColorMode.NO_COLOR };
-	assert(@catch(tree.dump(byte_term)) == DUMP_WRITE_FAILED);
+	assert(@catch(tree.dump(&byte_failure, false)) == DUMP_WRITE_FAILED);
 	RejectWriter flush_failure = { .fail_flush = true };
-	Terminal flush_term = { .writer = &flush_failure, .mode = diagnostics::ColorMode.NO_COLOR };
-	assert(@catch(tree.dump(flush_term)) == DUMP_WRITE_FAILED);
+	assert(@catch(tree.dump(&flush_failure, false)) == DUMP_WRITE_FAILED);
 	tree.free();
 	comp.free();
 }

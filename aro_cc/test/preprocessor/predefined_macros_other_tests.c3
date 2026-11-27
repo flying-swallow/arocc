@@ -60,7 +60,7 @@ fn String emit(String triple, String cpu, SectionFn section, Opts o = {})
 	String result;
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.target = tgt(triple, cpu);
 		if (o.set_os) comp.target.os.tag = o.os;
 		comp.langopts.pthread = o.pthread;
@@ -69,7 +69,7 @@ fn String emit(String triple, String cpu, SectionFn section, Opts o = {})
 		comp.code_gen_options.is_ropi = o.ropi;
 		comp.code_gen_options.is_rwpi = o.rwpi;
 		comp.cmodel = o.cmodel;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		DString w;
 		w.init(&ta);
 		section(&comp, &w, o.is_gnu)!!;

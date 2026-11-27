@@ -12,7 +12,7 @@ macro @with_comp(; @body(Compilation* comp))
 	ta.init(mem);
 	defer ta.free();
 	Compilation comp;
-	comp.init(&ta);
+	comp.init(&ta, compilation::native_definition());
 	comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
 	@body(&comp);
 	comp.free();
@@ -28,7 +28,7 @@ macro @with_parser(; @body(Compilation* comp, Parser* p, Diagnostics* d))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;

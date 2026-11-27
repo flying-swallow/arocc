@@ -5,6 +5,7 @@ load("//aro_cc/tools:c3.bzl", "c3_test")
 c3_test(name = "attribute_names_tests", srcs = ["attribute_names_tests.c3"], deps = ["//:aro_cc_lib"])
 c3_test(name = "attribute_wip_tests", srcs = ["attribute_wip_tests.c3"], deps = ["//:aro_cc_lib"])
 c3_test(name = "parser_attribute_tests", srcs = ["parser_attribute_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "darwin_sdk_syntax_tests", srcs = ["darwin_sdk_syntax_tests.c3"], deps = ["//:aro_cc_lib"])
 c3_test(name = "attribute_map_tests", srcs = ["attribute_map_tests.c3"], deps = ["//:aro_cc_lib"])
 c3_test(name = "symbol_stack_tests", srcs = ["symbol_stack_tests.c3"], deps = ["//:aro_cc_lib"])
 c3_test(name = "parser_context_tests", srcs = ["parser_context_tests.c3"], deps = ["//:aro_cc_lib"])
@@ -29,6 +30,7 @@ test_suite(
         ":attribute_names_tests",
         ":attribute_wip_tests",
         ":parser_attribute_tests",
+        ":darwin_sdk_syntax_tests",
         ":attribute_map_tests",
         ":symbol_stack_tests",
         ":parser_context_tests",

@@ -5,12 +5,41 @@ import aro::compiler::includes;
 import aro::source, aro::string_interner, aro::frontend::c::diagnostics, aro::frontend::c::lang_opts, aro::target, aro::frontend::c::type_store, std::collections::list, std::collections::maybe;
 import aro::value_interner, aro::frontend::c::pragma;
 import aro::frontend::c::builtins;
-import aro::code_gen_options, std::time;
+import aro::code_gen_options, std::time, std::core::dstring;
 
 excuse FILE_TOO_BIG;
 
 <* Zig `error.FatalError` (Compilation.Error): a fatal error has occurred and compilation has stopped. *>
 excuse FATAL_ERROR;
+
+<* Settings selected before compiling a translation unit. Create with
+   `definition_for_target` so language and code generation defaults are filled.
+   Each Compilation owns its own TypeStore, derived from these settings. *>
+struct CompilationDefinition
+{
+	Target target;
+	LangOpts langopts;
+	CodeGenOptions code_gen_options;
+	CodeModel cmodel;
+	bool has_darwin_target_variant;
+	Target darwin_target_variant;
+}
+
+fn CompilationDefinition definition_for_target(Target selected_target)
+{
+	return {
+		.target = selected_target,
+		.langopts = lang_opts::DEFAULT,
+		.code_gen_options = code_gen_options::DEFAULT,
+		.cmodel = DEFAULT,
+	};
+}
+
+<* Explicit definition using the machine running the compiler as the target. *>
+fn CompilationDefinition native_definition()
+{
+	return definition_for_target(target::native()!!);
+}
 
 struct Compilation
 {
@@ -128,17 +157,21 @@ fn long Compilation.now_seconds(&self) => self.clock_mode == FIXED ? self.fixed_
  Initialize an empty compilation. All owned memory comes from `gpa`.
  `diagnostics` is borrowed (Zig `InitOptions.diagnostics`); when null the
  compilation owns a sink with IGNORE output that still counts messages.
+ An explicit definition is copied and initializes named types for its target
+ immediately. Finalize its target and language options before passing it here.
  @param [&inout] gpa : "Allocator for everything the compilation owns"
 *>
-fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnostics* diagnostics = null)
+fn void Compilation.init(&self, Allocator gpa, CompilationDefinition definition,
+	Allocator arena = null, Diagnostics* diagnostics = null)
 {
 	*self = { .gpa = gpa, .arena = arena, .ms_cwd_source_id = source::UNUSED_ID, .diagnostics = diagnostics };
-	self.langopts = lang_opts::DEFAULT;
 	self.clock_mode = SYSTEM;
-	self.code_gen_options = code_gen_options::DEFAULT;
-	self.cmodel = DEFAULT;
-	// Zig's `Target.default` is the host (builtin); an undescribable host is a build configuration error.
-	self.target = target::native()!!;
+	self.target = definition.target;
+	self.langopts = definition.langopts;
+	self.code_gen_options = definition.code_gen_options;
+	self.cmodel = definition.cmodel;
+	self.has_darwin_target_variant = definition.has_darwin_target_variant;
+	self.darwin_target_variant = definition.darwin_target_variant;
 	if (!diagnostics)
 	{
 		self.diagnostics = alloc::new(gpa, Diagnostics);
@@ -154,6 +187,7 @@ fn void Compilation.init(&self, Allocator gpa, Allocator arena = null, Diagnosti
 	self.interner.init(gpa);
 	self.builtins.init(gpa);
 	self.pragmas.init(gpa);
+	type_store::init_named_types(&self.type_store, &self.target, &self.string_interner);
 }
 
 fn void Compilation.free(&self)
@@ -164,7 +198,7 @@ fn void Compilation.free(&self)
 		// umbrella_framework_path borrows a prefix of this or another source's
 		// path (subframeworks share their umbrella's), so it is never freed here.
 		alloc::free(gpa, src.path.ptr);
-		alloc::free(gpa, src.buf.ptr);
+		src.storage.free(gpa);
 		if (src.splice_locs.len) alloc::free(gpa, src.splice_locs.ptr);
 	}
 	foreach (&al : self.source_aliases) alloc::free(gpa, al.path.ptr);
@@ -233,7 +267,7 @@ fn Source Compilation.get_source(&self, SourceId id)
 		self.generated_buf.entries[self.generated_buf.len()] = 0;
 		return {
 			.path = "<scratch space>",
-			.buf = (String)self.generated_buf.array_view(),
+			.storage = { .raw = (String)self.generated_buf.array_view() },
 			.id = source::GENERATED_ID,
 			.kind = USER,
 		};
@@ -414,10 +448,34 @@ fn Source? Compilation.add_source_from_owned_buffer(&self, String path, char[] b
 	Source src = {
 		.id = source_id,
 		.path = duped_path,
-		.buf = (String)contents,
+		.storage = { .raw = (String)contents, .owns_raw = true },
 		.splice_locs = splice_locs,
 		.kind = kind,
 	};
+	self.sources.push(src);
+	uint idx = self.source_paths.get_or_put(duped_path);
+	assert(idx == source_id.index);
+	return src;
+}
+
+<*
+ Add an already-normalized DString as a source without copying it. The DString
+ moves into Source.storage and supplies the trailing NUL through zstr_view.
+*>
+fn Source? Compilation.add_source_from_owned_dstring(&self, String path, DString* contents, SourceKind kind)
+{
+	if ((ulong)contents.len() > uint::max) return FILE_TOO_BIG~;
+	contents.zstr_view();
+	String duped_path = path.copy(self.gpa);
+	defer catch alloc::free(self.gpa, duped_path.ptr);
+	SourceId source_id = { .index = (uint)self.sources.len() };
+	Source src = {
+		.id = source_id,
+		.path = duped_path,
+		.storage = { .dstring = *contents },
+		.kind = kind,
+	};
+	*contents = (DString)null;
 	self.sources.push(src);
 	uint idx = self.source_paths.get_or_put(duped_path);
 	assert(idx == source_id.index);
@@ -434,7 +492,7 @@ fn void? Compilation.add_newline_escape_error(&self, String path, char[] buf, ui
 	// Temporary source for getting the location for errors.
 	Source tmp_source = {
 		.path = path,
-		.buf = (String)buf,
+		.storage = { .raw = (String)buf },
 		.id = source::UNUSED_ID,
 		.kind = kind,
 		.splice_locs = splice_locs,

@@ -44,7 +44,7 @@ macro @with_pp(String triple; @body(Compilation* comp, Diagnostics* d, Preproces
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = tgt(triple);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -128,7 +128,7 @@ int source_counter;
 fn void lex_range(Compilation* comp, Source src, uint from, uint to, ExpandBuf* out)
 {
 	Tokenizer t;
-	t.init(src.buf, src.id, comp.langopts, &comp.target);
+	t.init(src.storage.bytes(), src.id, comp.langopts, &comp.target);
 	while (true)
 	{
 		Token raw = t.next();
@@ -533,7 +533,7 @@ fn void paste_strings() @test
 		ExpandBuf buf;
 		buf.init(comp.gpa);
 		Source src = comp.add_source_from_buffer("p.c", "(\"a\" \"bc\")")!!;
-		lex_range(comp, src, 0, (uint)src.buf.len, &buf);
+		lex_range(comp, src, 0, (uint)src.storage.bytes().len, &buf);
 		pp.char_buf.push('x');
 		// [source] parenthesized series, quotes dropped, length restored.
 		test::eq(pp.paste_strings_unsafe(buf.array_view())!!, "abc");

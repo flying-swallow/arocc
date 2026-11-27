@@ -26,7 +26,7 @@ macro @with_comp(; @body(Compilation* comp, Diagnostics* d))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		@body(&comp, &d);
 		comp.free();
 		d.free();

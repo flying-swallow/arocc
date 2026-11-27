@@ -34,7 +34,7 @@ fn Outcome eval_line(Preprocessor* pp, String line)
 	// Paths must be unique: add_source_from_buffer returns an existing source of the same path.
 	Source src = comp.add_source_from_buffer(string::tformat("t%d.c", comp.sources.len()), text)!!;
 	Tokenizer tz;
-	tz.init(src.buf, src.id, comp.langopts, &comp.target);
+	tz.init(src.storage.bytes(), src.id, comp.langopts, &comp.target);
 	Token hash = tz.next_no_ws();
 	assert(hash.id == HASH);
 	Token kw = tz.next_no_ws();
@@ -76,8 +76,8 @@ macro @with_pp(; @body(Preprocessor* pp, Diagnostics* d))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		@body(&pp, &d);

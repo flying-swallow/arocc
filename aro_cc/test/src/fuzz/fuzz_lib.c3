@@ -1,7 +1,7 @@
 module aro::fuzz_lib;
 import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::preprocessor;
 import aro::frontend::c::predefined_macros, aro::frontend::c::pragmas::gcc, aro::frontend::c::pragmas::message, aro::frontend::c::pragmas::once;
-import aro::frontend::c::pragma, aro::source, aro::target, aro::toolchain, aro::frontend::c::tree;
+import aro::frontend::c::pragma, aro::host_process, aro::source, aro::target, aro::toolchain, aro::frontend::c::tree;
 import aro::frontend::c::tokens;
 import std::collections::list, std::core::mem::allocators, std::io, std::io::file, std::io::path, std::io::os, libc;
 
@@ -192,7 +192,7 @@ fn bool compile_one(String input)
 	diagnostics::Diagnostics diagnostics;
 	diagnostics.init_ignore();
 	Compilation comp;
-	comp.init(a, a, &diagnostics);
+	comp.init(a, compilation::native_definition(), a, &diagnostics);
 	defer comp.free();
 
 	comp.include_files = {
@@ -214,6 +214,7 @@ fn bool compile_one(String input)
 	Host host = target::host()!!;
 	toolchain::discovery::Env tc_env = {
 		.fs = toolchain::discovery::host_fs(),
+		.process = host_process::SERVICE,
 		.target = comp.target,
 		.host_is_darwin = host.os.is_darwin(),
 	};
@@ -258,7 +259,6 @@ fn bool compile_one(String input)
 	defer tree.free();
 
 	DiscardWriter discard;
-	diagnostics::Terminal terminal = { .writer = (OutStream)&discard, .mode = diagnostics::ColorMode.NO_COLOR };
-	(void)tree.dump(terminal);
+	(void)tree.dump((OutStream)&discard, false);
 	return true;
 }

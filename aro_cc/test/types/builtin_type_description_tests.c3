@@ -43,9 +43,9 @@ macro @with_target(String triple; @body(Compilation* comp))
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.target = tgt(triple);
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		@body(&comp);
 		comp.free();
 	}

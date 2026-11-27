@@ -205,7 +205,7 @@ fn int run_backend_driver(String[] args, diagnostics::Diagnostics* d, BackendChi
 {
 	args = pin_external_assembler(args, native_default);
 	compilation::Compilation comp;
-	comp.init(mem, null, d);
+	comp.init(mem, compilation::native_definition(), null, d);
 	comp.environment.process = { .ctx = (void*)child, .run = &backend_fake_child };
 	comp.environment.has_path = true;
 	comp.environment.path = path_value;
@@ -218,7 +218,7 @@ fn int run_backend_driver(String[] args, diagnostics::Diagnostics* d, BackendChi
 fn int run_backend_driver_host(String[] args, diagnostics::Diagnostics* d, String path_value)
 {
 	compilation::Compilation comp;
-	comp.init(mem, null, d);
+	comp.init(mem, compilation::native_definition(), null, d);
 	// Leave the process service unset so linker execution uses driver_exec.run_host.
 	comp.environment.process = {};
 	comp.environment.has_path = true;

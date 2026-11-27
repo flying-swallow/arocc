@@ -36,7 +36,7 @@ macro @with_pp(String text, Standard std, bool preserve_ws, Linemarkers markers;
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.langopts.standard = std;
 		Source src = comp.add_source_from_buffer("t.c", text)!!;
 		Preprocessor pp;
@@ -98,7 +98,7 @@ fn void include_guard_detection() @test
 	ta.init(mem);
 	defer ta.free();
 	Compilation comp;
-	comp.init(&ta);
+	comp.init(&ta, compilation::native_definition());
 	Preprocessor pp;
 	pp.init(&comp, preprocessor::TESTING)!!;
 	Source a = comp.add_source_from_buffer("a.h", "\n\n  # ifndef A_H /* c */\n#define A_H\n#endif\n")!!;
@@ -120,7 +120,7 @@ fn void expect_helpers() @test
 	{
 		Source s1 = pp.comp.add_source_from_buffer("e1.c", "  FOO /* x */ bar baz\nnext")!!;
 		Tokenizer t;
-		t.init(s1.buf, s1.id, pp.comp.langopts, &pp.comp.target);
+		t.init(s1.storage.bytes(), s1.id, pp.comp.langopts, &pp.comp.target);
 		test::eq(pp.expect_macro_name(&t)!!, "FOO");
 		pp.expect_nl(&t)!!;
 		check(d.messages.len(), 1);
@@ -128,7 +128,7 @@ fn void expect_helpers() @test
 		check(t.next().id.ordinal, TokenId.IDENTIFIER.ordinal);
 
 		Source s2 = pp.comp.add_source_from_buffer("e2.c", "  1 rest of line\nnext")!!;
-		t.init(s2.buf, s2.id, pp.comp.langopts, &pp.comp.target);
+		t.init(s2.storage.bytes(), s2.id, pp.comp.langopts, &pp.comp.target);
 		assert(@catch(pp.expect_macro_name(&t)) == preprocessor::NO_MACRO_NAME);
 		expect_msg(d, 1, "macro name missing", 1, 3);
 		// skip_to_nl consumed the line.
@@ -296,7 +296,7 @@ fn void newline_eof() @test
 		d.init_list(&ta);
 		d.set("newline-eof", WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", "#ifdef A\n#endif")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -445,8 +445,8 @@ fn void empty_if_expression_uses_real_evaluator() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Source src = comp.add_source_from_buffer("t.c", "#if\nskipped\n#else\n#endif\n#ifdef X\n#elif\nskipped\n#endif\n#ifdef DEFINED\n#elif\n#endif\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;

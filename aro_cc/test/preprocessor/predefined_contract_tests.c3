@@ -65,7 +65,7 @@ fn void compilation_defaults_and_clock() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		test::eq(comp.environment.source_date_epoch.has_value, false);
 		test::eq(comp.cmodel, CodeModel.DEFAULT);
 		test::eq(comp.code_gen_options.optimization_level, OptimizationLevel.O0);

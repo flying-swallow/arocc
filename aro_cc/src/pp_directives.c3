@@ -165,10 +165,10 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 
 	self.preprocess_count++;
 	Tokenizer tokenizer;
-	tokenizer.init(src.buf, src.id, self.comp.langopts, &self.comp.target, src.splice_locs);
+	tokenizer.init(src.storage.bytes(), src.id, self.comp.langopts, &self.comp.target, src.splice_locs);
 
 	// Estimate how many new tokens this source will contain.
-	self.ensure_total_token_capacity(self.tokens.len() + src.buf.len / 8);
+	self.ensure_total_token_capacity(self.tokens.len() + src.storage.bytes().len / 8);
 
 	IfContext if_context = IF_CONTEXT_DEFAULT;
 
@@ -557,7 +557,7 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess_extra(&self, Source src)
 				if (if_context.level != 0) self.err_raw(tok, Diagnostic.UNTERMINATED_CONDITIONAL_DIRECTIVE)!;
 				// The following check needs to occur here and not at the top of the function
 				// because a pragma may change the level during preprocessing
-				if (src.buf.len > 0 && src.buf[src.buf.len - 1] != '\n')
+				if (src.storage.bytes().len > 0 && src.storage.bytes()[src.storage.bytes().len - 1] != '\n')
 				{
 					self.err_raw(tok, Diagnostic.NEWLINE_EOF)!;
 				}
@@ -607,7 +607,7 @@ fn String strip_quotes(String s) @local
 fn String? Preprocessor.find_include_guard(&self, Source src)
 {
 	Tokenizer tokenizer;
-	tokenizer.init(src.buf, src.id, self.comp.langopts, &self.comp.target);
+	tokenizer.init(src.storage.bytes(), src.id, self.comp.langopts, &self.comp.target);
 	RawToken hash = tokenizer.next_no_ws();
 	while (hash.id == NL) hash = tokenizer.next_no_ws();
 	if (hash.id != HASH) return NO_INCLUDE_GUARD~;

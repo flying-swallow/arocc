@@ -22,7 +22,7 @@ fn void AstFixture.init(&self)
 {
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
-	self.comp.init(&self.ta, null, &self.diagnostics);
+	self.comp.init(&self.ta, compilation::native_definition(), null, &self.diagnostics);
 	Source src = self.comp.add_source_from_buffer("ir_probe.c", "answer")!!;
 	self.tokens[0] = { .id = tokenizer::TokenId.IDENTIFIER,
 		.loc = { .id = src.id, .byte_offset = 0, .line = 1 } };
@@ -173,8 +173,7 @@ fn Ir invalid_symbol_body_ir(Allocator allocator, value_interner::Interner* inte
 
 fn void dump_graph(Ir* graph)
 {
-	Terminal term = { .writer = io::stdout(), .mode = diagnostics::ColorMode.NO_COLOR };
-	graph.dump(term)!!;
+	graph.dump(io::stdout(), false)!!;
 }
 
 fn int main(String[] args)

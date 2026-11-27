@@ -8,40 +8,50 @@
 // algorithms of record_layout.zig reduce to natural layout: each field at the
 // next offset aligned to its type's alignment, record alignment the maximum
 // field alignment (at least one byte), size rounded up to it, required
-// alignment 8 bits. `natural_record_layout` computes exactly that.
+// alignment 8 bits. Builtin record layout uses the target scalar sizes and alignments.
 module aro::frontend::c::type_store;
-import aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::target, aro::string_interner;
+import aro::target, aro::string_interner;
 
-<*
- Natural layout of plain scalar fields (see the module comment); fills each
- field's `layout`.
- @require fields.len > 0
-*>
-fn RecordLayout natural_record_layout(Compilation* comp, RecordField[] fields, bool is_union = false)
+fn QualType put_builtin_struct(TypeStore* ts, Target* t, StringInterner* strings, String name, RecordField[] fields) @local
 {
 	ulong size_bits = 0;
 	uint align_bits = 8;
-	foreach (&field : fields)
+	foreach (&f : fields)
 	{
-		assert(field.bit_width == BIT_WIDTH_NULL, "bitfields need record_layout.compute");
-		ulong fsize = field.qt.sizeof(comp) * 8;
-		uint falign = field.qt.alignof(comp) * 8;
-		ulong offset = is_union ? 0 : align_forward(size_bits, falign);
-		size_bits = max(size_bits, offset + fsize);
-		align_bits = max(align_bits, falign);
-		field.layout = { .offset_bits = offset, .size_bits = fsize };
+		ulong size;
+		uint alignment;
+		switch ((BuiltinType)f.qt.index)
+		{
+			case INT_POINTER:
+			case CHAR_POINTER:
+			case VOID_POINTER:
+				size = (ulong)t.ptr_bit_width() / 8;
+				alignment = t.cpu.arch == AVR ? 1 : (uint)size;
+			default:
+				CType ctype;
+				switch ((BuiltinType)f.qt.index)
+				{
+					case INT: ctype = INT;
+					case UINT: ctype = UINT;
+					case LONG: ctype = LONG;
+					case UCHAR: ctype = CHAR;
+					case USHORT: ctype = USHORT;
+					default: unreachable("unexpected builtin record field type");
+				}
+				size = (ulong)t.c_type_bit_size(ctype) / 8;
+				alignment = t.c_type_alignment(ctype);
+		}
+		ulong offset = align_forward(size_bits, (ulong)alignment * 8);
+		f.layout = { .offset_bits = offset, .size_bits = size * 8 };
+		size_bits = offset + size * 8;
+		align_bits = max(align_bits, alignment * 8);
 	}
-	size_bits = align_forward(size_bits, align_bits);
-	return { .size_bits = size_bits, .field_alignment_bits = align_bits, .pointer_alignment_bits = align_bits, .required_alignment_bits = 8 };
+	RecordLayout layout = { .size_bits = align_forward(size_bits, align_bits),
+		.field_alignment_bits = align_bits, .pointer_alignment_bits = align_bits, .required_alignment_bits = 8 };
+	return ts.put(type_record(strings.intern(name), fields, layout));
 }
 
-fn QualType put_builtin_struct(Compilation* comp, String name, RecordField[] fields) @local
-{
-	RecordLayout layout = natural_record_layout(comp, fields);
-	return comp.type_store.put(type_record(comp.intern_string(name), fields, layout));
-}
-
-fn RecordField field(Compilation* comp, String name, QualType qt) @local => record_field(comp.intern_string(name), qt);
+fn RecordField field(StringInterner* strings, String name, QualType qt) @local => record_field(strings.intern(name), qt);
 
 fn QualType int_kind_qt(CIntKind k)
 {
@@ -61,10 +71,8 @@ fn QualType int_kind_qt(CIntKind k)
 }
 
 <* TypeStore.initNamedTypes: wchar_t, wint_t, ptrdiff_t, size_t, pid_t, intmax_t, ..., va_list. *>
-fn void init_named_types(Compilation* comp)
+fn void init_named_types(TypeStore* ts, Target* t, StringInterner* strings)
 {
-	TypeStore* ts = &comp.type_store;
-	Target* t = &comp.target;
 	OsTag os = t.os.tag;
 	Arch arch = t.cpu.arch;
 
@@ -198,7 +206,13 @@ fn void init_named_types(Compilation* comp)
 		}
 	}
 	ts.ptrdiff = ptrdiff;
-	ts.size = ptrdiff.make_int_unsigned(comp);
+	switch (ptrdiff)
+	{
+		case INT: ts.size = UINT;
+		case LONG: ts.size = ULONG;
+		case LONG_LONG: ts.size = ULONG_LONG;
+		default: unreachable("unexpected ptrdiff_t type");
+	}
 
 	ts.pid_t = os == HAIKU ? LONG : INT;
 
@@ -206,24 +220,24 @@ fn void init_named_types(Compilation* comp)
 	ts.intptr = int_kind_qt(t.int_ptr_type());
 	ts.int16 = int_kind_qt(t.int16_type());
 	ts.int64 = int_kind_qt(t.int64_type());
-	ts.uint_least16_t = int_least_n(comp, 16, UNSIGNED);
-	ts.uint_least32_t = int_least_n(comp, 32, UNSIGNED);
+	ts.uint_least16_t = int_least_n_target(t, 16, UNSIGNED);
+	ts.uint_least32_t = int_least_n_target(t, 32, UNSIGNED);
 
-	ts.ns_constant_string = generate_ns_constant_string_type(comp);
-	ts.va_list = generate_va_list_type(comp);
+	ts.ns_constant_string = generate_ns_constant_string_type(ts, t, strings);
+	ts.va_list = generate_va_list_type(ts, t, strings);
 }
 
-fn QualType generate_ns_constant_string_type(Compilation* comp)
+fn QualType generate_ns_constant_string_type(TypeStore* ts, Target* t, StringInterner* strings)
 {
 	QualType const_int_ptr = { .is_const = true, .builtin = true, .index = BuiltinType.INT_POINTER.ordinal };
 	QualType const_char_ptr = { .is_const = true, .builtin = true, .index = BuiltinType.CHAR_POINTER.ordinal };
 	RecordField[4] fields = {
-		field(comp, "isa", const_int_ptr),
-		field(comp, "flags", INT),
-		field(comp, "str", const_char_ptr),
-		field(comp, "length", LONG),
+		field(strings, "isa", const_int_ptr),
+		field(strings, "flags", INT),
+		field(strings, "str", const_char_ptr),
+		field(strings, "length", LONG),
 	};
-	return put_builtin_struct(comp, "__NSConstantString_tag", &fields);
+	return put_builtin_struct(ts, t, strings, "__NSConstantString_tag", &fields);
 }
 
 enum VaListKind : char @local
@@ -238,9 +252,8 @@ enum VaListKind : char @local
 }
 
 <* TypeStore.generateVaListType: the target's `__builtin_va_list`. *>
-fn QualType generate_va_list_type(Compilation* comp)
+fn QualType generate_va_list_type(TypeStore* ts, Target* t, StringInterner* strings)
 {
-	Target* t = &comp.target;
 	VaListKind kind;
 	switch (t.cpu.arch)
 	{
@@ -314,55 +327,55 @@ fn QualType generate_va_list_type(Compilation* comp)
 	{
 		case AARCH64_VA_LIST:
 			RecordField[5] fields = {
-				field(comp, "__stack", VOID_POINTER),
-				field(comp, "__gr_top", VOID_POINTER),
-				field(comp, "__vr_top", VOID_POINTER),
-				field(comp, "__gr_offs", INT),
-				field(comp, "__vr_offs", INT),
+				field(strings, "__stack", VOID_POINTER),
+				field(strings, "__gr_top", VOID_POINTER),
+				field(strings, "__vr_top", VOID_POINTER),
+				field(strings, "__gr_offs", INT),
+				field(strings, "__vr_offs", INT),
 			};
-			return put_builtin_struct(comp, "__va_list", &fields);
+			return put_builtin_struct(ts, t, strings, "__va_list", &fields);
 		case ARM_VA_LIST:
-			RecordField[1] fields = { field(comp, "__ap", VOID_POINTER) };
-			return put_builtin_struct(comp, "__va_list", &fields);
+			RecordField[1] fields = { field(strings, "__ap", VOID_POINTER) };
+			return put_builtin_struct(ts, t, strings, "__va_list", &fields);
 		case S390X_VA_LIST:
 			RecordField[4] fields = {
-				field(comp, "__gpr", LONG),
-				field(comp, "__fpr", LONG),
-				field(comp, "__overflow_arg_area", VOID_POINTER),
-				field(comp, "__reg_save_area", VOID_POINTER),
+				field(strings, "__gpr", LONG),
+				field(strings, "__fpr", LONG),
+				field(strings, "__overflow_arg_area", VOID_POINTER),
+				field(strings, "__reg_save_area", VOID_POINTER),
 			};
-			struct_qt = put_builtin_struct(comp, "__va_list_tag", &fields);
+			struct_qt = put_builtin_struct(ts, t, strings, "__va_list_tag", &fields);
 		case POWERPC_VA_LIST:
 			RecordField[5] fields = {
-				field(comp, "gpr", UCHAR),
-				field(comp, "fpr", UCHAR),
-				field(comp, "reserved", USHORT),
-				field(comp, "overflow_arg_area", VOID_POINTER),
-				field(comp, "reg_save_area", VOID_POINTER),
+				field(strings, "gpr", UCHAR),
+				field(strings, "fpr", UCHAR),
+				field(strings, "reserved", USHORT),
+				field(strings, "overflow_arg_area", VOID_POINTER),
+				field(strings, "reg_save_area", VOID_POINTER),
 			};
-			struct_qt = put_builtin_struct(comp, "__va_list_tag", &fields);
+			struct_qt = put_builtin_struct(ts, t, strings, "__va_list_tag", &fields);
 		case HEXAGON_VA_LIST:
 			RecordField[3] fields = {
-				field(comp, "__current_saved_reg_area_pointer", VOID_POINTER),
-				field(comp, "__saved_reg_area_end_pointer", VOID_POINTER),
-				field(comp, "__overflow_area_pointer", VOID_POINTER),
+				field(strings, "__current_saved_reg_area_pointer", VOID_POINTER),
+				field(strings, "__saved_reg_area_end_pointer", VOID_POINTER),
+				field(strings, "__overflow_area_pointer", VOID_POINTER),
 			};
-			struct_qt = put_builtin_struct(comp, "__va_list_tag", &fields);
+			struct_qt = put_builtin_struct(ts, t, strings, "__va_list_tag", &fields);
 		case X86_64_VA_LIST:
 			RecordField[4] fields = {
-				field(comp, "gp_offset", UINT),
-				field(comp, "fp_offset", UINT),
-				field(comp, "overflow_arg_area", VOID_POINTER),
-				field(comp, "reg_save_area", VOID_POINTER),
+				field(strings, "gp_offset", UINT),
+				field(strings, "fp_offset", UINT),
+				field(strings, "overflow_arg_area", VOID_POINTER),
+				field(strings, "reg_save_area", VOID_POINTER),
 			};
-			struct_qt = put_builtin_struct(comp, "__va_list_tag", &fields);
+			struct_qt = put_builtin_struct(ts, t, strings, "__va_list_tag", &fields);
 		case XTENSA_VA_LIST:
 			RecordField[3] fields = {
-				field(comp, "__va_stk", INT_POINTER),
-				field(comp, "__va_reg", INT_POINTER),
-				field(comp, "__va_ndx", INT),
+				field(strings, "__va_stk", INT_POINTER),
+				field(strings, "__va_reg", INT_POINTER),
+				field(strings, "__va_ndx", INT),
 			};
-			return put_builtin_struct(comp, "__va_list_tag", &fields);
+			return put_builtin_struct(ts, t, strings, "__va_list_tag", &fields);
 	}
-	return comp.type_store.put(type_array(struct_qt, FIXED, 1));
+	return ts.put(type_array(struct_qt, FIXED, 1));
 }

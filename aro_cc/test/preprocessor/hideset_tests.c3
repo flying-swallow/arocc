@@ -25,7 +25,7 @@ macro @with_hs(; @body(Hideset* hs, SourceId id))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("hs.c", BUF)!!;
 		Hideset hs;
 		hs.init(&comp);

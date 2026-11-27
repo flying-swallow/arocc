@@ -1489,8 +1489,7 @@ fn int emit_ir_output(Compilation* comp, Diagnostics* d, DriverOptions* opts,
 	}
 	if (opts.verbose_ir)
 	{
-		diagnostics::Terminal term = { .writer = io::stdout(), .mode = diagnostics::ColorMode.NO_COLOR };
-		if (catch generated_ir.dump(term))
+		if (catch generated_ir.dump(io::stdout(), false))
 		{
 			(void)add_driver_fatal(comp.gpa, d, "unable to write Ir dump");
 			return 1;
@@ -1551,8 +1550,7 @@ fn int report_ir_todos(Compilation* comp, Diagnostics* d, DriverOptions* opts, b
 	}
 	if (opts.verbose_ir)
 	{
-		diagnostics::Terminal term = { .writer = io::stdout(), .mode = diagnostics::ColorMode.NO_COLOR };
-		if (catch generated_ir.dump(term))
+		if (catch generated_ir.dump(io::stdout(), false))
 		{
 			(void)add_driver_fatal(comp.gpa, d, "unable to write Ir dump");
 			return 1;
@@ -1895,8 +1893,7 @@ fn int process_source(Compilation* comp, Diagnostics* d, DriverOptions* opts, Fr
 	defer result.free();
 	if (opts.verbose_ast)
 	{
-		diagnostics::Terminal term = { .writer = io::stdout(), .mode = diagnostics::ColorMode.NO_COLOR };
-		if (catch result.dump(term))
+		if (catch result.dump(io::stdout(), false))
 		{
 			(void)add_driver_fatal(comp.gpa, d, "unable to write AST");
 			return 1;
@@ -2006,7 +2003,7 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 	if (extra.has_color)
 	{
 		d.color = extra.color ? diagnostics::ColorOverride.FORCE_ON : diagnostics::ColorOverride.FORCE_OFF;
-		d.terminal.mode = extra.color ? diagnostics::ColorMode.ESCAPE_CODES : diagnostics::ColorMode.NO_COLOR;
+		d.use_ansi = extra.color;
 	}
 	bool link_mode = !(opts.only_preprocess || opts.only_syntax || opts.only_compile || opts.only_preprocess_and_compile);
 	// A link step may name only objects, archives and -l libraries (`aro m.o -o m`).
@@ -2192,7 +2189,7 @@ fn int run_with_stdin(Compilation* comp, Diagnostics* d, String[] args,
 		}
 		else if (try existing = comp.find_source(input_path))
 		{
-			input_bytes = existing.buf.copy(comp.gpa);
+			input_bytes = existing.storage.bytes().copy(comp.gpa);
 		}
 		else
 		{

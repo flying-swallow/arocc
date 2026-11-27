@@ -1,13 +1,12 @@
 // Owner: 12.4 lookup-props (contract frozen by plan 12 stage 0).
 // Port of src/aro/Builtins.zig minus createType/createBuiltin (those live in
-// builtin_type_description.c3): per-group name lookup over the generated
+// builtin_type_description.c3): per-group name lookup over the checked-in C3
 // tables, arch -> group search order, the Builtins name -> Expanded cache.
 //
 // Invariants:
-// - The generated tables (aro::frontend::c::builtin_defs::<group>, produced from the .def
-//   files by //:builtin_defs, see aro_cc/tools/builtins_schema.md) are the only data
-//   source. NAMES is sorted bytewise ascending, so a tag index is the name's
-//   rank and lookup is a binary search. No DAFSA.
+// - The checked-in tables (aro::frontend::c::builtin_defs::<group>) are the only
+//   data source; see aro_cc/tools/builtins_schema.md. NAMES is sorted bytewise
+//   ascending, so a tag index is the name's rank and lookup is a binary search.
 // - Lookup is exact and case-sensitive; an unknown name is UNKNOWN_BUILTIN
 //   (Zig `null`), never a crash.
 // - from_name searches COMMON first, then the arch groups in Zig order
@@ -57,7 +56,7 @@ struct FromName
 struct Builtins
 {
 	Allocator gpa;
-	<* Keys are static names from the generated NAMES tables. *>
+	<* Keys are static names from the expanded NAMES tables. *>
 	StringTable names;
 	<* Indexed by the StringTable index of the name. *>
 	List{Expanded} expanded;
@@ -108,7 +107,7 @@ fn Expanded? Builtins.get_or_create(&self, Compilation* comp, String name)
 <*
  The insertion half of getOrCreate: builds the function type of `builtin`
  and caches it under `key`. `key` must outlive the cache (get_or_create passes
- the static generated name). Returns the existing entry if `key` is cached.
+ the static table name). Returns the existing entry if `key` is cached.
 *>
 fn Expanded Builtins.create_from(&self, Compilation* comp, String key, FromName builtin)
 {
@@ -174,7 +173,7 @@ fn BuiltinTag? tag_from_name(BuiltinGroup group, String name)
 }
 
 <*
- Binary search of `name` in a bytewise-ascending name table (the generated
+ Binary search of `name` in a bytewise-ascending name table (the expanded
  NAMES layout). Lengths outside [shortest, longest] fail fast, as the Zig
  DAFSA lookup does. UNKNOWN_BUILTIN on a miss.
  @require names.len <= 0x10000 : "tag indices are 16 bits"

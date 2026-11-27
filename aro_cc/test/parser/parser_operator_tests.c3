@@ -22,8 +22,8 @@ fn void check_int_expr(String text, tree::NodeKind kind, long want, bool want_no
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Source src = comp.add_source_from_buffer("operator.c", text)!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -131,8 +131,8 @@ fn void check_pointer_expr(String text, tree::NodeKind kind, type_store::QualTyp
 		d.init_list(&ta);
 		d.state.extensions = diagnostics::MessageKind.WARNING;
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		if (distinct_pointees) second_pointer_qt = comp.type_store.put(type_store::type_pointer(type_store::FLOAT));
 		if (bounds_safety) comp.langopts.bounds_safety = lang_opts::BoundsSafety.CLANG;
 		if (make_single_pointer)
@@ -389,7 +389,7 @@ fn void const_expression_entry_accepts_integer_expression() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("const-expr.c", "2 + 2\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -420,7 +420,7 @@ fn void integer_const_expr_rejects_noninteger_result() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("noninteger-const-expr.c", "x\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -467,7 +467,7 @@ fn void conditional_uses_common_type_of_both_arms() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("conditional.c", "0 ? y : x\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -520,7 +520,7 @@ fn void short_circuit_and_invalid_forms() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("bad.c", "1 +\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -552,7 +552,7 @@ fn void float_operands_keep_arithmetic_ast_type() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("float-op.c", "x + y\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -592,7 +592,7 @@ fn void complex_arithmetic_and_unary_conjugation_fold() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		type_store::QualType complex_double = comp.type_store.put(type_store::type_complex(type_store::DOUBLE));
 		Value x_value = value::intern(&comp, primitive_value::complex_key(
 			primitive_value::f64_value(0x3FF0_0000_0000_0000), primitive_value::f64_value(0x4000_0000_0000_0000)));

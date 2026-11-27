@@ -577,12 +577,7 @@ fn String BuilderSpecifierTag.zig_name(self)
 
 fn void? Builder.cannot_combine_with_typeof(&self, BuilderSpecifierTag tag, tokens::TokenIndex tok)
 {
-	return self.err(Diagnostic.CANNOT_COMBINE_WITH_TYPEOF, tok, tag.zig_name());
-}
-
-macro void? Builder.err(&self, Diagnostic $diag, tokens::TokenIndex tok, ...)
-{
-	return $diag.@emit(self.parser, tok, ...$vaarg);
+	return Diagnostic.CANNOT_COMBINE_WITH_TYPEOF.@emit(self.parser, tok, tag.zig_name());
 }
 
 fn parser::QtArg Builder.fmt_qt(&self, type_store::QualType qt) => self.parser.fmt_qt(qt);
@@ -598,7 +593,7 @@ fn void? Builder.cannot_combine(&self, tokens::TokenIndex tok)
 	// `.invalid => unreachable` in Type lookup), so there is no Zig output to match.
 	// Emit the literal `invalid` here instead of trapping in C3's printer.
 	if (qt.is_invalid()) return Diagnostic.CANNOT_COMBINE_SPEC_QT.@emit(self.parser, tok, "'invalid'");
-	return self.err(Diagnostic.CANNOT_COMBINE_SPEC_QT, tok, self.fmt_qt(qt));
+	return Diagnostic.CANNOT_COMBINE_SPEC_QT.@emit(self.parser, tok, self.fmt_qt(qt));
 }
 
 fn void? Builder.duplicate_spec(&self, tokens::TokenIndex tok, String spelling)
@@ -1233,32 +1228,32 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 		}
 		if (qt.is_c23_auto())
 		{
-			self.err(Diagnostic.ATOMIC_AUTO, atok)!; return INVALID;
+			Diagnostic.ATOMIC_AUTO.@emit(self.parser, atok)!; return INVALID;
 		}
 		if (qt.has_incomplete_size(self.parser.comp))
 		{
-			self.err(Diagnostic.ATOMIC_INCOMPLETE, atok, self.fmt_qt(qt))!; return INVALID;
+			Diagnostic.ATOMIC_INCOMPLETE.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 		}
 		Type t = qt.base(self.parser.comp).ty;
 		if (t.tag == ARRAY)
 		{
-			self.err(Diagnostic.ATOMIC_ARRAY, atok, self.fmt_qt(qt))!; return INVALID;
+			Diagnostic.ATOMIC_ARRAY.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 		}
 		if (t.tag == FUNC)
 		{
-			self.err(Diagnostic.ATOMIC_FUNC, atok, self.fmt_qt(qt))!; return INVALID;
+			Diagnostic.ATOMIC_FUNC.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 		}
 		if (t.tag == ATOMIC)
 		{
-			self.err(Diagnostic.ATOMIC_ATOMIC, atok, self.fmt_qt(qt))!; return INVALID;
+			Diagnostic.ATOMIC_ATOMIC.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 		}
 		if (t.tag == COMPLEX)
 		{
-			self.err(Diagnostic.ATOMIC_COMPLEX, atok, self.fmt_qt(qt))!; return INVALID;
+			Diagnostic.ATOMIC_COMPLEX.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 		}
 		if (t.tag == BIT_INT)
 		{
-			self.err(Diagnostic.ATOMIC_BIT_INT, atok, self.fmt_qt(qt))!; return INVALID;
+			Diagnostic.ATOMIC_BIT_INT.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 		}
 		if (qt.is_const || qt.is_volatile)
 		{
@@ -1267,7 +1262,7 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 			// outer type since the atomic payload is unqualified.
 			if (self.has_atomic_type_tok)
 			{
-				self.err(Diagnostic.ATOMIC_QUALIFIED, atok, self.fmt_qt(qt))!; return INVALID;
+				Diagnostic.ATOMIC_QUALIFIED.@emit(self.parser, atok, self.fmt_qt(qt))!; return INVALID;
 			}
 			inner_const = qt.is_const;
 			inner_volatile = qt.is_volatile;
@@ -1289,7 +1284,7 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 		}
 		if (input.is_c23_auto())
 		{
-			self.err(Diagnostic.RESTRICT_NON_POINTER, self.restrict_tok, self.fmt_qt(input))!;
+			Diagnostic.RESTRICT_NON_POINTER.@emit(self.parser, self.restrict_tok, self.fmt_qt(input))!;
 			return qt;
 		}
 		TypeTag tag = input.base(self.parser.comp).ty.tag;
@@ -1299,7 +1294,7 @@ fn QualType? Builder.finish_quals(&self, QualType input)
 		}
 		else
 		{
-			self.err(Diagnostic.RESTRICT_NON_POINTER, self.restrict_tok, self.fmt_qt(input))!;
+			Diagnostic.RESTRICT_NON_POINTER.@emit(self.parser, self.restrict_tok, self.fmt_qt(input))!;
 		}
 	}
 	return qt;

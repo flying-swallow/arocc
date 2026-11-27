@@ -21,7 +21,7 @@ fn void constant_expression_stores_folded_value_and_restores_mode() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("const-fold.c", "2 + 2\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -54,7 +54,7 @@ fn void unavailable_value_is_not_stored() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("const-fold-unavailable.c", "answer\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -92,7 +92,7 @@ fn void integer_const_expression_rejects_noninteger_and_propagates_malformed_inp
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("bad-integer-const.c", "1 +\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -124,7 +124,7 @@ fn void integer_const_expression_rejects_noninteger_result() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("float-integer-const.c", "x\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -159,7 +159,7 @@ fn void const_expression_restores_mode_after_parse_failure() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("const-fold-fault.c", "1 +\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -191,7 +191,7 @@ fn void referenced_const_declaration_uses_extension_folding_mode() @test
 		d.init_list(&ta);
 		d.set("gnu-folding-constant", WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("const-fold-extension.c", "answer\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;

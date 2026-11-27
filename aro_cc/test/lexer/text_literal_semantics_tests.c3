@@ -27,9 +27,9 @@ macro @with_comp(String triple; @body(Compilation* comp))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple(triple, HOST)!!;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		@body(&comp);
 		comp.free();
 		d.free();

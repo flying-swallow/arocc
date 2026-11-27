@@ -31,8 +31,8 @@ fn void? RejectWriter.flush(&self) @dynamic => WRITE_FAILURE~;
 
 fn void SymbolFixture.init(&self, Allocator a, OutStream writer = null)
 {
-	if (writer) { self.d.init_writer(writer, diagnostics::ColorMode.NO_COLOR); } else { self.d.init_list(a); }
-	self.comp.init(a, null, &self.d);
+	if (writer) { self.d.init_writer(writer, false); } else { self.d.init_list(a); }
+	self.comp.init(a, compilation::native_definition(), null, &self.d);
 	char[] buf = alloc::new_array(tmem, char, TOKEN_COUNT * 2);
 	for (uint i = 0; i < TOKEN_COUNT; i++) { buf[i * 2] = 'a'; buf[i * 2 + 1] = ' '; }
 	Source src = self.comp.add_source_from_buffer("symbols.c", (String)buf)!!;
@@ -73,7 +73,7 @@ fn void scope_shadowing_and_reuse() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		SymbolStack stack;
 		stack.init(&ta);
 		StringId x = comp.intern_string("x");

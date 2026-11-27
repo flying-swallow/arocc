@@ -75,7 +75,7 @@ fn void ordered_classes_and_path_forms() @test
 		tree.add_file("/work/a/after.h", "after-only");
 		tree.add_file("/absolute/h.h", "absolute");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = AFTER, .path = "/work/a" },
@@ -125,7 +125,7 @@ fn void system_directory_shadows_duplicate_normal_directory() @test
 		tree.add_file("/first/header.h", "first");
 		tree.add_file("/inc/header.h", "system");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = NORMAL, .path = "/inc" },
@@ -156,7 +156,7 @@ fn void quoted_and_include_next() @test
 		tree.add_file("/w/inc/local.h", "normal");
 		tree.add_file("/w/sys/local.h", "system");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = QUOTE, .path = "/w/quote" },
@@ -200,7 +200,7 @@ fn void quoted_include_dir_when_slash_index_equals_name_length() @test
 		tree.add_file("/abcd/top.h", "");
 		tree.add_file("/abcd/x.h", "root-level sibling");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({ { .kind = SYSTEM, .path = "/sys" } });
 		Source top = add_source(&comp, "/sys/abc/top.h");
@@ -226,7 +226,7 @@ fn void microsoft_cwd_search_reports_extension() @test
 		tree.init(&ta);
 		tree.add_file("/ms/header.h", "ms");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = add_source(&comp, "/work/main.c");
 		Source ms = add_source(&comp, "/ms/anchor.c");
@@ -256,7 +256,7 @@ fn void ms_warning_only_on_ms_cwd_fallback() @test
 		tree.add_file("/inc/fallback.h", "include-dir");
 		tree.add_file("/ms/other.h", "ms");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({ { .kind = NORMAL, .path = "/inc" } });
 		Source main = add_source(&comp, "/work/main.c");
@@ -288,7 +288,7 @@ fn void framework_subframework_and_reuse() @test
 		tree.add_file("/sdk/Foo.framework/Headers/Foo.h", "foo");
 		tree.add_file("/sdk/Foo.framework/Frameworks/Bar.framework/Headers/Bar.h", "bar");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({ { .kind = SYSTEM_FRAMEWORK, .path = "/sdk" } });
 		Source main = add_source(&comp, "/main.c");
@@ -328,7 +328,7 @@ fn void framework_include_next_continues_to_next_root() @test
 		tree.add_file("/sdk/frameworks/SimpleFramework.framework/Headers/Foo.h", "first");
 		tree.add_file("/sdk/next/SimpleFramework.framework/Headers/Foo.h", "second");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = SYSTEM_FRAMEWORK, .path = "/sdk/frameworks" },
@@ -357,16 +357,16 @@ fn void missing_empty_binary_and_repeated_cleanup() @test
 			tree.add_file("/inc/empty.h", "");
 			tree.add_file("/inc/binary.h", "A\x00B");
 			Compilation comp;
-			comp.init(&ta);
+			comp.init(&ta, compilation::native_definition());
 			setup_files(&tree, &comp);
 			comp.set_include_dirs({ { .kind = NORMAL, .path = "/inc" } });
 			comp.set_embed_dirs({ "/inc" });
 			Source main = add_source(&comp, "/main.c");
 			Source empty = comp.search_include("empty.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
-			check(empty.buf.len, 0);
+			check(empty.storage.bytes().len, 0);
 			Source binary = comp.search_include("binary.h", main.id, ANGLE_BRACKETS, FIRST, null)!!;
-			check(binary.buf.len, 3);
-			check(binary.buf[1], 0);
+			check(binary.storage.bytes().len, 3);
+			check(binary.storage.bytes()[1], 0);
 			DepFile deps;
 			deps.init(&ta, "out.o", MAKE);
 			Preprocessor pp = { .comp = &comp, .dependencies = &deps };
@@ -404,7 +404,7 @@ fn void embed_order_absolute_limits_and_missing() @test
 		tree.add_file("/embed/empty.bin", "");
 		tree.add_file("/absolute/data.bin", "absolute-data");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_embed_dirs({ "/embed" });
 		Source main = add_source(&comp, "/work/src/main.c");
@@ -458,7 +458,7 @@ fn void quote_system_shadowing_and_include_next_exhaustion() @test
 		tree.add_file("/normal/shared.h", "normal");
 		tree.add_file("/system/shared.h", "system");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = SYSTEM, .path = "/system" },
@@ -492,7 +492,7 @@ fn void include_candidate_path_normalization_edges() @test
 		tree.add_file("/rooted.h", "absolute parent");
 		tree.add_file("/trail", "trailing slash");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = add_source(&comp, "/main.c");
 
@@ -538,7 +538,7 @@ fn void include_next_normalizes_include_dir_spelling() @test
 		tree.add_file("/w/include/mixed/other_mixed.h", "mixed");
 		tree.add_file("/w/include/other_mixed.h", "next");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = NORMAL, .path = "/w/include//mixed" },
@@ -566,7 +566,7 @@ fn void include_next_bare_includer_name_waits_on_nothing() @test
 		tree.init(&ta);
 		tree.add_file("/inc/y.h", "next");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({ { .kind = NORMAL, .path = "/inc" } });
 		// Zig dirname("x.h") is null, so FindInclude never waits and /inc is searched.
@@ -590,7 +590,7 @@ fn void include_next_root_wait_dir_matches_slash_dir() @test
 		tree.add_file("/a.h", "root");
 		tree.add_file("/x/a.h", "next");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = NORMAL, .path = "/" },
@@ -619,7 +619,7 @@ fn void include_next_slash_name_waits_on_candidate_dirname() @test
 		tree.add_file("/a/inc/sub/y.h", "a sub");
 		tree.add_file("/b/sub/y.h", "b sub");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_include_dirs({
 			{ .kind = NORMAL, .path = "/a/inc" },

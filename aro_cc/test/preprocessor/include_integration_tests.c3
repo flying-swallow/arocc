@@ -82,7 +82,7 @@ fn void include_callback_skip_and_fatal_contract() @test
 		tree.add_file("/work/main.c", "#include <callback.h>\nint after;\n");
 		tree.add_file("/work/inc/callback.h", "int included;\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", "#include <callback.h>\nint after;\n")!!;
 		DepFile deps;
@@ -117,7 +117,7 @@ fn void include_callback_skip_and_fatal_contract() @test
 		tree.add_file("/work/main.c", "#include <callback.h>\nint unreachable;\n");
 		tree.add_file("/work/inc/callback.h", "int included;\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", "#include <callback.h>\nint unreachable;\n")!!;
 		Preprocessor pp;
@@ -147,7 +147,7 @@ fn void pragma_once_repeated_include_preprocessing() @test
 		tree.add_file("/work/main.c", "#include <once.h>\n#include <once.h>\n");
 		tree.add_file("/work/inc/once.h", "#pragma once\nint once_only;\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		bool added = comp.pragmas.add("once", once::handler(&ta));
 		assert(added);
@@ -178,7 +178,7 @@ fn void embed_and_include_query_dependencies_own_resolved_paths() @test
 		tree.add_file("/work/inc/queried.h", "int queried;\n");
 		tree.add_file("/work/payload.bin", "AB");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", "#if __has_include(<queried.h>)\nint query_found;\n#endif\n#embed \"payload.bin\"\n")!!;
 		DepFile deps;
@@ -210,7 +210,7 @@ fn void absolute_include_and_embed_directory_resolution_deduplicate_dependencies
 		tree.add_file("/work/a.bin", "A");
 		tree.add_file("/work/e dir/f.bin", "B");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		comp.set_embed_dirs({ "/work/e dir" });
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
@@ -257,7 +257,7 @@ fn void missing_queries_and_zero_or_empty_embeds() @test
 		tree.add_file("/work/payload.bin", "payload");
 		tree.add_file("/work/empty.bin", "");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		DepFile deps;
@@ -318,7 +318,7 @@ fn String embed_output(TrackingAllocator* ta, String text, Diagnostics* d)
 	tree.add_file("/work/main.c", text);
 	add_embed_fixtures(&tree);
 	Compilation comp;
-	comp.init(ta, null, d);
+	comp.init(ta, compilation::native_definition(), null, d);
 	comp.langopts.standard = lang_opts::Standard.C23;
 	setup_files(&tree, &comp);
 	comp.set_embed_dirs({ "/work/embed" });
@@ -617,7 +617,7 @@ fn void repeated_guarded_include_and_dependencies() @test
 		tree.add_file("/work/main.c", "#include <guard.h>\n#include <guard.h>\n");
 		tree.add_file("/work/inc/guard.h", "#ifndef GUARD_H\n#define GUARD_H\nint guarded;\n#endif\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", "#include <guard.h>\n#include <guard.h>\n")!!;
 		DepFile deps;
@@ -645,7 +645,7 @@ fn void include_next_and_missing_include() @test
 		tree.add_file("/work/inc/chain.h", "#include_next <chain.h>\nint first;\n");
 		tree.add_file("/work/next/chain.h", "int second;\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", "#include <chain.h>\n")!!;
 		String output = preprocess_text(&comp, main, null);
@@ -676,7 +676,7 @@ fn void include_angle_brackets_keep_space() @test
 		tree.add_file("/work/main.c", text);
 		tree.add_file("/work/inc/a b.h", "int spaced;\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		DepFile deps;
@@ -705,7 +705,7 @@ fn void include_header_name_macro_expands() @test
 		tree.add_file("/work/main.c", text);
 		tree.add_file("/work/inc/x.h", "int from_header;\n");
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		DepFile deps;
@@ -736,7 +736,7 @@ fn void include_quoted_header_reports_extra_tokens() @test
 		tree.add_file("/work/main.c", text);
 		tree.add_file("/work/inc/x.h", "int included;\n");
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		InitOptions opts = preprocessor::TESTING;
@@ -770,7 +770,7 @@ fn void include_poisoned_header_identifier_is_diagnosed() @test
 		tree.add_file("/work/main.c", text);
 		tree.add_file("/work/inc/x.h", "int included;\n");
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		setup_files(&tree, &comp);
 		bool added = comp.pragmas.add("GCC", gcc::make_handler(&ta));
 		assert(added);
@@ -805,7 +805,7 @@ fn void include_angle_header_without_closing_bracket_reports_pair() @test
 		String text = "#include <x.h\n";
 		tree.add_file("/work/main.c", text);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		InitOptions opts = preprocessor::TESTING;
@@ -839,7 +839,7 @@ fn void include_resume_uses_next_token_end_and_line() @test
 		tree.add_file("/work/main.c", text);
 		tree.add_file("/work/inc/x.h", "int x;\n");
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		InitOptions opts = preprocessor::TESTING;
@@ -851,7 +851,7 @@ fn void include_resume_uses_next_token_end_and_line() @test
 		pp.preprocess(main)!!;
 
 		Tokenizer source_tokens;
-		source_tokens.init(main.buf, main.id, comp.langopts, &comp.target);
+		source_tokens.init(main.storage.bytes(), main.id, comp.langopts, &comp.target);
 		Token after_directive;
 		while (true)
 		{
@@ -894,7 +894,7 @@ fn void include_without_final_newline_adds_nl_before_resume() @test
 		tree.add_file("/work/main.c", text);
 		tree.add_file("/work/inc/x.h", "int a;");
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		setup_files(&tree, &comp);
 		Source main = comp.add_source_from_buffer("/work/main.c", text)!!;
 		InitOptions opts = preprocessor::TESTING;

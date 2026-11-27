@@ -11,7 +11,7 @@ fn void sparse_array_initializer_round_trip() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			tree::Tree tree;
 			tree.init(&comp, {});
@@ -39,7 +39,7 @@ fn void omitted_record_field_default_round_trip() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			tree::Tree tree;
 			tree.init(&comp, {});

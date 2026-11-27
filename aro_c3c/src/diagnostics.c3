@@ -15,7 +15,7 @@
 // Separate from aro::frontend::c::diagnostics on purpose (frontend isolation).
 module aro::frontend::c3::diagnostics;
 import aro::compiler::reporting;
-import aro::frontend::c3::tokens, aro::terminal;
+import aro::frontend::c3::tokens;
 import std::io, std::collections::list, std::core::string::ansi, std::core::mem::alloc;
 
 enum Severity : char (String label)
@@ -109,7 +109,8 @@ struct Diagnostics
 {
 	Allocator allocator;
 	OutputKind output;
-	Terminal terminal;
+	OutStream writer;
+	bool use_ansi;
 	<* Path of each file id, for rendering locations. *>
 	List{String} file_paths;
 	List{Report} reports;
@@ -126,11 +127,12 @@ fn void Diagnostics.init_list(&self, Allocator a)
 	self.reports.init(a);
 }
 
-fn void Diagnostics.init_writer(&self, Allocator a, OutStream writer, ColorMode mode)
+fn void Diagnostics.init_writer(&self, Allocator a, OutStream writer, bool use_ansi)
 {
 	self.init_list(a);
 	self.output = TO_WRITER;
-	self.terminal = { .writer = writer, .mode = mode };
+	self.writer = writer;
+	self.use_ansi = use_ansi;
 }
 
 fn void Diagnostics.free(&self)
@@ -202,21 +204,22 @@ fn void Diagnostics.add_report(&self, Report r)
 <* c3c-style one-line rendering: `(path:row:col) Error: text`. *>
 fn void? Diagnostics.write_report(&self, Report* r)
 {
-	Terminal term = self.terminal;
+	OutStream w = self.writer;
+	bool use_ansi = self.use_ansi;
 	String path = r.span.file_id < self.file_paths.len() ? self.file_paths[r.span.file_id] : "<unknown>";
-	term.set_color(ansi::Ansi.BOLD)!;
-	io::fprintf(term.writer, "(%s:%d:%d) ", path, r.span.row, r.span.col)!;
+	if (use_ansi) io::write_all(w, ansi::Ansi.BOLD)!;
+	io::fprintf(w, "(%s:%d:%d) ", path, r.span.row, r.span.col)!;
 	switch (r.severity)
 	{
-		case ERROR: term.set_color(ansi::Ansi.BRIGHT_RED)!;
-		case WARNING: term.set_color(ansi::Ansi.BRIGHT_MAGENTA)!;
-		case NOTE: term.set_color(ansi::Ansi.BRIGHT_CYAN)!;
+		case ERROR: if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_RED)!;
+		case WARNING: if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_MAGENTA)!;
+		case NOTE: if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_CYAN)!;
 	}
-	term.write(r.severity.label)!;
-	term.write(": ")!;
-	term.set_color(ansi::Ansi.RESET)!;
-	term.write(r.text)!;
-	term.write("\n")!;
+	io::write_all(w, r.severity.label)!;
+	io::write_all(w, ": ")!;
+	if (use_ansi) io::write_all(w, ansi::Ansi.RESET)!;
+	io::write_all(w, r.text)!;
+	io::write_all(w, "\n")!;
 }
 
 // Tooling reports have no language source span or warning option policy.

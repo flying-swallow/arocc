@@ -210,14 +210,14 @@ fn HidesetIndex Hideset.intersection(&self, HidesetIndex a, HidesetIndex b)
 
 <*
  Zig `contains`: whether any item of `list` spells `str`, comparing `str`
- with comp.get_source(item.identifier.id).buf[byte_offset : len].
+ with comp.get_source(item.identifier.id).storage.bytes()[byte_offset : len].
 *>
 fn bool Hideset.contains(&self, HidesetIndex list, String str)
 {
 	for (HidesetIndex i = list; i != NONE; i = self.linked_list[(sz)i].next)
 	{
 		HidesetItem item = self.linked_list[(sz)i];
-		String buf = self.comp.get_source(item.identifier.id).buf;
+		String buf = self.comp.get_source(item.identifier.id).storage.bytes();
 		usz start = item.identifier.byte_offset;
 		if (str == buf[start : item.len]) return true;
 	}

@@ -106,18 +106,7 @@ fn void Parser.restore_statement_expression_state(&self, usz scope_depth, bool e
 fn StatementExpressionBodyResult? Parser.parse_statement_expression_body(&self, bool eval) @noinline
 {
 	type_store::NodeIndex body;
-	bool handled = false;
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.handle_statement_expression_body)
-		{
-			body = self.test_probe.handle_statement_expression_body(self, eval)!;
-			handled = true;
-		}
-	$endif
-	if (!handled)
-	{
-		body = self.declarations.handle_statement_expression_body(self, eval)!;
-	}
+	body = self.declarations.handle_statement_expression_body(self, eval)!;
 	tree::Node compound = body.get(&self.tree);
 	if (compound.kind != tree::NodeKind.COMPOUND_STMT) return PARSING_FAILED~;
 	type_store::QualType result_qt = type_store::VOID;

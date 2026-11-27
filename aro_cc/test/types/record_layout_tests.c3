@@ -24,7 +24,7 @@ macro @with_target(String triple; @body(Compilation* comp, AttributeMap* am))
 	ta.init(mem);
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.target = tgt(triple);
 		AttributeMap am;
 		am.init(&ta);

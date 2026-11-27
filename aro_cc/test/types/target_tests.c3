@@ -1066,7 +1066,7 @@ fn void compilation_defaults() @test
 	ta.init(mem);
 	defer ta.free();
 	Compilation comp;
-	comp.init(&ta);
+	comp.init(&ta, compilation::native_definition());
 	assert(comp.langopts.emulate == lang_opts::DEFAULT.emulate && comp.langopts.dollars_in_identifiers);
 	Target native = target::native()!!;
 	assert(comp.target.cpu.arch == native.cpu.arch && comp.target.os.tag == native.os.tag && comp.target.abi == native.abi);

@@ -349,7 +349,7 @@ fn void cache_and_compilation_field() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		check(comp.builtins.len(), 0);
 
 		// Unknown name: no entry is created.
@@ -401,7 +401,7 @@ fn void real_get_or_create() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		String[] names = builtins::group_names(COMMON);
 		usz limit = names.len < 64 ? names.len : 64;
 		foreach (name : names[:limit])

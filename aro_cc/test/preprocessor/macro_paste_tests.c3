@@ -28,7 +28,7 @@ macro @with_pp(; @body(Compilation* comp, Diagnostics* d, Preprocessor* pp))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		@body(&comp, &d, &pp);
@@ -46,7 +46,7 @@ macro @with_pp(; @body(Compilation* comp, Diagnostics* d, Preprocessor* pp))
 fn void lex_range(Comp* comp, Source src, uint from, uint to, ExpandBuf* out)
 {
 	Tokenizer t;
-	t.init(src.buf, src.id, comp.langopts, &comp.target);
+	t.init(src.storage.bytes(), src.id, comp.langopts, &comp.target);
 	while (true)
 	{
 		Token raw = t.next();
@@ -63,7 +63,7 @@ alias Comp = Compilation;
 fn Source lex_all(Comp* comp, String path, String text, ExpandBuf* out)
 {
 	Source src = comp.add_source_from_buffer(path, text)!!;
-	lex_range(comp, src, 0, (uint)src.buf.len, out);
+	lex_range(comp, src, 0, (uint)src.storage.bytes().len, out);
 	return src;
 }
 

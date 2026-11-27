@@ -222,17 +222,6 @@ fn type_store::NodeIndex? DeclarationParser.parse_local_declaration(&self, parse
 
 fn void? parser::Parser.handle_declaration(&self)
 {
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.handle_declaration)
-		{
-			fault f = @catch(self.test_probe.handle_declaration(self));
-			if (f != parser::HOOK_ABSENT)
-			{
-				if (f) return f~;
-				return;
-			}
-		}
-	$endif
 	return self.declarations.handle_declaration(self);
 }
 

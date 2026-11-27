@@ -29,7 +29,7 @@ fn String run_pp(String text)
 	out.init(tmem);
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		// Registration stays outside assert(): C3 strips asserts in release builds.
 		bool gcc_added = comp.pragmas.add("GCC", gcc::make_handler(comp.gpa));
 		bool once_added = comp.pragmas.add("once", once::handler(comp.gpa));
@@ -139,7 +139,7 @@ fn int guard_case(TokenId tag, String kind, String text, int expected)
 	int failed = 0;
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.add_source_from_buffer("bar.h", "int bar = 5;\n")!!;
 		Source src = comp.add_source_from_buffer("test.h", text)!!;
 		Preprocessor pp;
