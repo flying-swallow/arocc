@@ -1,0 +1,27 @@
+// #target: macos-x64
+module test;
+import std;
+fn int[3] test()
+{
+	int[3] x = io::EOF~!!;
+	return (int[])&x; // #warning: This code will never execute
+}
+fn int main()
+{
+	test();
+	return 0;
+}
+
+/* #expect: test.ll
+define { i64, i32 } @test.test() #0 {
+entry:
+  %x = alloca [3 x i32], align 4
+  %error_var = alloca i64, align 8
+  store i64 ptrtoint (ptr @std.io.EOF to i64), ptr %error_var, align 8
+  br label %panic_block
+
+panic_block:                                      ; preds = %entry
+  %0 = load i64, ptr %error_var, align 8
+  call void @std.core.runtime.panics.unwrap.fault(ptr @.panic_str, ptr @.panic_str.1, i32 5, i64 %0) #3
+  unreachable
+}

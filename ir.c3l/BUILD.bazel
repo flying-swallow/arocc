@@ -1,0 +1,117 @@
+load("//aro_cc/tools:c3.bzl", "c3_library")
+
+c3_library(
+    name = "core",
+    data = ["manifest.json"],
+    srcs = [
+        "core/ir.c3",
+        "core/bigint.c3",
+        "core/string_util.c3",
+        "core/primitive_value.c3",
+        "core/value_interner.c3",
+        "core/primitive_float.c3",
+        "core/primitive_float_parse.c3",
+        "core/primitive_float_print.c3",
+        "core/primitive_float_soft_narrow.c3",
+        "core/primitive_float_soft_wide.c3",
+        "core/ir_errors.c3",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+c3_library(
+    name = "optimizer",
+    srcs = [
+        "opt/ir_opt.c3",
+        "opt/ir_soft_float.c3",
+        "opt/ir_analyses.c3",
+        "opt/ir_mem_opt.c3",
+        "opt/ir_gvn.c3",
+        "opt/ir_jump_thread.c3",
+        "opt/ir_scalar_opt.c3",
+        "opt/ir_narrow.c3",
+        "opt/ir_if_convert.c3",
+        "opt/ir_cfg_hoist_sink.c3",
+        "opt/ir_loop_deletion.c3",
+        "opt/ir_loop_unroll.c3",
+        "opt/ir_loop_opt.c3",
+        "opt/ir_loop_indvar.c3",
+        "opt/ir_loop_widen.c3",
+        "opt/ir_loop_vectorize.c3",
+        "opt/ir_loop_strength_reduce.c3",
+        "opt/ir_float_fold.c3",
+        "opt/ir_ipo.c3",
+        "opt/ir_dead_arg_elim.c3",
+        "opt/ir_global_opt.c3",
+        "opt/ir_ipo_attrs.c3",
+        "opt/ir_instcombine.c3",
+        "opt/code_gen_options.c3",
+    ],
+    deps = [":core"],
+    visibility = ["//visibility:public"],
+)
+
+c3_library(
+    name = "ir",
+    srcs = [
+        "aarch64/abi.c3",
+        "aarch64/bits.c3",
+        "aarch64/emit_text.c3",
+        "aarch64/lower.c3",
+        "aarch64/lower_branch.c3",
+        "aarch64/lower_operand.c3",
+        "aarch64/lower_phi.c3",
+        "elf.c3",
+        "elf_link.c3",
+        "ir_renderer.c3",
+        "object.c3",
+        "x86_64/abi.c3",
+        "x86_64/bits.c3",
+        "x86_64/emit_object.c3",
+        "x86_64/emit_text.c3",
+        "x86_64/encode.c3",
+        "x86_64/encoding.c3",
+        "x86_64/encoding_evex.c3",
+        "x86_64/encoding_table.c3",
+        "x86_64/encoding_table_evex.c3",
+        "x86_64/lower.c3",
+        "x86_64/lower_address.c3",
+        "x86_64/lower_branch.c3",
+        "x86_64/lower_divconst.c3",
+        "x86_64/lower_operand.c3",
+        "x86_64/lower_phi.c3",
+        "x86_64/lower_vector.c3",
+        "support/target.c3",
+        "support/target_cpu.c3",
+        "support/target_data.c3",
+        "support/terminal.c3",
+        "support/bitset.c3",
+    ],
+    deps = [":core", ":optimizer"],
+    visibility = ["//visibility:public"],
+)
+
+# Legacy AST assembly and linker adapters are compiled with the consuming frontend.
+c3_library(
+    name = "compiler_adapters",
+    srcs = [
+        "assembly.c3",
+        "assembly_x86_64.c3",
+    ],
+    deps = [":ir", ":link"],
+    visibility = ["//visibility:public"],
+)
+
+c3_library(
+    name = "link",
+    srcs = [
+        "link/archive.c3",
+        "link/elf_reader.c3",
+        "link/ld_args.c3",
+        "link/ld_script.c3",
+        "link/link_diag.c3",
+        "link/link_fs.c3",
+    ],
+    deps = [":ir", "//aro/compiler:tooling"],
+    visibility = ["//visibility:public"],
+)

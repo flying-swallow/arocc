@@ -1,0 +1,99 @@
+// #target: macos-x64
+// #safe: yes
+module test;
+import std::io;
+
+fn int main()
+{
+    char[10] buf;
+
+    int* i = (int*)(&buf[1]);
+    int z = *i;
+    int z2 = mem::load(i, 1);
+    *i = 5;
+    mem::store(i, 6, 1);
+    int y = *i;
+
+    return 0;
+}
+
+/* #expect: test.ll
+  store ptr %ptradd9, ptr %i, align 8
+  %0 = load ptr, ptr %i, align 8
+  %1 = ptrtoint ptr %0 to i64
+  %checknull = icmp eq i64 %1, 0
+  %2 = and i64 %1, 3
+  %3 = icmp ne i64 %2, 0
+  %4 = or i1 %checknull, %3
+  br i1 %4, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  %5 = load i32, ptr %0, align 4
+  store i32 %5, ptr %z, align 4
+  %6 = load ptr, ptr %i, align 8
+  store ptr %6, ptr %ptr, align 8
+  %7 = load ptr, ptr %ptr, align 8
+  %ne = icmp ne ptr %7, null
+  br i1 %ne, label %assert_ok, label %assert_fail
+
+assert_fail:                                      ; preds = %checkok
+  call void @std.core.runtime.panics.ref_arg(ptr @.panic_str.3, ptr @.panic_str.1, i32 243) #2
+  unreachable
+
+assert_ok:                                        ; preds = %checkok
+  %8 = load ptr, ptr %ptr, align 8
+  %9 = load i32, ptr %8, align 1
+  store i32 %9, ptr %z2, align 4
+  %10 = load ptr, ptr %i, align 8
+  %11 = ptrtoint ptr %10 to i64
+  %checknull10 = icmp eq i64 %11, 0
+  %12 = and i64 %11, 3
+  %13 = icmp ne i64 %12, 0
+  %14 = or i1 %checknull10, %13
+  br i1 %14, label %panic11, label %checkok12
+
+checkok12:                                        ; preds = %assert_ok
+  store i32 5, ptr %10, align 4
+  %15 = load ptr, ptr %i, align 8
+  store ptr %15, ptr %ptr13, align 8
+  %16 = load ptr, ptr %ptr13, align 8
+  %ne14 = icmp ne ptr %16, null
+  br i1 %ne14, label %assert_ok16, label %assert_fail15
+
+assert_fail15:                                    ; preds = %checkok12
+  call void @std.core.runtime.panics.ref_arg(ptr @.panic_str.3, ptr @.panic_str.1, i32 259) #2
+  unreachable
+
+assert_ok16:                                      ; preds = %checkok12
+  %17 = load ptr, ptr %ptr13, align 8
+  store i32 6, ptr %17, align 1
+  %18 = load ptr, ptr %i, align 8
+  %19 = ptrtoint ptr %18 to i64
+  %checknull17 = icmp eq i64 %19, 0
+  %20 = and i64 %19, 3
+  %21 = icmp ne i64 %20, 0
+  %22 = or i1 %checknull17, %21
+  br i1 %22, label %panic18, label %checkok19
+
+checkok19:                                        ; preds = %assert_ok16
+  %23 = load i32, ptr %18, align 4
+  store i32 %23, ptr %y, align 4
+  ret i32 0
+
+panic:                                            ; preds = %entry
+  call void @std.core.runtime.panics.deref.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 9, ptr @.panic_str.2, i64 %1, i64 4) #2
+  unreachable
+
+panic11:                                          ; preds = %assert_ok
+  call void @std.core.runtime.panics.deref.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 11, ptr @.panic_str.2, i64 %11, i64 4) #2
+  unreachable
+
+panic18:                                          ; preds = %assert_ok16
+  call void @std.core.runtime.panics.deref.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 13, ptr @.panic_str.2, i64 %19, i64 4) #2
+  unreachable
+}
+/* #expect: std.core.runtime.panics.ll
+
+c"Dereference of null pointer, '%s' was null.\00"
+c"Unaligned access: ptr %% %s = %s, use mem::load / mem::store for unaligned access.\00"
+define weak void @std.core.runtime.panics.deref.long.long(ptr %0, ptr %1, i32 %2, ptr %3, i64 %4, i64 %5) #0 {

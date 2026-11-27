@@ -1,154 +1,28 @@
-load("//tools:builtins.bzl", "builtin_defs")
-load("//tools:c3.bzl", "c3_binary", "c3_library", "c3_source_archive")
-load("//tools:system_defaults.bzl", "system_defaults")
+load("//aro_cc/tools:builtins.bzl", "builtin_defs")
+load("//aro_cc/tools:c3.bzl", "c3_binary", "c3_library", "c3_source_archive")
+load("//aro_cc/tools:system_defaults.bzl", "system_defaults")
 
-system_defaults(name = "system_defaults_module")
+system_defaults(name = "system_defaults_module", visibility = ["//visibility:public"])
 
-# Library sources are listed explicitly; agents append new modules here.
-c3_library(
-    name = "aro_c3_lib",
-    srcs = [
-        "src/annex_g.c3",
-        "src/aro.c3",
-        "src/api.c3",
-        "src/frontend/c/attribute.c3",
-        "src/frontend/c/attribute_wip.c3",
-        "src/frontend/c/attribute_map.c3",
-        "src/bigint.c3",
-        "src/bitset.c3",
-        "src/frontend/c/builtin_properties.c3",
-        "src/frontend/c/builtin_type_description.c3",
-        "src/backend/ir.c3",
-        "src/backend/ir_opt.c3",
-        "src/backend/ir_scalar_opt.c3",
-        "src/backend/ir_renderer.c3",
-        "src/frontend/c/codegen.c3",
-        "src/frontend/c/codegen_abi.c3",
-        "src/frontend/c/codegen_nodes.c3",
-        "src/backend/object.c3",
-        "src/backend/elf.c3",
-        "src/backend/elf_link.c3",
-        "src/backend/link/link_diag.c3",
-        "src/backend/link/link_fs.c3",
-        "src/backend/link/elf_reader.c3",
-        "src/backend/link/archive.c3",
-        "src/backend/link/ld_script.c3",
-        "src/backend/link/ld_args.c3",
-        "src/backend/assembly.c3",
-        "src/backend/assembly_x86_64.c3",
-        "src/backend/x86_64/bits.c3",
-        "src/backend/x86_64/abi.c3",
-        "src/backend/x86_64/encoding.c3",
-        "src/backend/x86_64/encoding_table.c3",
-        "src/backend/x86_64/encode.c3",
-        "src/backend/x86_64/lower.c3",
-        "src/backend/x86_64/emit_text.c3",
-        "src/backend/x86_64/emit_object.c3",
-        "src/frontend/c/builtins.c3",
-        "src/frontend/c/builtin_eval.c3",
-        "src/frontend/c/builtin_call.c3",
-        "src/frontend/c/parser_builtin.c3",
-        ":builtin_defs",
-        "src/frontend/c/char_info.c3",
-        "src/code_gen_options.c3",
-        "src/frontend/c/driver.c3",
-        "src/frontend/c/driver_exec.c3",
-        "src/frontend/c/driver_options.c3",
-        "src/frontend/c/driver_tempfiles.c3",
-        "src/host_process.c3",
-        "src/frontend/c/compilation.c3",
-        "src/frontend/c/diagnostics.c3",
-        "src/frontend/c/dep_file.c3",
-        "src/primitive_float_parse.c3",
-        "src/string_util.c3",
-        "src/primitive_float_print.c3",
-        "src/primitive_float_soft_narrow.c3",
-        "src/primitive_float_soft_wide.c3",
-        "src/primitive_float.c3",
-        "src/frontend/c/hideset.c3",
-        "src/frontend/c/include_search.c3",
-        "src/frontend/c/identifier_tables.c3",
-        "src/frontend/c/driver_arguments.c3",
-        "src/frontend/c/lang_opts.c3",
-        "src/frontend/c/macro_expand.c3",
-        "src/frontend/c/macro_paste.c3",
-        "src/frontend/c/number_literal.c3",
-        "src/frontend/c/number_value.c3",
-        "src/frontend/c/pp_builtin_macros.c3",
-        "src/frontend/c/pp_diagnostics.c3",
-        "src/frontend/c/pp_directives.c3",
-        "src/frontend/c/pp_expression.c3",
-        "src/frontend/c/pp_feature_queries.c3",
-        "src/frontend/c/pp_print.c3",
-        "src/frontend/c/parser.c3",
-        "src/frontend/c/parser_declaration.c3",
-        "src/frontend/c/parser_attribute.c3",
-        "src/frontend/c/parser_declarator.c3",
-        "src/frontend/c/parser_symbols.c3",
-        "src/frontend/c/parser_expression.c3",
-        "src/frontend/c/parser_postfix.c3",
-        "src/frontend/c/parser_primary.c3",
-        "src/frontend/c/init_list.c3",
-        "src/frontend/c/parser_initializer.c3",
-        "src/frontend/c/parser_record.c3",
-        "src/frontend/c/parser_result.c3",
-        "src/frontend/c/parser_statement.c3",
-        "src/frontend/c/parser_asm.c3",
-        "src/frontend/c/predefined_macros.c3",
-        "src/frontend/c/predefined_macros_other.c3",
-        "src/frontend/c/predefined_macros_x86.c3",
-        "src/frontend/c/preprocessor.c3",
-        "src/frontend/c/pragma.c3",
-        "src/frontend/c/pragmas/gcc.c3",
-        "src/frontend/c/pragmas/pack.c3",
-        "src/frontend/c/pragmas/message.c3",
-        "src/frontend/c/pragmas/once.c3",
-        "src/frontend/c/record_layout.c3",
-        "src/source.c3",
-        "src/utf8.c3",
-        "src/string_interner.c3",
-        "src/frontend/c/symbol_stack.c3",
-        "src/tracy.c3",
-        "src/target.c3",
-        "src/target_cpu.c3",
-        "src/target_data.c3",
-        "src/frontend/c/text_literal.c3",
-        "src/frontend/c/text_literal_semantics.c3",
-        "src/frontend/c/tokenizer.c3",
-        "src/frontend/c/tokens.c3",
-        "src/toolchain/discovery.c3",
-        "src/toolchain.c3",
-        "src/toolchain/distro.c3",
-        "src/toolchain/darwin.c3",
-        "src/toolchain/gcc_detector.c3",
-        "src/toolchain/gcc_version.c3",
-        "src/toolchain/linux.c3",
-        "src/toolchain/multilib.c3",
-        "src/toolchain_link.c3",
-        ":system_defaults_module",
-        "src/frontend/c/tree.c3",
-        "src/frontend/c/tree_decl.c3",
-        "src/frontend/c/tree_dump.c3",
-        "src/frontend/c/tree_expr.c3",
-        "src/frontend/c/type_print.c3",
-        "src/frontend/c/type_store.c3",
-        "src/frontend/c/type_builder.c3",
-        "src/frontend/c/type_store_layout.c3",
-        "src/frontend/c/type_store_named.c3",
-        "src/frontend/c/type_store_relations.c3",
-        "src/frontend/c/value.c3",
-        "src/frontend/c/value_float.c3",
-        "src/primitive_value.c3",
-        "src/value_interner.c3",
-    ],
-    visibility = ["//visibility:public"],
+# Standalone consumer examples: core construction and optional verification.
+c3_binary(
+    name = "ir_example",
+    srcs = ["examples/ir_increment.c3"],
+    deps = ["//ir.c3l:ir"],
 )
 
+# Library sources are listed explicitly; agents append new modules here.
+alias(name = "aro_cc_lib", actual = "//aro_cc:lib", visibility = ["//visibility:public"])
+alias(name = "aro_c3_lib", actual = "//aro_c3c:lib", visibility = ["//visibility:public"])
+
+# Compatibility name for the independent C3 frontend library.
+alias(name = "aro_c3_frontend_lib", actual = "//aro_c3c:lib", visibility = ["//visibility:public"])
+
 # Stable public module target. This name is the supported dependency for C3
-# consumers; aro_c3_lib remains available for existing in-repository users.
+# consumers; aro_cc_lib remains available for existing in-repository users.
 c3_library(
     name = "aro",
-    deps = [":aro_c3_lib"],
+    deps = [":aro_cc_lib"],
     data = [":aro_builtin_headers"],
     visibility = ["//visibility:public"],
 )
@@ -158,31 +32,30 @@ c3_library(
 builtin_defs(
     name = "builtin_defs",
     srcs = [
-        "src/aro/Builtins/aarch64.def",
-        "src/aro/Builtins/aarch64_neon.def",
-        "src/aro/Builtins/amdgcn.def",
-        "src/aro/Builtins/arm.def",
-        "src/aro/Builtins/bpf.def",
-        "src/aro/Builtins/common.def",
-        "src/aro/Builtins/hexagon.def",
-        "src/aro/Builtins/loongarch.def",
-        "src/aro/Builtins/mips.def",
-        "src/aro/Builtins/neon.def",
-        "src/aro/Builtins/nvptx.def",
-        "src/aro/Builtins/powerpc.def",
-        "src/aro/Builtins/riscv.def",
-        "src/aro/Builtins/s390x.def",
-        "src/aro/Builtins/ve.def",
-        "src/aro/Builtins/wasm.def",
-        "src/aro/Builtins/x86_64.def",
-        "src/aro/Builtins/x86.def",
-        "src/aro/Builtins/xcore.def",
+        "//aro_cc:src/Builtins/aarch64.def",
+        "//aro_cc:src/Builtins/aarch64_neon.def",
+        "//aro_cc:src/Builtins/amdgcn.def",
+        "//aro_cc:src/Builtins/arm.def",
+        "//aro_cc:src/Builtins/bpf.def",
+        "//aro_cc:src/Builtins/common.def",
+        "//aro_cc:src/Builtins/hexagon.def",
+        "//aro_cc:src/Builtins/loongarch.def",
+        "//aro_cc:src/Builtins/mips.def",
+        "//aro_cc:src/Builtins/neon.def",
+        "//aro_cc:src/Builtins/nvptx.def",
+        "//aro_cc:src/Builtins/powerpc.def",
+        "//aro_cc:src/Builtins/riscv.def",
+        "//aro_cc:src/Builtins/s390x.def",
+        "//aro_cc:src/Builtins/ve.def",
+        "//aro_cc:src/Builtins/wasm.def",
+        "//aro_cc:src/Builtins/x86_64.def",
+        "//aro_cc:src/Builtins/x86.def",
+        "//aro_cc:src/Builtins/xcore.def",
     ],
-    # //test/unit/builtins:builtin_defs_regen_tests diffs these outputs against an in-process emit.
-    visibility = ["//test/unit/builtins:__pkg__"],
+    visibility = ["//visibility:public"],
 )
 
-exports_files(["src/frontend/c/builtin_properties.c3"])
+
 
 # Runtime resource headers for the installed compiler layout. The toolchain
 # finds these relative to the executable (or accepts an explicit resource dir).
@@ -202,41 +75,44 @@ c3_source_archive(
         "VERSION",
         "LICENSE",
         "LICENSE-UNICODE",
-        "docs/c3-api.md",
+        "docs/ir-library.md",
+        "docs/compiler-layout.md",
+        "examples/ir_increment.c3",
         "examples/parse_buffer.c3",
         "distfiles/package.BUILD.bazel",
         "distfiles/package.MODULE.bazel",
-        "distfiles/tools.BUILD.bazel",
-        "//tools:c3.bzl",
-        "//tools:c3_test_launcher.sh.tpl",
-        "//tools:c3c_repo.bzl",
+        "distfiles/aro_cc_tools.BUILD.bazel",
+        "//aro_cc/tools:c3.bzl",
+        "//aro_cc/tools:c3_test_launcher.sh.tpl",
+        "//aro_cc/tools:c3c_repo.bzl",
     ],
     src_path_prefixes = {
         "distfiles/package.BUILD.bazel": "BUILD.bazel",
         "distfiles/package.MODULE.bazel": "MODULE.bazel",
-        "distfiles/tools.BUILD.bazel": "tools/BUILD.bazel",
+        "distfiles/aro_cc_tools.BUILD.bazel": "aro_cc/tools/BUILD.bazel",
     },
     visibility = ["//visibility:public"],
 )
 
-c3_binary(
-    name = "aro_c3",
-    srcs = ["app/aro_c3/main.c3"],
-    deps = [":aro_c3_lib"],
-    data = [":aro_builtin_headers"],
-    visibility = ["//visibility:public"],
-)
+alias(name = "aro_cc", actual = "//aro_cc:aro_cc", visibility = ["//visibility:public"])
+
+alias(name = "aro_c3c", actual = "//aro_c3c:aro_c3c", visibility = ["//visibility:public"])
+
+alias(name = "aro_c3", actual = ":aro_c3c", visibility = ["//visibility:public"])
 
 # Complete record-layout fixture corpus and any future sibling runtime files.
 filegroup(
     name = "record_fixtures_tree",
-    srcs = ["//test:record_fixtures"],
-    visibility = ["//test/src/records:__pkg__"],
+    srcs = ["//aro_cc/test:record_fixtures"],
+    visibility = ["//aro_cc/test/src/records:__pkg__"],
 )
 
-# The 19 builtin .def inputs as runtime data (plan 12.1 //test/unit/builtins:def_parse_tests).
+# The 19 builtin .def inputs as runtime data (plan 12.1 //aro_cc/test/builtins:def_parse_tests).
+alias(name = "builtin_def_files", actual = "//aro_cc:builtin_def_files", visibility = ["//visibility:public"])
+
+# C3 frontend sources, checked by //aro_cc/test/unit/c3:isolation_test (no C frontend imports).
 filegroup(
-    name = "builtin_def_files",
-    srcs = glob(["src/aro/Builtins/*.def"]),
-    visibility = ["//visibility:public"],
+    name = "c3_frontend_srcs",
+    srcs = ["//aro_c3c:sources"],
+    visibility = ["//aro_cc/test/unit/c3:__pkg__"],
 )

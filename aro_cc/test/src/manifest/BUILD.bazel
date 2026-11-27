@@ -1,0 +1,23 @@
+load("//aro_cc/tools:c3.bzl", "c3_binary", "c3_library", "c3_test")
+
+# Aro `/** manifest: */` case runner (C3 port of the old aro_cc/test/runner.zig) and
+# shared child-process/path helpers. Used by //aro_cc/test/src/probes:assembly_regression
+# (case list + goldens) and, for its helpers, by the test_suite runner and CLI tests.
+c3_library(
+    name = "runner_lib",
+    srcs = ["runner.c3"],
+    visibility = ["//aro_cc/test:__subpackages__"],
+)
+
+# Portable process fixture used by runner_tests on each host.
+c3_binary(
+    name = "fake_aro",
+    srcs = ["testdata/fake_aro.c3"],
+)
+
+c3_test(
+    name = "runner_tests",
+    srcs = ["runner_tests.c3"],
+    data = [":fake_aro"],
+    deps = [":runner_lib"],
+)

@@ -1,5 +1,5 @@
 module(name = "aro", version = "0.1.0-dev")
 
 # Consumers can set --repo_env=C3C=/path/to/c3c (or its install directory).
-c3c = use_repo_rule("//tools:c3c_repo.bzl", "c3c_repo")
+c3c = use_repo_rule("//aro_cc/tools:c3c_repo.bzl", "c3c_repo")
 c3c(name = "c3c")

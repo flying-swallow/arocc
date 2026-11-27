@@ -1,0 +1,44 @@
+// #kind: run
+// #exit: 0
+// SysV classifies each eightbyte of a small aggregate: float/double-only words
+// travel in XMM registers, mixed words in GPRs, a lone long double returns in st(0).
+#include <stdio.h>
+struct FF { float a, b; };
+struct DL { double d; long l; };
+struct LD { long l; double d; };
+struct FID { float f; int i; double d; };
+struct DD { double a, b; };
+struct F3 { float a, b, c; };
+struct LDb { long double x; };
+union UD { double d; long l; };
+__attribute__((noinline)) struct FF ff(struct FF x) { x.a += 1; x.b *= 2; return x; }
+__attribute__((noinline)) struct DL dl(struct DL x) { x.d += 1; x.l *= 2; return x; }
+__attribute__((noinline)) struct LD ld(struct LD x) { x.d += 1; x.l *= 2; return x; }
+__attribute__((noinline)) struct FID fid(struct FID x) { x.f += 1; x.i *= 2; x.d -= 3; return x; }
+__attribute__((noinline)) struct DD dd(int a, struct DD x, double y) { x.a += a; x.b += y; return x; }
+__attribute__((noinline)) struct F3 f3(struct F3 x) { x.c = x.a + x.b; return x; }
+__attribute__((noinline)) struct LDb ldb(struct LDb x) { x.x *= 2; return x; }
+// Ten SSE eightbytes: the fifth struct no longer fits in XMM0-7 and goes on the stack.
+__attribute__((noinline)) double many(struct DD a, struct DD b, struct DD c, struct DD d, struct DD e)
+{
+	return a.a + b.b + c.a + d.b + e.a + e.b;
+}
+__attribute__((noinline)) union UD ud(union UD x) { x.d += 0.5; return x; }
+int main(void)
+{
+	struct FF a = ff((struct FF){1.5f, 2.5f});
+	struct DL b = dl((struct DL){1.25, 7});
+	struct LD c = ld((struct LD){9, 2.5});
+	struct FID d = fid((struct FID){1, 3, 10});
+	struct DD e = dd(4, (struct DD){1, 2}, 0.5);
+	struct F3 f = f3((struct F3){1, 2, 0});
+	struct LDb g = ldb((struct LDb){1.5L});
+	double m = many((struct DD){1, 2}, (struct DD){3, 4}, (struct DD){5, 6}, (struct DD){7, 8}, (struct DD){9, 10});
+	union UD u = ud((union UD){ .d = 4 });
+	printf("%g %g|%g %ld|%ld %g|%g %d %g|%g %g|%g|%Lg|%g|%g\n", a.a, a.b, b.d, b.l, c.l, c.d, d.f, d.i, d.d,
+		e.a, e.b, f.c, g.x, m, u.d);
+	return 0;
+}
+
+// #expect: stdout
+2.5 5|2.25 14|18 3.5|2 6 7|5 2.5|3|3|37|4.5

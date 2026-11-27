@@ -1,0 +1,16 @@
+// #kind: run
+// #exit: 0
+// fabs/fabsf/fabsl and __builtin_fabs* lower to an inline sign-bit clear (no libm
+// call): -0.0 and NaN lose their sign.
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
+static unsigned long long bits(double d) { unsigned long long u; memcpy(&u, &d, 8); return u; }
+int main(void) {
+  volatile double a = -3.5, z = -0.0, n = -NAN; volatile float f = -2.25f; volatile long double l = -7.5L;
+  printf("%g %g %g %llx %Lg %g %g\n", fabs(a), fabsf(f), __builtin_fabs(z), bits(fabs(n)), fabsl(l), __builtin_fabsf(-1.0f), fabs(-INFINITY));
+  return 0;
+}
+
+// #expect: stdout
+3.5 2.25 0 7ff8000000000000 7.5 1 inf

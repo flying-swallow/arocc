@@ -1,0 +1,7 @@
+load("@aro//aro_cc/tools:c3.bzl", "c3_binary")
+
+c3_binary(
+    name = "consumer",
+    srcs = ["consumer.c3"],
+    deps = ["@aro//:aro"],
+)

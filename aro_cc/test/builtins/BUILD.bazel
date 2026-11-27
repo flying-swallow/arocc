@@ -1,0 +1,28 @@
+load("//aro_cc/tools:c3.bzl", "c3_test")
+
+# Unit tests: builtins. One target per line so parallel additions merge cleanly.
+
+c3_test(name = "generate_def_tests", srcs = ["generate_def_tests.c3"], deps = ["//aro_cc/tools:generate_def_lib"])
+c3_test(name = "def_emit_tests", srcs = ["def_emit_tests.c3", "data/def_emit_x86.c3"], deps = ["//aro_cc/tools:generate_def_lib"])
+c3_test(name = "builtins_lookup_tests", srcs = ["builtins_lookup_tests.c3", "data/builtin_defs_sample.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "def_parse_tests", srcs = ["def_parse_tests.c3"], data = ["//:builtin_def_files"], deps = ["//aro_cc/tools:generate_def_lib"])
+c3_test(name = "builtins_tests", srcs = ["builtins_tests.c3"], data = ["//:builtin_def_files"], deps = ["//:aro_cc_lib"])
+c3_test(name = "builtin_defs_regen_tests", srcs = ["builtin_defs_regen_tests.c3"], data = ["//:builtin_def_files", "//:builtin_defs"], deps = ["//aro_cc/tools:generate_def_lib"])
+c3_test(name = "builtin_expression_tests", srcs = ["builtin_expression_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "builtin_call_tests", srcs = ["builtin_call_tests.c3"], deps = ["//:aro_cc_lib"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":generate_def_tests",
+        ":def_emit_tests",
+        ":builtins_lookup_tests",
+        ":def_parse_tests",
+        ":builtins_tests",
+        ":builtin_defs_regen_tests",
+        ":builtin_expression_tests",
+        ":builtin_call_tests",
+    ],
+    visibility = ["//aro_cc/test:__pkg__"],
+)

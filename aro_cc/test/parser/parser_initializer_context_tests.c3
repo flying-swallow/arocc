@@ -1,0 +1,135 @@
+// Initializer value requirements and variable-length-array diagnostics.
+module parser_init_ctx_tests;
+import aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_declaration, aro::frontend::c::parser_result;
+import aro::frontend::c::preprocessor, aro::source, aro::frontend::c::symbol_stack, aro::frontend::c::tokens, aro::frontend::c::tokenizer, aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::value;
+
+fn void init_context_parser(Compilation* comp, Preprocessor* pp, Source src, Parser* p)
+{
+	pp.init(comp, preprocessor::TESTING)!!;
+	pp.add_token(pp.preprocess(src)!!)!!;
+	p.init(pp);
+	p.bind_finalized_tokens();
+	type_store::NodeIndex declaration = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
+		.variable = { .qt = type_store::INT } });
+	p.define_symbol({ .name = comp.intern_string("unknown"), .kind = symbol_stack::SymbolKind.DEF,
+		.qt = type_store::INT, .node = declaration, .val = value::NONE });
+}
+
+fn void runtime_initializer_accepts_unavailable_value() @test
+{
+	TrackingAllocator ta; ta.init(mem); defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		source::Source src = comp.add_source_from_buffer("runtime-init.c", "unknown")!!;
+		preprocessor::Preprocessor pp;
+		parser::Parser p;
+		init_context_parser(&comp, &pp, src, &p);
+		parser_result::Result parsed = p.parse_initializer(type_store::INT)!!;
+		assert(parsed.val.is_none());
+		assert(d.messages.len() == 0);
+		assert(p.init_context == parser::InitContext.RUNTIME);
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void constexpr_initializer_requires_known_value() @test
+{
+	TrackingAllocator ta; ta.init(mem); defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		source::Source src = comp.add_source_from_buffer("constexpr-init.c", "unknown")!!;
+		preprocessor::Preprocessor pp;
+		parser::Parser p;
+		init_context_parser(&comp, &pp, src, &p);
+		p.declarations.parse_variable_initializer(&p, type_store::INT, true, false)!!;
+		assert(d.messages.len() == 1);
+		test::eq(d.messages[0].text, "constexpr variable must be initialized by a constant expression");
+		assert(p.init_context == parser::InitContext.RUNTIME);
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void constexpr_initializer_accepts_known_value() @test
+{
+	TrackingAllocator ta; ta.init(mem); defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		source::Source src = comp.add_source_from_buffer("constexpr-known-init.c", "1")!!;
+		preprocessor::Preprocessor pp;
+		parser::Parser p;
+		init_context_parser(&comp, &pp, src, &p);
+		parser_result::Result parsed = p.declarations.parse_variable_initializer(&p, type_store::INT, true, false)!!;
+		assert(!parsed.val.is_none(), "constexpr initialization keeps the scalar value available to the declaration owner");
+		assert(d.messages.len() == 0);
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void static_aggregate_initializer_checks_saved_child_values() @test
+{
+	TrackingAllocator ta; ta.init(mem); defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		source::Source src = comp.add_source_from_buffer("static-init.c", "{ 1, 2 }")!!;
+		preprocessor::Preprocessor pp;
+		parser::Parser p;
+		init_context_parser(&comp, &pp, src, &p);
+		type_store::QualType array_ty = comp.type_store.put(type_store::type_array(type_store::INT, type_store::ArrayLenKind.FIXED, 3));
+		parser_result::Result parsed = p.declarations.parse_variable_initializer(&p, array_ty, false, true)!!;
+		tree::Node array = parsed.node.get(&p.tree);
+		assert(array.kind == tree::NodeKind.ARRAY_INIT_EXPR);
+		assert(array.container_init.items.len == 3);
+		assert(array.container_init.items[2].get(&p.tree).kind == tree::NodeKind.ARRAY_FILLER_EXPR);
+		assert(d.messages.len() == 0, "constant children and zero-filled elements satisfy static initialization");
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void static_initializer_rejects_unavailable_value() @test
+{
+	TrackingAllocator ta; ta.init(mem); defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		source::Source src = comp.add_source_from_buffer("static-unknown-init.c", "unknown")!!;
+		preprocessor::Preprocessor pp;
+		parser::Parser p;
+		init_context_parser(&comp, &pp, src, &p);
+		p.declarations.parse_variable_initializer(&p, type_store::INT, false, true)!!;
+		assert(d.messages.len() == 1);
+		test::eq(d.messages[0].text, "initializer element is not a compile-time constant");
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}
+
+fn void variable_length_array_initializer_reports_diagnostic_and_recovers() @test
+{
+	TrackingAllocator ta; ta.init(mem); defer ta.free();
+	{
+		diagnostics::Diagnostics d; d.init_list(&ta);
+		compilation::Compilation comp; comp.init(&ta, null, &d);
+		source::Source src = comp.add_source_from_buffer("vla-init.c", "{ 1 }")!!;
+		preprocessor::Preprocessor pp;
+		parser::Parser p;
+		init_context_parser(&comp, &pp, src, &p);
+		type_store::NodeIndex bound = p.tree.add_node({ .kind = tree::NodeKind.INT_LITERAL,
+			.literal = { .literal_tok = 0, .qt = type_store::INT } });
+		type_store::QualType vla_ty = comp.type_store.put(type_store::type_vla(type_store::INT, bound));
+		parser_result::Result parsed = p.parse_initializer(vla_ty)!!;
+		assert(parsed.node.get(&p.tree).kind == tree::NodeKind.DEFAULT_INIT_EXPR,
+			"the unsupported VLA initializer is consumed and represented by the existing fallback node");
+		assert(d.messages.len() == 1);
+		test::eq(d.messages[0].text, "variable-sized object may not be initialized");
+		p.free(); pp.free(); comp.free(); d.free();
+	}
+	assert(ta.allocation_count() == 0);
+}

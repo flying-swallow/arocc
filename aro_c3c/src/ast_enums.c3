@@ -1,0 +1,1128 @@
+// Port of the language enums of c3c src/compiler/enums.h (from `ABIKind` on;
+// build-option, target and TokenType enums live elsewhere or are not ported).
+//
+// Mechanical translation: a plain enum keeps its members with the shared C
+// prefix stripped (AST_IF_STMT -> AstKind.IF_STMT); C range markers such as
+// TYPE_INTEGER_FIRST become module constants with their full C name. Enums
+// with explicit or negative values, or bit flags, become `alias X = int`
+// plus constants keeping the C names.
+module aro::frontend::c3::compiler;
+
+enum PanicFunction : char
+{
+	FN_MESSAGE,
+	FN_ASSERT,
+	FN_ASSERT_VIOLATION,
+	FN_REQUIRE,
+	FN_REQUIRE_MESSAGE,
+	FN_ENSURE,
+	FN_ENSURE_MESSAGE,
+	FN_REF_PARAM,
+	FN_REF_ARG,
+	FN_NULL_METHOD,
+	FN_NULL_POINTER,
+	FN_DEREF,
+	FN_NULL_FUNCTION,
+	FN_NO_METHOD,
+	FN_ADD_OVERFLOW,
+	FN_SUB_OVERFLOW,
+	FN_MUL_OVERFLOW,
+	FN_NEG_OVERFLOW,
+	FN_DIV_ZERO,
+	FN_REM_ZERO,
+	FN_INFINITE_LOOP,
+	FN_ACCESS_INNER,
+	FN_ACCESS_NAMES,
+	FN_ACCESS_LEN,
+	FN_UNALIGNED,
+	FN_UNWRAP,
+	FN_SHIFT,
+	FN_INDEX,
+	FN_INDEX_NEGATIVE,
+	FN_INDEX_BOUNDS,
+	FN_SLICE,
+	FN_SLICE_START,
+	FN_SLICE_START_NEGATIVE,
+	FN_SLICE_LEN_NEGATIVE,
+	FN_SLICE_END,
+	FN_SLICE_RANGE_NEGATIVE,
+	FN_SLICE_COPY,
+	FN_ENUM_NEGATIVE,
+	FN_ENUM_RANGE,
+	FN_ASSERT_ARGS,
+	FN_COUNT,
+}
+
+enum ABIKind : char
+{
+	ARG_IGNORE,
+	ARG_DIRECT,
+	ARG_DIRECT_PAIR,
+	ARG_DIRECT_COERCE,
+	ARG_DIRECT_COERCE_INT,
+	ARG_DIRECT_SPLIT_STRUCT_I32,
+	ARG_EXPAND_COERCE,
+	ARG_INDIRECT,
+	ARG_EXPAND,
+}
+
+enum AnalysisStage : char
+{
+	NOT_BEGUN,
+	MODULE_HIERARCHY,
+	REMOVE_FEATURE_CONDITIONALS,
+	IMPORTS,
+	REGISTER_GLOBAL_DECLARATIONS,
+	INCLUDES,
+	REGISTER_CONDITIONAL_DECLARATIONS,
+	METHODS_REGISTER,
+	METHODS_REGISTER_GENERIC_SPECIALIZATION,
+	POST_REGISTER,
+	DECLS,
+	DECLS_CHECK_GENERICS,
+	CT_ECHO,
+	CT_ASSERT,
+	FUNCTIONS,
+	INTERFACE,
+	FINALIZE,
+}
+const AnalysisStage ANALYSIS_LAST = AnalysisStage.FINALIZE;
+
+alias AsmArgBits = int;
+const AsmArgBits ARG_BITS_8 = 1 << 0;
+const AsmArgBits ARG_BITS_16 = 1 << 1;
+const AsmArgBits ARG_BITS_32 = 1 << 2;
+const AsmArgBits ARG_BITS_64 = 1 << 3;
+const AsmArgBits ARG_BITS_128 = 1 << 4;
+const AsmArgBits ARG_BITS_256 = 1 << 5;
+const AsmArgBits ARG_BITS_512 = 1 << 6;
+const AsmArgBits ARG_BITS_80 = 1 << 7;
+const AsmArgBits ARG_BITS_5 = 1 << 8;
+const AsmArgBits ARG_BITS_12 = 1 << 9;
+const AsmArgBits ARG_BITS_20 = 1 << 10;
+
+enum AsmArgKind : char
+{
+	ARG_REG, // A register
+	ARG_ADDR, // [...]
+	ARG_REGVAR, // foo - variable in a register, r/=r/+r
+	ARG_MEMADDR, // &foo - address to a variable
+	ARG_MEMVAR, // [&foo]
+	ARG_VALUE, // -1, (expr), 1, 3.0
+	ARG_INT, // Converted from VALUE
+}
+
+enum AsmOffsetType : char
+{
+	SCALE_1, // *
+	SCALE_2,
+	SCALE_4,
+	SCALE_8,
+	SCALE_SHR, // >>
+	SCALE_SHL, // <<
+	SCALE_ASHL, // >>>
+	SCALE_ROR, // ror
+	SCALE_RRX, // rrx
+}
+
+enum AsmRegisterType : char
+{
+	REG_INT,
+	REG_FLOAT,
+	REG_IVEC,
+	REF_FVEC,
+}
+
+enum AstKind : char
+{
+	POISONED,
+	ASM_BLOCK_STMT,
+	ASM_LABEL,
+	ASM_STMT,
+	ASSERT_STMT,
+	BLOCK_EXIT_STMT,
+	BREAK_STMT,
+	CASE_STMT,
+	COMPOUND_STMT,
+	CONTINUE_STMT,
+	CT_ASSERT,
+	CT_COMPOUND_STMT,
+	CT_ECHO_STMT,
+	CT_ELSE_STMT,
+	CT_EXPAND_STMT,
+	CT_FOREACH_STMT,
+	CT_FOR_STMT,
+	CT_IF_STMT,
+	CT_SWITCH_STMT,
+	CT_TYPE_ASSIGN_STMT,
+	DECLARE_STMT,
+	DECLS_STMT,
+	DEFAULT_STMT,
+	DEFER_STMT,
+	EXPR_STMT,
+	FOREACH_STMT,
+	FOR_STMT,
+	IF_STMT,
+	NEXTCASE_STMT,
+	NOP_STMT,
+	RETURN_STMT,
+	SWITCH_STMT,
+}
+
+enum Atomicity : char
+{
+	NONE,
+	UNORDERED,
+	RELAXED,
+	ACQUIRE,
+	RELEASE,
+	ACQUIRE_RELEASE,
+	SEQ_CONSISTENT,
+}
+
+alias AttributeDomain = int;
+const AttributeDomain ATTR_NONE = 0;
+const AttributeDomain ATTR_FUNC = 1 << 0;
+const AttributeDomain ATTR_GLOBAL = 1 << 1;
+const AttributeDomain ATTR_LOCAL = 1 << 2;
+const AttributeDomain ATTR_ENUM = 1 << 3;
+const AttributeDomain ATTR_STRUCT = 1 << 4;
+const AttributeDomain ATTR_UNION = 1 << 5;
+const AttributeDomain ATTR_CONST = 1 << 6;
+const AttributeDomain ATTR_FAULT = 1 << 7;
+const AttributeDomain ATTR_ALIAS = 1 << 8;
+const AttributeDomain ATTR_MEMBER = 1 << 9;
+const AttributeDomain ATTR_BITSTRUCT_MEMBER = 1 << 10;
+const AttributeDomain ATTR_INTERFACE = 1 << 11;
+const AttributeDomain ATTR_CALL = 1 << 12;
+const AttributeDomain ATTR_BITSTRUCT = 1 << 13;
+const AttributeDomain ATTR_MACRO = 1 << 14;
+const AttributeDomain ATTR_TYPEDEF = 1 << 15;
+const AttributeDomain ATTR_ENUM_VALUE = 1 << 16;
+const AttributeDomain ATTR_INTERFACE_METHOD = 1 << 17;
+const AttributeDomain ATTR_PARAM = 1 << 18;
+const AttributeDomain ATTR_FNTYPE = 1 << 19;
+const AttributeDomain ATTR_LOCAL_STATIC = 1 << 20;
+
+enum AttributeType : char
+{
+	ALIGN,
+	ALLOW_DEPRECATED,
+	ASMNAME,
+	BENCHMARK,
+	BIGENDIAN,
+	BUILTIN,
+	CALLCONV,
+	CNAME,
+	COMPACT,
+	CONST,
+	CONSTINIT,
+	DEPRECATED,
+	DYNAMIC,
+	EXPORT,
+	FEAT,
+	FINALIZER,
+	FORMAT,
+	IF,
+	INIT,
+	INLINE,
+	JUMP,
+	LINK,
+	LITTLEENDIAN,
+	LOCAL,
+	MAYDISCARD,
+	MUSTINIT,
+	NAKED,
+	NOALIAS,
+	NODISCARD,
+	NOINIT,
+	NOINLINE,
+	NOPADDING,
+	NORECURSE,
+	NOREDZONE,
+	NORETURN,
+	NOSANITIZE,
+	NOSTRIP,
+	OBFUSCATE,
+	OPERATOR,
+	OPERATOR_R,
+	OPERATOR_S,
+	OPTIONAL,
+	OVERLAP,
+	PACKED,
+	PRIVATE,
+	PUBLIC,
+	PURE,
+	REFLECT,
+	SAFEINFER,
+	SAFEMACRO,
+	SECTION,
+	SIMD,
+	TAG,
+	TEST,
+	UNUSED,
+	USED,
+	WASM,
+	WEAK,
+	WEAKLINK,
+	WINMAIN,
+	STACKPROBE,
+	NOSTACKPROBE,
+	STACKPROTECTOR,
+	NOSTACKPROTECTOR,
+	NONE,
+}
+const AttributeType NUMBER_OF_ATTRIBUTES = AttributeType.NONE;
+
+enum BinaryOp : char
+{
+	ERROR,
+	MULT,
+	SUB,
+	ADD,
+	DIV,
+	MOD,
+	SHR,
+	SHL,
+	BIT_OR,
+	BIT_XOR,
+	BIT_AND,
+	AND,
+	OR,
+	ELSE,
+	CT_AND,
+	CT_OR,
+	CT_CONCAT,
+	CT_CONCAT_ASSIGN,
+	// Don't change the ordering for GT to EQ or things will break
+	GT,
+	GE,
+	LT,
+	LE,
+	NE,
+	EQ,
+	// Vec comparisons
+	VEC_GT,
+	VEC_GE,
+	VEC_LT,
+	VEC_LE,
+	VEC_NE,
+	VEC_EQ,
+	// Only "assign" BINOPS after this point
+	ASSIGN,
+	ADD_ASSIGN,
+	BIT_AND_ASSIGN,
+	BIT_OR_ASSIGN,
+	BIT_XOR_ASSIGN,
+	DIV_ASSIGN,
+	MOD_ASSIGN,
+	MULT_ASSIGN,
+	SHR_ASSIGN,
+	SHL_ASSIGN,
+	SUB_ASSIGN,
+}
+const BinaryOp BINARYOP_LAST = BinaryOp.SUB_ASSIGN;
+
+enum BitSizes : char
+{
+	BIT1,
+	BITS8,
+	BITS16,
+	BITS32,
+	BITS64,
+	BITS128,
+	BITS256,
+	BITSIZES_LEN,
+}
+
+alias BoolErr = int;
+const BoolErr BOOL_ERR = -1;
+const BoolErr BOOL_FALSE = 0;
+const BoolErr BOOL_TRUE = 1;
+
+enum BuiltinAccessKind : char
+{
+	TYPEOFANY,
+	TYPEOFANYFAULT,
+	ENUMNAME,
+	FAULTNAME,
+}
+
+enum BuiltinDefine : char
+{
+	DEF_DATE,
+	DEF_FILE,
+	DEF_FILEPATH,
+	DEF_FUNC,
+	DEF_FUNCTION,
+	DEF_LINE,
+	DEF_LINE_RAW,
+	DEF_MODULE,
+	DEF_PANIC_FN,
+	DEF_BENCHMARK_NAMES,
+	DEF_BENCHMARK_FNS,
+	DEF_TEST_NAMES,
+	DEF_TEST_FNS,
+	DEF_TIME,
+	DEF_NONE,
+}
+const BuiltinDefine NUMBER_OF_BUILTIN_DEFINES = BuiltinDefine.DEF_NONE;
+
+enum BuiltinFunction : char
+{
+	ABS,
+	ACOS,
+	ASIN,
+	ATAN,
+	ANY_MAKE,
+	ATOMIC_LOAD,
+	ATOMIC_STORE,
+	ATOMIC_FETCH_EXCHANGE,
+	ATOMIC_FETCH_ADD,
+	ATOMIC_FETCH_SUB,
+	ATOMIC_FETCH_AND,
+	ATOMIC_FETCH_NAND,
+	ATOMIC_FETCH_OR,
+	ATOMIC_FETCH_XOR,
+	ATOMIC_FETCH_MAX,
+	ATOMIC_FETCH_MIN,
+	ATOMIC_FETCH_INC_WRAP,
+	ATOMIC_FETCH_DEC_WRAP,
+	BITREVERSE,
+	BREAKPOINT,
+	BSWAP,
+	CEIL,
+	COMPARE_EXCHANGE,
+	COPYSIGN,
+	COS,
+	COSH,
+	CTLZ,
+	CTTZ,
+	EXACT_ADD,
+	EXACT_DIV,
+	EXACT_MOD,
+	EXACT_MUL,
+	EXACT_NEG,
+	EXACT_SUB,
+	EXP,
+	EXP2,
+	EXP10,
+	EXPECT,
+	EXPECT_WITH_PROBABILITY,
+	FENCE,
+	FLOOR,
+	FMA,
+	FMULADD,
+	FRAMEADDRESS,
+	FSHL,
+	FSHR,
+	GATHER,
+	GET_ROUNDING_MODE,
+	INT_TO_MASK,
+	LOG,
+	LOG2,
+	LOG10,
+	MATRIX_MUL,
+	MATRIX_TRANSPOSE,
+	MASK_TO_INT,
+	MASKED_LOAD,
+	MASKED_STORE,
+	MAX,
+	MEMCOPY,
+	MEMCOPY_INLINE,
+	MEMMOVE,
+	MEMSET,
+	MEMSET_INLINE,
+	MIN,
+	NEARBYINT,
+	OVERFLOW_ADD,
+	OVERFLOW_MUL,
+	OVERFLOW_SUB,
+	POPCOUNT,
+	POW,
+	POW_INT,
+	PREFETCH,
+	REDUCE_ADD,
+	REDUCE_AND,
+	REDUCE_FADD,
+	REDUCE_FMUL,
+	REDUCE_MAX,
+	REDUCE_MIN,
+	REDUCE_MUL,
+	REDUCE_OR,
+	REDUCE_XOR,
+	REVERSE,
+	RETURNADDRESS,
+	RINT,
+	RND,
+	ROUND,
+	ROUNDEVEN,
+	SAT_ADD,
+	SAT_SHL,
+	SAT_SUB,
+	SAT_MUL,
+	SCATTER,
+	SELECT,
+	SET_ROUNDING_MODE,
+	SPRINTF,
+	STR_FIND,
+	STR_HASH,
+	STR_LOWER,
+	STR_PASCALCASE,
+	STR_REPLACE,
+	STR_UPPER,
+	STR_SNAKECASE,
+	SWIZZLE,
+	SWIZZLE2,
+	SIN,
+	SINH,
+	SQRT,
+	SYSCALL,
+	SYSCLOCK,
+	TAN,
+	TANH,
+	TRAP,
+	TRUNC,
+	UNALIGNED_LOAD,
+	UNALIGNED_STORE,
+	UNREACHABLE,
+	VECCOMPLT,
+	VECCOMPLE,
+	VECCOMPGT,
+	VECCOMPGE,
+	VECCOMPEQ,
+	VECCOMPNE,
+	VOLATILE_LOAD,
+	VOLATILE_STORE,
+	WASM_MEMORY_SIZE,
+	WASM_MEMORY_GROW,
+	WIDESTRING_16,
+	WIDESTRING_32,
+	NONE,
+	// Disabled for now!
+	LLRINT,
+	LLROUND,
+	LRINT,
+	LROUND,
+}
+const BuiltinFunction NUMBER_OF_BUILTINS = BuiltinFunction.NONE;
+
+enum CallABI : char
+{
+	C,
+	X64_VECTOR,
+	AAPCS,
+	AAPCS_VFP,
+}
+
+enum CallEnvKind : char
+{
+	ENV_GLOBAL_INIT,
+	ENV_FUNCTION,
+	ENV_FUNCTION_STATIC,
+	ENV_ATTR,
+}
+
+alias CmpRes = int;
+const CmpRes CMP_LT = -1;
+const CmpRes CMP_EQ = 0;
+const CmpRes CMP_GT = 1;
+
+alias CondResult = int;
+const CondResult COND_MISSING = -1;
+const CondResult COND_TRUE = 1;
+const CondResult COND_FALSE = 0;
+
+enum CondType : char
+{
+	TYPE_UNWRAP_BOOL,
+	TYPE_EVALTYPE_VALUE,
+}
+
+enum ConstInitType : char
+{
+	INIT_ZERO,
+	INIT_STRUCT,
+	INIT_UNION,
+	INIT_VALUE,
+	INIT_ARRAY,
+	INIT_ARRAY_FULL,
+	INIT_ARRAY_VALUE,
+}
+
+enum ConstKind : char
+{
+	FLOAT,
+	INTEGER,
+	BOOL,
+	ENUM,
+	FAULT,
+	BYTES,
+	STRING,
+	POINTER,
+	TYPEID,
+	SLICE,
+	INITIALIZER,
+	UNTYPED_LIST,
+	REF,
+	MEMBER,
+	REFLECTION,
+}
+
+alias ConvGroup = int;
+const ConvGroup CONV_NO = -1;
+const ConvGroup CONV_VOID = 0;
+const ConvGroup CONV_WILDCARD = CONV_VOID + 1;
+const ConvGroup CONV_BOOL = CONV_WILDCARD + 1;
+const ConvGroup CONV_INT = CONV_BOOL + 1;
+const ConvGroup CONV_FLOAT = CONV_INT + 1;
+const ConvGroup CONV_POINTER = CONV_FLOAT + 1;
+const ConvGroup CONV_SLICE = CONV_POINTER + 1;
+const ConvGroup CONV_VECTOR = CONV_SLICE + 1;
+const ConvGroup CONV_BITSTRUCT = CONV_VECTOR + 1;
+const ConvGroup CONV_DISTINCT = CONV_BITSTRUCT + 1;
+const ConvGroup CONV_ARRAY = CONV_DISTINCT + 1;
+const ConvGroup CONV_STRUCT = CONV_ARRAY + 1;
+const ConvGroup CONV_UNION = CONV_STRUCT + 1;
+const ConvGroup CONV_ANY = CONV_UNION + 1;
+const ConvGroup CONV_INTERFACE = CONV_ANY + 1;
+const ConvGroup CONV_ENUM = CONV_INTERFACE + 1;
+const ConvGroup CONV_RAW_ENUM = CONV_ENUM + 1;
+const ConvGroup CONV_FUNC = CONV_RAW_ENUM + 1;
+const ConvGroup CONV_TYPEID = CONV_FUNC + 1;
+const ConvGroup CONV_ANYFAULT = CONV_TYPEID + 1;
+const ConvGroup CONV_VOIDPTR = CONV_ANYFAULT + 1;
+const ConvGroup CONV_VAPTR = CONV_VOIDPTR + 1;
+const ConvGroup CONV_INFERRED = CONV_VAPTR + 1;
+const ConvGroup CONV_UNTYPED_LIST = CONV_INFERRED + 1;
+const ConvGroup CONV_LAST = CONV_UNTYPED_LIST;
+
+enum CType : char
+{
+	SHORT,
+	INT,
+	LONG,
+	LONG_LONG,
+}
+
+enum DeclKind : char
+{
+	POISONED,
+	ATTRIBUTE,
+	BITSTRUCT,
+	BODYPARAM,
+	CT_ASSERT,
+	CT_ECHO,
+	CT_EXEC,
+	CT_EXPAND,
+	CT_INCLUDE,
+	DECLARRAY,
+	CONTRACT,
+	ALIAS,
+	ALIAS_PATH,
+	TYPEDEF,
+	ENUM,
+	ENUM_CONSTANT,
+	ERASED,
+	FAULT,
+	FNTYPE,
+	FUNC,
+	GROUP,
+	GENERIC,
+	GENERIC_INSTANCE,
+	IMPORT,
+	LABEL,
+	MACRO,
+	INTERFACE,
+	CONSTSET,
+	STRUCT,
+	TYPE_ALIAS,
+	UNION,
+	VAR,
+}
+const DeclKind DECL_LAST = DeclKind.VAR;
+
+enum DefineType : char
+{
+	IDENT_ALIAS,
+	IDENT_GENERIC,
+}
+
+enum DesignatorType : char
+{
+	FIELD,
+	ARRAY,
+	RANGE,
+}
+
+enum ExprKind : char
+{
+	ACCESS_RESOLVED,
+	ACCESS_UNRESOLVED,
+	ADDR_CONVERSION,
+	ASM,
+	BENCHMARK_HOOK,
+	BINARY,
+	BITACCESS,
+	BITASSIGN,
+	BUILTIN,
+	BUILTIN_ACCESS,
+	CALL,
+	CAST,
+	CATCH,
+	CATCH_UNRESOLVED,
+	COMPILER_CONST,
+	COMPOUND_LITERAL,
+	COND,
+	CONST,
+	CONTRACT,
+	CT_FEATURE,
+	CT_DEFINED,
+	CT_EVAL,
+	CT_IDENT,
+	CT_REFLECT,
+	CT_SUBSCRIPT,
+	DECL,
+	DEFAULT_ARG,
+	DESIGNATED_INITIALIZER_LIST,
+	DESIGNATOR,
+	DISCARD,
+	EMBED,
+	ENUM_FROM_ORD,
+	EXPRESSION_LIST,
+	EXT_TRUNC,
+	FLOAT_TO_INT,
+	FORCE_UNWRAP,
+	GENERIC_IDENT,
+	HASH_IDENT,
+	IDENTIFIER,
+	INITIALIZER_LIST,
+	INT_TO_BOOL,
+	INT_TO_FLOAT,
+	INT_TO_PTR,
+	IOTA_DECL,
+	LAMBDA,
+	LAST_FAULT,
+	LENGTHOF,
+	MACRO_BLOCK,
+	MACRO_BODY,
+	MACRO_BODY_EXPANSION,
+	MAKE_ANY,
+	MAKE_SLICE,
+	MAYBE_DEREF,
+	MEMBER_GET,
+	MEMBER_SET,
+	NAMED_ARGUMENT,
+	NAMED_EVAL_ARGUMENT,
+	NOP,
+	OPERATOR_CHARS,
+	OPTIONAL,
+	OTHER_CONTEXT,
+	POINTER_OFFSET,
+	POISONED,
+	POST_UNARY,
+	PTR_ACCESS,
+	PTR_TO_INT,
+	RECAST,
+	RETHROW,
+	RETVAL,
+	RVALUE,
+	SCALAR_TO_VECTOR,
+	SLICE,
+	SLICE_ASSIGN,
+	SLICE_COPY,
+	SLICE_LEN,
+	SLICE_TO_VEC_ARRAY,
+	SPLAT,
+	STRINGIFY,
+	SUBSCRIPT,
+	SUBSCRIPT_ADDR,
+	SUBSCRIPT_ASSIGN,
+	SWIZZLE,
+	TERNARY,
+	TEST_HOOK,
+	TRY,
+	TRY_UNRESOLVED,
+	TRY_UNWRAP_CHAIN,
+	TWO,
+	TYPECALL,
+	TYPEID,
+	TYPEID_INFO,
+	TYPEINFO,
+	TYPE_PROPERTY,
+	UNARY,
+	UNRESOLVED_IDENTIFIER,
+	VAARG,
+	VACOUNT,
+	VASPLAT,
+	VECTOR_FROM_ARRAY,
+	VECTOR_TO_ARRAY,
+}
+const ExprKind EXPR_LAST = ExprKind.VECTOR_TO_ARRAY;
+
+enum InOutModifier : char
+{
+	ANY,
+	IN,
+	OUT,
+	INOUT,
+	INIT,
+	OWN,
+	DROP,
+}
+
+alias IntrospectType = int;
+const IntrospectType INTROSPECT_TYPE_VOID = 0;
+const IntrospectType INTROSPECT_TYPE_BOOL = 1;
+const IntrospectType INTROSPECT_TYPE_SIGNED_INT = 2;
+const IntrospectType INTROSPECT_TYPE_UNSIGNED_INT = 3;
+const IntrospectType INTROSPECT_TYPE_FLOAT = 4;
+const IntrospectType INTROSPECT_TYPE_TYPEID = 5;
+const IntrospectType INTROSPECT_TYPE_ANYFAULT = 6;
+const IntrospectType INTROSPECT_TYPE_ANY = 7;
+const IntrospectType INTROSPECT_TYPE_ENUM = 8;
+const IntrospectType INTROSPECT_TYPE_CONSTSET = 9;
+const IntrospectType INTROSPECT_TYPE_STRUCT = 10;
+const IntrospectType INTROSPECT_TYPE_UNION = 11;
+const IntrospectType INTROSPECT_TYPE_BITSTRUCT = 12;
+const IntrospectType INTROSPECT_TYPE_FUNC = 13;
+const IntrospectType INTROSPECT_TYPE_OPTIONAL = 14;
+const IntrospectType INTROSPECT_TYPE_ARRAY = 15;
+const IntrospectType INTROSPECT_TYPE_SLICE = 16;
+const IntrospectType INTROSPECT_TYPE_VECTOR = 17;
+const IntrospectType INTROSPECT_TYPE_DISTINCT = 18;
+const IntrospectType INTROSPECT_TYPE_POINTER = 19;
+const IntrospectType INTROSPECT_TYPE_INTERFACE = 20;
+const IntrospectType INTROSPECT_TYPE_UNTYPEDLIST = 21;
+
+enum MainType : char
+{
+	TYPE_ERROR,
+	TYPE_RAW,
+	TYPE_NO_ARGS,
+	TYPE_ARGS,
+	TYPE_WIN,
+}
+
+enum MethodSearchType : char
+{
+	SEARCH_SUBMODULE_CURRENT,
+	SEARCH_IMPORTED,
+	SEARCH_CURRENT,
+	SEARCH_PRIVATE_IMPORTED,
+}
+
+alias OverloadType = int;
+const OverloadType OVERLOAD_TYPE_LEFT = 1;
+const OverloadType OVERLOAD_TYPE_RIGHT = 2;
+const OverloadType OVERLOAD_TYPE_SYMMETRIC = OVERLOAD_TYPE_LEFT | OVERLOAD_TYPE_RIGHT;
+
+alias OverloadMatch = int;
+const OverloadMatch OVERLOAD_MATCH_ERROR = -1;
+const OverloadMatch OVERLOAD_MATCH_NONE = 0;
+const OverloadMatch OVERLOAD_MATCH_EXACT = OVERLOAD_MATCH_NONE + 1;
+const OverloadMatch OVERLOAD_MATCH_CONVERSION = OVERLOAD_MATCH_EXACT + 1;
+const OverloadMatch OVERLOAD_MATCH_WILDCARD = OVERLOAD_MATCH_CONVERSION + 1;
+const OverloadMatch OVERLOAD_MATCH_AMBIGUOUS_WILDCARD = OVERLOAD_MATCH_WILDCARD + 1;
+const OverloadMatch OVERLOAD_MATCH_AMBIGUOUS_CONVERSION = OVERLOAD_MATCH_AMBIGUOUS_WILDCARD + 1;
+const OverloadMatch OVERLOAD_MATCH_AMBIGUOUS_EXACT = OVERLOAD_MATCH_AMBIGUOUS_CONVERSION + 1;
+const OverloadMatch OVERLOAD_MATCH_AMBIGUOUS_START = OVERLOAD_MATCH_AMBIGUOUS_WILDCARD;
+
+alias OperatorOverload = int;
+const OperatorOverload OVERLOAD_NONE = 0;
+const OperatorOverload OVERLOAD_ELEMENT_AT = 1;
+const OperatorOverload OVERLOAD_SUBSCRIPTS_FIRST = OVERLOAD_ELEMENT_AT;
+const OperatorOverload OVERLOAD_ELEMENT_REF = OVERLOAD_SUBSCRIPTS_FIRST + 1;
+const OperatorOverload OVERLOAD_ELEMENT_SET = OVERLOAD_ELEMENT_REF + 1;
+const OperatorOverload OVERLOAD_LEN = OVERLOAD_ELEMENT_SET + 1;
+const OperatorOverload OVERLOAD_SUBSCRIPTS_LAST = OVERLOAD_LEN;
+const OperatorOverload OVERLOAD_NEGATE = OVERLOAD_SUBSCRIPTS_LAST + 1;
+const OperatorOverload OVERLOAD_UNARY_MINUS = OVERLOAD_NEGATE + 1;
+const OperatorOverload OVERLOAD_PLUS = OVERLOAD_UNARY_MINUS + 1;
+const OperatorOverload OVERLOAD_TYPED_START = OVERLOAD_PLUS;
+const OperatorOverload OVERLOAD_MINUS = OVERLOAD_TYPED_START + 1;
+const OperatorOverload OVERLOAD_MULTIPLY = OVERLOAD_MINUS + 1;
+const OperatorOverload OVERLOAD_DIVIDE = OVERLOAD_MULTIPLY + 1;
+const OperatorOverload OVERLOAD_REMINDER = OVERLOAD_DIVIDE + 1;
+const OperatorOverload OVERLOAD_AND = OVERLOAD_REMINDER + 1;
+const OperatorOverload OVERLOAD_OR = OVERLOAD_AND + 1;
+const OperatorOverload OVERLOAD_XOR = OVERLOAD_OR + 1;
+const OperatorOverload OVERLOAD_SHL = OVERLOAD_XOR + 1;
+const OperatorOverload OVERLOAD_SHR = OVERLOAD_SHL + 1;
+const OperatorOverload OVERLOAD_EQUAL = OVERLOAD_SHR + 1;
+const OperatorOverload OVERLOAD_LESS_THAN = OVERLOAD_EQUAL + 1;
+const OperatorOverload OVERLOAD_PLUS_ASSIGN = OVERLOAD_LESS_THAN + 1;
+const OperatorOverload OVERLOAD_MINUS_ASSIGN = OVERLOAD_PLUS_ASSIGN + 1;
+const OperatorOverload OVERLOAD_MULTIPLY_ASSIGN = OVERLOAD_MINUS_ASSIGN + 1;
+const OperatorOverload OVERLOAD_DIVIDE_ASSIGN = OVERLOAD_MULTIPLY_ASSIGN + 1;
+const OperatorOverload OVERLOAD_REMINDER_ASSIGN = OVERLOAD_DIVIDE_ASSIGN + 1;
+const OperatorOverload OVERLOAD_AND_ASSIGN = OVERLOAD_REMINDER_ASSIGN + 1;
+const OperatorOverload OVERLOAD_OR_ASSIGN = OVERLOAD_AND_ASSIGN + 1;
+const OperatorOverload OVERLOAD_XOR_ASSIGN = OVERLOAD_OR_ASSIGN + 1;
+const OperatorOverload OVERLOAD_SHL_ASSIGN = OVERLOAD_XOR_ASSIGN + 1;
+const OperatorOverload OVERLOAD_SHR_ASSIGN = OVERLOAD_SHL_ASSIGN + 1;
+const OperatorOverload OVERLOADS_COUNT = OVERLOAD_SHR_ASSIGN;
+
+enum Precedence : char
+{
+	NONE,
+	ASSIGNMENT, // =, *=, /=, %=, +=, etc
+	TERNARY, // ?:
+	OR, // || |||
+	AND, // && &&&
+	RELATIONAL, // < > <= >= == !=
+	ADDITIVE, // + - +++
+	ORELSE, // ?: ??
+	BIT, // ^ | &
+	SHIFT, // << >>
+	MULTIPLICATIVE, // * / %
+	UNARY, // ! - + ~ * & prefix ++/-- (type)
+	CALL, // . () [] postfix ++ -- !! ! ~
+	PRIMARY,
+}
+
+enum ResolveStatus : char
+{
+	NOT_DONE,
+	RUNNING,
+	DONE,
+}
+
+alias ResolveTypeKind = int;
+const ResolveTypeKind RESOLVE_TYPE_DEFAULT = 0;
+const ResolveTypeKind RESOLVE_TYPE_ALLOW_INFER = 0x01;
+const ResolveTypeKind RESOLVE_TYPE_ALLOW_FLEXIBLE = 0x02;
+const ResolveTypeKind RESOLVE_TYPE_NO_CHECK_DISTINCT = 0x04;
+const ResolveTypeKind RESOLVE_TYPE_MACRO_METHOD = RESOLVE_TYPE_ALLOW_INFER | RESOLVE_TYPE_NO_CHECK_DISTINCT;
+const ResolveTypeKind RESOLVE_TYPE_FUNC_METHOD = RESOLVE_TYPE_NO_CHECK_DISTINCT;
+
+alias ScopeFlags = int;
+const ScopeFlags SCOPE_NONE = 0;
+const ScopeFlags SCOPE_ENSURE = 1 << 1;
+const ScopeFlags SCOPE_ENSURE_MACRO = 1 << 2;
+const ScopeFlags SCOPE_MACRO = 1 << 4;
+const ScopeFlags SCOPE_COND = 1 << 5;
+const ScopeFlags SCOPE_COMPARISON = 1 << 6;
+
+alias StorageType = int;
+const StorageType STORAGE_ERROR = -1;
+const StorageType STORAGE_NORMAL = 0;
+const StorageType STORAGE_VOID = STORAGE_NORMAL + 1;
+const StorageType STORAGE_COMPILE_TIME = STORAGE_VOID + 1;
+const StorageType STORAGE_WILDCARD = STORAGE_COMPILE_TIME + 1;
+const StorageType STORAGE_UNKNOWN = STORAGE_WILDCARD + 1;
+
+alias TypeCmpResult = int;
+const TypeCmpResult TYPE_MISMATCH = 0;
+const TypeCmpResult TYPE_SAME = 1;
+const TypeCmpResult TYPE_SAME_INT_SIZE = 2;
+const TypeCmpResult TYPE_ALIGNMENT_INCREASE = 3;
+const TypeCmpResult TYPE_ERROR = -1;
+
+enum TypeIdInfoKind : char
+{
+	INFO_KIND,
+	INFO_PARENTOF,
+	INFO_INNER,
+	INFO_LEN,
+	INFO_SIZEOF,
+	INFO_NAMES,
+}
+
+alias TypeInfoCompressedKind = int;
+const TypeInfoCompressedKind TYPE_COMPRESSED_NONE = 0;
+const TypeInfoCompressedKind TYPE_COMPRESSED_PTR = 1;
+const TypeInfoCompressedKind TYPE_COMPRESSED_SUB = 2;
+const TypeInfoCompressedKind TYPE_COMPRESSED_SUBPTR = 3;
+const TypeInfoCompressedKind TYPE_COMPRESSED_PTRPTR = 4;
+const TypeInfoCompressedKind TYPE_COMPRESSED_PTRSUB = 5;
+const TypeInfoCompressedKind TYPE_COMPRESSED_SUBSUB = 6;
+
+enum TypeInfoKind : char
+{
+	INFO_POISON,
+	INFO_IDENTIFIER,
+	INFO_CT_IDENTIFIER,
+	INFO_TYPEOF,
+	INFO_TYPEFROM,
+	INFO_ARRAY,
+	INFO_VECTOR,
+	INFO_INFERRED_ARRAY,
+	INFO_INFERRED_VECTOR,
+	INFO_SLICE,
+	INFO_POINTER,
+	INFO_GENERIC,
+}
+
+enum TypeKind : char
+{
+	POISONED,
+	VOID,
+	BOOL,
+	I8,
+	I16,
+	I32,
+	I64,
+	I128,
+	U8,
+	U16,
+	U32,
+	U64,
+	U128,
+	F16,
+	BF16,
+	F32,
+	F64,
+	F128,
+	ANY,
+	INTERFACE,
+	ANYFAULT,
+	TYPEID,
+	FUNC_PTR,
+	POINTER,
+	TYPEDEF,
+	CONSTSET,
+	ENUM,
+	FUNC_RAW,
+	STRUCT,
+	UNION,
+	BITSTRUCT,
+	ALIAS,
+	UNTYPEDLIST,
+	SLICE,
+	ARRAY,
+	FLEXIBLE_ARRAY,
+	INFERRED_ARRAY,
+	VECTOR,
+	SIMD_VECTOR,
+	INFERRED_VECTOR,
+	OPTIONAL,
+	WILDCARD,
+	TYPEINFO,
+	MEMBER,
+	REFLECTION,
+}
+const TypeKind TYPE_INTEGER_FIRST = TypeKind.I8;
+const TypeKind TYPE_NUM_FIRST = TYPE_INTEGER_FIRST;
+const TypeKind TYPE_INT_FIRST = TYPE_INTEGER_FIRST;
+const TypeKind TYPE_INT_LAST = TypeKind.I128;
+const TypeKind TYPE_UINT_FIRST = TypeKind.U8;
+const TypeKind TYPE_UINT_LAST = TypeKind.U128;
+const TypeKind TYPE_INTEGER_LAST = TypeKind.U128;
+const TypeKind TYPE_FLOAT_FIRST = TypeKind.F16;
+const TypeKind TYPE_FLOAT_LAST = TypeKind.F128;
+const TypeKind TYPE_NUM_LAST = TYPE_FLOAT_LAST;
+const TypeKind TYPE_FIRST_ARRAYLIKE = TypeKind.ARRAY;
+const TypeKind TYPE_LAST_ARRAYLIKE = TypeKind.INFERRED_VECTOR;
+const TypeKind TYPE_LAST = TypeKind.REFLECTION;
+
+enum TypeProperty : char
+{
+	PROPERTY_ALIGNMENT,
+	PROPERTY_FROM_ORDINAL,
+	PROPERTY_GENERIC_ARGS,
+	PROPERTY_GENERIC_QNAME,
+	PROPERTY_HAS_EQUALS,
+	PROPERTY_IS_ORDERED,
+	PROPERTY_IS_ANONYMOUS,
+	PROPERTY_IS_NESTED,
+	PROPERTY_IS_SUBSTRUCT,
+	PROPERTY_IS_GENERIC,
+	PROPERTY_LEN,
+	PROPERTY_LOOKUP_FIELD,
+	PROPERTY_MAX,
+	PROPERTY_MIN,
+	PROPERTY_MEMBERS,
+	PROPERTY_METHODS,
+	PROPERTY_NAN,
+	PROPERTY_INF,
+	PROPERTY_INNER,
+	PROPERTY_KIND,
+	PROPERTY_NAMES,
+	PROPERTY_NAME,
+	PROPERTY_CNAME,
+	PROPERTY_QNAME,
+	PROPERTY_PARAM_STRUCT,
+	PROPERTY_PARAMS,
+	PROPERTY_PARENT,
+	PROPERTY_RETURNS,
+	PROPERTY_SIZE,
+	PROPERTY_GET_TAG,
+	PROPERTY_HAS_TAG,
+	PROPERTY_TAGS,
+	PROPERTY_VALUES,
+	PROPERTY_NONE,
+}
+const TypeProperty NUMBER_OF_TYPE_PROPERTIES = TypeProperty.PROPERTY_NONE;
+
+enum UnaryOp : char
+{
+	ERROR,
+	DEREF,
+	ADDR,
+	NEG,
+	PLUS,
+	BITNEG,
+	NOT,
+	INC,
+	DEC,
+	TADDR,
+}
+
+enum VarDeclKind : char
+{
+	CONST,
+	GLOBAL,
+	LOCAL,
+	PARAM,
+	MEMBER,
+	BITMEMBER,
+	PARAM_EXPR,
+	UNWRAPPED,
+	ERASE,
+	REWRAPPED,
+	PARAM_CT,
+	PARAM_CT_TYPE,
+	LOCAL_CT,
+	LOCAL_CT_TYPE,
+}
+const VarDeclKind VARDECL_FIRST_CT = VarDeclKind.PARAM_CT;
+const VarDeclKind VARDECL_LAST_CT = VarDeclKind.LOCAL_CT_TYPE;
+
+enum Variadic : char
+{
+	NONE,
+	TYPED,
+	ANY,
+	RAW,
+}
+
+enum Visibility : char
+{
+	PUBLIC,
+	PRIVATE,
+	LOCAL,
+}
+
+enum RetValType : char
+{
+	NORMAL,
+	OPTIONAL_VOID,
+	OPTIONAL_VALUE,
+}
+
+enum ParamRewrite : char
+{
+	RW_NONE,
+	RW_VEC_TO_ARRAY,
+	RW_EXPAND_ELEMENTS,
+}
+
+enum CtEvalKind : char
+{
+	EVAL_IDENTIFIER,
+	EVAL_IMPLICIT_IDENTIFIER,
+}
+
+const int PANIC_FN_MAX_TEXTS = 2;
+const int PANIC_FN_MAX_VALUES = 4;

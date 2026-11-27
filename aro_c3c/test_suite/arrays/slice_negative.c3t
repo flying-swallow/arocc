@@ -1,0 +1,58 @@
+// #target: macos-x64
+// #safe: yes
+module test;
+
+fn void main()
+{
+	int[2] x = { 1, 2 };
+	int[] z = x[0..-1];
+	int y = 1;
+	int yy = -1;
+	int[] w = x[y..yy];
+}
+
+/* #expect: test.ll
+define void @test.main() #0 {
+entry:
+  %x = alloca [2 x i32], align 4
+  %z = alloca %"int[]", align 8
+  %y = alloca i32, align 4
+  %yy = alloca i32, align 4
+  %w = alloca %"int[]", align 8
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %x, ptr align 4 @.__const, i64 8, i1 false)
+  %0 = insertvalue %"int[]" undef, ptr %x, 0
+  %1 = insertvalue %"int[]" %0, i64 0, 1
+  store %"int[]" %1, ptr %z, align 8
+  store i32 1, ptr %y, align 4
+  store i32 -1, ptr %yy, align 4
+  %2 = load i32, ptr %y, align 4
+  %sext = sext i32 %2 to i64
+  %3 = icmp ugt i64 %sext, 2
+  br i1 %3, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  %4 = load i32, ptr %yy, align 4
+  %sext1 = sext i32 %4 to i64
+  %5 = add i64 %sext1, 1
+  %6 = icmp sgt i64 %sext, %5
+  %7 = icmp sge i64 %sext1, 2
+  %8 = or i1 %6, %7
+  br i1 %8, label %panic2, label %checkok3
+
+checkok3:                                         ; preds = %checkok
+  %9 = add i64 %sext1, 1
+  %size = sub i64 %9, %sext
+  %ptroffset = getelementptr inbounds [4 x i8], ptr %x, i64 %sext
+  %10 = insertvalue %"int[]" undef, ptr %ptroffset, 0
+  %11 = insertvalue %"int[]" %10, i64 %size, 1
+  store %"int[]" %11, ptr %w, align 8
+  ret void
+
+panic:                                            ; preds = %entry
+  call void @std.core.runtime.panics.slice.long.long.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 9, i64 3, i64 %sext, i64 undef, i64 2) #3
+  unreachable
+
+panic2:                                           ; preds = %checkok
+  call void @std.core.runtime.panics.slice.long.long.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 9, i64 48, i64 %sext, i64 %sext1, i64 2) #3
+  unreachable
+}

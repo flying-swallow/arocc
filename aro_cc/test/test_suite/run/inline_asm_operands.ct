@@ -1,0 +1,29 @@
+// #kind: run
+// #exit: 0
+// GNU inline asm: register/memory/immediate/tied/named operands, specific
+// registers, %b modifier, XMM operands, clobbers, and file-scope asm.
+#include <stdio.h>
+#include <stdint.h>
+asm(".globl answer_fn\n answer_fn:\n movl $42, %eax\n ret\n");
+int answer_fn(void);
+static inline uint64_t rdtsc_like(void) { uint32_t lo, hi; __asm__ volatile("movl $7, %0\n\tmovl $1, %1" : "=a"(lo), "=d"(hi)); return ((uint64_t)hi << 32) | lo; }
+static int add(int a, int b) { int r; asm("movl %1, %0\n\taddl %2, %0" : "=&r"(r) : "r"(a), "r"(b)); return r; }
+static int inc(int x) { asm("incl %0" : "+r"(x)); return x; }
+static long tied(long x) { long r; asm("leaq 5(%1), %0" : "=r"(r) : "0"(x), "r"(x)); return r; }
+static int memop(int *p) { int v; asm("movl %1, %0" : "=r"(v) : "m"(*p)); return v; }
+static void store(int *p, int v) { asm volatile("movl %1, %0" : "=m"(*p) : "ri"(v) : "memory"); }
+static int imm(void) { int r; asm("movl %1, %0" : "=r"(r) : "i"(123)); return r; }
+static int named(int a) { int r; asm("imull $3, %[in], %[out]" : [out] "=r"(r) : [in] "r"(a)); return r; }
+static int bx(int a) { int r; asm("movl %1, %%ebx\n\tleal 1(%%rbx), %%eax\n\tmovl %%eax, %0" : "=r"(r) : "r"(a) : "rbx", "rax"); return r; }
+static double dbl(double x) { double r; asm("addsd %1, %0" : "=x"(r) : "x"(x), "0"(x)); return r; }
+static unsigned char bytes(unsigned v) { unsigned char r; asm("movb %b1, %0" : "=q"(r) : "q"(v)); return r; }
+int main(void) {
+  int m = 9; store(&m, 77);
+  long keep = 1234; int *pk = &m;
+  printf("%d %llu %d %d %ld %d %d %d %d %d %g %d %ld %d\n", answer_fn(), (unsigned long long)rdtsc_like(), add(2, 3), inc(41), tied(10),
+         memop(pk), m, imm(), named(5), bx(10) - 0, dbl(1.25), bytes(0x1234), keep, *pk);
+  return 0;
+}
+
+// #expect: stdout
+42 4294967303 5 42 15 77 77 123 15 11 2.5 52 1234 77

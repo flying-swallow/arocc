@@ -1,0 +1,802 @@
+// #opt: --warn-deadcode=no
+module test;
+typedef Foo = int;
+fn void Foo.test(&self) {}
+struct Bar { int a; int b; }
+extern fn void tick();
+fn void set(int** pp, int* q) { *pp = q; }
+fn void v(int x, args...) {}
+
+<* @param [&in] p *>
+fn void foo(int* p) {}
+
+<* @param [&in] p *>
+fn void foo2(int x, int* p) {}
+
+<* @param [&in] p *>
+fn bool check(int* p) => true;
+
+// Straight-line code
+
+fn void direct() @export
+{
+	int* p = null;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void zero_init() @export
+{
+	int* p;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void reassigned_null(int* q) @export
+{
+	int* p = q;
+	p = null;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void copied() @export
+{
+	int* a = null;
+	int* b = a;
+	foo(b); // #error: parameter must be non-null
+}
+
+fn void chained() @export
+{
+	int* a;
+	int* b;
+	a = b = null;
+	foo(a); // #error: parameter must be non-null
+}
+
+fn void second_param() @export
+{
+	int* p = null;
+	foo2(1, p); // #error: parameter must be non-null
+}
+
+fn void method() @export
+{
+	Foo* f = null;
+	f.test(); // #error: value known to be null
+}
+
+fn void param_assigned(int* p) @export
+{
+	p = null;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void assignment_value() @export
+{
+	int* p;
+	foo2(1, (p = null)); // #error: parameter must be non-null
+}
+
+fn void deref_null() @export
+{
+	int* p = null;
+	*p = 1; // #error: would dereference a null pointer
+}
+
+fn void access_write() @export
+{
+	Bar* b = null;
+	b.a = 1; // #error: access would dereference a null pointer
+}
+
+fn void access_read() @export
+{
+	Bar* b = null;
+	int x = b.a; // #error: access would dereference a null pointer
+}
+
+fn void many_slots() @export
+{
+	int* p0 = null; int* p1 = null; int* p2 = null; int* p3 = null; int* p4 = null;
+	int* p5 = null; int* p6 = null; int* p7 = null; int* p8 = null; int* p9 = null;
+	int* p10 = null; int* p11 = null; int* p12 = null; int* p13 = null; int* p14 = null;
+	int* p15 = null; int* p16 = null; int* p17 = null; int* p18 = null; int* p19 = null;
+	int* p20 = null; int* p21 = null; int* p22 = null; int* p23 = null; int* p24 = null;
+	int* p25 = null; int* p26 = null; int* p27 = null; int* p28 = null; int* p29 = null;
+	int* p30 = null; int* p31 = null; int* p32 = null; int* p33 = null; int* p34 = null;
+	int* p35 = null;
+	foo(p35); // #error: parameter must be non-null
+	foo(p3); // #error: parameter must be non-null
+}
+
+fn void ok_reassigned(int* q) @export
+{
+	int* p = null;
+	p = q;
+	foo(p);
+}
+
+fn void ok_noinit() @export
+{
+	int* p @noinit;
+	foo(p);
+}
+
+fn void ok_unknown_param(int* p) @export
+{
+	foo(p);
+}
+
+fn void ok_incremented() @export
+{
+	int* p = null;
+	p++;
+	foo(p);
+}
+
+fn void ok_compound() @export
+{
+	int* p = null;
+	p += 1;
+	foo(p);
+}
+
+fn void ok_temp_addr() @export
+{
+	int* p = &&1;
+	foo(p);
+}
+
+fn void ok_varargs_call() @export
+{
+	v(1);
+}
+
+// Address of a member is not a read (D32)
+
+fn usz ok_offsetof() @export
+{
+	Bar* b = null;
+	return (usz)&b.b;
+}
+
+fn usz ok_member_address() @export
+{
+	Bar* b = null;
+	int* pb = &b.b;
+	return (usz)pb;
+}
+
+// Taking the address stops tracking
+
+fn void ok_alias_call(int* q) @export
+{
+	int* p = null;
+	set(&p, q);
+	if (q) foo(p);
+}
+
+fn void ok_alias_store(int* q) @export
+{
+	int* p = null;
+	int** pp = &p;
+	*pp = q;
+	if (q) foo(p);
+}
+
+fn void ok_untracked_before_assign(int* q) @export
+{
+	int* p;
+	int** pp = &p;
+	*pp = q;
+	if (q) foo(p);
+}
+
+// Branches and joins
+
+fn void join_both_null(bool c) @export
+{
+	int* p;
+	if (c) { p = null; } else { p = null; }
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void null_before_branch(int n) @export
+{
+	int* p = null;
+	if (n > 0) { foo(p); } // #error: parameter must be non-null
+}
+
+fn void null_in_branch(bool c) @export
+{
+	int* p = null;
+	if (c) { p = null; }
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void ok_join_one_arm(int* q, bool c) @export
+{
+	int* p = null;
+	if (c) p = q;
+	foo(p);
+}
+
+fn void ok_join_keeps_other_slots(int* q, bool c) @export
+{
+	int* a = q;
+	int* b = null;
+	if (c) { }
+	foo(a);
+}
+
+fn void dead_arm_ignored(int* q) @export
+{
+	int* p = null;
+	if (p) { p = q; }
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void ok_dead_nested(bool k) @export
+{
+	int* p = null;
+	int* r = null;
+	if (p)
+	{
+		if (k) { }
+		foo(r);
+	}
+}
+
+fn void ok_early_return_bails(int* q, int n) @export
+{
+	if (n == 0) return;
+	foo(q);
+}
+
+// Narrowing
+
+fn void not_ptr(int* q) @export
+{
+	if (!q) foo(q); // #error: parameter must be non-null
+}
+
+fn void eq_null(int* q) @export
+{
+	if (q == null) { foo(q); } // #error: parameter must be non-null
+}
+
+fn void eq_null_left(int* q) @export
+{
+	if (null == q) foo(q); // #error: parameter must be non-null
+}
+
+fn void ne_else(int* q) @export
+{
+	if (q != null) { } else { foo(q); } // #error: parameter must be non-null
+}
+
+fn void else_arm(int* q) @export
+{
+	if (q) { } else { foo(q); } // #error: parameter must be non-null
+}
+
+fn void double_not(int* q) @export
+{
+	if (!!q) { } else { foo(q); } // #error: parameter must be non-null
+}
+
+fn void and_both(int* q, bool k) @export
+{
+	if (!q && k) { foo(q); } // #error: parameter must be non-null
+}
+
+fn void ok_or_either(int* q, bool k) @export
+{
+	if (!q || k) { foo(q); }
+}
+
+fn void ok_contradiction(int* q) @export
+{
+	if (!q && q) { foo(q); }
+}
+
+fn void ok_known_null_branch() @export
+{
+	int* p = null;
+	if (p) foo(p);
+}
+
+fn void ok_after_if(int* q) @export
+{
+	if (q) { }
+	foo(q);
+}
+
+fn void ok_side_effect_condition(int* q) @export
+{
+	int* p = null;
+	if ((p = q) != null) foo(p);
+}
+
+// && and ||
+
+fn void ok_and(int* q) @export
+{
+	q && check(q);
+}
+
+fn void or_right(int* q) @export
+{
+	q || check(q); // #error: parameter must be non-null
+}
+
+fn void not_and_right(int* q) @export
+{
+	!q && check(q); // #error: parameter must be non-null
+}
+
+fn void ok_and_skipped_path(int* q) @export
+{
+	int* p = null;
+	q && (p = q) != null;
+	foo(p);
+}
+
+fn void after_and(int* q) @export
+{
+	int* p = null;
+	p && check(q);
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void ok_nested_and(int* q, int* r) @export
+{
+	(q && r) && check(q) && check(r);
+}
+
+// Address computations and constant conditions (adversarial review 2026-11-25)
+
+fn void ok_addr_of_deref() @export
+{
+	int* p = null;
+	int* q = &*p;
+}
+
+fn void addr_of_deref_keeps_value() @export
+{
+	int* p = null;
+	int* q = &*p;
+	foo(q); // #error: parameter must be non-null
+}
+
+int g_y;
+
+fn void ok_member_address_may_be_null() @export
+{
+	Bar* p = null;
+	int* q = &p.a;
+	int* r;
+	if (q == null) { r = &g_y; } else { r = null; }
+	*r = 1;
+}
+
+fn void ok_local_member_address() @export
+{
+	Bar b;
+	int* q = &b.a;
+	foo(q);
+}
+
+fn void ok_if_false() @export
+{
+	int* p = null;
+	if (false) { *p = 1; }
+}
+
+const bool DEBUG = false;
+
+fn void ok_if_const_false() @export
+{
+	int* p = null;
+	if (DEBUG) { *p = 1; }
+}
+
+fn void if_true() @export
+{
+	int* p = null;
+	if (true) { *p = 1; } // #error: would dereference a null pointer
+}
+
+fn void ok_true_or() @export
+{
+	int* p = null;
+	if (true || *p == 1) {}
+}
+
+fn void ok_false_and() @export
+{
+	int* p = null;
+	bool b = false && *p == 1;
+}
+
+fn void ok_else_of_true(int* q) @export
+{
+	int* p = null;
+	if (true) { } else { foo(p); }
+}
+
+fn void ok_struct_local() @export
+{
+	Bar s;
+	s.a = 1;
+	int* q = &s.b;
+	foo(q);
+}
+
+// Arguments are evaluated left to right (codegen loads each argument before later ones run)
+
+fn void arg_then_later_assignment() @export
+{
+	int x;
+	int* p = null;
+	foo2b(p, p = &x); // #error: parameter must be non-null
+}
+
+<* @param [&in] a *>
+fn void foo2b(int* a, int* b) {}
+
+
+fn void early_return_narrows(int* q) @export
+{
+	if (!q) return;
+	foo(q);
+}
+
+fn void early_return_else(int* q) @export
+{
+	if (q) { } else { return; }
+	foo(q);
+}
+
+fn void return_keeps_null(bool b) @export
+{
+	int* p = null;
+	if (b) return;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void return_value_checked() @export
+{
+	int* p = null;
+	return foo(p); // #error: parameter must be non-null
+}
+
+fn void defer_on_return() @export
+{
+	int* p = null;
+	defer *p = 1; // #error: would dereference a null pointer
+	return;
+}
+
+fn void ok_after_return() @export
+{
+	int* p = null;
+	return;
+	*p = 1;
+}
+// Asserts (D22)
+
+fn void assert_narrows_null(int* q) @export
+{
+	assert(q == null);
+	foo(q); // #error: parameter must be non-null
+}
+
+fn void assert_not_narrows_null(int* q) @export
+{
+	assert(!q);
+	foo(q); // #error: parameter must be non-null
+}
+
+fn void assert_and_narrows(int* q, bool k) @export
+{
+	assert(k && q == null);
+	foo(q); // #error: parameter must be non-null
+}
+
+fn void assert_never_passes() @export
+{
+	int* p = null;
+	assert(p != null); // #error: always false
+}
+
+fn void assert_never_passes_negated() @export
+{
+	int x;
+	int* p = &x;
+	assert(!p, "p is set"); // #error: always false
+}
+
+fn void assert_call_checked() @export
+{
+	int* p = null;
+	assert(check(p)); // #error: parameter must be non-null
+}
+
+fn void assert_in_branch(bool b) @export
+{
+	int* p = null;
+	if (b)
+	{
+		assert(p); // #error: always false
+	}
+}
+
+fn void ok_assert_not_null(int* q) @export
+{
+	assert(q);
+	foo(q);
+}
+
+fn void ok_assert_ne_null(int* q) @export
+{
+	assert(q != null);
+	foo(q);
+}
+
+fn void ok_assert_unknown_call(int* q) @export
+{
+	assert(check(q));
+}
+
+fn void ok_assert_or(int* q, bool k) @export
+{
+	assert(q == null || k);
+	foo(q);
+}
+
+fn void assert_after_failing_assert() @export
+{
+	int* p = null;
+	assert(p != null); // #error: always false
+	*p = 1;
+}
+
+fn void ok_assert_in_dead_branch() @export
+{
+	int* p = null;
+	if (p)
+	{
+		assert(p == null);
+	}
+}
+
+fn void ok_assert_narrowing_joined(int* q, bool b) @export
+{
+	if (b)
+	{
+		assert(q == null);
+	}
+	foo(q);
+}
+
+// Side effects in an assert condition (review 2026-11-25)
+
+int g_assert;
+macro bool @set_global(#x) { #x = &g_assert; return true; }
+
+fn void ok_assert_assigns_after_test(int* p) @export
+{
+	assert(p != null && (p = null) == null);
+}
+
+fn void assert_assign_no_fact(int* p, int* q) @export
+{
+	assert(p != null && (p = q) == q);
+	if (!p) foo(p); // #error: parameter must be non-null
+}
+
+fn void ok_assert_after_bail() @export
+{
+	int* p = null;
+	assert(@set_global(p) && p != null);
+}
+
+fn void assert_not_or(int* q, bool k) @export
+{
+	assert(!(q || k));
+	foo(q); // #error: parameter must be non-null
+}
+
+// Varargs and splats
+
+int g_va;
+
+<* @param [&in] p *>
+fn int* id(int* p) => p;
+
+<* @param [&in] p *>
+fn int*[] ptrs(int* p) => {};
+
+fn void typed_va(int x, int*... rest) {}
+extern fn void raw_va(int x, ...);
+
+<* @param [&in] last *>
+fn void va_then_named(int x, int*... rest, int* last = &g_va) {}
+
+fn void any_vararg_checked() @export
+{
+	int* p = null;
+	v(1, id(p)); // #error: parameter must be non-null
+}
+
+fn void typed_vararg_checked() @export
+{
+	int* p = null;
+	typed_va(1, id(p)); // #error: parameter must be non-null
+}
+
+fn void raw_vararg_checked() @export
+{
+	int* p = null;
+	raw_va(1, id(p)); // #error: parameter must be non-null
+}
+
+fn void splat_checked() @export
+{
+	int* p = null;
+	typed_va(1, ...ptrs(p)); // #error: parameter must be non-null
+}
+
+fn void typed_vararg_keeps_null() @export
+{
+	int* p = null;
+	typed_va(1, p);
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void vararg_assignment() @export
+{
+	int* p = &g_va;
+	typed_va(1, p = null);
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void vararg_before_later_args() @export
+{
+	int* p = &g_va;
+	va_then_named(1, p = null, last: p); // #error: parameter must be non-null
+}
+
+fn void ok_vararg_before_later_args() @export
+{
+	int* p = null;
+	va_then_named(1, p = &g_va, last: p);
+}
+
+fn void ok_any_vararg_by_reference() @export
+{
+	int* p = null;
+	v(1, p);
+	foo(p);
+}
+
+fn void ok_empty_varargs() @export
+{
+	int* p = &g_va;
+	typed_va(1);
+	v(1);
+	foo(p);
+}
+
+// Optional arguments skip the rest of the call when they fail (review 2026-11-25)
+
+faultdef BAD;
+fn int*? opt_ptr() => BAD~;
+fn int? opt_int() => BAD~;
+fn void two(int a, int* b) {}
+
+fn void ok_optional_vararg_skips_rest() @export
+{
+	int* p = &g_va;
+	(void)typed_va(1, opt_ptr(), p = null);
+	foo(p);
+}
+
+fn void ok_optional_any_vararg_skips_rest() @export
+{
+	int* p = &g_va;
+	(void)v(1, opt_int(), p = null);
+	foo(p);
+}
+
+fn void ok_optional_arg_skips_rest() @export
+{
+	int* p = &g_va;
+	(void)two(opt_int(), p = null);
+	foo(p);
+}
+
+// @noreturn calls end the path
+
+extern fn void stop() @noreturn;
+
+<* @param [&in] p *>
+extern fn void stop_with(int* p) @noreturn;
+
+fn void ok_noreturn_narrows(int* q) @export
+{
+	if (!q) stop();
+	foo(q);
+}
+
+fn void noreturn_keeps_null(bool b) @export
+{
+	int* p = null;
+	if (b) stop();
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void noreturn_arg_checked() @export
+{
+	int* p = null;
+	stop_with(p); // #error: parameter must be non-null
+}
+
+fn void ok_after_noreturn() @export
+{
+	int* p = null;
+	stop();
+	*p = 1;
+}
+
+fn void noreturn_one_arm(int* q, bool b) @export
+{
+	int* p = null;
+	if (b) { stop(); } else { p = q; }
+	if (!p) foo(p); // #error: parameter must be non-null
+}
+
+// any
+
+fn void any_copy_keeps_tracking() @export
+{
+	int* p = null;
+	any a = p;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void ok_any_of_address_untracks() @export
+{
+	int* p = null;
+	any a = &p;
+	*(int**)a.ptr = &g_va;
+	foo(p);
+}
+
+// Splat forms
+
+fn void ok_splat_array() @export
+{
+	int*[2] arr = { &g_va, &g_va };
+	int* p = &g_va;
+	typed_va(1, ...arr);
+	typed_va(1, ...&arr);
+	typed_va(1, ...arr[:1], p);
+	foo(p);
+}
+
+// && copies its operand, so writes through it never reach the variable (review 2026-11-25)
+
+fn void taddr_copy_keeps_null() @export
+{
+	int* p = null;
+	int** pp = &&p;
+	*pp = &g_va;
+	foo(p); // #error: parameter must be non-null
+}
+
+fn void taddr_member_reads() @export
+{
+	Bar* b = null;
+	int* x = &&b.b; // #error: access would dereference a null pointer
+}

@@ -1,0 +1,24 @@
+// #target: macos-x64
+module test;
+
+alias IntFn = fn int();
+IntFn lambda @export = fn () => 1;
+IntFn lambda_naked @export = fn () @naked { asm("ret"); };
+
+/* #expect: test.ll
+
+; Function Attrs: naked nounwind uwtable
+define internal i32 @"test.$global$lambda2"() #0 {
+entry:
+  call void asm sideeffect "ret", "~{dirflag},~{fpsr},~{flags}"()
+  unreachable
+}
+
+; Function Attrs: nounwind ssp uwtable
+define internal i32 @"test.$global$lambda1"() #1 {
+entry:
+  ret i32 1
+}
+
+attributes #0 = { naked nounwind uwtable "no-stack-arg-probe" "no-trapping-math"="true" }
+attributes #1 = { nounwind ssp uwtable "no-trapping-math"="true" "stack-protector-buffer-size"="8" }

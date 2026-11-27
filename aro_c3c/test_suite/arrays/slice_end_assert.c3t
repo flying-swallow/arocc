@@ -1,0 +1,80 @@
+// #target: macos-x64
+// #safe: yes
+module test;
+fn int main()
+{
+	String x = "ABCD";
+	int z = 5;
+	String y = x[1:^8];
+	x[0:^z];
+	return 0;
+}
+
+/* #expect: test.ll
+define i32 @main() #0 {
+entry:
+  %x = alloca %"char[]", align 8
+  %z = alloca i32, align 4
+  %y = alloca %"char[]", align 8
+  store ptr @.str, ptr %x, align 8
+  %ptradd = getelementptr inbounds i8, ptr %x, i64 8
+  store i64 4, ptr %ptradd, align 8
+  store i32 5, ptr %z, align 4
+  %0 = load %"char[]", ptr %x, align 8
+  %1 = extractvalue %"char[]" %0, 0
+  %2 = extractvalue %"char[]" %0, 1
+  %3 = icmp ugt i64 1, %2
+  br i1 %3, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  %sub = sub i64 %2, 8
+  %add = add i64 1, %sub
+  %4 = icmp sgt i64 1, %add
+  %5 = icmp sgt i64 %add, %2
+  %6 = or i1 %4, %5
+  br i1 %6, label %panic1, label %checkok2
+
+checkok2:                                         ; preds = %checkok
+  %size = sub i64 %add, 1
+  %ptradd3 = getelementptr inbounds i8, ptr %1, i64 1
+  %7 = insertvalue %"char[]" undef, ptr %ptradd3, 0
+  %8 = insertvalue %"char[]" %7, i64 %size, 1
+  store %"char[]" %8, ptr %y, align 8
+  %9 = load %"char[]", ptr %x, align 8
+  %10 = extractvalue %"char[]" %9, 0
+  %11 = extractvalue %"char[]" %9, 1
+  %12 = icmp ugt i64 0, %11
+  br i1 %12, label %panic4, label %checkok5
+
+checkok5:                                         ; preds = %checkok2
+  %13 = load i32, ptr %z, align 4
+  %sext = sext i32 %13 to i64
+  %sub6 = sub i64 %11, %sext
+  %add7 = add i64 0, %sub6
+  %14 = icmp sgt i64 0, %add7
+  %15 = icmp sgt i64 %add7, %11
+  %16 = or i1 %14, %15
+  br i1 %16, label %panic8, label %checkok9
+
+checkok9:                                         ; preds = %checkok5
+  %size10 = sub i64 %add7, 0
+  %17 = insertvalue %"char[]" undef, ptr %10, 0
+  %18 = insertvalue %"char[]" %17, i64 %size10, 1
+  ret i32 0
+
+panic:                                            ; preds = %entry
+  call void @std.core.runtime.panics.slice.long.long.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 6, i64 3, i64 1, i64 undef, i64 %2) #2
+  unreachable
+
+panic1:                                           ; preds = %checkok
+  call void @std.core.runtime.panics.slice.long.long.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 6, i64 12, i64 1, i64 %add, i64 %2) #2
+  unreachable
+
+panic4:                                           ; preds = %checkok2
+  call void @std.core.runtime.panics.slice.long.long.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 7, i64 3, i64 0, i64 undef, i64 %11) #2
+  unreachable
+
+panic8:                                           ; preds = %checkok5
+  call void @std.core.runtime.panics.slice.long.long.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 7, i64 12, i64 0, i64 %add7, i64 %11) #2
+  unreachable
+}

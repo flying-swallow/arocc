@@ -1,0 +1,96 @@
+load("//aro_cc/tools:c3.bzl", "c3_library", "c3_main_test", "c3_test")
+
+# Production frontend driver lifecycle and CLI behavior. The executable is a
+# runfile as well, so resource-header lookup follows the same Bazel layout.
+c3_test(
+    name = "cli_tests",
+    srcs = ["cli_tests.c3"],
+    data = ["//:aro_cc"],
+    deps = ["//aro_cc/test/src/manifest:runner_lib", "//:aro_cc_lib"],
+)
+
+# Source-derived lifecycle checks for data-only backend CLI modes, subprocess
+# failures, structured argv, and invocation-owned temporary-file cleanup.
+c3_test(
+    name = "backend_cli_regression",
+    srcs = ["backend_cli_regression.c3"],
+    deps = ["//:aro_cc_lib"],
+)
+
+# Host gate, `// expect N` parsing and PATH setup shared by the native
+# integration programs.
+c3_library(
+    name = "native_test_support",
+    srcs = ["native_test_support.c3"],
+    deps = ["//aro_cc/test/src/lib:harness_lib"],
+    visibility = ["//aro_cc/test/src:__subpackages__"],
+)
+
+# Native Linux x86-64 acceptance: compile supported data through aro_cc, then
+# link and run a separately compiled C consumer using the declared host cc.
+c3_main_test(
+    name = "native_backend_cli_integration",
+    srcs = ["native_backend_cli_integration.c3"],
+    deps = [":native_test_support"],
+    args = [
+        "$(location //:aro_cc)",
+        "$(location //aro_cc/test:native/backend_data.c)",
+        "$(location //aro_cc/test:native/backend_consumer.c)",
+        "$(location @native_assembler_tools//:cc)",
+    ],
+    data = [
+        "//:aro_cc",
+        "//aro_cc/test:native/backend_data.c",
+        "//aro_cc/test:native/backend_consumer.c",
+        "@native_assembler_tools//:cc",
+        "@native_assembler_tools//:as",
+    ],
+)
+
+# Standalone external-consumer workspace; it is copied to a fresh directory by
+# the integration program and resolves aro only through the extracted package.
+c3_main_test(
+    name = "library_consumer",
+    srcs = ["library_consumer_integration.c3"],
+    args = [
+        "$(location //:aro_distribution)",
+        "$(location @c3c//:c3c)",
+    ],
+    data = [
+        "//:aro_distribution",
+        "@c3c//:c3c",
+        "@c3c//:stdlib",
+        "consumer_workspace/MODULE.bazel",
+        "consumer_workspace/consumer.c3",
+        "library_consumer.BUILD.bazel",
+    ],
+    deps = ["//aro_cc/test/src/lib:harness_lib"],
+)
+
+# Exercises runfiles lookup from an unrelated working directory and a
+# space-containing runtime data path.
+c3_test(
+    name = "runfiles_portability_integration",
+    srcs = ["runfiles_portability_integration.c3"],
+    data = ["//aro_cc/test:portability/runfiles fixtures/portable data.txt"],
+)
+
+# Native Darwin tools are selected by xcrun. Non-Darwin hosts skip execution;
+# no-sandbox permits access to the selected Xcode SDK and tool services.
+c3_main_test(
+    name = "darwin_arm64_integration",
+    srcs = ["darwin_arm64_integration.c3"],
+    deps = [":native_test_support", "//:aro_cc_lib"],
+    args = [
+        "$(location //:aro_cc)",
+        "$(location //aro_cc/test:native/darwin_arm64_abi.c)",
+        "$(location //aro_cc/test:native/darwin_arm64_consumer.c)",
+    ],
+    data = [
+        "//:aro_cc",
+        "//aro_cc/test:native/darwin_arm64_abi.c",
+        "//aro_cc/test:native/darwin_arm64_consumer.c",
+        "//aro_cc/test:native/darwin_arm64_abi.h",
+    ],
+    tags = ["no-sandbox"],
+)

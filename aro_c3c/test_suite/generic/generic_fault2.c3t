@@ -1,0 +1,7 @@
+module g <T>;
+
+excuse F0, F1;
+
+module main;
+
+fn void main() {}

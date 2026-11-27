@@ -1,0 +1,397 @@
+// #skip: diagnostics differ (aro_cc gap)
+// #opt: -Wno-int-conversion --target=x86_64-linux-gnu
+union U {
+    int x;
+    float y;
+};
+
+int bar(void) {
+    return 42;
+}
+void foo(void) {
+    int x;
+    float f;
+    double d;
+    int arr[2];
+    int *p;
+
+    p = (int *)&f; // bitcast
+    p = arr; // array_to_pointer
+
+    x = bar(); // function_to_pointer
+
+    _Bool b = p; // pointer_to_bool
+
+    x = p; // pointer_to_int
+
+    x = b; // bool_to_int
+
+    f = b;  // bool_to_float
+
+    p = b;  // bool_to_pointer
+
+    b = x;  // int_to_bool
+
+    f = x; // int_to_float
+
+    p = x; // int_to_pointer
+
+    b = f; //float_to_bool
+
+    x = f; //float_to_int
+
+    x = 1L; // int_cast
+
+    f = d; // float_cast
+    d = f; // float_cast
+
+    p = 0; // null_to_pointer
+
+    (void)p; // to_void
+
+    union U u;
+
+    u = (union U)x; // to_union
+    u = (union U)f; // to_union
+
+    void *vp;
+    vp = p; // bitcast
+    p = vp; // bitcast
+
+    #pragma GCC diagnostic ignored "-Wincompatible-pointer-types-discards-qualifiers"
+    const int *const_p;
+    const_p = p; // no_op
+    p = const_p; // bitcast
+
+    volatile int *volatile_p;
+    volatile_p = p; // no_op
+    p = volatile_p; // bitcast
+}
+
+// #expect: stdout
+implicit typedef: '__int128'
+ name: __int128_t
+
+implicit typedef: 'unsigned __int128'
+ name: __uint128_t
+
+implicit typedef: '*char'
+ name: __builtin_ms_va_list
+
+implicit typedef: '[1]struct __va_list_tag'
+ name: __builtin_va_list
+
+implicit typedef: 'struct __NSConstantString_tag'
+ name: __NSConstantString
+
+implicit typedef: 'long double'
+ name: __float80
+
+union_decl: 'union U'
+  record_field: 'int'
+   name: x
+
+  record_field: 'float'
+   name: y
+
+function: 'fn () int'
+ name: bar
+ body:
+  compound_stmt
+    return_stmt: 'int'
+     expr:
+      int_literal: 'int' (value: 42)
+
+function: 'fn () void'
+ name: foo
+ body:
+  compound_stmt
+    decl_stmt
+      variable: 'int'
+       name: x
+
+    decl_stmt
+      variable: 'float'
+       name: f
+
+    decl_stmt
+      variable: 'double'
+       name: d
+
+    decl_stmt
+      variable: '[2]int'
+       name: arr
+
+    decl_stmt
+      variable: '*int'
+       name: p
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      cast: (bitcast) '*int'
+        addr_of_expr: '*float'
+         operand:
+          decl_ref_expr: 'float' lvalue
+           name: f
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (array_to_pointer) 'decayed *[2]int'
+        decl_ref_expr: '[2]int' lvalue
+         name: arr
+
+    assign_expr: 'int'
+     lhs:
+      decl_ref_expr: 'int' lvalue
+       name: x
+     rhs:
+      call_expr: 'int'
+       callee:
+        implicit cast: (function_to_pointer) '*fn () int'
+          decl_ref_expr: 'fn () int' lvalue
+           name: bar
+
+    decl_stmt
+      variable: '_Bool'
+       name: b
+       init:
+        implicit cast: (pointer_to_bool) '_Bool'
+          implicit cast: (lval_to_rval) '*int'
+            decl_ref_expr: '*int' lvalue
+             name: p
+
+    assign_expr: 'int'
+     lhs:
+      decl_ref_expr: 'int' lvalue
+       name: x
+     rhs:
+      implicit cast: (pointer_to_int) 'int'
+        implicit cast: (lval_to_rval) '*int'
+          decl_ref_expr: '*int' lvalue
+           name: p
+
+    assign_expr: 'int'
+     lhs:
+      decl_ref_expr: 'int' lvalue
+       name: x
+     rhs:
+      implicit cast: (bool_to_int) 'int'
+        implicit cast: (lval_to_rval) '_Bool'
+          decl_ref_expr: '_Bool' lvalue
+           name: b
+
+    assign_expr: 'float'
+     lhs:
+      decl_ref_expr: 'float' lvalue
+       name: f
+     rhs:
+      implicit cast: (bool_to_float) 'float'
+        implicit cast: (lval_to_rval) '_Bool'
+          decl_ref_expr: '_Bool' lvalue
+           name: b
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (bool_to_pointer) '*int'
+        implicit cast: (lval_to_rval) '_Bool'
+          decl_ref_expr: '_Bool' lvalue
+           name: b
+
+    assign_expr: '_Bool'
+     lhs:
+      decl_ref_expr: '_Bool' lvalue
+       name: b
+     rhs:
+      implicit cast: (int_to_bool) '_Bool'
+        implicit cast: (lval_to_rval) 'int'
+          decl_ref_expr: 'int' lvalue
+           name: x
+
+    assign_expr: 'float'
+     lhs:
+      decl_ref_expr: 'float' lvalue
+       name: f
+     rhs:
+      implicit cast: (int_to_float) 'float'
+        implicit cast: (lval_to_rval) 'int'
+          decl_ref_expr: 'int' lvalue
+           name: x
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (int_to_pointer) '*int'
+        implicit cast: (lval_to_rval) 'int'
+          decl_ref_expr: 'int' lvalue
+           name: x
+
+    assign_expr: '_Bool'
+     lhs:
+      decl_ref_expr: '_Bool' lvalue
+       name: b
+     rhs:
+      implicit cast: (float_to_bool) '_Bool'
+        implicit cast: (lval_to_rval) 'float'
+          decl_ref_expr: 'float' lvalue
+           name: f
+
+    assign_expr: 'int'
+     lhs:
+      decl_ref_expr: 'int' lvalue
+       name: x
+     rhs:
+      implicit cast: (float_to_int) 'int'
+        implicit cast: (lval_to_rval) 'float'
+          decl_ref_expr: 'float' lvalue
+           name: f
+
+    assign_expr: 'int'
+     lhs:
+      decl_ref_expr: 'int' lvalue
+       name: x
+     rhs:
+      implicit cast: (int_cast) 'int'
+        int_literal: 'long' (value: 1)
+
+    assign_expr: 'float'
+     lhs:
+      decl_ref_expr: 'float' lvalue
+       name: f
+     rhs:
+      implicit cast: (float_cast) 'float'
+        implicit cast: (lval_to_rval) 'double'
+          decl_ref_expr: 'double' lvalue
+           name: d
+
+    assign_expr: 'double'
+     lhs:
+      decl_ref_expr: 'double' lvalue
+       name: d
+     rhs:
+      implicit cast: (float_cast) 'double'
+        implicit cast: (lval_to_rval) 'float'
+          decl_ref_expr: 'float' lvalue
+           name: f
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (null_to_pointer) '*int'
+        int_literal: 'int' (value: 0)
+
+    cast: (to_void) 'void'
+      implicit cast: (lval_to_rval) '*int'
+        decl_ref_expr: '*int' lvalue
+         name: p
+
+    decl_stmt
+      variable: 'union U'
+       name: u
+
+    assign_expr: 'union U'
+     lhs:
+      decl_ref_expr: 'union U' lvalue
+       name: u
+     rhs:
+      cast: (union_cast) 'union U'
+        implicit cast: (lval_to_rval) 'int'
+          decl_ref_expr: 'int' lvalue
+           name: x
+
+    assign_expr: 'union U'
+     lhs:
+      decl_ref_expr: 'union U' lvalue
+       name: u
+     rhs:
+      cast: (union_cast) 'union U'
+        implicit cast: (lval_to_rval) 'float'
+          decl_ref_expr: 'float' lvalue
+           name: f
+
+    decl_stmt
+      variable: '*void'
+       name: vp
+
+    assign_expr: '*void'
+     lhs:
+      decl_ref_expr: '*void' lvalue
+       name: vp
+     rhs:
+      implicit cast: (bitcast) '*void'
+        implicit cast: (lval_to_rval) '*int'
+          decl_ref_expr: '*int' lvalue
+           name: p
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (bitcast) '*int'
+        implicit cast: (lval_to_rval) '*void'
+          decl_ref_expr: '*void' lvalue
+           name: vp
+
+    decl_stmt
+      variable: '*const int'
+       name: const_p
+
+    assign_expr: '*const int'
+     lhs:
+      decl_ref_expr: '*const int' lvalue
+       name: const_p
+     rhs:
+      implicit cast: (no_op) '*const int'
+        implicit cast: (lval_to_rval) '*int'
+          decl_ref_expr: '*int' lvalue
+           name: p
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (bitcast) '*int'
+        implicit cast: (lval_to_rval) '*const int'
+          decl_ref_expr: '*const int' lvalue
+           name: const_p
+
+    decl_stmt
+      variable: '*volatile int'
+       name: volatile_p
+
+    assign_expr: '*volatile int'
+     lhs:
+      decl_ref_expr: '*volatile int' lvalue
+       name: volatile_p
+     rhs:
+      implicit cast: (no_op) '*volatile int'
+        implicit cast: (lval_to_rval) '*int'
+          decl_ref_expr: '*int' lvalue
+           name: p
+
+    assign_expr: '*int'
+     lhs:
+      decl_ref_expr: '*int' lvalue
+       name: p
+     rhs:
+      implicit cast: (bitcast) '*int'
+        implicit cast: (lval_to_rval) '*volatile int'
+          decl_ref_expr: '*volatile int' lvalue
+           name: volatile_p
+
+    implicit return_stmt: 'void'
+

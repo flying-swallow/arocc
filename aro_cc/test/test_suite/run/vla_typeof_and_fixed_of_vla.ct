@@ -1,0 +1,21 @@
+// #kind: run
+// #exit: 0
+// VLA leftovers: typeof of a VLA object or row, [*] prototypes, VLA
+// parameters, and sizeof of a fixed-length array of runtime-length rows.
+#include <stdio.h>
+int sum(int n, int a[*]);
+int sum(int n, int a[n]) { int s = 0; for (int i = 0; i < n; i++) s += a[i]; return s; }
+int g(int n, int m, int a[n][m]) { return a[1][2] + (int)sizeof(a[0]); }
+int main(void) {
+  int n = 4;
+  int v[n];
+  typeof(v) w;
+  for (int i = 0; i < n; i++) v[i] = w[i] = i;
+  int m = 3; int mat[2][m]; mat[1][2] = 40;
+  __typeof__(mat[0]) row;
+  printf("%d %zu %zu %d %zu\n", sum(n, v), sizeof(w), sizeof(row), g(2, m, mat), sizeof(typeof(int[n][2])));
+  return 0;
+}
+
+// #expect: stdout
+6 16 12 52 32

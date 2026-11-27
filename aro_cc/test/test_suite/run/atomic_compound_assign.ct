@@ -1,0 +1,20 @@
+// #kind: run
+// #exit: 0
+// Compound assignment, ++ and -- on _Atomic objects are single atomic
+// read-modify-writes (chibicc atomic.c): three threads lose no updates.
+#include <stdio.h>
+#include <pthread.h>
+static _Atomic int x;
+static _Atomic long y = 1000;
+static void *w(void *a) { for (int i = 0; i < 200000; i++) { x += 5; x--; y -= 2; } return 0; }
+int main(void) {
+  pthread_t t[3];
+  for (int i = 0; i < 3; i++) pthread_create(&t[i], 0, w, 0);
+  for (int i = 0; i < 3; i++) pthread_join(t[i], 0);
+  int arr[8]; int *_Atomic p = arr; p++; p += 2; int *q = p--;
+  _Atomic int m = 6; m *= 7; int r = (m <<= 1); int pre = ++m; int post = m--;
+  printf("%d %ld | %d %d | %d %d %d %d\n", x, y, (int)(p - arr), (int)(q - arr), m, r, pre, post);
+}
+
+// #expect: stdout
+2400000 -1199000 | 2 3 | 84 84 85 85

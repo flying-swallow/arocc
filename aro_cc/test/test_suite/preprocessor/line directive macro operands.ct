@@ -1,0 +1,17 @@
+// #kind: expand
+// C 6.10.4p5: `#line` operands that are not a plain digit sequence are
+// macro-expanded first (c-testsuite 00152).
+#define L 1000
+#define F "x.c"
+#define BOTH 77 "y.c"
+#line L
+int a = __LINE__;
+#line L F
+const char *f = __FILE__; int b = __LINE__;
+#line BOTH
+int c = __LINE__; const char *g = __FILE__;
+
+// #expect: stdout
+int a = 1000;
+const char *f = "x.c"; int b = 1000;
+int c = 77; const char *g = "y.c";

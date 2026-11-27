@@ -1,0 +1,280 @@
+// #kind: run
+// #exit: 0
+// Every SSE2-selected vector-extension operation (ir::sse2_vector_op /
+// sse2_vector_cast / sse2_shuffle_kind) and the lane-by-lane fallbacks beside
+// them, checked lane by lane against scalar arithmetic. Operands come through
+// noinline calls so nothing folds.
+#include <stdio.h>
+#include <string.h>
+
+typedef signed char v16qi __attribute__((vector_size(16)));
+typedef unsigned char v16qu __attribute__((vector_size(16)));
+typedef short v8hi __attribute__((vector_size(16)));
+typedef unsigned short v8hu __attribute__((vector_size(16)));
+typedef int v4si __attribute__((vector_size(16)));
+typedef unsigned v4su __attribute__((vector_size(16)));
+typedef long long v2di __attribute__((vector_size(16)));
+typedef unsigned long long v2du __attribute__((vector_size(16)));
+typedef float v4sf __attribute__((vector_size(16)));
+typedef double v2df __attribute__((vector_size(16)));
+
+static int failures;
+
+static void fail(const char *what, int lane)
+{
+	printf("FAIL %s lane %d\n", what, lane);
+	failures++;
+}
+
+static const long long INPUT_A[16] = { 1, -1, 127, -128, 0x7fff, -0x8000, 0x7fffffff, -0x7fffffffLL - 1, 5, -77, 200, 3, 0, 1000000007, -9, 64 };
+static const long long INPUT_B[16] = { 3, -1, -128, 127, 2, 0x7fff, -3, 1, 5, 77, -5, 3, 0, 13, -9, -64 };
+
+#define LOAD(T, E, N, src, out) do { E lanes_[N]; for (int i_ = 0; i_ < N; i_++) lanes_[i_] = (E)src[i_]; memcpy(&(out), lanes_, 16); } while (0)
+
+#define BIN(T, E, N, NAME, OP) \
+	__attribute__((noinline)) static T NAME(T a, T b) { return a OP b; } \
+	static void check_##NAME(void) \
+	{ \
+		T a, b; LOAD(T, E, N, INPUT_A, a); LOAD(T, E, N, INPUT_B, b); \
+		T r = NAME(a, b); \
+		for (int i = 0; i < N; i++) \
+		{ \
+			E want = (E)(a[i] OP b[i]); \
+			if (r[i] != want && !(r[i] != r[i] && want != want)) fail(#NAME, i); /* NaN == NaN here */ \
+		} \
+	}
+
+#define CMP(T, M, E, N, NAME, OP) \
+	__attribute__((noinline)) static M NAME(T a, T b) { return a OP b; } \
+	static void check_##NAME(void) \
+	{ \
+		T a, b; LOAD(T, E, N, INPUT_A, a); LOAD(T, E, N, INPUT_B, b); \
+		M r = NAME(a, b); \
+		for (int i = 0; i < N; i++) if (r[i] != ((a[i] OP b[i]) ? -1 : 0)) fail(#NAME, i); \
+	}
+
+#define UN(T, E, N, NAME, OP) \
+	__attribute__((noinline)) static T NAME(T a) { return OP a; } \
+	static void check_##NAME(void) \
+	{ \
+		T a; LOAD(T, E, N, INPUT_A, a); \
+		T r = NAME(a); \
+		for (int i = 0; i < N; i++) if (r[i] != (E)(OP a[i])) fail(#NAME, i); \
+	}
+
+// Left shifts go through unsigned so the scalar reference wraps like the lanes.
+#define SHL(T, E, U, N, NAME, COUNT) \
+	__attribute__((noinline)) static T NAME##_var(T a, int s) { return a << s; } \
+	__attribute__((noinline)) static T NAME##_const(T a) { return a << COUNT; } \
+	static void check_##NAME(void) \
+	{ \
+		T a; LOAD(T, E, N, INPUT_A, a); \
+		T r = NAME##_var(a, COUNT), c = NAME##_const(a); \
+		for (int i = 0; i < N; i++) \
+		{ \
+			E want = (E)((U)a[i] << COUNT); \
+			if (r[i] != want) fail(#NAME "_var", i); \
+			if (c[i] != want) fail(#NAME "_const", i); \
+		} \
+	}
+
+#define SHR(T, E, N, NAME, COUNT) \
+	__attribute__((noinline)) static T NAME##_var(T a, int s) { return a >> s; } \
+	__attribute__((noinline)) static T NAME##_const(T a) { return a >> COUNT; } \
+	static void check_##NAME(void) \
+	{ \
+		T a; LOAD(T, E, N, INPUT_A, a); \
+		T r = NAME##_var(a, COUNT), c = NAME##_const(a); \
+		for (int i = 0; i < N; i++) \
+		{ \
+			E want = (E)(a[i] >> COUNT); \
+			if (r[i] != want) fail(#NAME "_var", i); \
+			if (c[i] != want) fail(#NAME "_const", i); \
+		} \
+	}
+
+#define INT_TYPE(T, M, E, U, N, P, SH) \
+	BIN(T, E, N, P##_add, +) BIN(T, E, N, P##_sub, -) BIN(T, E, N, P##_and, &) BIN(T, E, N, P##_or, |) \
+	BIN(T, E, N, P##_xor, ^) BIN(T, E, N, P##_mul, *) \
+	CMP(T, M, E, N, P##_eq, ==) CMP(T, M, E, N, P##_ne, !=) CMP(T, M, E, N, P##_lt, <) \
+	CMP(T, M, E, N, P##_le, <=) CMP(T, M, E, N, P##_gt, >) CMP(T, M, E, N, P##_ge, >=) \
+	UN(T, E, N, P##_neg, -) UN(T, E, N, P##_not, ~) \
+	SHL(T, E, U, N, P##_shl, SH) SHR(T, E, N, P##_shr, SH) \
+	__attribute__((noinline)) static T P##_splat_add(T a, E s) { return a + s; } \
+	static void check_##P(void) \
+	{ \
+		check_##P##_add(); check_##P##_sub(); check_##P##_and(); check_##P##_or(); check_##P##_xor(); \
+		check_##P##_mul(); check_##P##_eq(); check_##P##_ne(); check_##P##_lt(); check_##P##_le(); \
+		check_##P##_gt(); check_##P##_ge(); check_##P##_neg(); check_##P##_not(); check_##P##_shl(); \
+		check_##P##_shr(); \
+		T a; LOAD(T, E, N, INPUT_A, a); \
+		E s = (E)INPUT_B[3]; \
+		T r = P##_splat_add(a, s); \
+		for (int i = 0; i < N; i++) if (r[i] != (E)(a[i] + s)) fail(#P "_splat_add", i); \
+	}
+
+INT_TYPE(v16qi, v16qi, signed char, unsigned char, 16, qi, 3)
+INT_TYPE(v16qu, v16qi, unsigned char, unsigned char, 16, qu, 3)
+INT_TYPE(v8hi, v8hi, short, unsigned short, 8, hi, 5)
+INT_TYPE(v8hu, v8hi, unsigned short, unsigned short, 8, hu, 5)
+INT_TYPE(v4si, v4si, int, unsigned, 4, si, 7)
+INT_TYPE(v4su, v4si, unsigned, unsigned, 4, su, 7)
+INT_TYPE(v2di, v2di, long long, unsigned long long, 2, di, 33)
+INT_TYPE(v2du, v2di, unsigned long long, unsigned long long, 2, du, 33)
+
+#define FLOAT_TYPE(T, M, E, N, P) \
+	BIN(T, E, N, P##_fadd, +) BIN(T, E, N, P##_fsub, -) BIN(T, E, N, P##_fmul, *) BIN(T, E, N, P##_fdiv, /) \
+	CMP(T, M, E, N, P##_feq, ==) CMP(T, M, E, N, P##_fne, !=) CMP(T, M, E, N, P##_flt, <) \
+	CMP(T, M, E, N, P##_fle, <=) CMP(T, M, E, N, P##_fgt, >) CMP(T, M, E, N, P##_fge, >=) \
+	UN(T, E, N, P##_fneg, -) \
+	static void check_##P(void) \
+	{ \
+		check_##P##_fadd(); check_##P##_fsub(); check_##P##_fmul(); check_##P##_fdiv(); \
+		check_##P##_feq(); check_##P##_fne(); check_##P##_flt(); check_##P##_fle(); check_##P##_fgt(); \
+		check_##P##_fge(); check_##P##_fneg(); \
+	}
+
+FLOAT_TYPE(v4sf, v4si, float, 4, sf)
+FLOAT_TYPE(v2df, v2di, double, 2, df)
+
+// Comparisons with a NaN lane: only != holds.
+__attribute__((noinline)) static v4si nan_eq(v4sf a, v4sf b) { return a == b; }
+__attribute__((noinline)) static v4si nan_ne(v4sf a, v4sf b) { return a != b; }
+__attribute__((noinline)) static v4si nan_ge(v4sf a, v4sf b) { return a >= b; }
+__attribute__((noinline)) static v2di nan_lt(v2df a, v2df b) { return a < b; }
+
+static void check_nan(void)
+{
+	float nan = __builtin_nanf("");
+	v4sf a = { nan, 1.0f, nan, 2.0f };
+	v4sf b = { 1.0f, nan, nan, 2.0f };
+	v4si eq = nan_eq(a, b), ne = nan_ne(a, b), ge = nan_ge(a, b);
+	for (int i = 0; i < 3; i++)
+	{
+		if (eq[i] != 0) fail("nan_eq", i);
+		if (ne[i] != -1) fail("nan_ne", i);
+		if (ge[i] != 0) fail("nan_ge", i);
+	}
+	if (eq[3] != -1 || ne[3] != 0 || ge[3] != -1) fail("nan_ordered", 3);
+	v2df c = { __builtin_nan(""), 1.0 }, d = { 2.0, 2.0 };
+	v2di lt = nan_lt(c, d);
+	if (lt[0] != 0) fail("nan_lt", 0);
+	if (lt[1] != -1) fail("nan_lt", 1);
+}
+
+// Shuffles: PSHUFD permutes, SHUFPS/SHUFPD pairs, PUNPCKL/H interleaves (both
+// operand orders), and masks only the lane-by-lane path can do.
+#define SHUF(T, E, N, NAME, ...) \
+	__attribute__((noinline)) static T NAME(T a, T b) { return __builtin_shufflevector(a, b, __VA_ARGS__); } \
+	static void check_##NAME(void) \
+	{ \
+		static const int mask[N] = { __VA_ARGS__ }; \
+		T a, b; LOAD(T, E, N, INPUT_A, a); LOAD(T, E, N, INPUT_B, b); \
+		E both[2 * N]; \
+		for (int i = 0; i < N; i++) { both[i] = a[i]; both[N + i] = b[i]; } \
+		T r = NAME(a, b); \
+		for (int i = 0; i < N; i++) if (r[i] != both[mask[i]]) fail(#NAME, i); \
+	}
+
+SHUF(v4si, int, 4, shuf_si_reverse, 3, 2, 1, 0)
+SHUF(v4si, int, 4, shuf_si_broadcast_b, 5, 5, 5, 5)
+SHUF(v4sf, float, 4, shuf_sf_pairs, 0, 3, 4, 6)
+SHUF(v4sf, float, 4, shuf_sf_pairs_swapped, 7, 4, 1, 2)
+SHUF(v2di, long long, 2, shuf_di_swap, 1, 0)
+SHUF(v2df, double, 2, shuf_df_pairs, 1, 2)
+SHUF(v2df, double, 2, shuf_df_pairs_swapped, 3, 0)
+SHUF(v8hi, short, 8, shuf_hi_unpacklo, 0, 8, 1, 9, 2, 10, 3, 11)
+SHUF(v8hi, short, 8, shuf_hi_unpacklo_swapped, 8, 0, 9, 1, 10, 2, 11, 3)
+SHUF(v16qi, signed char, 16, shuf_qi_unpackhi, 8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31)
+SHUF(v4si, int, 4, shuf_si_unpackhi, 2, 6, 3, 7)
+SHUF(v2di, long long, 2, shuf_di_unpacklo, 0, 2)
+SHUF(v8hi, short, 8, shuf_hi_fallback, 7, 6, 5, 4, 3, 2, 1, 0)
+SHUF(v4si, int, 4, shuf_si_fallback, 0, 5, 2, 7)
+
+__attribute__((noinline)) static v4sf cvt_si_sf(v4si a) { return __builtin_convertvector(a, v4sf); }
+__attribute__((noinline)) static v4si cvt_sf_si(v4sf a) { return __builtin_convertvector(a, v4si); }
+__attribute__((noinline)) static v4sf cvt_su_sf(v4su a) { return __builtin_convertvector(a, v4sf); }
+__attribute__((noinline)) static v2di cvt_df_di(v2df a) { return __builtin_convertvector(a, v2di); }
+
+static void check_convert(void)
+{
+	v4si a = { -7, 0, 123456, 2000000000 };
+	v4sf f = cvt_si_sf(a);
+	for (int i = 0; i < 4; i++) if (f[i] != (float)a[i]) fail("cvt_si_sf", i);
+	v4sf g = { -7.9f, 0.5f, 123456.7f, -2.5e9f / 2 };
+	v4si t = cvt_sf_si(g);
+	for (int i = 0; i < 4; i++) if (t[i] != (int)g[i]) fail("cvt_sf_si", i);
+	v4su u = { 0u, 1u, 0x80000000u, 0xffffffffu };
+	v4sf uf = cvt_su_sf(u);
+	for (int i = 0; i < 4; i++) if (uf[i] != (float)u[i]) fail("cvt_su_sf", i);
+	v2df d = { -3.75, 1e15 };
+	v2di di = cvt_df_di(d);
+	for (int i = 0; i < 2; i++) if (di[i] != (long long)d[i]) fail("cvt_df_di", i);
+}
+
+__attribute__((noinline)) static int extract_qi(v16qi v) { return v[5] + v[10]; }
+__attribute__((noinline)) static int extract_qu(v16qu v) { return v[3]; }
+__attribute__((noinline)) static int extract_hi(v8hi v) { return v[3] * 2 + v[6]; }
+__attribute__((noinline)) static int extract_si(v4si v) { return v[2]; }
+__attribute__((noinline)) static long long extract_di(v2di v) { return v[1]; }
+__attribute__((noinline)) static float extract_sf(v4sf v) { return v[3]; }
+__attribute__((noinline)) static double extract_df(v2df v) { return v[1]; }
+
+static void check_extract(void)
+{
+	v16qi q; LOAD(v16qi, signed char, 16, INPUT_A, q);
+	if (extract_qi(q) != (signed char)INPUT_A[5] + (signed char)INPUT_A[10]) fail("extract_qi", 5);
+	v16qu qu; LOAD(v16qu, unsigned char, 16, INPUT_A, qu);
+	if (extract_qu(qu) != (unsigned char)INPUT_A[3]) fail("extract_qu", 3);
+	v8hi h; LOAD(v8hi, short, 8, INPUT_A, h);
+	if (extract_hi(h) != (short)INPUT_A[3] * 2 + (short)INPUT_A[6]) fail("extract_hi", 3);
+	v4si s = { 1, 2, -3, 4 };
+	if (extract_si(s) != -3) fail("extract_si", 2);
+	v2di d = { 1, -0x123456789LL };
+	if (extract_di(d) != -0x123456789LL) fail("extract_di", 1);
+	v4sf f = { 1, 2, 3, -4.5f };
+	if (extract_sf(f) != -4.5f) fail("extract_sf", 3);
+	v2df g = { 1, 0.125 };
+	if (extract_df(g) != 0.125) fail("extract_df", 1);
+}
+
+// Values that stay vectors across a loop (PHIs), a call (caller-saved XMM) and
+// a compound assignment.
+__attribute__((noinline)) static v4si bump(v4si v) { return v + 1; }
+
+static void check_loop(void)
+{
+	v4si acc = { 0, 0, 0, 0 }, step = { 1, 2, 3, 4 };
+	for (int i = 0; i < 10; i++)
+	{
+		acc += step;
+		step = bump(step);
+		acc ^= (v4si){ i, 0, 0, i };
+	}
+	int want[4];
+	int st[4] = { 1, 2, 3, 4 }, ac[4] = { 0, 0, 0, 0 };
+	for (int i = 0; i < 10; i++)
+	{
+		for (int l = 0; l < 4; l++) { ac[l] += st[l]; st[l]++; }
+		ac[0] ^= i; ac[3] ^= i;
+	}
+	memcpy(want, ac, sizeof want);
+	for (int l = 0; l < 4; l++) if (acc[l] != want[l]) fail("loop", l);
+}
+
+int main(void)
+{
+	check_qi(); check_qu(); check_hi(); check_hu(); check_si(); check_su(); check_di(); check_du();
+	check_sf(); check_df(); check_nan();
+	check_shuf_si_reverse(); check_shuf_si_broadcast_b(); check_shuf_sf_pairs(); check_shuf_sf_pairs_swapped();
+	check_shuf_di_swap(); check_shuf_df_pairs(); check_shuf_df_pairs_swapped(); check_shuf_hi_unpacklo();
+	check_shuf_hi_unpacklo_swapped(); check_shuf_qi_unpackhi(); check_shuf_si_unpackhi(); check_shuf_di_unpacklo();
+	check_shuf_hi_fallback(); check_shuf_si_fallback();
+	check_convert(); check_extract(); check_loop();
+	if (failures) return 1;
+	puts("ok");
+	return 0;
+}
+
+// #expect: stdout
+ok

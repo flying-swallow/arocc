@@ -1,0 +1,119 @@
+// #target: macos-x64
+module test;
+
+fn void test()
+{
+	int[] a = { 1, 2, 3 };
+	for (int i = 0; i < 3; i++)
+	{
+		int? b = i == 0 ? NOT_FOUND~ : i;
+		int[]? y = a[:b];
+		int[]? w = a[b..];
+		int? z = a[b];
+	}
+}
+
+/* #expect: test.ll
+
+  %0 = insertvalue %"int[]" undef, ptr %literal, 0
+  %1 = insertvalue %"int[]" %0, i64 3, 1
+  store %"int[]" %1, ptr %a, align 8
+  store i32 0, ptr %i, align 4
+  br label %loop.cond
+
+loop.cond:                                        ; preds = %after_assign15, %entry
+  %2 = load i32, ptr %i, align 4
+  %lt = icmp slt i32 %2, 3
+  br i1 %lt, label %loop.body, label %loop.exit
+
+loop.body:                                        ; preds = %loop.cond
+  %3 = load i32, ptr %i, align 4
+  %eq = icmp eq i32 %3, 0
+  br i1 %eq, label %cond.lhs, label %cond.rhs
+
+cond.lhs:                                         ; preds = %loop.body
+  store i64 ptrtoint (ptr @std.core.builtin.NOT_FOUND to i64), ptr %b.f, align 8
+  br label %after_assign
+
+cond.rhs:                                         ; preds = %loop.body
+  %4 = load i32, ptr %i, align 4
+  br label %cond.phi
+
+cond.phi:                                         ; preds = %cond.rhs
+  store i32 %4, ptr %b, align 4
+  store i64 0, ptr %b.f, align 8
+  br label %after_assign
+
+after_assign:                                     ; preds = %cond.phi, %cond.lhs
+  %5 = load %"int[]", ptr %a, align 8
+  %6 = extractvalue %"int[]" %5, 0
+  %optval = load i64, ptr %b.f, align 8
+  %not_err = icmp eq i64 %optval, 0
+  br i1 %not_err, label %after_check, label %assign_optional
+
+assign_optional:                                  ; preds = %after_assign
+  store i64 %optval, ptr %y.f, align 8
+  br label %after_assign1
+
+after_check:                                      ; preds = %after_assign
+  %7 = load i32, ptr %b, align 4
+  %sext = sext i32 %7 to i64
+  %add = add i64 0, %sext
+  %size = sub i64 %add, 0
+  %8 = insertvalue %"int[]" undef, ptr %6, 0
+  %9 = insertvalue %"int[]" %8, i64 %size, 1
+  store %"int[]" %9, ptr %y, align 8
+  store i64 0, ptr %y.f, align 8
+  br label %after_assign1
+
+after_assign1:                                    ; preds = %after_check, %assign_optional
+  %10 = load %"int[]", ptr %a, align 8
+  %11 = extractvalue %"int[]" %10, 0
+  %optval2 = load i64, ptr %b.f, align 8
+  %not_err3 = icmp eq i64 %optval2, 0
+  br i1 %not_err3, label %after_check5, label %assign_optional4
+
+assign_optional4:                                 ; preds = %after_assign1
+  store i64 %optval2, ptr %w.f, align 8
+  br label %after_assign8
+
+after_check5:                                     ; preds = %after_assign1
+  %12 = load i32, ptr %b, align 4
+  %sext6 = sext i32 %12 to i64
+  %13 = extractvalue %"int[]" %10, 1
+  %size7 = sub i64 %13, %sext6
+  %ptroffset = getelementptr inbounds [4 x i8], ptr %11, i64 %sext6
+  %14 = insertvalue %"int[]" undef, ptr %ptroffset, 0
+  %15 = insertvalue %"int[]" %14, i64 %size7, 1
+  store %"int[]" %15, ptr %w, align 8
+  store i64 0, ptr %w.f, align 8
+  br label %after_assign8
+
+after_assign8:                                    ; preds = %after_check5, %assign_optional4
+  %16 = load ptr, ptr %a, align 8
+  %optval9 = load i64, ptr %b.f, align 8
+  %not_err10 = icmp eq i64 %optval9, 0
+  br i1 %not_err10, label %after_check12, label %assign_optional11
+
+assign_optional11:                                ; preds = %after_assign8
+  store i64 %optval9, ptr %z.f, align 8
+  br label %after_assign15
+
+after_check12:                                    ; preds = %after_assign8
+  %17 = load i32, ptr %b, align 4
+  %sext13 = sext i32 %17 to i64
+  %ptroffset14 = getelementptr inbounds [4 x i8], ptr %16, i64 %sext13
+  %18 = load i32, ptr %ptroffset14, align 4
+  store i32 %18, ptr %z, align 4
+  store i64 0, ptr %z.f, align 8
+  br label %after_assign15
+
+after_assign15:                                   ; preds = %after_check12, %assign_optional11
+  %19 = load i32, ptr %i, align 4
+  %add16 = add i32 %19, 1
+  store i32 %add16, ptr %i, align 4
+  br label %loop.cond
+
+loop.exit:                                        ; preds = %loop.cond
+  ret void
+}

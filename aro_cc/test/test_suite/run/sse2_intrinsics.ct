@@ -1,0 +1,67 @@
+// #kind: run
+// #exit: 0
+// aro's <emmintrin.h>/<xmmintrin.h> (vector-extension implementations): results
+// recorded from gcc's own headers.
+#include <emmintrin.h>
+#include <stdio.h>
+#include <string.h>
+static void dump(const char *n, __m128i v) { unsigned char b[16]; _mm_storeu_si128((__m128i *)b, v); printf("%s:", n); for (int i = 0; i < 16; i++) printf("%02x", b[i]); printf("\n"); }
+int main(void) {
+  unsigned char buf[32]; for (int i = 0; i < 32; i++) buf[i] = (unsigned char)(i * 37 + 5);
+  __m128i a = _mm_loadu_si128((const __m128i *)buf), b = _mm_loadu_si128((const __m128i *)(buf + 7));
+  dump("add8", _mm_add_epi8(a, b)); dump("adds8", _mm_adds_epi8(a, b)); dump("addsu8", _mm_adds_epu8(a, b));
+  dump("sub16", _mm_sub_epi16(a, b)); dump("mullo", _mm_mullo_epi16(a, b)); dump("mulhi", _mm_mulhi_epi16(a, b));
+  dump("mulu32", _mm_mul_epu32(a, b)); dump("madd", _mm_madd_epi16(a, b)); dump("sad", _mm_sad_epu8(a, b));
+  dump("cmpeq", _mm_cmpeq_epi8(a, _mm_set1_epi8((char)buf[3]))); dump("cmpgt", _mm_cmpgt_epi16(a, b));
+  printf("mask %x %x\n", _mm_movemask_epi8(a), _mm_movemask_epi8(_mm_cmpgt_epi8(a, b)));
+  dump("sll", _mm_slli_epi32(a, 3)); dump("srl", _mm_srli_epi64(a, 13)); dump("sra", _mm_srai_epi16(a, 5));
+  dump("bsr", _mm_srli_si128(a, 5)); dump("bsl", _mm_slli_si128(a, 3));
+  dump("shuf", _mm_shuffle_epi32(a, _MM_SHUFFLE(0, 1, 2, 3))); dump("shlo", _mm_shufflelo_epi16(a, 0x1b)); dump("shhi", _mm_shufflehi_epi16(a, 0x4e));
+  dump("unlo", _mm_unpacklo_epi8(a, b)); dump("unhi32", _mm_unpackhi_epi32(a, b)); dump("packs", _mm_packs_epi16(a, b)); dump("packus", _mm_packus_epi16(a, b));
+  dump("minu8", _mm_min_epu8(a, b)); dump("avg", _mm_avg_epu8(a, b)); dump("xor", _mm_xor_si128(a, b)); dump("andn", _mm_andnot_si128(a, b));
+  printf("ext %d %d\n", _mm_extract_epi16(a, 3), _mm_cvtsi128_si32(a)); dump("ins", _mm_insert_epi16(a, 0x7777, 5));
+  __m128 f = _mm_set_ps(4.5f, -3.25f, 2.0f, 1.0f), g = _mm_set1_ps(2.5f);
+  float o[4]; _mm_storeu_ps(o, _mm_add_ps(_mm_mul_ps(f, g), _mm_sqrt_ps(_mm_set_ps(16, 9, 4, 1))));
+  printf("ps %g %g %g %g mask %d cvt %d %d\n", o[0], o[1], o[2], o[3], _mm_movemask_ps(_mm_cmplt_ps(f, g)), _mm_cvtss_si32(_mm_set_ss(2.5f)), _mm_cvtss_si32(_mm_set_ss(3.5f)));
+  _mm_storeu_ps(o, _mm_shuffle_ps(f, g, _MM_SHUFFLE(3, 2, 1, 0))); printf("shps %g %g %g %g\n", o[0], o[1], o[2], o[3]);
+  __m128d d = _mm_set_pd(9.0, 2.25); double od[2]; _mm_storeu_pd(od, _mm_sqrt_pd(d)); printf("pd %g %g %d\n", od[0], od[1], _mm_movemask_pd(_mm_cmpgt_pd(d, _mm_set1_pd(3))));
+  dump("cvt", _mm_cvttps_epi32(f)); dump("cvtr", _mm_cvtps_epi32(_mm_set_ps(1.5f, 2.5f, -0.5f, 3.7f)));
+  return 0;
+}
+
+// #expect: stdout
+add8:0d57a1eb357fc9135da7f13b85cf1963
+adds8:0d577f7f8080c9135d7f7f8085cf1963
+addsu8:0d57a1ebffffff135da7f1ffffff1963
+sub16:fdfcfdfcfdfcfdfcfdfcfdfcfdfcfdfc
+mullo:28314efa3c7ef2bc7059b679c4549ad1
+mulhi:64073536f00f6900581b872531029409
+mulu32:283176555922363670591a11f8e07861
+madd:762b9a3d2e3b5a1026d3df405e26c60b
+sad:18000000000000001800000000000000
+cmpeq:000000ff000000000000000000000000
+cmpgt:00000000000000000000000000000000
+mask 3870 0
+sll:285079a2c8f41d476891bae308365f80
+srl:79a2cbf41d470000bae30c365f800100
+sra:5001a203f4fd47009102e3fc36ff8001
+bsr:bee3082d52779cc1e60b300000000000
+bsl:000000052a4f7499bee3082d52779cc1
+shuf:c1e60b302d52779c99bee308052a4f74
+shlo:e30899be4f74052a2d52779cc1e60b30
+shhi:052a4f7499bee308c1e60b302d52779c
+unlo:05082a2d4f527477999cbec1e3e6080b
+unhi32:2d52779c30557a9fc1e60b30c4e90e33
+packs:7f7f807f7f80807f7f7f807f7f80807f
+packus:ffff00ffff0000ffffff00ffff0000ff
+minu8:052a4f7499bee3082d52779cc1e60b30
+avg:072c51769bc0e50a2f54799ec3e80d32
+xor:0d071d03057f05031d070d03050f0503
+andn:08051003044104031005080304090403
+ext 2275 1951345157
+ins:052a4f7499bee3082d527777c1e60b30
+ps 3.5 7 -5.125 15.25 mask 7 cvt 2 4
+shps 1 2 2.5 2.5
+pd 1.5 3 2
+cvt:0100000002000000fdffffff04000000
+cvtr:04000000000000000200000002000000

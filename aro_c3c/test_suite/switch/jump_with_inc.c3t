@@ -1,0 +1,68 @@
+// #target: macos-aarch64
+module test;
+extern fn int b(int y);
+
+fn int foo(int x) @export
+{
+	switch (x) @jump
+	{
+		case 1:
+			nextcase (b(x));
+		case 0:
+			x++;
+			nextcase x;
+		default:
+			unreachable();
+	}
+}
+/* #expect: test.ll
+
+define i32 @test__foo(i32 %0) #0 {
+entry:
+  %x = alloca i32, align 4
+  %switch = alloca i32, align 4
+  store i32 %0, ptr %x, align 4
+  %1 = load i32, ptr %x, align 4
+  store i32 %1, ptr %switch, align 4
+  br label %switch.entry
+
+switch.entry:                                     ; preds = %entry
+  %2 = load i32, ptr %switch, align 4
+  %3 = icmp ugt i32 %2, 1
+  br i1 %3, label %switch.default, label %jumpblock
+
+jumpblock:                                        ; preds = %switch.entry
+  %zext = zext i32 %2 to i64
+  %ptroffset = getelementptr inbounds [8 x i8], ptr @jumptable, i64 %zext
+  %target = load ptr, ptr %ptroffset, align 8
+  indirectbr ptr %target, [label %switch.case, label %switch.case5, label %switch.default]
+
+switch.case:                                      ; preds = %jumpblock6, %jumpblock1, %jumpblock
+  %4 = load i32, ptr %x, align 4
+  %5 = call i32 @b(i32 %4)
+  %6 = icmp ugt i32 %5, 1
+  br i1 %6, label %switch.default, label %jumpblock1
+
+jumpblock1:                                       ; preds = %switch.case
+  %zext2 = zext i32 %5 to i64
+  %ptroffset3 = getelementptr inbounds [8 x i8], ptr @jumptable, i64 %zext2
+  %target4 = load ptr, ptr %ptroffset3, align 8
+  indirectbr ptr %target4, [label %switch.case, label %switch.case5, label %switch.default]
+
+switch.case5:                                     ; preds = %jumpblock6, %jumpblock, %jumpblock1
+  %7 = load i32, ptr %x, align 4
+  %add = add i32 %7, 1
+  store i32 %add, ptr %x, align 4
+  %8 = load i32, ptr %x, align 4
+  %9 = icmp ugt i32 %8, 1
+  br i1 %9, label %switch.default, label %jumpblock6
+
+jumpblock6:                                       ; preds = %switch.case5
+  %zext7 = zext i32 %8 to i64
+  %ptroffset8 = getelementptr inbounds [8 x i8], ptr @jumptable, i64 %zext7
+  %target9 = load ptr, ptr %ptroffset8, align 8
+  indirectbr ptr %target9, [label %switch.case, label %switch.case5, label %switch.default]
+
+switch.default:                                   ; preds = %jumpblock, %jumpblock6, %switch.case5, %jumpblock1, %switch.case, %switch.entry
+  unreachable
+}

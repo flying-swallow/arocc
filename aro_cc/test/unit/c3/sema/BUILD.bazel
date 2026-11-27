@@ -1,0 +1,28 @@
+load("//aro_cc/tools:c3.bzl", "c3_test")
+
+# Unit tests: C3 frontend sema (src/frontend/c3/sema_*.c3).
+
+c3_test(name = "sema_expr2_tests", srcs = ["sema_expr2_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_abi_asm_tests", srcs = ["sema_abi_asm_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_passes_tests", srcs = ["sema_passes_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_casts_tests", srcs = ["sema_casts_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "numeric_tests", srcs = ["numeric_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_name_resolution_tests", srcs = ["sema_name_resolution_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_stmts_tests", srcs = ["sema_stmts_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_decls_tests", srcs = ["sema_decls_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+c3_test(name = "sema_expr_tests", srcs = ["sema_expr_tests.c3"], deps = ["//:aro_c3_frontend_lib"])
+
+test_suite(
+    name = "all",
+    tests = [
+        ":sema_expr_tests",
+        ":sema_decls_tests",
+        ":sema_stmts_tests",
+        ":sema_name_resolution_tests",
+        ":numeric_tests",
+        ":sema_casts_tests",
+        ":sema_passes_tests",
+        ":sema_abi_asm_tests",
+        ":sema_expr2_tests",
+    ],
+)
