@@ -1,0 +1,16 @@
+load("//aro_cc/tools:c3.bzl", "c3_library", "c3_test")
+
+# Shared support for the C3 test harness and dev tools (//aro_cc/test/src/...,
+# //aro_cc/tools/gen_*): child processes with timeouts, filesystem helpers,
+# runfiles and parallel loops.
+c3_library(
+    name = "harness_lib",
+    srcs = glob(["*.c3"], exclude = ["*_tests.c3"]),
+    visibility = ["//aro_cc/test:__subpackages__", "//aro_cc/tools:__subpackages__"],
+)
+
+c3_test(
+    name = "harness_lib_tests",
+    srcs = ["harness_lib_tests.c3"],
+    deps = [":harness_lib"],
+)

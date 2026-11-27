@@ -36,7 +36,7 @@ install Xcode Command Line Tools and the host C3 compiler before building.
 
 ```sh
 bazel build //:aro_cc
-./bazel-bin/aro_cc hello.c -o hello
+./bazel-bin/aro_cc/aro_cc hello.c -o hello
 ./hello
 ```
 

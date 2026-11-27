@@ -1,0 +1,54 @@
+// #target: macos-x64
+module test;
+excuse OH_NO;
+const C = 1;
+fn void main() => do_thing()!!;
+
+fn void? do_thing()
+{
+    int* a_value = mem::alloc_array(int, may_fault()!);
+}
+macro may_fault()
+{
+	return OH_NO~;
+}
+
+/* #expect: test.ll
+define void @test.main() #0 {
+entry:
+  %error_var = alloca i64, align 8
+  %0 = call i64 @test.do_thing()
+  %not_err = icmp eq i64 %0, 0
+  br i1 %not_err, label %after_check, label %assign_optional
+
+assign_optional:                                  ; preds = %entry
+  store i64 %0, ptr %error_var, align 8
+  br label %panic_block
+
+after_check:                                      ; preds = %entry
+  br label %noerr_block
+
+panic_block:                                      ; preds = %assign_optional
+  %1 = load i64, ptr %error_var, align 8
+  call void @std.core.runtime.panics.unwrap.fault(ptr @.panic_str, ptr @.panic_str.1, i32 4, i64 %1) #2
+  unreachable
+
+noerr_block:                                      ; preds = %after_check
+  ret void
+}
+
+define i64 @test.do_thing() #0 {
+entry:
+  %a_value = alloca ptr, align 8
+  %error_var = alloca i64, align 8
+  store i64 ptrtoint (ptr @test.OH_NO to i64), ptr %error_var, align 8
+  br label %guard_block
+
+guard_block:                                      ; preds = %entry
+  %0 = load i64, ptr %error_var, align 8
+  ret i64 %0
+
+after_macro:                                      ; No predecessors!
+  store ptr poison, ptr %a_value, align 8
+  ret i64 0
+}

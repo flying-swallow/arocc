@@ -14,7 +14,7 @@
 //   QualType.dump spelling of the AST goldens; param strings are quoted from
 //   the cited .def lines.
 // - Attribute bits are computed by hand from the Attributes bit table in
-//   tools/builtins_schema.md (eval_args 0x10000 is the default).
+//   aro_cc/tools/builtins_schema.md (eval_args 0x10000 is the default).
 module builtins_tests;
 import aro::frontend::c::builtins, aro::frontend::c::builtin_properties, aro::frontend::c::builtin_type_description;
 import aro::frontend::c::builtin_defs::common, aro::frontend::c::builtin_defs::ve, aro::frontend::c::builtin_defs::x86;

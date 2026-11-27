@@ -1,0 +1,26 @@
+load("//aro_cc/tools:c3.bzl", "c3_binary", "c3_library", "c3_test")
+
+# c3c-style test suite runner for aro_cc/test/test_suite (see test_suite_runner.c3).
+# bazel run //aro_cc/test/src/test_suite:test_suite_runner -- <aro_cc> <file/dir> [options]
+c3_library(
+    name = "test_suite_runner_lib",
+    srcs = ["test_suite_runner.c3"],
+    deps = [
+        "//aro_cc/test/src/lib:harness_lib",
+        "//aro_cc/test/src/manifest:runner_lib",
+    ],
+    visibility = ["//aro_cc/test:__subpackages__"],
+)
+
+c3_test(
+    name = "test_suite_runner_tests",
+    srcs = ["test_suite_runner_tests.c3"],
+    deps = [":test_suite_runner_lib"],
+)
+
+c3_binary(
+    name = "test_suite_runner",
+    srcs = ["test_suite_runner_main.c3"],
+    deps = [":test_suite_runner_lib"],
+    visibility = ["//aro_cc/test:__subpackages__"],
+)

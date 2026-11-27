@@ -1,4 +1,4 @@
-load("//tools:c3.bzl", "c3_test")
+load("//aro_cc/tools:c3.bzl", "c3_test")
 
 # Unit tests: parser. One target per line so parallel additions merge cleanly.
 

@@ -2,8 +2,8 @@
 // Port of src/aro/Builtins/properties.zig plus the per-builtin record shape of
 // Builtins.zig (BuiltinBase / BuiltinTarget) and the group/tag identity.
 //
-// Invariants (see tools/builtins_schema.md):
-// - This file imports nothing but std. The generator binary //tools:generate_def
+// Invariants (see aro_cc/tools/builtins_schema.md):
+// - This file imports nothing but std. The generator binary //aro_cc/tools:generate_def
 //   compiles it standalone (no aro_cc_lib), so the enum name tables below are
 //   the single source of truth for both .def parsing and runtime lookup.
 // - Enum ordinals, associated `name` strings and the Attributes bit layout are

@@ -1,0 +1,112 @@
+// #safe: yes
+// #target: macos-x64
+module test;
+enum Abc : char { ABC }
+
+fn void main()
+{
+	int a;
+	Abc x = (Abc)a;
+	long z;
+	Abc y = (Abc)z;
+	a = 256;
+	y = (Abc)a;
+	a = -1;
+	y = (Abc)a;
+}
+
+/* #expect: test.ll
+define void @test.main() #0 {
+entry:
+  %a = alloca i32, align 4
+  %x = alloca i8, align 1
+  %z = alloca i64, align 8
+  %y = alloca i8, align 1
+  store i32 0, ptr %a, align 4
+  %0 = load i32, ptr %a, align 4
+  %lt = icmp slt i32 %0, 0
+  br i1 %lt, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  %ge = icmp sge i32 %0, 1
+  br i1 %ge, label %panic1, label %checkok2
+
+checkok2:                                         ; preds = %checkok
+  %trunc = trunc i32 %0 to i8
+  store i8 %trunc, ptr %x, align 1
+  store i64 0, ptr %z, align 8
+  %1 = load i64, ptr %z, align 8
+  %lt3 = icmp slt i64 %1, 0
+  br i1 %lt3, label %panic4, label %checkok5
+
+checkok5:                                         ; preds = %checkok2
+  %ge6 = icmp sge i64 %1, 1
+  br i1 %ge6, label %panic7, label %checkok8
+
+checkok8:                                         ; preds = %checkok5
+  %trunc9 = trunc i64 %1 to i8
+  store i8 %trunc9, ptr %y, align 1
+  store i32 256, ptr %a, align 4
+  %2 = load i32, ptr %a, align 4
+  %lt10 = icmp slt i32 %2, 0
+  br i1 %lt10, label %panic11, label %checkok12
+
+checkok12:                                        ; preds = %checkok8
+  %ge13 = icmp sge i32 %2, 1
+  br i1 %ge13, label %panic14, label %checkok15
+
+checkok15:                                        ; preds = %checkok12
+  %trunc16 = trunc i32 %2 to i8
+  store i8 %trunc16, ptr %y, align 1
+  store i32 -1, ptr %a, align 4
+  %3 = load i32, ptr %a, align 4
+  %lt17 = icmp slt i32 %3, 0
+  br i1 %lt17, label %panic18, label %checkok19
+
+checkok19:                                        ; preds = %checkok15
+  %ge20 = icmp sge i32 %3, 1
+  br i1 %ge20, label %panic21, label %checkok22
+
+checkok22:                                        ; preds = %checkok19
+  %trunc23 = trunc i32 %3 to i8
+  store i8 %trunc23, ptr %y, align 1
+  ret void
+
+panic:                                            ; preds = %entry
+  %4 = sext i32 %0 to i64
+  call void @std.core.runtime.panics.enum_negative.long(ptr @.panic_str, ptr @.panic_str.1, i32 7, ptr @.panic_str.2, i64 %4) #2
+  unreachable
+
+panic1:                                           ; preds = %checkok
+  %5 = sext i32 %0 to i64
+  call void @std.core.runtime.panics.enum_range.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 7, ptr @.panic_str.2, i64 %5, i64 0) #2
+  unreachable
+
+panic4:                                           ; preds = %checkok2
+  call void @std.core.runtime.panics.enum_negative.long(ptr @.panic_str, ptr @.panic_str.1, i32 9, ptr @.panic_str.2, i64 %1) #2
+  unreachable
+
+panic7:                                           ; preds = %checkok5
+  call void @std.core.runtime.panics.enum_range.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 9, ptr @.panic_str.2, i64 %1, i64 0) #2
+  unreachable
+
+panic11:                                          ; preds = %checkok8
+  %6 = sext i32 %2 to i64
+  call void @std.core.runtime.panics.enum_negative.long(ptr @.panic_str, ptr @.panic_str.1, i32 11, ptr @.panic_str.2, i64 %6) #2
+  unreachable
+
+panic14:                                          ; preds = %checkok12
+  %7 = sext i32 %2 to i64
+  call void @std.core.runtime.panics.enum_range.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 11, ptr @.panic_str.2, i64 %7, i64 0) #2
+  unreachable
+
+panic18:                                          ; preds = %checkok15
+  %8 = sext i32 %3 to i64
+  call void @std.core.runtime.panics.enum_negative.long(ptr @.panic_str, ptr @.panic_str.1, i32 13, ptr @.panic_str.2, i64 %8) #2
+  unreachable
+
+panic21:                                          ; preds = %checkok19
+  %9 = sext i32 %3 to i64
+  call void @std.core.runtime.panics.enum_range.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 13, ptr @.panic_str.2, i64 %9, i64 0) #2
+  unreachable
+}

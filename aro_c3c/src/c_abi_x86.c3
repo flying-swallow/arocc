@@ -1,0 +1,575 @@
+// Port of c3c src/compiler/abi/c_abi_x86.c (revision 54bab366a): the
+// 32-bit x86 C ABI classifier (based on Clang's X86_32ABIInfo).
+//
+// Deviations from c3c:
+// - `MIN_ABI_STACK_ALIGN` is a module constant.
+// - The ABIArgInfo arrays are arena-allocated slices (c3c `MALLOC`);
+//   `x86_create_params` returns an empty slice where c3c returns NULL.
+// - Case-group macros (CT_TYPES, LOWERED_TYPES, ALL_INTS, ALL_FLOATS) are
+//   spelled out.
+// - `long` (ByteSize) is cast to int at the register-count arithmetic.
+// - `UNREACHABLE_VOID` on a non-C call ABI is `unreachable()`.
+module aro::frontend::c3::compiler;
+
+const int MIN_ABI_STACK_ALIGN = 4;
+
+// abi/c_abi_x86.c:12 (static)
+fn bool type_is_simd_vector(Type* type) @inline
+{
+	type = type.canonical;
+	return type.type_kind == SIMD_VECTOR && type_size(type) == 16;
+}
+
+// abi/c_abi_x86.c:18 (static)
+fn bool type_is_union_struct_with_simd_vector(Type* type)
+{
+	if (!type_is_union_or_strukt(type)) return false;
+
+	Decl*[] members = type.decl.strukt.members;
+	foreach (member : members)
+	{
+		Type* member_type = lowered_member_type(member);
+		if (type_is_simd_vector(member_type)) return true;
+		if (type_is_union_struct_with_simd_vector(member_type)) return true;
+	}
+	return false;
+}
+
+// abi/c_abi_x86.c:33 (static)
+fn int x86_stack_alignment(Type* type, int alignment)
+{
+	// Less than ABI, use default
+	if (alignment < MIN_ABI_STACK_ALIGN) return 0;
+
+	// Otherwise, if the type contains an SSE vector type, the alignment is 16.
+	if (alignment >= 16 && (type_is_simd_vector(type) || type_is_union_struct_with_simd_vector(type)))
+	{
+		return 16;
+	}
+	return MIN_ABI_STACK_ALIGN;
+}
+
+// abi/c_abi_x86.c:47 (static)
+fn ABIArgInfo* x86_create_indirect_result(Regs* regs, Type* type, ByVal by_val, ParamInfo param)
+{
+	if (by_val != BY_VAL)
+	{
+		ABIArgInfo* info = abi_arg_new_indirect_not_by_val(type, param);
+
+		if (regs.int_regs)
+		{
+			regs.int_regs--;
+			if (!compiler.platform.x86.is_mcu_api) info.attributes.by_reg = true;
+		}
+		return info;
+	}
+
+	// From here on everything is by val:
+
+	// Compute alignment
+	int alignment = type_abi_alignment(type);
+	int stack_alignment = x86_stack_alignment(type, alignment);
+
+	// Default alignment
+	if (stack_alignment == 0) stack_alignment = 4;
+
+	// Realign if alignment is greater.
+	if (alignment > stack_alignment)
+	{
+		return abi_arg_new_indirect_realigned(stack_alignment, type, param);
+	}
+
+	return abi_arg_new_indirect_by_val(type, param);
+}
+
+// abi/c_abi_x86.c:80 (static)
+fn ABIArgInfo* create_indirect_return_x86(Type* type, Regs* regs, ParamInfo param)
+{
+	ABIArgInfo* info = abi_arg_new_indirect_not_by_val(type, param);
+	if (!regs.int_regs) return info;
+	// Consume a register for the return.
+	regs.int_regs--;
+	if (compiler.platform.x86.is_mcu_api) return info;
+
+	info.attributes.by_reg = true;
+	return info;
+}
+
+// abi/c_abi_x86.c:92 (static)
+fn bool x86_should_return_type_in_reg(Type* type)
+{
+	assert(type.canonical == type);
+	ByteSize size = type_size(type);
+	if (size > 8) return false;
+
+	// Require power of two for everything except mcu.
+	if (!compiler.platform.x86.is_mcu_api && !is_power_of_two((ulong)size)) return false;
+
+	if (type.type_kind == SIMD_VECTOR)
+	{
+		// 64 (and 128 bit) vectors are not returned as registers
+		return size < 8;
+	}
+
+	switch (type.type_kind)
+	{
+		case TYPEINFO:
+		case INFERRED_ARRAY:
+		case INFERRED_VECTOR:
+		case POISONED:
+		case MEMBER:
+		case WILDCARD:
+		case REFLECTION:
+		case ANYFAULT:
+		case BITSTRUCT:
+		case TYPEDEF:
+		case ENUM:
+		case FLEXIBLE_ARRAY:
+		case FUNC_RAW:
+		case INTERFACE:
+		case OPTIONAL:
+		case CONSTSET:
+		case ALIAS:
+		case TYPEID:
+		case VECTOR:
+		case SIMD_VECTOR:
+		case VOID:
+		case UNTYPEDLIST:
+			unreachable();
+		case I8:
+		case I16:
+		case I32:
+		case I64:
+		case I128:
+		case U8:
+		case U16:
+		case U32:
+		case U64:
+		case U128:
+		case BF16:
+		case F16:
+		case F32:
+		case F64:
+		case F128:
+		case BOOL:
+		case POINTER:
+		case FUNC_PTR:
+		case SLICE:
+		case ANY:
+			return true;
+		case ARRAY:
+			// Small arrays <= 8 bytes.
+			return x86_should_return_type_in_reg(lowered_array_element_type(type));
+		case STRUCT:
+		case UNION:
+			// Handle below
+			break;
+	}
+	// If all can be passed in registers, then pass in register
+	// (remember we already limited the size!)
+	Decl*[] members = type.decl.strukt.members;
+	foreach (member : members)
+	{
+		if (!x86_should_return_type_in_reg(lowered_member_type(member))) return false;
+	}
+	return true;
+}
+
+// abi/c_abi_x86.c:159
+<*
+ This code is based on X86_32ABIInfo::classifyReturnType in Clang.
+ @param call : "convention used."
+ @param regs : "registers available"
+ @param param : "type of the return."
+*>
+fn ABIArgInfo* x86_classify_return(CallABI call, Regs* regs, ParamInfo param)
+{
+	// 1. Lower any type like enum etc.
+	Type* type = type_lowering(param.type);
+
+	// 2. Void is ignored
+	if (type_is_void(type)) return abi_arg_ignore();
+
+	// 3. In the case of a vector or regcall, a homogeneous aggregate
+	//    should be passed directly in a register.
+	Type* base = null;
+	int elements = 0;
+
+	if (type.type_kind == SIMD_VECTOR) return abi_arg_new_direct(param);
+
+	if (type_is_abi_aggregate(type))
+	{
+		// Structs with variable arrays are always indirect.
+		if (type_is_union_or_strukt(type) && type.decl.has_variable_array)
+		{
+			return create_indirect_return_x86(type, regs, param);
+		}
+		if (!compiler.platform.x86.return_small_struct_in_reg_abi) return create_indirect_return_x86(type, regs, param);
+
+		// Check if we can return it in a register.
+		if (x86_should_return_type_in_reg(type))
+		{
+			// Special case is floats and pointers in single field structs (except for MSVC)
+			Type* single_element = type_abi_find_single_struct_element(type, true);
+			if (single_element && (type_is_float(single_element) || type_is_pointer_type(single_element)))
+			{
+				return abi_arg_new_direct_coerce_type(abi_type_get(single_element), param);
+			}
+			// This is not a single field struct, so we wrap it in an int.
+			return abi_arg_new_direct_coerce_int(param);
+		}
+		return create_indirect_return_x86(type, regs, param);
+	}
+
+	// Is this small enough to need to be extended?
+	if (type_is_promotable_int_bool(type))
+	{
+		return abi_arg_new_direct_int_ext(type, param);
+	}
+
+	// If we support something like int128, then this is an indirect return.
+	if (type_is_integer(type) && type_size(type) > 8) return create_indirect_return_x86(type, regs, param);
+
+	// Otherwise we expect to just pass this nicely in the return.
+	return abi_arg_new_direct(param);
+}
+
+// abi/c_abi_x86.c:212 (static)
+fn bool x86_is_mmxtype(Type* type) @inline
+{
+	// Return true if the type is an MMX type <2 x i32>, <4 x i16>, or <8 x i8>.
+	if (type.type_kind != SIMD_VECTOR) return false;
+	Type* element = lowered_array_element_type(type);
+	if (type_size(element) >= 8) return false;
+	if (!type_is_integer(element)) return false;
+	return type_size(type) == 8;
+}
+
+// abi/c_abi_x86.c:222 (static)
+fn bool x86_can_expand_indirect_aggregate_arg(Type* type) @inline
+{
+	assert(type_is_abi_aggregate(type));
+
+	// Test whether an argument type which is to be passed indirectly (on the
+	// stack) would have the equivalent layout if it was expanded into separate
+	// arguments. If so, we prefer to do the latter to avoid inhibiting
+	// optimizations.
+
+	if (!type_is_union_or_strukt(type)) return false;
+
+	ByteSize size = 0;
+	Decl*[] members = type.decl.strukt.members;
+	foreach (member : members)
+	{
+		Type* member_type = lowered_member_type(member);
+		switch (member_type.type_kind)
+		{
+			case I32:
+			case U32:
+			case F32:
+			case U64:
+			case I64:
+			case F64:
+				break;
+			default:
+				return false;
+		}
+	}
+	return size == type_size(type);
+}
+
+// abi/c_abi_x86.c:254 (static)
+fn bool x86_try_use_free_regs(Regs* regs, Type* type)
+{
+	// 1. Floats are not passed in regs on soft floats.
+	if (!compiler.platform.x86.use_soft_float && type_is_float(type)) return false;
+
+	ByteSize size = type_size(type);
+
+	// 2. If the type is empty, don't use a register.
+	if (!size) return false;
+
+	// 3. Calculate the number of registers.
+	ByteSize size_in_regs = (size + 3) / 4;
+
+	// 4. The MCU psABI allows passing parameters in-reg even if there are
+	//    earlier parameters that are passed on the stack. Also,
+	//	  it does not allow passing >8-byte structs in-register,
+	//	  even if there are 3 free registers available.
+	if (compiler.platform.x86.is_mcu_api)
+	{
+		// 4a. Just return if there are not enough registers.
+		if (size_in_regs > regs.int_regs) return false;
+
+		// 4b. If the size in regs > 2 then refuse.
+		if (size_in_regs > 2) return false;
+
+		// 4c. Use registers, we're fine.
+		regs.int_regs -= (int)size_in_regs;
+		return true;
+	}
+
+	// 5. The non-MCU ABI, if we don't have enough registers,
+	//    clear them to prevent register use later on.
+	if (size_in_regs > regs.int_regs)
+	{
+		regs.int_regs = 0;
+		return false;
+	}
+
+	// 6. Use registers, we're fine.
+	regs.int_regs -= (int)size_in_regs;
+	return true;
+}
+
+// abi/c_abi_x86.c:302 (static)
+<*
+ Check if a primitive should be in reg, if so, remove number of free registers.
+ @return "true if it should have an inreg attribute, false otherwise."
+*>
+fn bool x86_try_put_primitive_in_reg(CallABI call, Regs* regs, Type* type)
+{
+	// 1. Try to use regs for this type,
+	//    regardless whether we succeed or not, this will update
+	//    the number of registers available.
+	if (!x86_try_use_free_regs(regs, type)) return false;
+
+	// 2. On MCU, do not use the inreg attribute.
+	if (compiler.platform.x86.is_mcu_api) return false;
+
+	return true;
+}
+
+// abi/c_abi_x86.c:318 (static, UNUSED in c3c)
+<*
+ Handle the vector/regcalls with HVAs.
+*>
+fn ABIArgInfo* x86_classify_homogenous_aggregate(Regs* regs, Type* type, int elements, bool is_vec_call, ParamInfo param) @inline
+{
+	// We now know it's a float/double or a vector,
+	// since only those are valid for x86
+	// see type_is_homogenous_base_type()
+
+	// If we don't have enough SSE registers,
+	// just send this by pointer.
+	if (regs.float_regs < elements)
+	{
+		return x86_create_indirect_result(regs, type, BY_VAL_SKIP, param);
+	}
+
+	// Use the SSE registers.
+	regs.float_regs -= elements;
+
+	// In case of a vector call, pass HVA directly and
+	// don't flatten.
+	if (is_vec_call)
+	{
+		return abi_arg_new_direct_by_reg(true, param);
+	}
+
+	// If it is a builtin, then expansion is not needed.
+	if (type_is_builtin(type.type_kind) || type.type_kind == SIMD_VECTOR)
+	{
+		return abi_arg_new_direct(param);
+	}
+
+	// Otherwise just a normal expand.
+	return abi_arg_new_expand(param);
+}
+
+// abi/c_abi_x86.c:351 (static)
+fn ABIArgInfo* x86_classify_vector(Regs* regs, Type* type, ParamInfo param) @inline
+{
+	// MMX passed as i64
+	if (x86_is_mmxtype(type))
+	{
+		return abi_arg_new_direct_coerce_type_bits(64, param);
+	}
+
+	// Send as a normal parameter
+	return abi_arg_new_direct(param);
+}
+
+// abi/c_abi_x86.c:368 (static)
+<*
+ Handle:
+ error type, struct, union, slice,
+ string, array, error union, complex.
+*>
+fn ABIArgInfo* x86_classify_aggregate(CallABI call, Regs* regs, Type* type, ParamInfo param) @inline
+{
+	// Only called for aggregates.
+	assert(type_is_abi_aggregate(type));
+
+	if (type_is_union_or_strukt(type) && type.decl.has_variable_array)
+	{
+		// TODO, check why this should not be by_val
+		return x86_create_indirect_result(regs, type, BY_VAL, param);
+	}
+
+	int size = type_size(type);
+
+	// See if we can pass aggregates directly.
+	// this never happens for MSVC
+	if (x86_try_use_free_regs(regs, type))
+	{
+		// Here we coerce the aggregate into a struct { i32, i32, ... }
+		// but we do not generate this struct immediately here.
+		int size_in_regs = (size + 3) / 4;
+		assert(size_in_regs < 8);
+		ABIArgInfo* info;
+		if (size_in_regs > 1)
+		{
+			info = abi_arg_new_direct_struct_expand_i32((char)size_in_regs, param);
+		}
+		else
+		{
+			info = abi_arg_new_direct_coerce_type_bits(32, param);
+		}
+		// Not in reg on MCU
+		if (!compiler.platform.x86.is_mcu_api) info.attributes.by_reg = true;
+		return info;
+	}
+
+	// Expand small (<= 128-bit) record types when we know that the stack layout
+	// of those arguments will match the struct. This is important because the
+	// LLVM backend isn't smart enough to remove byval, which inhibits many
+	// optimizations.
+	// Don't do this for the MCU if there are still free integer registers
+	// (see X86_64 ABI for full explanation).
+	if (size <= 16 && (!compiler.platform.x86.is_mcu_api || !regs.int_regs) &&
+		x86_can_expand_indirect_aggregate_arg(type))
+	{
+		return abi_arg_new_expand(param);
+	}
+	return x86_create_indirect_result(regs, type, BY_VAL, param);
+}
+
+// abi/c_abi_x86.c:420 (static)
+<*
+ Pointer / Vararray / int / float / bool
+*>
+fn ABIArgInfo* x86_classify_primitives(CallABI call, Regs* regs, Type* type, ParamInfo param)
+{
+	// f128 i128 u128 on stack.
+	if (type_size(type) > 8) return x86_create_indirect_result(regs, type, BY_VAL_SKIP, param);
+
+	bool in_reg = x86_try_put_primitive_in_reg(call, regs, type);
+
+	if (type_is_promotable_int_bool(type))
+	{
+		return abi_arg_new_direct_int_ext_by_reg(type, in_reg, param);
+	}
+
+	return abi_arg_new_direct_by_reg(in_reg, param);
+}
+
+// abi/c_abi_x86.c:438 (static)
+<*
+ Classify an argument to an x86 function.
+*>
+fn ABIArgInfo* x86_classify_argument(CallABI call, Regs* regs, ParamInfo param)
+{
+	// FIXME: Set alignment on indirect arguments.
+
+	// We lower all types here first to avoid enums and typedefs.
+	Type* type = type_lowering(param.type);
+
+	switch (type.type_kind)
+	{
+		case TYPEINFO:
+		case INFERRED_ARRAY:
+		case INFERRED_VECTOR:
+		case POISONED:
+		case MEMBER:
+		case WILDCARD:
+		case REFLECTION:
+		case ENUM:
+		case ALIAS:
+		case TYPEID:
+		case TYPEDEF:
+		case ANYFAULT:
+		case BITSTRUCT:
+		case OPTIONAL:
+		case INTERFACE:
+		case CONSTSET:
+		case UNTYPEDLIST:
+		case VOID:
+		case FUNC_RAW:
+		case FLEXIBLE_ARRAY:
+		case VECTOR:
+			unreachable();
+		case BF16:
+		case F16:
+		case F32:
+		case F64:
+		case F128:
+		case I8:
+		case I16:
+		case I32:
+		case I64:
+		case I128:
+		case U8:
+		case U16:
+		case U32:
+		case U64:
+		case U128:
+		case BOOL:
+		case FUNC_PTR:
+		case POINTER:
+			return x86_classify_primitives(call, regs, type, param);
+		case SIMD_VECTOR:
+			return x86_classify_vector(regs, type, param);
+		case STRUCT:
+		case UNION:
+		case SLICE:
+		case ANY:
+		case ARRAY:
+			return x86_classify_aggregate(call, regs, type, param);
+	}
+}
+
+// abi/c_abi_x86.c:473 (static)
+fn ABIArgInfo*[] x86_create_params(CallABI abi, ParamInfo* params, int param_count, Regs* regs)
+{
+	if (!param_count) return {};
+	ABIArgInfo*[] args = ((ABIArgInfo**)calloc_arena(ABIArgInfo*::size * (usz)param_count))[:param_count];
+	for (int i = 0; i < param_count; i++)
+	{
+		args[i] = x86_classify_argument(abi, regs, params[i]);
+	}
+	return args;
+}
+
+// abi/c_abi_x86.c:484
+fn void c_abi_func_create_x86(FunctionPrototype* prototype, ParamInfo* params, int param_count, ParamInfo* vaargs, int vaarg_count)
+{
+	// 1. Calculate the registers we have available
+	//    Normal: 0 / 0 (3 on win32 struct ABI)
+	//    Reg:    5 / 8
+	//    Vector: 2 / 6
+	//    Fast:   2 / 3
+	Regs regs = { 0, 0 };
+	switch (prototype.call_abi)
+	{
+		case C:
+			regs.int_regs = compiler.platform.default_number_regs_x86;
+		default:
+			unreachable();
+	}
+	// 3. Special case for MCU:
+	if (compiler.platform.x86.is_mcu_api)
+	{
+		regs.float_regs = 0;
+		regs.int_regs = 3;
+	}
+
+	// 4. Classify the return type. In the case of optional, we need to classify the optional itself as the
+	//    return type.
+	prototype.ret_abi_info = x86_classify_return(prototype.call_abi, &regs, prototype.return_info);
+
+	// (c3c keeps Clang's chain-call / vectorcall first pass here, commented out.)
+
+	prototype.abi_args = x86_create_params(prototype.call_abi, params, param_count, &regs);
+	prototype.abi_varargs = x86_create_params(prototype.call_abi, vaargs, vaarg_count, &regs);
+}

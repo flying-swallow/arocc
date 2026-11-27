@@ -29,7 +29,7 @@ on:
       - 'aro_cc/**'
       - 'aro_c3c/**'
       - 'ir.c3l/**'
-      - 'tools/**'
+      - 'aro_cc/tools/**'
       - 'aro/app/**'
       - 'distfiles/**'
       - 'examples/**'
@@ -62,7 +62,7 @@ on:
       - 'aro_cc/**'
       - 'aro_c3c/**'
       - 'ir.c3l/**'
-      - 'tools/**'
+      - 'aro_cc/tools/**'
       - 'aro/app/**'
       - 'distfiles/**'
       - 'examples/**'
@@ -174,8 +174,8 @@ jobs:
           bazel --batch --output_user_root="$bazel_root" fetch \
             --experimental_collect_system_network_usage=false \
             --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
-            //:aro_cc //:aro_c3c //:aro_distribution //tools:generate_def \
-            //tools/... //aro_cc/test/... //aro_c3c:all
+            //:aro_cc //:aro_c3c //:aro_distribution //aro_cc/tools:generate_def \
+            //aro_cc/tools/... //aro_cc/test/... //aro_c3c:all
 
       - name: Build all C3 targets (${{ matrix.compilation_mode }})
         shell: bash
@@ -184,8 +184,8 @@ jobs:
           bazel --batch --output_user_root="$bazel_root" build \
             --experimental_collect_system_network_usage=false \
             --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
-            //:aro_cc //:aro_c3c //:aro_distribution //tools:generate_def \
-            //tools/... //aro_cc/test/... //aro_c3c:all
+            //:aro_cc //:aro_c3c //:aro_distribution //aro_cc/tools:generate_def \
+            //aro_cc/tools/... //aro_cc/test/... //aro_c3c:all
 
       - name: Run C3 suites, cross-target frontend/layout, CLI/distribution, and fuzz replay (${{ matrix.compilation_mode }})
         shell: bash

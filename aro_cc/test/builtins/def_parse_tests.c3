@@ -1,12 +1,12 @@
 // Plan 12.1 def-parser tests: generate_def::parse_def over the 19 real .def
 // files (Bazel data, read from the runfiles tree) and over malformed inputs,
-// one or more per fault in tools/generate_def_schema.c3.
+// one or more per fault in aro_cc/tools/generate_def_schema.c3.
 //
 // Expected values are source-derived (no Zig executable was run): counts were
 // taken from the .def files themselves (non-comment, non-property trimmed lines
 // = names; uncommented `.features` lines; `.header` lines other than `.none`;
 // `.language` lines other than `.all_languages`), and sample records were read
-// from the cited lines. Total: 13,552 builtins (tools/builtins_schema.md).
+// from the cited lines. Total: 13,552 builtins (aro_cc/tools/builtins_schema.md).
 module def_parse_tests;
 import std::io, std::collections::list, generate_def, aro::frontend::c::builtin_properties;
 

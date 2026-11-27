@@ -1,0 +1,25 @@
+// #target: macos-x64
+// #safe: yes
+module test;
+typedef Foo = int;
+fn void Foo.test(&self) {}
+Foo* x;
+fn int main()
+{
+	Foo* a = x;
+	a.test();
+    return 0;
+}
+/* #expect: test.ll
+define void @test.Foo.test(ptr %0) #0 {
+entry:
+  %1 = icmp eq ptr %0, null
+  br i1 %1, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  ret void
+
+panic:                                            ; preds = %entry
+  call void @std.core.runtime.panics.ref_param(ptr @.panic_str, ptr @.panic_str.1, i32 3, ptr @.panic_str.2) #2
+  unreachable
+}

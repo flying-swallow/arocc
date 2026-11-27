@@ -1,0 +1,75 @@
+load("//aro_cc/tools:c3.bzl", "c3_binary", "c3_main_test", "c3_test")
+
+# In-memory preprocessing CLI (`pp_probe -fno-color-diagnostics <file> -E -P
+# [args]`), used by preprocessor_integration.
+c3_binary(
+    name = "pp_probe",
+    srcs = ["pp_probe.c3"],
+    data = ["//:aro_builtin_headers"],
+    deps = [
+        "//aro_cc/test/src/manifest:runner_lib",
+        "//:aro_cc_lib",
+    ],
+)
+
+# Typed-IR probe for the AST-lowering boundary. The probe uses direct Builder
+# fixtures and hand-built AST fixtures; expected outcomes are source-derived.
+c3_binary(
+    name = "ir_probe",
+    srcs = ["ir_probe.c3"],
+    data = ["//aro_cc/test:regression/ir/cases.txt"],
+    deps = ["//:aro_cc_lib"],
+)
+
+# Data-only x86-64 assembly probe built from direct AST fixtures.
+c3_binary(
+    name = "assembly_probe",
+    srcs = ["assembly_probe.c3"],
+    deps = ["//:aro_cc_lib"],
+)
+
+c3_test(
+    name = "assembly_regression",
+    srcs = ["assembly_regression.c3"],
+    data = [
+        "//aro_cc/test:regression/assembly/cases.txt",
+        "//aro_cc/test:regression_assembly_fixtures",
+        ":assembly_probe",
+    ],
+    deps = [
+        "//aro_cc/test/src/manifest:runner_lib",
+        "//:aro_cc_lib",
+    ],
+)
+
+# Native Linux x86-64 smoke test: assemble one emitted data section and inspect
+# its ELF symbols and bytes (read directly, no readelf). Other hosts report a skip.
+c3_main_test(
+    name = "native_assembly_integration",
+    srcs = ["native_assembly_integration.c3"],
+    args = [
+        "$(location :assembly_probe)",
+        "$(location //aro_cc/test:regression/assembly/fixtures/integer_scalars.c)",
+        "$(location @native_assembler_tools//:as)",
+    ],
+    data = [
+        ":assembly_probe",
+        "//aro_cc/test:regression/assembly/fixtures/integer_scalars.c",
+        "@native_assembler_tools//:as",
+    ],
+    deps = ["//aro_cc/test/src/cli:native_test_support"],
+)
+
+# Focused include/embed integration over aro_cc/test/regression/preprocessor/fixtures.
+c3_test(
+    name = "preprocessor_integration",
+    srcs = ["preprocessor_integration.c3"],
+    data = [
+        ":pp_probe",
+        "//aro_cc/test:regression_preprocessor_fixtures",
+    ],
+    deps = [
+        "//aro_cc/test/src/manifest:runner_lib",
+        "//:aro_cc_lib",
+    ],
+)

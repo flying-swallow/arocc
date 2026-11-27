@@ -1,0 +1,49 @@
+// #target: macos-x64
+module test;
+fn int? xy()
+{
+	return 1;
+}
+macro int? foo()
+{
+	xy()!;
+	return 1;
+}
+fn void main()
+{
+	foo()!!;
+}
+
+/* #expect: test.ll
+define void @test.main() #0 {
+entry:
+  %error_var = alloca i64, align 8
+  %error_var1 = alloca i64, align 8
+  %retparam = alloca i32, align 4
+  %0 = call i64 @test.xy(ptr %retparam)
+  %not_err = icmp eq i64 %0, 0
+  br i1 %not_err, label %after_check, label %assign_optional
+
+assign_optional:                                  ; preds = %entry
+  store i64 %0, ptr %error_var1, align 8
+  br label %guard_block
+
+after_check:                                      ; preds = %entry
+  br label %noerr_block
+
+guard_block:                                      ; preds = %assign_optional
+  %1 = load i64, ptr %error_var1, align 8
+  store i64 %1, ptr %error_var, align 8
+  br label %panic_block
+
+noerr_block:                                      ; preds = %after_check
+  br label %noerr_block2
+
+panic_block:                                      ; preds = %guard_block
+  %2 = load i64, ptr %error_var, align 8
+  call void @std.core.runtime.panics.unwrap.fault(ptr @.panic_str, ptr @.panic_str.1, i32 13, i64 %2) #2
+  unreachable
+
+noerr_block2:                                     ; preds = %noerr_block
+  ret void
+}

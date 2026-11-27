@@ -1,0 +1,114 @@
+// #target: macos-x64
+// #safe: yes
+module test;
+import libc;
+
+fn void testf()
+{
+    float[<4>] y = { 1, 2, 3, 4 };
+    float[<4>] z = { 2, 2, 2, -100 };
+    float[<4>] w = y + z;
+    w = y / z;
+}
+
+
+fn void testi()
+{
+    int[<4>] y = { 1, 2, 3, 4 };
+    int[<4>] z = { 2, 2, 2, -100 };
+    int[<4>] w = y / z;
+    w = z >> y;
+    w = z << y;
+}
+
+/* #expect: test.ll
+define void @test.testf() #0 {
+entry:
+  %y = alloca <4 x float>, align 16
+  %z = alloca <4 x float>, align 16
+  %w = alloca <4 x float>, align 16
+  store <4 x float> <float 1.000000e+00, float 2.000000e+00, float 3.000000e+00, float 4.000000e+00>, ptr %y, align 16
+  store <4 x float> <float 2.000000e+00, float 2.000000e+00, float 2.000000e+00, float -1.000000e+02>, ptr %z, align 16
+  %0 = load <4 x float>, ptr %y, align 16
+  %1 = load <4 x float>, ptr %z, align 16
+  %fadd = fadd <4 x float> %0, %1
+  store <4 x float> %fadd, ptr %w, align 16
+  %2 = load <4 x float>, ptr %y, align 16
+  %3 = load <4 x float>, ptr %z, align 16
+  %fdiv = fdiv <4 x float> %2, %3
+  store <4 x float> %fdiv, ptr %w, align 16
+  ret void
+}
+
+define void @test.testi() #0 {
+entry:
+  %y = alloca <4 x i32>, align 16
+  %z = alloca <4 x i32>, align 16
+  %w = alloca <4 x i32>, align 16
+  store <4 x i32> <i32 1, i32 2, i32 3, i32 4>, ptr %y, align 16
+  store <4 x i32> <i32 2, i32 2, i32 2, i32 -100>, ptr %z, align 16
+  %0 = load <4 x i32>, ptr %y, align 16
+  %1 = load <4 x i32>, ptr %z, align 16
+  %2 = call i32 @llvm.vector.reduce.umin.v4i32(<4 x i32> %1)
+  %zero = icmp eq i32 %2, 0
+  br i1 %zero, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  %sdiv = sdiv <4 x i32> %0, %1
+  store <4 x i32> %sdiv, ptr %w, align 16
+  %3 = load <4 x i32>, ptr %z, align 16
+  %4 = load <4 x i32>, ptr %y, align 16
+  %5 = call i32 @llvm.vector.reduce.smin.v4i32(<4 x i32> %4)
+  %shift_underflow = icmp slt i32 %5, 0
+  br i1 %shift_underflow, label %panic1, label %checkok2
+
+checkok2:                                         ; preds = %checkok
+  %6 = call i32 @llvm.vector.reduce.smax.v4i32(<4 x i32> %4)
+  %shift_exceeds = icmp sge i32 %6, 32
+  br i1 %shift_exceeds, label %panic3, label %checkok4
+
+checkok4:                                         ; preds = %checkok2
+  %ashr = ashr <4 x i32> %3, %4
+  %7 = freeze <4 x i32> %ashr
+  store <4 x i32> %7, ptr %w, align 16
+  %8 = load <4 x i32>, ptr %z, align 16
+  %9 = load <4 x i32>, ptr %y, align 16
+  %10 = call i32 @llvm.vector.reduce.smin.v4i32(<4 x i32> %9)
+  %shift_underflow5 = icmp slt i32 %10, 0
+  br i1 %shift_underflow5, label %panic6, label %checkok7
+
+checkok7:                                         ; preds = %checkok4
+  %11 = call i32 @llvm.vector.reduce.smax.v4i32(<4 x i32> %9)
+  %shift_exceeds8 = icmp sge i32 %11, 32
+  br i1 %shift_exceeds8, label %panic9, label %checkok10
+
+checkok10:                                        ; preds = %checkok7
+  %shl = shl <4 x i32> %8, %9
+  %12 = freeze <4 x i32> %shl
+  store <4 x i32> %12, ptr %w, align 16
+  ret void
+
+panic:                                            ; preds = %entry
+  call void @std.core.runtime.panics.div_zero(ptr @.panic_str, ptr @.panic_str.1, i32 17) #3
+  unreachable
+
+panic1:                                           ; preds = %checkok
+  %13 = sext i32 %5 to i64
+  call void @std.core.runtime.panics.shift.long(ptr @.panic_str, ptr @.panic_str.1, i32 18, i64 %13) #3
+  unreachable
+
+panic3:                                           ; preds = %checkok2
+  %14 = sext i32 %6 to i64
+  call void @std.core.runtime.panics.shift.long(ptr @.panic_str, ptr @.panic_str.1, i32 18, i64 %14) #3
+  unreachable
+
+panic6:                                           ; preds = %checkok4
+  %15 = sext i32 %10 to i64
+  call void @std.core.runtime.panics.shift.long(ptr @.panic_str, ptr @.panic_str.1, i32 19, i64 %15) #3
+  unreachable
+
+panic9:                                           ; preds = %checkok7
+  %16 = sext i32 %11 to i64
+  call void @std.core.runtime.panics.shift.long(ptr @.panic_str, ptr @.panic_str.1, i32 19, i64 %16) #3
+  unreachable
+}

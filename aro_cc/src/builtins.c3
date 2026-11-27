@@ -5,7 +5,7 @@
 //
 // Invariants:
 // - The generated tables (aro::frontend::c::builtin_defs::<group>, produced from the .def
-//   files by //:builtin_defs, see tools/builtins_schema.md) are the only data
+//   files by //:builtin_defs, see aro_cc/tools/builtins_schema.md) are the only data
 //   source. NAMES is sorted bytewise ascending, so a tag index is the name's
 //   rank and lookup is a binary search. No DAFSA.
 // - Lookup is exact and case-sensitive; an unknown name is UNKNOWN_BUILTIN

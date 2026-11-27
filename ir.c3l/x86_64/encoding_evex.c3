@@ -1,6 +1,6 @@
 // AVX-512 (EVEX) instruction forms. The rows are generated from Intel XED
 // (AVX512F and the Skylake-X sets: CD/BW/DQ/VL) into encoding_table_evex.c3 by
-// //tools/gen_x86_encodings --evex=...; this file holds the hand-written row
+// this file holds the hand-written row
 // shape they use.
 //
 // Data only for now: no lowering emits EVEX instructions and encode.c3 only

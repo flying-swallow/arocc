@@ -9,7 +9,7 @@
 //   regBitSize/memBitSize/immBitSize, isSigned, toReg) are enum associated
 //   values. `exact` stands for Zig's `toReg() != .none` (the operand names one
 //   specific register, so only that register matches).
-// - The rows are generated from Intel XED (tools/gen_x86_encodings) for the
+// - The rows were generated from Intel XED for the
 //   mnemonics lowering uses: x86_64 baseline, legacy SSE/SSE2 and x87; the "shortest encoding" choice uses `Entry.estimate_len`.
 // - Operands also carry symbol and label references; those classify as `rel32`
 //   (branch/call targets) or rip-relative memory, which an assembler or a later

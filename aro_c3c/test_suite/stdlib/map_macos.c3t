@@ -1,0 +1,86 @@
+// #target: macos-x64
+
+module test;
+import std::io;
+import std::collections::map;
+
+struct Foo (Printable) { int x; void* bar; }
+
+alias IntFooMap = HashMap { int, Foo };
+alias IntDoubleMap = HashMap { int, double };
+
+fn String Foo.to_new_string(Foo* foo, Allocator allocator = allocator::heap()) @dynamic
+{
+	DString s = dstring::new_with_capacity(allocator, 128);
+	s.appendf("{%s, %p}", foo.x, foo.bar);
+	return s.str_view();
+}
+
+
+
+fn void main()
+{
+	IntFooMap map;
+	map.init(mem);
+	io::printfn("Map size: %d", map.count);
+	map.set(1, { 1, null });
+	io::printfn("Map size: %d", map.count);
+	map.set(1, { 2, null });
+	io::printfn("Map size: %d", map.count);
+	(void)io::printfn("Val: %d", map.get(1).x);
+	io::printfn("Has 1: %s", map.has_key(1));
+	io::printfn("Has 2: %s", map.has_key(2));
+	map.set(7, { 4, null });
+	io::printfn("Values: %s", map.values(mem));
+	IntDoubleMap map2;
+	map2.init(mem);
+	map2.set(4, 1.3);
+	io::printfn("Map find: %s", map2.has_value(1.3));
+	io::printfn("Map find: %s", map2.has_value(1.2));
+	map2.set(100, 3.4);
+	io::printfn("%s", map2.keys(mem));
+	io::printfn("%s", map2.values(mem));
+	@pool()
+	{
+		IntDoubleMap map3;
+		map3.init(mem);
+		map3.set(5, 3.2);
+		map3.set(7, 5.2);
+		io::printfn("%s", map3.keys(mem));
+	};
+}
+
+/* #expect: test.ll
+
+  %hi64 = load ptr, ptr %ptradd63, align 8
+  %49 = call { ptr, i64 } @"std.collections.map.HashMap$int$double$.values"(ptr %map2, i64 %lo62, ptr %hi64)
+  store { ptr, i64 } %49, ptr %result65, align 8
+  %50 = insertvalue %any undef, ptr %result65, 0
+  %51 = insertvalue %any %50, i64 ptrtoint (ptr @"$ct.sa$double" to i64), 1
+  store %any %51, ptr %varargslots61, align 16
+  %52 = call i64 @std.io.printfn(ptr %retparam66, ptr @.str.12, i64 2, ptr %varargslots61, i64 1)
+  call void @llvm.assume(i1 true)
+  %53 = call ptr @std.core.mem.allocators.push_pool(i64 0) #5
+  store ptr %53, ptr %state, align 8
+  call void @llvm.memset.p0.i64(ptr align 8 %map3, i8 0, i64 48, i1 false)
+  %54 = call ptr @llvm.threadlocal.address.p0(ptr @std.core.mem.allocators.thread_allocator)
+  %lo69 = load i64, ptr %54, align 8
+  %ptradd70 = getelementptr inbounds i8, ptr %54, i64 8
+  %hi71 = load ptr, ptr %ptradd70, align 8
+  %55 = call ptr @"std.collections.map.HashMap$int$double$.init"(ptr %map3, i64 %lo69, ptr %hi71, i64 16, float 7.500000e-01)
+  %56 = call i8 @"std.collections.map.HashMap$int$double$.set"(ptr %map3, i32 5, double 3.200000e+00)
+  %57 = call i8 @"std.collections.map.HashMap$int$double$.set"(ptr %map3, i32 7, double 5.200000e+00)
+  %58 = call ptr @llvm.threadlocal.address.p0(ptr @std.core.mem.allocators.thread_allocator)
+  %lo73 = load i64, ptr %58, align 8
+  %ptradd74 = getelementptr inbounds i8, ptr %58, i64 8
+  %hi75 = load ptr, ptr %ptradd74, align 8
+  %59 = call { ptr, i64 } @"std.collections.map.HashMap$int$double$.keys"(ptr %map3, i64 %lo73, ptr %hi75)
+  store { ptr, i64 } %59, ptr %result76, align 8
+  %60 = insertvalue %any undef, ptr %result76, 0
+  %61 = insertvalue %any %60, i64 ptrtoint (ptr @"$ct.sa$int" to i64), 1
+  store %any %61, ptr %varargslots72, align 16
+  %62 = call i64 @std.io.printfn(ptr %retparam77, ptr @.str.13, i64 2, ptr %varargslots72, i64 1)
+  %63 = load ptr, ptr %state, align 8
+  call void @std.core.mem.allocators.pop_pool(ptr %63) #5
+  ret void
+}

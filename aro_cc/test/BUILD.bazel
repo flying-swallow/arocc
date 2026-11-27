@@ -34,7 +34,7 @@ test_suite(
 _FIXTURE_VISIBILITY = [
     "//:__pkg__",
     "//aro_cc/test:__subpackages__",
-    "//tools:__subpackages__",
+    "//aro_cc/tools:__subpackages__",
 ]
 
 # Individual fixture files are addressable as //aro_cc/test:<path>.

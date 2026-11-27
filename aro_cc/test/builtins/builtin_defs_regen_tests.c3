@@ -3,7 +3,7 @@
 // For each of the 19 .def files (Bazel data), parse + emit twice in-process
 // and require identical bytes, then require that the output of the Bazel
 // GenerateDef action (//:builtin_defs, also Bazel data, produced by the
-// //tools:generate_def binary) equals the in-process emit byte for byte. That
+// //aro_cc/tools:generate_def binary) equals the in-process emit byte for byte. That
 // ties the tables compiled into //:aro_cc_lib to a pure function of the .def
 // text. No Zig output is involved.
 module builtin_defs_regen_tests;

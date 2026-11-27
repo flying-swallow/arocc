@@ -1,4 +1,4 @@
-load("//tools:c3.bzl", "c3_library")
+load("//aro_cc/tools:c3.bzl", "c3_library")
 
 # This standalone package includes the generated builtin and system-default
 # modules under src, so the source glob is its complete compiler input set.

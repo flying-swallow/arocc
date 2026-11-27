@@ -1,0 +1,19 @@
+load("//aro_cc/tools:c3.bzl", "c3_binary")
+
+# Compile-time and run-time benchmark of aro_cc against the host gcc/clang.
+# Only an optimized build gives meaningful compile numbers:
+#   bazel run -c opt //aro_cc/test/src/bench:bench
+#   bazel run -c opt //aro_cc/test/src/bench:bench -- --mode compile --corpus /path/to/sqlite3.c
+#   bazel run -c opt //aro_cc/test/src/bench:bench -- --mode run --filter 'crc*'
+# Run programs live in aro_cc/test/bench/run (each prints a checksum; outputs must
+# match across compilers).
+c3_binary(
+    name = "bench",
+    srcs = ["bench.c3"],
+    args = [
+        "--aro",
+        "$(rootpath //:aro_cc)",
+    ],
+    data = ["//:aro_cc"],
+    deps = ["//aro_cc/test/src/lib:harness_lib"],
+)

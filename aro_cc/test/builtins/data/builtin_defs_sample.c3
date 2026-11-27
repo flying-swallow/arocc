@@ -1,5 +1,5 @@
 // Hand-written test table in the exact generated layout of
-// tools/builtins_schema.md ("Generated table layout"), standing in for
+// aro_cc/tools/builtins_schema.md ("Generated table layout"), standing in for
 // bazel-bin/builtin_defs/common.c3 until the generator fills the real tables.
 // Source-derived: entries copied from aro_cc/src/Builtins/common.def (lines 51,
 // 487, 491, 992, 1110, 2385, 3003, 4467); attribute bits computed by hand from

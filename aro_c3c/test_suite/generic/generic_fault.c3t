@@ -1,0 +1,11 @@
+module abc <Type>;
+
+attrmacro @Hello = @inline;
+excuse ABC;
+
+module bcd;
+import abc;
+fn void main()
+{
+	int? a = abc::ABC~;
+}

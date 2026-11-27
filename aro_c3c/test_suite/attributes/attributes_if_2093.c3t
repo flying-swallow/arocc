@@ -1,0 +1,8 @@
+module test;
+
+attrmacro @ReadOnly @feat(LINUX) = @section(".rodata");
+attrmacro @ReadOnly @feat(WIN32) = @section(".rdata$");
+
+fn void main()
+{
+}

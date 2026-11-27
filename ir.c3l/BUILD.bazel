@@ -1,4 +1,4 @@
-load("//tools:c3.bzl", "c3_library")
+load("//aro_cc/tools:c3.bzl", "c3_library")
 
 c3_library(
     name = "core",

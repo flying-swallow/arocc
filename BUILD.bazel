@@ -1,6 +1,6 @@
-load("//tools:builtins.bzl", "builtin_defs")
-load("//tools:c3.bzl", "c3_binary", "c3_library", "c3_source_archive")
-load("//tools:system_defaults.bzl", "system_defaults")
+load("//aro_cc/tools:builtins.bzl", "builtin_defs")
+load("//aro_cc/tools:c3.bzl", "c3_binary", "c3_library", "c3_source_archive")
+load("//aro_cc/tools:system_defaults.bzl", "system_defaults")
 
 system_defaults(name = "system_defaults_module", visibility = ["//visibility:public"])
 
@@ -75,33 +75,26 @@ c3_source_archive(
         "VERSION",
         "LICENSE",
         "LICENSE-UNICODE",
-        "docs/c3-api.md",
         "docs/ir-library.md",
         "docs/compiler-layout.md",
         "examples/ir_increment.c3",
         "examples/parse_buffer.c3",
         "distfiles/package.BUILD.bazel",
         "distfiles/package.MODULE.bazel",
-        "distfiles/tools.BUILD.bazel",
-        "//tools:c3.bzl",
-        "//tools:c3_test_launcher.sh.tpl",
-        "//tools:c3c_repo.bzl",
+        "distfiles/aro_cc_tools.BUILD.bazel",
+        "//aro_cc/tools:c3.bzl",
+        "//aro_cc/tools:c3_test_launcher.sh.tpl",
+        "//aro_cc/tools:c3c_repo.bzl",
     ],
     src_path_prefixes = {
         "distfiles/package.BUILD.bazel": "BUILD.bazel",
         "distfiles/package.MODULE.bazel": "MODULE.bazel",
-        "distfiles/tools.BUILD.bazel": "tools/BUILD.bazel",
+        "distfiles/aro_cc_tools.BUILD.bazel": "aro_cc/tools/BUILD.bazel",
     },
     visibility = ["//visibility:public"],
 )
 
-c3_binary(
-    name = "aro_cc",
-    srcs = ["//aro_cc:main.c3"],
-    deps = [":aro_cc_lib"],
-    data = [":aro_builtin_headers"],
-    visibility = ["//visibility:public"],
-)
+alias(name = "aro_cc", actual = "//aro_cc:aro_cc", visibility = ["//visibility:public"])
 
 alias(name = "aro_c3c", actual = "//aro_c3c:aro_c3c", visibility = ["//visibility:public"])
 

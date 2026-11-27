@@ -1,0 +1,169 @@
+// #target: macos-x64
+
+module mymodule;
+
+extern fn void printf(char *, ...);
+
+fn void main()
+{
+
+    char[] y = "hodo";
+    char[] z = "hodo";
+    if (y == "hodo")
+    {
+        printf("This works\n");
+    }
+    if (y == z)
+    {
+        printf("This works too\n");
+    }
+    switch (y)
+    {
+        case "mixx":
+            printf("Wut\n");
+        case "hodot":
+            printf("Nope\n");
+        case "hodo":
+            printf("Winning!\n");
+        default:
+            printf("Hodohell\n");
+    }
+
+}
+
+/* #expect: mymodule.ll
+
+define void @mymodule.main() #0 {
+entry:
+  %y = alloca %"char[]", align 8
+  %z = alloca %"char[]", align 8
+  %switch = alloca %"char[]", align 8
+  store ptr @.str, ptr %y, align 8
+  %ptradd = getelementptr inbounds i8, ptr %y, i64 8
+  store i64 4, ptr %ptradd, align 8
+  store ptr @.str.1, ptr %z, align 8
+  %ptradd1 = getelementptr inbounds i8, ptr %z, i64 8
+  store i64 4, ptr %ptradd1, align 8
+  %0 = load %"char[]", ptr %y, align 8
+  %1 = extractvalue %"char[]" %0, 1
+  %2 = extractvalue %"char[]" %0, 0
+  %eq = icmp eq i64 %1, 4
+  br i1 %eq, label %slice_memcmp, label %slice_cmp_exit
+
+slice_memcmp:                                     ; preds = %entry
+  %cmp = call i32 @memcmp(ptr %2, ptr @.str.2, i64 %1)
+  %eq2 = icmp eq i32 %cmp, 0
+  br label %slice_cmp_exit
+
+slice_cmp_exit:                                   ; preds = %slice_memcmp, %entry
+  %slice_cmp_phi = phi i1 [ %eq2, %slice_memcmp ], [ false, %entry ]
+  br i1 %slice_cmp_phi, label %if.then, label %if.exit
+
+if.then:                                          ; preds = %slice_cmp_exit
+  call void (ptr, ...) @printf(ptr @.str.3)
+  br label %if.exit
+
+if.exit:                                          ; preds = %if.then, %slice_cmp_exit
+  %3 = load %"char[]", ptr %y, align 8
+  %4 = load %"char[]", ptr %z, align 8
+  %5 = extractvalue %"char[]" %3, 1
+  %6 = extractvalue %"char[]" %4, 1
+  %7 = extractvalue %"char[]" %3, 0
+  %8 = extractvalue %"char[]" %4, 0
+  %eq3 = icmp eq i64 %5, %6
+  br i1 %eq3, label %slice_memcmp4, label %slice_cmp_exit7
+
+slice_memcmp4:                                    ; preds = %if.exit
+  %cmp5 = call i32 @memcmp(ptr %7, ptr %8, i64 %5)
+  %eq6 = icmp eq i32 %cmp5, 0
+  br label %slice_cmp_exit7
+
+slice_cmp_exit7:                                  ; preds = %slice_memcmp4, %if.exit
+  %slice_cmp_phi8 = phi i1 [ %eq6, %slice_memcmp4 ], [ false, %if.exit ]
+  br i1 %slice_cmp_phi8, label %if.then9, label %if.exit10
+
+if.then9:                                         ; preds = %slice_cmp_exit7
+  call void (ptr, ...) @printf(ptr @.str.4)
+  br label %if.exit10
+
+if.exit10:                                        ; preds = %if.then9, %slice_cmp_exit7
+  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %switch, ptr align 8 %y, i64 16, i1 false)
+  br label %switch.entry
+
+switch.entry:                                     ; preds = %if.exit10
+  %9 = load %"char[]", ptr %switch, align 8
+  %10 = extractvalue %"char[]" %9, 1
+  %11 = extractvalue %"char[]" %9, 0
+  %eq11 = icmp eq i64 4, %10
+  br i1 %eq11, label %slice_memcmp12, label %slice_cmp_exit15
+
+slice_memcmp12:                                   ; preds = %switch.entry
+  %cmp13 = call i32 @memcmp(ptr @.str.5, ptr %11, i64 4)
+  %eq14 = icmp eq i32 %cmp13, 0
+  br label %slice_cmp_exit15
+
+slice_cmp_exit15:                                 ; preds = %slice_memcmp12, %switch.entry
+  %slice_cmp_phi16 = phi i1 [ %eq14, %slice_memcmp12 ], [ false, %switch.entry ]
+  br i1 %slice_cmp_phi16, label %switch.case, label %next_if
+
+switch.case:                                      ; preds = %slice_cmp_exit15
+  call void (ptr, ...) @printf(ptr @.str.6)
+  br label %switch.exit
+
+next_if:                                          ; preds = %slice_cmp_exit15
+  %12 = extractvalue %"char[]" %9, 1
+  %13 = extractvalue %"char[]" %9, 0
+  %eq17 = icmp eq i64 5, %12
+  br i1 %eq17, label %slice_memcmp18, label %slice_cmp_exit21
+
+slice_memcmp18:                                   ; preds = %next_if
+  %cmp19 = call i32 @memcmp(ptr @.str.7, ptr %13, i64 5)
+  %eq20 = icmp eq i32 %cmp19, 0
+  br label %slice_cmp_exit21
+
+slice_cmp_exit21:                                 ; preds = %slice_memcmp18, %next_if
+  %slice_cmp_phi22 = phi i1 [ %eq20, %slice_memcmp18 ], [ false, %next_if ]
+  br i1 %slice_cmp_phi22, label %switch.case23, label %next_if24
+
+switch.case23:                                    ; preds = %slice_cmp_exit21
+  call void (ptr, ...) @printf(ptr @.str.8)
+  br label %switch.exit
+
+next_if24:                                        ; preds = %slice_cmp_exit21
+  %14 = extractvalue %"char[]" %9, 1
+  %15 = extractvalue %"char[]" %9, 0
+  %eq25 = icmp eq i64 4, %14
+  br i1 %eq25, label %slice_memcmp26, label %slice_cmp_exit29
+
+slice_memcmp26:                                   ; preds = %next_if24
+  %cmp27 = call i32 @memcmp(ptr @.str.9, ptr %15, i64 4)
+  %eq28 = icmp eq i32 %cmp27, 0
+  br label %slice_cmp_exit29
+
+slice_cmp_exit29:                                 ; preds = %slice_memcmp26, %next_if24
+  %slice_cmp_phi30 = phi i1 [ %eq28, %slice_memcmp26 ], [ false, %next_if24 ]
+  br i1 %slice_cmp_phi30, label %switch.case31, label %next_if32
+
+switch.case31:                                    ; preds = %slice_cmp_exit29
+  call void (ptr, ...) @printf(ptr @.str.10)
+  br label %switch.exit
+
+next_if32:                                        ; preds = %slice_cmp_exit29
+  br label %switch.default
+
+switch.default:                                   ; preds = %next_if32
+  call void (ptr, ...) @printf(ptr @.str.11)
+  br label %switch.exit
+
+switch.exit:                                      ; preds = %switch.default, %switch.case31, %switch.case23, %switch.case
+  ret void
+}
+
+; Function Attrs: nounwind ssp uwtable
+define i32 @main(i32 %0, ptr %1) #0 {
+entry:
+  call void @mymodule.main()
+  ret i32 0
+}
+
+declare i32 @memcmp(ptr, ptr, i64)

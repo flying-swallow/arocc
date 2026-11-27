@@ -1,0 +1,58 @@
+// #target: macos-x64
+// #safe: yes
+module test;
+
+<*
+ @param [out] bar
+ @ensure *bar != 0
+*>
+fn void foo(int* bar)
+{
+	*bar = 1;
+}
+
+fn void main()
+{
+	int x;
+	foo(&x);
+}
+
+/* #expect: test.ll
+define void @test.foo(ptr %0) #0 {
+entry:
+  %1 = ptrtoint ptr %0 to i64
+  %checknull = icmp eq i64 %1, 0
+  %2 = and i64 %1, 3
+  %3 = icmp ne i64 %2, 0
+  %4 = or i1 %checknull, %3
+  br i1 %4, label %panic, label %checkok
+
+checkok:                                          ; preds = %entry
+  store i32 1, ptr %0, align 4
+  %5 = ptrtoint ptr %0 to i64
+  %checknull1 = icmp eq i64 %5, 0
+  %6 = and i64 %5, 3
+  %7 = icmp ne i64 %6, 0
+  %8 = or i1 %checknull1, %7
+  br i1 %8, label %panic2, label %checkok3
+
+checkok3:                                         ; preds = %checkok
+  %9 = load i32, ptr %0, align 4
+  %ne = icmp ne i32 %9, 0
+  br i1 %ne, label %assert_ok, label %assert_fail
+
+assert_fail:                                      ; preds = %checkok3
+  call void @std.core.runtime.panics.ensure(ptr @.panic_str, ptr @.panic_str.1, i32 8, ptr @.panic_str.3) #2
+  unreachable
+
+assert_ok:                                        ; preds = %checkok3
+  ret void
+
+panic:                                            ; preds = %entry
+  call void @std.core.runtime.panics.deref.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 9, ptr @.panic_str.2, i64 %1, i64 4) #2
+  unreachable
+
+panic2:                                           ; preds = %checkok
+  call void @std.core.runtime.panics.deref.long.long(ptr @.panic_str, ptr @.panic_str.1, i32 5, ptr @.panic_str.2, i64 %5, i64 4) #2
+  unreachable
+}
