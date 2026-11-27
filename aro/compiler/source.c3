@@ -3,6 +3,7 @@
 // the `Compilation` that created it (see compilation.c3).
 module aro::source;
 import aro::utf8;
+import std::core::dstring;
 
 <*
  Stable identifier of a source. Mirrors Zig's `packed struct(u32)`:
@@ -57,14 +58,40 @@ struct ExpandedLocation
 	SourceKind kind;
 }
 
+struct SourceStorage
+{
+	<* DString owner for generated text; raw for source buffers adopted without copying. *>
+	String raw;
+	DString dstring;
+	bool owns_raw;
+}
+
+fn String SourceStorage.bytes(&self)
+{
+	if (self.dstring) return self.dstring.str_view();
+	return self.raw;
+}
+
+fn void SourceStorage.free(&self, Allocator allocator)
+{
+	if (self.dstring)
+	{
+		self.dstring.free();
+	}
+	else if (self.owns_raw && self.raw.ptr)
+	{
+		alloc::free(allocator, self.raw.ptr);
+	}
+}
+
 struct Source
 {
 	String path;
-	<* Normalized contents. Always followed by a NUL byte: buf.ptr[buf.len] == 0. *>
-	String buf;
+	<* Source bytes, either a raw owned allocation or a DString. *>
+	SourceStorage storage;
 	SourceId id;
 	<*
-	 Each entry is a byte position within `buf` where a backslash+newline was deleted
+	 Each entry is a byte position within `storage` where a backslash+newline was deleted
 	 from the original raw buffer. The same position can appear multiple times if
 	 multiple consecutive splices happened. Guaranteed to be non-decreasing.
 	*>
@@ -79,7 +106,7 @@ fn bool Source.has_umbrella_framework_path(&self) => self.umbrella_framework_pat
 <* Expand `loc` (which must be inside this source) into line text, column and display width. *>
 fn ExpandedLocation Source.line_col(&self, Location loc)
 {
-	String buf = self.buf;
+	String buf = self.storage.bytes();
 	usz offset = loc.byte_offset;
 	usz start = 0;
 	// find the start of the line which is either a newline or a splice

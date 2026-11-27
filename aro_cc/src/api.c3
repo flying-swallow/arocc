@@ -12,6 +12,7 @@ import aro::frontend::c::tree, aro::frontend::c::type_store, aro::frontend::c::v
 // Zig src/aro.zig module exports and named type aliases.
 alias CodeGen = codegen::CodeGen;
 alias Compilation = compilation::Compilation;
+alias CompilationDefinition = compilation::CompilationDefinition;
 alias Diagnostics = diagnostics::Diagnostics;
 alias Parser = parser::Parser;
 alias Preprocessor = preprocessor::Preprocessor;

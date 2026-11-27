@@ -12,7 +12,7 @@ fn void parser_zig_node_locations() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source file = comp.add_source_from_buffer("file.c",
 			"int foo = 5;\nint bar = 10;\nint main(void) {}\n")!!;
 

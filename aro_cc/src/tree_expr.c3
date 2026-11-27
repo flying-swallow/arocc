@@ -46,8 +46,9 @@ fn AsmOperand[] asm_operands(uint[] words, uint start, uint count)
   - BUILTIN_SHUFFLEVECTOR: extra [lhs, rhs, indexes...].
  @require node.kind.family != DECL
 *>
-fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
+fn NodeRepr Tree.encode_expr_stmt(&self, Node* node)
 {
+	NodeRepr repr = {};
 	repr.kind = node.kind;
 	NodeData* data = &repr.data;
 	switch (node.kind)
@@ -57,7 +58,7 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 			data.body.body = node.labeled_stmt.body;
 		case COMPOUND_STMT:
 			repr.tok = node.compound_stmt.l_brace_tok;
-			self.encode_node_list(repr, node.compound_stmt.body);
+			self.encode_node_list(&repr, node.compound_stmt.body);
 		case IF_STMT:
 			NodeIfStmt v = node.if_stmt;
 			repr.tok = v.if_tok;
@@ -132,7 +133,7 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 		}
 		case DECL_STMT:
 			repr.tok = node.decl_stmt.first_tok;
-			self.encode_node_list(repr, node.decl_stmt.decls);
+			self.encode_node_list(&repr, node.decl_stmt.decls);
 		case ASM_STMT:
 			NodeAsmStmt v = node.asm_stmt;
 			repr.tok = v.asm_tok;
@@ -252,7 +253,7 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 			}
 		case BUILTIN_CALL_EXPR:
 			repr.tok = node.builtin_call.builtin_tok;
-			self.encode_typed_list(repr, node.builtin_call.qt, node.builtin_call.args);
+			self.encode_typed_list(&repr, node.builtin_call.qt, node.builtin_call.args);
 		case BUILTIN_TYPES_COMPATIBLE_P:
 			repr.tok = node.types_compatible.builtin_tok;
 			data.types_compatible = { .lhs = node.types_compatible.lhs, .rhs = node.types_compatible.rhs };
@@ -299,7 +300,7 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 		case ARRAY_INIT_EXPR:
 		case STRUCT_INIT_EXPR:
 			repr.tok = node.container_init.l_brace_tok;
-			self.encode_typed_list(repr, node.container_init.container_qt, node.container_init.items);
+			self.encode_typed_list(&repr, node.container_init.container_qt, node.container_init.items);
 		case UNION_INIT_EXPR:
 			repr.tok = node.union_init.l_brace_tok;
 			data.union_init = { .qt = node.union_init.union_qt, .field_index = node.union_init.field_index, .initializer = node.union_init.initializer };
@@ -322,6 +323,7 @@ fn void Tree.encode_expr_stmt(&self, Node node, NodeRepr* repr)
 		case BUILTIN_VA_ARG_PACK_LEN: repr.tok = node.va_arg_pack.builtin_tok;
 		default: unreachable("unsupported expression encoding");
 	}
+	return repr;
 }
 
 <* COMPOUND_STMT / DECL_STMT list: `span` over extra when longer than 3, else packed `elems`. *>

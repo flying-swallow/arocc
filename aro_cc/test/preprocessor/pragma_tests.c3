@@ -10,12 +10,10 @@ import aro::frontend::c::pragmas::message;
 import aro::frontend::c::tokenizer;
 import aro::frontend::c::parser;
 import aro::frontend::c::tree;
+import aro::target;
+import aro::frontend::c::type_store;
 import std::core::mem::allocators;
-
-<* Replaces the implicit typedef prelude with nothing; these tests use an untargeted Compilation. *>
-struct NoPrelude (parser::IParserTestProbe) { char unused; }
-
-fn void? NoPrelude.handle_implicit_typedefs(&self, parser::Parser* p) @dynamic {}
+const target::Host TEST_HOST = { target::Arch.X86_64, target::OsTag.LINUX, target::Abi.GNU };
 
 macro check(left, right)
 {
@@ -178,7 +176,7 @@ fn void registration_dispatch_and_handled_lookup() @test
 fn void compilation_registry_repeats_parse_callbacks_and_destroys_once() @test
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	CallbackState state = {};
 	CallbackPragma h = handler(&state, null);
 	h.before_parse_fn = &before_parse;
@@ -208,7 +206,9 @@ fn void gcc_diagnostic_state_resets_and_replays_per_parse() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		comp.target = target::parse_triple("x86_64-linux-gnu", TEST_HOST)!!;
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("gcc.c", "#pragma GCC diagnostic ignored \"-Wundef\"\n")!!;
@@ -227,8 +227,7 @@ fn void gcc_diagnostic_state_resets_and_replays_per_parse() @test
 		assert(d.severity(diagnostics::Option.UNDEF) == diagnostics::MessageKind.WARNING);
 		assert(gcc_handler.original_state.error_warnings);
 		Parser p;
-		NoPrelude no_prelude;
-		p.init(&pp); p.test_probe = &no_prelude;
+		p.init(&pp);
 		p.bind_finalized_tokens();
 		assert(p.replay_pragma()!!);
 		assert(d.severity(diagnostics::Option.UNDEF) == diagnostics::MessageKind.OFF);
@@ -249,7 +248,7 @@ fn void gcc_diagnostic_state_resets_and_replays_per_parse() @test
 fn void before_preprocess_visits_registered_handlers_in_order() @test
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	CallbackState first = {};
 	CallbackState second = {};
 	CallbackPragma first_handler = handler(&first, null, &before_preprocess);
@@ -451,7 +450,7 @@ fn void parser_replays_pack_push_pop_and_alignment() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("pack-replay.c", "#pragma pack(push, outer, 4)\n#pragma pack(pop, outer)\n#pragma pack(2)\n")!!;
@@ -486,7 +485,7 @@ fn void parser_reports_pack_pop_underflow() @test
 		d.init_list(&ta);
 		d.set("ignored-pragmas", diagnostics::MessageKind.WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("pack-underflow.c", "#pragma pack(pop)\n")!!;
@@ -528,7 +527,7 @@ fn void pragma_operator_and_eof_dispatch() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		CallbackState state = {};
 		CallbackPragma probe = handler(&state, &handled_preprocess);
 		bool added_probe = comp.pragmas.add("probe", &probe);
@@ -556,7 +555,7 @@ fn void ms_pragma_operator_dispatches_registered_handler() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.langopts.set_ms_extensions(true);
 		bool added_message = comp.pragmas.add("message", message::handler());
 		assert(added_message);
@@ -584,7 +583,7 @@ fn void pragma_macro_arguments_expand_by_default() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("macro.c", "#define TEXT \"expanded\"\n#pragma message TEXT\n")!!;
 		bool added_message = comp.pragmas.add("message", message::handler());
 		assert(added_message);
@@ -609,7 +608,7 @@ fn void gcc_pragma_arguments_follow_should_expand_policy() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("gcc-macro.c", "#define COMMAND warning\n#pragma GCC COMMAND \"kept\"\n")!!;
 		bool added_gcc = comp.pragmas.add("GCC", gcc::make_handler(&ta));
 		assert(added_gcc);
@@ -635,7 +634,7 @@ fn void unknown_pragma_preserves_original_tokens() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		d.set("unknown-pragmas", WARNING)!!;
 		Source src = comp.add_source_from_buffer("unknown.c", "#pragma unregistered kept_token\n")!!;
 		Preprocessor pp;
@@ -662,7 +661,7 @@ fn void unknown_stop_and_fatal_results_dispatch_distinctly() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		d.set("unknown-pragmas", WARNING)!!;
 		ResultState state = { .result = PragmaResult.UNKNOWN };
 		CallbackPragma route_handler = { .ctx = &state, .preprocess_fn = &selected_result };
@@ -707,7 +706,7 @@ fn void nested_pragma_macro_expansion_uses_generated_location() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("nested.c", "#define INNER _Pragma(\"message \\\"nested\\\"\")\n#define OUTER INNER\nOUTER\n")!!;
 		bool added_message = comp.pragmas.add("message", message::handler());
 		assert(added_message);
@@ -736,7 +735,7 @@ fn void once_provider_state_and_after_parse_reset() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("once.h", "#pragma once\n")!!;
 		once::Once* h = once::handler(&ta);
 		bool added_once = comp.pragmas.add("once", h);
@@ -766,7 +765,7 @@ fn void malformed_then_repeated_valid_translation_units_clean_pragma_state() @te
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		once::Once* once_handler = once::handler(&ta);
 		bool added_once = comp.pragmas.add("once", once_handler);
 		assert(added_once);
@@ -812,7 +811,7 @@ fn void pragma_operator_malformed_string_recovers_to_later_pragma() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("bad.c", "_Pragma(1)\n#pragma message \"recovered\"\n")!!;
 		bool added_message = comp.pragmas.add("message", message::handler());
 		assert(added_message);
@@ -840,7 +839,7 @@ fn void malformed_message_pragma_recovers_to_later_message() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		bool added_message = comp.pragmas.add("message", message::handler());
 		assert(added_message);
 		Source src = comp.add_source_from_buffer("message.c", "#pragma message 1\n#pragma message \"recovered\"\n")!!;

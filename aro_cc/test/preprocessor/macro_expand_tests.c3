@@ -33,7 +33,7 @@ macro check(left, right)
 fn void? drive(Preprocessor* pp, Source src)
 {
 	Tokenizer t;
-	t.init(src.buf, src.id, pp.comp.langopts, &pp.comp.target, src.splice_locs);
+	t.init(src.storage.bytes(), src.id, pp.comp.langopts, &pp.comp.target, src.splice_locs);
 	bool start_of_line = true;
 	while (true)
 	{
@@ -124,7 +124,7 @@ macro @with_pp(String text, Compiler emulate = CLANG, String standard = ""; @bod
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.langopts.set_emulated_compiler(emulate);
 		if (standard.len) comp.langopts.set_standard(standard)!!;
 		Source src = comp.add_source_from_buffer("t.c", text)!!;
@@ -297,7 +297,7 @@ fn void gnu_variadic_macros() @test
 		d.init_list(&ta);
 		d.set("pedantic", WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", "#define a(foo, args...) #args, foo __VA_ARGS__ args\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -343,7 +343,7 @@ fn void token_paste_delete_comma_gnu() @test
 		d.init_list(&ta);
 		d.set("gnu-zero-variadic-macro-arguments", WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", text)!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -479,7 +479,7 @@ fn void builtin_macro_redefinition() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", "#define __LINE__ 1\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -506,7 +506,7 @@ fn void keyword_hidden_by_macro() @test
 		d.init_list(&ta);
 		d.set("pedantic", WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", "#define int foo\n#define include hello\n\n#define if then\n#define alignof _Alignof\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -638,7 +638,7 @@ fn void expand_exhaustive_expr_context() @test
 		d.init_list(&ta);
 		d.set("expansion-to-defined", WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", "#define X 1\n#define D defined X\n")!!;
 		Source use = comp.add_source_from_buffer("u.c", "defined X && defined ( X ) && X && D")!!;
 		Preprocessor pp;
@@ -648,7 +648,7 @@ fn void expand_exhaustive_expr_context() @test
 		ExpandBuf buf;
 		buf.init(comp.gpa);
 		Tokenizer t;
-		t.init(use.buf, use.id, comp.langopts, &comp.target);
+		t.init(use.storage.bytes(), use.id, comp.langopts, &comp.target);
 		while (true)
 		{
 			Token tok = t.next();

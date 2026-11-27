@@ -18,6 +18,29 @@ fn ulong align_forward(ulong value, ulong alignment)
 	return (value + alignment - 1) & ~(alignment - 1);
 }
 
+<*
+ Natural layout of plain scalar fields (see the module comment); fills each
+ field's `layout`.
+ @require fields.len > 0
+*>
+fn RecordLayout natural_record_layout(Compilation* comp, RecordField[] fields, bool is_union = false)
+{
+	ulong size_bits = 0;
+	uint align_bits = 8;
+	foreach (&field : fields)
+	{
+		assert(field.bit_width == BIT_WIDTH_NULL, "bitfields need record_layout.compute");
+		ulong fsize = field.qt.sizeof(comp) * 8;
+		uint falign = field.qt.alignof(comp) * 8;
+		ulong offset = is_union ? 0 : align_forward(size_bits, falign);
+		size_bits = max(size_bits, offset + fsize);
+		align_bits = max(align_bits, falign);
+		field.layout = { .offset_bits = offset, .size_bits = fsize };
+	}
+	size_bits = align_forward(size_bits, align_bits);
+	return { .size_bits = size_bits, .field_alignment_bits = align_bits, .pointer_alignment_bits = align_bits, .required_alignment_bits = 8 };
+}
+
 <* Type.Int.bits *>
 fn ushort TypeInt.bits(self, Compilation* comp)
 {
@@ -59,21 +82,27 @@ fn QualType smallest_n_bit_int_target_independent(Compilation* comp, ulong bits,
 <* Compilation.intLeastN: lowest-rank integer type with at least N bits; subject to platform idiosyncrasies. *>
 fn QualType int_least_n(Compilation* comp, ulong bits, Signedness signedness)
 {
-	if (bits <= 24 && bits > TypeInt.INT.bits(comp) && comp.target.has_int24())
+	return int_least_n_target(&comp.target, bits, signedness);
+}
+
+fn QualType int_least_n_target(Target* t, ulong bits, Signedness signedness)
+{
+	if (bits <= 24 && bits > t.c_type_bit_size(INT) && t.has_int24())
 	{
 		return signedness == SIGNED ? INT24 : UINT24;
 	}
-	if (bits == 64 && (comp.target.os.tag.is_darwin() || comp.target.cpu.arch.is_wasm()))
+	if (bits == 64 && (t.os.tag.is_darwin() || t.cpu.arch.is_wasm()))
 	{
-		// WebAssembly and Darwin use `long long` for `int_least64_t` and `int_fast64_t`.
 		return signedness == SIGNED ? LONG_LONG : ULONG_LONG;
 	}
-	if (bits == 16 && comp.target.cpu.arch == AVR)
+	if (bits == 16 && t.cpu.arch == AVR) return signedness == SIGNED ? INT : UINT;
+	TypeInt[6] candidates = { SCHAR, SHORT, INT, LONG, LONG_LONG, INT128 };
+	foreach (k : candidates)
 	{
-		// AVR uses int for int_least16_t and int_fast16_t.
-		return signedness == SIGNED ? INT : UINT;
+		ulong width = k.fixed_bits ? k.fixed_bits : t.c_type_bit_size(k.ctype);
+		if (width >= bits) return int_qt(signedness == SIGNED ? k : k.unsigned_of);
 	}
-	return smallest_n_bit_int_target_independent(comp, bits, signedness);
+	unreachable("no integer type is wide enough");
 }
 
 enum TypeSizeOrder : char

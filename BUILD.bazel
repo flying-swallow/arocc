@@ -1,4 +1,3 @@
-load("//aro_cc/tools:builtins.bzl", "builtin_defs")
 load("//aro_cc/tools:c3.bzl", "c3_binary", "c3_library", "c3_source_archive")
 load("//aro_cc/tools:system_defaults.bzl", "system_defaults")
 
@@ -26,36 +25,6 @@ c3_library(
     data = [":aro_builtin_headers"],
     visibility = ["//visibility:public"],
 )
-
-# Generated builtin tables (plan 12): one aro::frontend::c::builtin_defs::<group> module
-# per .def file, in Builtins.zig order.
-builtin_defs(
-    name = "builtin_defs",
-    srcs = [
-        "//aro_cc:src/Builtins/aarch64.def",
-        "//aro_cc:src/Builtins/aarch64_neon.def",
-        "//aro_cc:src/Builtins/amdgcn.def",
-        "//aro_cc:src/Builtins/arm.def",
-        "//aro_cc:src/Builtins/bpf.def",
-        "//aro_cc:src/Builtins/common.def",
-        "//aro_cc:src/Builtins/hexagon.def",
-        "//aro_cc:src/Builtins/loongarch.def",
-        "//aro_cc:src/Builtins/mips.def",
-        "//aro_cc:src/Builtins/neon.def",
-        "//aro_cc:src/Builtins/nvptx.def",
-        "//aro_cc:src/Builtins/powerpc.def",
-        "//aro_cc:src/Builtins/riscv.def",
-        "//aro_cc:src/Builtins/s390x.def",
-        "//aro_cc:src/Builtins/ve.def",
-        "//aro_cc:src/Builtins/wasm.def",
-        "//aro_cc:src/Builtins/x86_64.def",
-        "//aro_cc:src/Builtins/x86.def",
-        "//aro_cc:src/Builtins/xcore.def",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-
 
 # Runtime resource headers for the installed compiler layout. The toolchain
 # finds these relative to the executable (or accepts an explicit resource dir).
@@ -106,9 +75,6 @@ filegroup(
     srcs = ["//aro_cc/test:record_fixtures"],
     visibility = ["//aro_cc/test/src/records:__pkg__"],
 )
-
-# The 19 builtin .def inputs as runtime data (plan 12.1 //aro_cc/test/builtins:def_parse_tests).
-alias(name = "builtin_def_files", actual = "//aro_cc:builtin_def_files", visibility = ["//visibility:public"])
 
 # C3 frontend sources, checked by //aro_cc/test/unit/c3:isolation_test (no C frontend imports).
 filegroup(

@@ -29,7 +29,7 @@ fn void PostfixFixture.init(&self, String input, String path = "postfix.c", bool
 {
 	self.allocator.init(mem);
 	self.diagnostics.init_list(&self.allocator);
-	self.comp.init(&self.allocator, null, &self.diagnostics);
+	self.comp.init(&self.allocator, compilation::native_definition(), null, &self.diagnostics);
 	if (bounds_safety) self.comp.langopts.bounds_safety = lang_opts::BoundsSafety.CLANG;
 	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 	source::Source src = self.comp.add_source_from_buffer(path, input)!!;

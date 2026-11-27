@@ -32,20 +32,10 @@ struct PpValue
 	ulong unsigned;
 }
 
-<* Zig `Value.init(i64)` / `init(comptime_int)`. *>
 fn PpValue pp_signed(long v) => { .signed = v };
-<* Zig `Value.init(u64)`. *>
 fn PpValue pp_unsigned(ulong v) => { .is_unsigned = true, .unsigned = v };
-<* Zig `Value.init(bool)`: signed 0 or 1. *>
 fn PpValue pp_bool(bool b) => { .signed = b ? 1 : 0 };
-
-<* Zig `Value.toBool`: value != 0. *>
-fn bool PpValue.to_bool(self)
-{
-	return self.is_unsigned ? self.unsigned != 0 : self.signed != 0;
-}
-
-<* Zig `Value.isZero`. *>
+fn bool PpValue.to_bool(self) => self.is_unsigned ? self.unsigned != 0 : self.signed != 0;
 fn bool PpValue.is_zero(self) => !self.to_bool();
 
 <*

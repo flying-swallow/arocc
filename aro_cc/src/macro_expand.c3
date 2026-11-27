@@ -796,7 +796,7 @@ fn void Preprocessor.expand_va_opt(&self, ExpandBuf* buf, RawToken raw, bool sho
 
 	Source src = self.comp.get_source(raw.source);
 	Tokenizer tokenizer = {
-		.buf = src.buf,
+		.buf = src.storage.bytes(),
 		.index = raw.start,
 		.source = raw.source,
 		.langopts = self.comp.langopts,

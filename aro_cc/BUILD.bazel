@@ -55,8 +55,6 @@ c3_library(
         "src/parser_statement.c3",
         "src/parser_asm.c3",
         "src/predefined_macros.c3",
-        "src/predefined_macros_other.c3",
-        "src/predefined_macros_x86.c3",
         "src/preprocessor.c3",
         "src/pragma.c3",
         "src/pragmas/gcc.c3",
@@ -82,7 +80,25 @@ c3_library(
         "src/type_store_relations.c3",
         "src/value.c3",
         "src/value_float.c3",
-        "//:builtin_defs",
+        "src/builtin_defs/aarch64.c3",
+        "src/builtin_defs/aarch64_neon.c3",
+        "src/builtin_defs/amdgcn.c3",
+        "src/builtin_defs/arm.c3",
+        "src/builtin_defs/bpf.c3",
+        "src/builtin_defs/common.c3",
+        "src/builtin_defs/hexagon.c3",
+        "src/builtin_defs/loongarch.c3",
+        "src/builtin_defs/mips.c3",
+        "src/builtin_defs/neon.c3",
+        "src/builtin_defs/nvptx.c3",
+        "src/builtin_defs/powerpc.c3",
+        "src/builtin_defs/riscv.c3",
+        "src/builtin_defs/s390x.c3",
+        "src/builtin_defs/ve.c3",
+        "src/builtin_defs/wasm.c3",
+        "src/builtin_defs/x86.c3",
+        "src/builtin_defs/x86_64.c3",
+        "src/builtin_defs/xcore.c3",
     ],
     deps = ["//aro/compiler:common", "//ir.c3l:ir", "//aro/compiler:tooling", "//ir.c3l:compiler_adapters"],
     visibility = ["//visibility:public"],
@@ -100,7 +116,3 @@ c3_binary(
 )
 
 exports_files(["main.c3"])
-
-filegroup(name = "builtin_def_files", srcs = glob(["src/Builtins/*.def"]), visibility = ["//visibility:public"])
-
-exports_files(glob(["src/Builtins/*.def"]), visibility = ["//visibility:public"])

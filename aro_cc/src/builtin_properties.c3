@@ -3,16 +3,10 @@
 // Builtins.zig (BuiltinBase / BuiltinTarget) and the group/tag identity.
 //
 // Invariants (see aro_cc/tools/builtins_schema.md):
-// - This file imports nothing but std. The generator binary //aro_cc/tools:generate_def
-//   compiles it standalone (no aro_cc_lib), so the enum name tables below are
-//   the single source of truth for both .def parsing and runtime lookup.
-// - Enum ordinals, associated `name` strings and the Attributes bit layout are
-//   part of the generated-table ABI: generated files reference them by C3
-//   constant name (HEADER / LANGUAGE values) and by raw bits (Attributes).
-//   Changing any of them requires regenerating, and the bit layout must keep
-//   matching the Zig `packed struct` field order.
-// - BuiltinGroup lists the 19 .def groups in Builtins.zig `Tag` order; its
-//   ordinal is the `group` half of a BuiltinTag.
+// - Enum ordinals, associated names and Attributes bits define the table ABI.
+//   Keep them synchronized with the checked-in C3 records.
+// - BuiltinGroup lists the 19 groups in Builtins.zig Tag order; its ordinal
+//   is the group half of a BuiltinTag.
 module aro::frontend::c::builtin_properties;
 
 <* Header which must be included for a builtin to be available (properties.Header). name: Zig tag; file: the header. *>
@@ -89,7 +83,7 @@ bitstruct Attributes : uint
 const Attributes ATTRIBUTES_DEFAULT = { .eval_args = true };
 
 <*
- Names of the Attributes fields as written in .def files (`.attributes = .{ .<name> = ... }`).
+ Names of the Attributes fields from the original builtin definitions.
  kind: how the value is written: BOOL (`true`/`false`), FORMAT_KIND (`.printf`),
  POSITION (decimal 0..31).
 *>
@@ -114,11 +108,11 @@ enum AttributeField : char (String name, AttributeValueKind kind)
 }
 
 <*
- The 19 builtin groups, one per .def file, in Builtins.zig `Tag` order.
- def_name: the .def basename and generated module name
+ The 19 builtin table groups, in Builtins.zig `Tag` order.
+ def_name: the table basename and module name
  (aro::frontend::c::builtin_defs::<def_name>). has_features: the group uses
  Zig BuiltinTarget (may carry `.features`); false for BuiltinBase groups,
- whose .def files must not contain `.features`.
+ whose records have no target features.
 *>
 enum BuiltinGroup : char (String def_name, bool has_features)
 {
@@ -146,7 +140,7 @@ enum BuiltinGroup : char (String def_name, bool has_features)
 <*
  Builtins.Tag (a union of per-group enums). index is the per-group tag value:
  the builtin's rank in its group's bytewise-sorted name list, which equals the
- Zig DAFSA unique index minus one. Compare whole values with `==`; generated
+ Zig DAFSA unique index minus one. Compare whole values with `==`; table
  modules provide named constants (`common::TAG___BUILTIN_VA_START`).
 *>
 bitstruct BuiltinTag : uint
@@ -155,8 +149,8 @@ bitstruct BuiltinTag : uint
 	BuiltinGroup group : 16..23;
 }
 
-<* The builtin table generator compiles this module without generated tag
- modules, so these predicates use bytewise-sorted common.def indices. Keep the
+<* These predicates use bytewise-sorted common table indices to avoid importing
+ table modules back into their shared record definitions. Keep the
  indices synchronized if the relevant names or their ordering change. *>
 const ushort COMMON_VA_COPY_BUILTIN_INDEX = 807;
 const ushort COMMON_VA_COPY_INDEX = 1496;
@@ -170,10 +164,8 @@ fn bool is_va_copy_tag(BuiltinTag tag) => tag.group == BuiltinGroup.COMMON &&
 	(tag.index == COMMON_VA_COPY_BUILTIN_INDEX || tag.index == COMMON_VA_COPY_INDEX);
 
 <*
- One parsed .def entry minus its name (Zig BuiltinBase / BuiltinTarget).
- All strings are static (generated constants) or borrowed from the .def
- buffer inside the generator. features is "" when absent (Zig `null`); the
- .def files never spell an empty features string, so "" is unambiguous.
+ One builtin record minus its name (Zig BuiltinBase / BuiltinTarget).
+ All strings are static table constants. features is "" when absent (Zig `null`).
 *>
 struct BuiltinRecord
 {
@@ -253,3 +245,50 @@ fn Attributes Attributes.with_field(self, AttributeField f, uint value)
  @require param_str.len > 0
 *>
 fn bool is_var_args(String param_str) => param_str[^1] == '.';
+
+<* Expand the enum table into the parallel arrays used by binary lookup. *>
+macro @builtin_names($Type) @const
+{
+	String[$Type::values.len] $names;
+	$foreach $i, $entry : $Type::values:
+		$names[$i] = $entry.name;
+	$endforeach
+	return $names;
+}
+
+macro @builtin_records($Type) @const
+{
+	BuiltinRecord[$Type::values.len] $records;
+	$foreach $i, $entry : $Type::values:
+		$records[$i] = $entry.record;
+	$endforeach
+	return $records;
+}
+
+macro usz @builtin_name_length($Type, bool $longest) @const
+{
+	usz $length = $Type::values[0].name.len;
+	$foreach $entry : $Type::values:
+		usz $next = (usz)$entry.name.len;
+		$if ($longest && $next > $length) || (!$longest && $next < $length):
+			$length = $next;
+		$endif
+	$endforeach
+	return $length;
+}
+
+
+<* Declare the public tags for enum entries with a TAG_ identifier. *>
+macro String @builtin_tags($Type) @const
+{
+	String $declarations = "";
+	$foreach $entry : $Type::values:
+		String $identifier = string::@sprintf("%s", $entry);
+		$if $identifier[:4] == "TAG_":
+			$declarations = $declarations +++ string::@sprintf(
+				"const BuiltinTag %s = { .group = GROUP, .index = %s };\n",
+				$identifier, $entry.ordinal);
+		$endif
+	$endforeach
+	return $declarations;
+}

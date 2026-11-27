@@ -20,7 +20,7 @@ fn void empty_decl_round_trip_and_growth() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
@@ -62,7 +62,7 @@ fn void declaration_expression_and_statement_round_trips() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
@@ -117,7 +117,7 @@ fn void compact_expression_boundaries_and_borrowed_slices() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
@@ -163,7 +163,7 @@ fn void compact_decoded_slices_alias_node_storage() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
@@ -242,7 +242,7 @@ fn void sentinels_casts_classification_and_associations() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
@@ -306,7 +306,7 @@ fn void if_and_for_optional_sentinels_round_trip() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});
@@ -375,7 +375,7 @@ fn void token_location_round_trip_for_generated_and_source_tokens() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Source src = comp.add_source_from_buffer("macro-origin.c", "VALUE\n")!!;
 			comp.generated_buf.push_all("VALUE");
@@ -409,7 +409,7 @@ fn void storage_form_round_trips() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		{
 			Tree tree;
 			tree.init(&comp, {});

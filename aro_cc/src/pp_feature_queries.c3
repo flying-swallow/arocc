@@ -333,7 +333,7 @@ fn String? Preprocessor.reconstruct_include_string(&self, TokenWithExpansionLocs
 			{
 				// Ugly hack to find out where the '>' should go, since we don't have the closing ')' location
 				TokenWithExpansionLocs closing = first;
-				String buf = self.comp.get_source(closing.loc.id).buf;
+				String buf = self.comp.get_source(closing.loc.id).storage.bytes();
 				sz pos = closing.loc.byte_offset;
 				while (pos < buf.len && buf[pos] != '\n') pos++;
 				closing.loc.byte_offset = (uint)pos;

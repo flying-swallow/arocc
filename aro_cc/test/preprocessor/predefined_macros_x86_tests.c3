@@ -69,7 +69,7 @@ fn void target_os_macros_match_fixtures()
 	foreach (c : OS_MACRO_CASES)
 	{
 		Compilation comp;
-		comp.init(mem);
+		comp.init(mem, compilation::native_definition());
 		defer comp.free();
 		set_target(&comp, c.triple);
 		DString w;
@@ -92,7 +92,7 @@ fn void target_os_unix_bsds_and_illumos()
 	foreach (triple : yes)
 	{
 		Compilation comp;
-		comp.init(mem);
+		comp.init(mem, compilation::native_definition());
 		defer comp.free();
 		set_target(&comp, triple);
 		DString w;
@@ -102,7 +102,7 @@ fn void target_os_unix_bsds_and_illumos()
 		test::eq(w.str_view().contains("#define TARGET_OS_UNIX 1\n"), true);
 	}
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86_64-dragonfly");
 	DString w;
@@ -115,7 +115,7 @@ fn void target_os_unix_bsds_and_illumos()
 fn void windows_msvc()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86_64-windows-msvc");
 	DString w;
@@ -135,7 +135,7 @@ fn void windows_msvc()
 fn void windows_mingw64()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86_64-windows-gnu");
 	comp.langopts.declspec_attrs = false;
@@ -160,7 +160,7 @@ fn void windows_mingw64()
 fn void windows_mingw32_gnu_mode_and_ms_extensions()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86-windows-gnu");
 	comp.langopts.set_ms_extensions(true); // sets declspec_attrs and ms_extensions
@@ -179,7 +179,7 @@ fn void windows_mingw32_gnu_mode_and_ms_extensions()
 fn void windows_declspec_without_ms_extensions()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86_64-windows-gnu");
 	comp.langopts.declspec_attrs = true;
@@ -195,7 +195,7 @@ fn void windows_declspec_without_ms_extensions()
 fn void darwin_versions()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 
 	// macOS before 10.10: one digit each for minor/patch (clamped to 9).
@@ -256,7 +256,7 @@ fn void darwin_platform_defines()
 	foreach (i, triple : triples)
 	{
 		Compilation comp;
-		comp.init(mem);
+		comp.init(mem, compilation::native_definition());
 		defer comp.free();
 		set_target(&comp, triple);
 		comp.target.os.min = { 17, 2, 1 };
@@ -274,7 +274,7 @@ fn void darwin_platform_defines()
 fn void x86_64_linux_baseline()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	// target_cpu.c3 model x86_64: 64bit cmov cx8 fxsr mmx nopl sse2 x87 (+ sse via deps).
 	set_target(&comp, "x86_64-linux-gnu", "x86_64");
@@ -296,7 +296,7 @@ fn void x86_64_linux_baseline()
 fn void x86_64_v3_feature_order()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86_64-linux-gnu", "x86_64_v3");
 	comp.cmodel = KERNEL;
@@ -329,7 +329,7 @@ fn void x86_windows_msvc_m_ix86()
 	foreach (i, cpu : cpus)
 	{
 		Compilation comp;
-		comp.init(mem);
+		comp.init(mem, compilation::native_definition());
 		defer comp.free();
 		set_target(&comp, "x86-windows-msvc", cpu);
 		comp.langopts.ms_extensions = true;
@@ -348,7 +348,7 @@ fn void x86_windows_msvc_m_ix86()
 
 	// +sse without sse2 -> 1.
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86-windows-msvc", "i686+sse");
 	comp.langopts.ms_extensions = true;
@@ -362,7 +362,7 @@ fn void x86_windows_msvc_m_ix86()
 fn void x86_linux_gnu_mode()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86-linux-gnu", "i386");
 	comp.langopts.emulate = CLANG;
@@ -382,7 +382,7 @@ fn void x86_linux_gnu_mode()
 fn void x86_64_msvc_and_apx()
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	set_target(&comp, "x86_64-windows-msvc", "x86_64+egpr+push2pop2+ppx+ndd+ccmp+nf+cf+zu+avx10_1+avx512vl");
 	DString w;
@@ -424,7 +424,7 @@ fn void no_leaks()
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		set_target(&comp, "x86_64-windows-gnu");
 		DString w;
 		w.init(&ta);

@@ -20,7 +20,7 @@ fn void runtime_initializer_accepts_unavailable_value() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source src = comp.add_source_from_buffer("runtime-init.c", "unknown")!!;
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
@@ -39,7 +39,7 @@ fn void constexpr_initializer_requires_known_value() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source src = comp.add_source_from_buffer("constexpr-init.c", "unknown")!!;
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
@@ -58,7 +58,7 @@ fn void constexpr_initializer_accepts_known_value() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source src = comp.add_source_from_buffer("constexpr-known-init.c", "1")!!;
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
@@ -76,7 +76,7 @@ fn void static_aggregate_initializer_checks_saved_child_values() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source src = comp.add_source_from_buffer("static-init.c", "{ 1, 2 }")!!;
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
@@ -98,7 +98,7 @@ fn void static_initializer_rejects_unavailable_value() @test
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source src = comp.add_source_from_buffer("static-unknown-init.c", "unknown")!!;
 		preprocessor::Preprocessor pp;
 		parser::Parser p;
@@ -116,7 +116,7 @@ fn void variable_length_array_initializer_reports_diagnostic_and_recovers() @tes
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		source::Source src = comp.add_source_from_buffer("vla-init.c", "{ 1 }")!!;
 		preprocessor::Preprocessor pp;
 		parser::Parser p;

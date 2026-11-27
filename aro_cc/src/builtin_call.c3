@@ -10,7 +10,6 @@ import std::core::dstring;
 
 excuse NO_PARAM_COUNT;
 
-
 fn bool is_overflow_builtin(builtin_properties::BuiltinTag tag)
 {
 	return tag == common::TAG___BUILTIN_ADD_OVERFLOW || tag == common::TAG___BUILTIN_SUB_OVERFLOW ||

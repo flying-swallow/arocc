@@ -14,7 +14,7 @@ fn void initializer_grammar_keeps_high_designators_sparse() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("initializer.c", "{ [999999] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -47,7 +47,7 @@ fn void initializer_grammar_parses_nested_designator_paths() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("nested-initializer.c", "{ .items[1].value = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -91,7 +91,7 @@ fn void initializer_grammar_elides_braces_across_nested_arrays() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("elided-array-initializer.c", "{ 1, 2, 3, 4 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -136,7 +136,7 @@ fn void initializer_grammar_elided_scalar_override_diagnostic_order() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("elided-override-initializer.c", "{ 1, .pair.first = 3 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -186,7 +186,7 @@ fn void initializer_grammar_range_and_duplicate_override_semantics() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-initializer.c", "{ [1 ... 3] = 7, [1 ... 3] = 999999 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -228,7 +228,7 @@ fn void initializer_grammar_range_override_preserves_warning_locations() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-override-initializer.c", "{ [2] = 1, [1 ... 3] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -306,7 +306,7 @@ fn void inferred_array_length_and_sparse_fillers() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		parser::Parser p;
@@ -380,7 +380,7 @@ fn void union_active_member_and_compound_literal_fields() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		parser::Parser p;
@@ -431,7 +431,7 @@ fn void brace_elision_fills_nested_array_fields_in_order() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("brace-elision.c", "{ 1, 3, 7, 999999 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -480,7 +480,7 @@ fn void direct_string_initializer_preserves_inferred_bound_and_null_rules() @tes
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		type_store::QualType literal_qt = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.FIXED, 4));
 		value::Value literal_val = value::intern(&comp, { .tag = BYTES, .bytes = "abc\0" });
 		type_store::QualType incomplete = comp.type_store.put(type_store::type_array(type_store::CHAR, type_store::ArrayLenKind.INCOMPLETE));
@@ -546,8 +546,8 @@ fn void string_initializer_preserves_utf16_and_rejects_incompatible_encoding() @
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		type_store::QualType u16 = comp.type_store.uint_least16_t;
 		type_store::QualType literal_qt = comp.type_store.put(type_store::type_array(u16, type_store::ArrayLenKind.FIXED, 3));
 		type_store::QualType target = comp.type_store.put(type_store::type_array(u16, type_store::ArrayLenKind.FIXED, 2));
@@ -599,7 +599,7 @@ fn void brace_elision_accepts_string_array_subobject() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("elided-string-initializer.c", "{ \"abc\", 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -642,7 +642,7 @@ fn void brace_elision_does_not_replace_array_elements_with_later_string() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("elided-string-after-element.c", "{ 1, \"abc\" }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -685,7 +685,7 @@ fn void brace_elision_does_not_replace_initialized_char_array_with_string() @tes
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("elided-char-array-override.c", "{ 1, \"bc\" }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -724,7 +724,7 @@ fn void brace_elision_replaces_equal_nested_array_subobject_in_order() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("nested-array-override.c", "{ 1, \"abc\" }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -774,7 +774,7 @@ fn void range_designator_with_field_suffix_repeats_per_element() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-field-suffix-initializer.c", "{ [1 ... 3].value = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -821,7 +821,7 @@ fn void range_designator_with_subscript_suffix_repeats_per_row() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-subscript-suffix-initializer.c", "{ [0 ... 1][1] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -864,7 +864,7 @@ fn void nested_range_designators_fill_fixed_matrix() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("nested-range-initializer.c", "{ [0 ... 1][0 ... 1] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -909,7 +909,7 @@ fn void range_repeats_nested_brace_value_as_struct_ast() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-nested-brace-initializer.c", "{ [0 ... 1] = { .value = 7 } }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -957,7 +957,7 @@ fn void duplicate_scalar_override_reports_token_locations() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("duplicate-override-locations.c", "{ [1] = 7, [1] = 999999 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -1007,7 +1007,7 @@ fn void range_duplicate_override_reports_original_token_locations() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-duplicate-override-locations.c",
 			"{ [1 ... 2].value = 7, [1 ... 2].value = 999999 }")!!;
 		Preprocessor pp;
@@ -1065,7 +1065,7 @@ fn void reversed_range_designator_is_an_error() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("reversed-range-initializer.c", "{ [3 ... 1] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -1099,7 +1099,7 @@ fn void single_element_range_designator_is_valid() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("single-range-initializer.c", "{ [2 ... 2] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -1135,7 +1135,7 @@ fn void range_end_out_of_bounds_is_an_error() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-end-oob-initializer.c", "{ [1 ... 4] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -1169,7 +1169,7 @@ fn void range_start_out_of_bounds_is_an_error() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("range-start-oob-initializer.c", "{ [3 ... 3] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -1202,7 +1202,7 @@ fn void inferred_array_length_from_range_end() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("inferred-range-initializer.c", "{ [2 ... 4] = 7 }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -1244,7 +1244,7 @@ fn void inferred_outer_length_from_nested_range_end() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("inferred-nested-range-initializer.c", "{ [1 ... 2] = { 5, 6 } }")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;

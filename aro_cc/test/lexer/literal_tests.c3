@@ -140,7 +140,7 @@ fn bool? Ctx.init(&self, Allocator a, String cfg)
 	if (parts.len < 3) return false;
 	self.diags.init_list(a);
 	self.diags.state.enable_all_warnings = true;
-	self.comp.init(a, null, &self.diags);
+	self.comp.init(a, compilation::native_definition(), null, &self.diags);
 	self.comp.target = target::parse_triple(parts[0], HOST)!;
 	switch (parts[2])
 	{
@@ -168,7 +168,7 @@ fn bool? Ctx.init(&self, Allocator a, String cfg)
 			default: return false;
 		}
 	}
-	type_store::init_named_types(&self.comp);
+	type_store::init_named_types(&self.comp.type_store, &self.comp.target, &self.comp.string_interner);
 	return true;
 }
 
@@ -1178,7 +1178,7 @@ fn String rendered(Ctx* c)
 	foreach (&m : c.diags.messages)
 	{
 		Message copy = *m;
-		copy.write({ .writer = &s, .mode = NO_COLOR }, false)!!;
+		copy.write(&s, false, false)!!;
 	}
 	return s.str_view();
 }

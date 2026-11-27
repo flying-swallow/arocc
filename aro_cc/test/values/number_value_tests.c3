@@ -32,10 +32,10 @@ macro @with_comp(String triple, Compiler emu = NO; @body(Compilation* comp))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple(triple, HOST)!!;
 		comp.langopts.set_emulated_compiler(emu);
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		@body(&comp);
 		comp.free();
 		d.free();
@@ -105,7 +105,7 @@ fn void decimal_literal_works_before_named_types_are_initialized() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		assert(comp.type_store.intmax.is_invalid(), "raw parser setup leaves named intmax unset");
 
 		NumberValue v = int_lit(&comp, DECIMAL, "1", NONE);

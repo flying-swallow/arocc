@@ -4,7 +4,7 @@
 // finish_fn transfers the current arena to the declaration.
 module ir_tests;
 import std, aro::backend::ir, aro::backend::ir_opt, aro::backend::object, aro::target, aro::value_interner, aro::primitive_value;
-import aro::terminal, std::core::dstring;
+import std::core::dstring;
 
 macro check(left, right)
 {
@@ -175,8 +175,7 @@ fn void builder_transfers_blocks_and_owned_inputs() @test
 	// Source-derived from src/backend/Ir.zig dumpDecl and its write helpers.
 	DString output;
 	output.init(&f.ta);
-	Terminal term = { .writer = &output, .mode = terminal::ColorMode.NO_COLOR };
-	f.graph.dump(term)!!;
+	f.graph.dump(&output, false)!!;
 	check(output.str_view(),
 		"i32 @choose(i1 %0) {\n"
 		"entry.0:\n"

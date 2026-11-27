@@ -23,7 +23,7 @@ macro check(left, right)
 fn void? drive(Preprocessor* pp, Source src)
 {
 	Tokenizer t;
-	t.init(src.buf, src.id, pp.comp.langopts, &pp.comp.target, src.splice_locs);
+	t.init(src.storage.bytes(), src.id, pp.comp.langopts, &pp.comp.target, src.splice_locs);
 	bool start_of_line = true;
 	while (true)
 	{
@@ -114,7 +114,7 @@ macro @with_pp(String text, Compiler emulate = CLANG, String standard = ""; @bod
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.langopts.set_emulated_compiler(emulate);
 		if (standard.len) comp.langopts.set_standard(standard)!!;
 		Source src = comp.add_source_from_buffer("t.c", text)!!;
@@ -160,7 +160,7 @@ macro @with_opt(String text, String opt; @body(Preprocessor* pp, Diagnostics* d)
 		d.init_list(&ta);
 		d.set(opt, WARNING)!!;
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("t.c", text)!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;

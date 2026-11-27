@@ -1,6 +1,6 @@
 // Source-derived direct tests for the specialized builtin parsers
 // (aro/src/frontend/c/parser_builtin.c3) and builtin_eval. Operands go through the Parser's
-// real expression grammar; type names come from small test handlers.
+// real expression and declaration grammars.
 module builtin_expression_tests;
 import aro::primitive_value;
 import aro::frontend::c::builtin_eval, aro::frontend::c::builtin_defs::common, aro::frontend::c::builtins;
@@ -18,44 +18,6 @@ const Host HOST = { X86_64, LINUX, GNU };
 macro check(left, right)
 {
 	test::eq((long)left, (long)right);
-}
-
-struct OffsetTypeContext (parser::IParserTestProbe) { type_store::QualType qt; }
-
-fn type_store::QualType? OffsetTypeContext.handle_typed_type_name(&self, parser::Parser* p) @dynamic
-	=> parse_offset_record_type((void*)self, p);
-
-<* Typed type-name handler accepting only `int`. *>
-struct IntTypeHandler (parser::IParserTestProbe) { int unused; }
-
-fn type_store::QualType? IntTypeHandler.handle_typed_type_name(&self, parser::Parser* p) @dynamic
-	=> parse_int_type(null, p);
-
-<* Typed type-name handler mapping `int` to a 4 x int vector. *>
-struct VectorTypeHandler (parser::IParserTestProbe) { int unused; }
-
-fn type_store::QualType? VectorTypeHandler.handle_typed_type_name(&self, parser::Parser* p) @dynamic
-	=> parse_vector_type(null, p);
-
-fn type_store::QualType? parse_offset_record_type(void* context, parser::Parser* p)
-{
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.IDENTIFIER) return parser::PARSING_FAILED~;
-	p.advance();
-	return ((OffsetTypeContext*)context).qt;
-}
-
-fn type_store::QualType? parse_int_type(void* context, parser::Parser* p)
-{
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return parser::PARSING_FAILED~;
-	p.advance();
-	return type_store::INT;
-}
-
-fn type_store::QualType? parse_vector_type(void* context, parser::Parser* p)
-{
-	if (p.at_eof() || p.tree.tokens[(usz)p.tok_i].id != tokenizer::TokenId.KEYWORD_INT) return parser::PARSING_FAILED~;
-	p.advance();
-	return p.comp.type_store.put(type_store::type_vector(type_store::INT, 4));
 }
 
 <* Declare `v` as a 4 x int vector variable for the vector builtin operands. *>
@@ -76,7 +38,7 @@ fn void choose_expression_suppresses_unselected_evaluation() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Source src = comp.add_source_from_buffer("choose-expr.c", "(1, 2, 1 / 0)\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -109,24 +71,19 @@ fn void types_compatible_expression_returns_constant_boolean() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		Source src = comp.add_source_from_buffer("types-compatible.c", "(int, int)\n")!!;
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		Source src = comp.add_source_from_buffer("types-compatible.c", "__builtin_types_compatible_p(int, int)\n")!!;
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		TokenWithExpansionLocs eof = pp.preprocess(src)!!;
 		pp.add_token(eof)!!;
-		Tree tree;
-		tree.init(&comp, pp.tokens.array_view());
-		IntTypeHandler int_types;
-		parser::Parser p = { .pp = &pp, .comp = &comp, .diagnostics = &d, .test_probe = &int_types };
-		p.tree = tree;
-		p.tok_end = (tokens::TokenIndex)tree.tokens.len;
-		parser_result::Result result = p.builtin_types_compatible(0)!!;
+		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
+		parser_result::Result result = p.expr()!!;
 		assert(p.at_eof());
 		assert(result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_TYPES_COMPATIBLE_P);
 		assert(result.qt.eql(type_store::INT, &comp));
 		assert(result.val.to_i64(&comp)!! == 1);
-		p.tree.free();
+		p.free();
 		pp.free();
 		comp.free();
 		d.free();
@@ -143,7 +100,7 @@ fn void builtin_eval_infinity_and_isinf_finite_cases() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		// Parser holds Tree by value: nodes and values must go through p.tree.
 		// A separate Tree copied into p.tree would miss later add_node/set_value.
 		parser::Parser p = { .comp = &comp };
@@ -193,7 +150,7 @@ fn void builtin_eval_bswap16_32_64_and_missing_value() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		parser::Parser p = { .comp = &comp };
 		Tree* tree = &p.tree;
 		tree.init(&comp, {});
@@ -242,7 +199,7 @@ fn void check_infl_target_format(Compilation* comp, parser::Parser* p, String tr
 	ulong width, primitive_value::PrimitiveType tag, uint128 raw)
 {
 	comp.target = target::parse_triple(triple, HOST)!!;
-	type_store::init_named_types(comp);
+	type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 	assert(type_store::LONG_DOUBLE.bit_sizeof(comp) == width);
 	builtins::Expanded infl_builtin = { .tag = common::TAG___BUILTIN_INFL,
 		.attributes = { .const_evaluable = true } };
@@ -259,7 +216,7 @@ fn void builtin_eval_infl_target_long_double_formats() @test
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		Tree tree;
 		tree.init(&comp, {});
 		parser::Parser p = { .comp = &comp };
@@ -288,9 +245,9 @@ fn void builtin_eval_nan_sign_predicates_and_constant_p_cases() @test
 	defer ta.free();
 	{
 		Diagnostics d; d.init_list(&ta);
-		Compilation comp; comp.init(&ta, null, &d);
+		Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		// Parser holds Tree by value: nodes and values must go through p.tree.
 		// A separate Tree copied into p.tree would miss later add_node/set_value.
 		parser::Parser p = { .comp = &comp };
@@ -400,10 +357,10 @@ fn void check_builtin_constant_p_string_subscript(String text, long expected, bo
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
 		comp.langopts.standard = lang_opts::Standard.C17;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("constant-p-subscript.c", text)!!;
@@ -467,10 +424,10 @@ fn void check_constant_expression_no_diagnostics(String text, long expected)
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
 		comp.langopts.standard = lang_opts::Standard.C17;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("constant-expression.c", text)!!;
@@ -499,11 +456,14 @@ fn void shufflevector_diagnoses_index_below_negative_one_and_keeps_ast() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("shuffle.c", "(v, v, -2)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
-		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp);
+		type_store::QualType vector_qt = comp.type_store.put(type_store::type_vector(type_store::INT, 4));
+		p.define_symbol({ .name = comp.intern_string("v4si"), .kind = symbol_stack::SymbolKind.TYPEDEF, .qt = vector_qt });
+		p.bind_finalized_tokens();
 		define_vector_operand(&p);
 		parser_result::Result result = p.builtin_shufflevector(0)!!;
 		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
@@ -519,11 +479,14 @@ fn void shufflevector_builds_result_type_and_index_nodes() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("shuffle-valid.c", "(v, v, 1, -1)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
-		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
+		parser::Parser p; p.init(&pp);
+		type_store::QualType vector_qt = comp.type_store.put(type_store::type_vector(type_store::INT, 4));
+		p.define_symbol({ .name = comp.intern_string("v4si"), .kind = symbol_stack::SymbolKind.TYPEDEF, .qt = vector_qt });
+		p.bind_finalized_tokens();
 		define_vector_operand(&p);
 		parser_result::Result result = p.builtin_shufflevector(0)!!;
 		assert(p.at_eof() && result.node.kind(&p.tree) == tree::NodeKind.BUILTIN_SHUFFLEVECTOR);
@@ -541,12 +504,13 @@ fn void convertvector_builds_destination_typed_node() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
-		Source src = comp.add_source_from_buffer("convertvector.c", "(v, int)\n")!!;
+		Source src = comp.add_source_from_buffer("convertvector.c", "(v, v4si)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
-		VectorTypeHandler vector_types;
-		parser::Parser p; p.init(&pp); p.test_probe = &vector_types;
+		parser::Parser p; p.init(&pp);
+		type_store::QualType vector_qt = comp.type_store.put(type_store::type_vector(type_store::INT, 4));
+		p.define_symbol({ .name = comp.intern_string("v4si"), .kind = symbol_stack::SymbolKind.TYPEDEF, .qt = vector_qt });
 		p.bind_finalized_tokens();
 		define_vector_operand(&p);
 		parser_result::Result result = p.builtin_convertvector(0)!!;
@@ -563,12 +527,11 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("builtin-errors.c", "(1, int)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
-		IntTypeHandler int_types;
-		parser::Parser p; p.init(&pp); p.test_probe = &int_types;
+		parser::Parser p; p.init(&pp);
 		p.bind_finalized_tokens();
 		assert(@catch(p.builtin_va_arg(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
@@ -579,12 +542,11 @@ fn void va_arg_and_offsetof_report_specialized_type_errors() @test
 	assert(ta.allocation_count() == 0);
 	{
 		TrackingAllocator ta2; ta2.init(mem); defer ta2.free();
-		Diagnostics d; d.init_list(&ta2); Compilation comp; comp.init(&ta2, null, &d);
+		Diagnostics d; d.init_list(&ta2); Compilation comp; comp.init(&ta2, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-error.c", "(int, field) (int, field)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
-		IntTypeHandler int_types;
-		parser::Parser p; p.init(&pp); p.test_probe = &int_types;
+		parser::Parser p; p.init(&pp);
 		p.bind_finalized_tokens();
 		assert(@catch(p.builtin_offsetof(0)) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 1);
@@ -603,9 +565,9 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
-		Source src = comp.add_source_from_buffer("offsetof-array.c", "(Root, items[1 + 1].value)\n")!!;
+		Source src = comp.add_source_from_buffer("offsetof-array.c", "(struct Root, items[1 + 1].value)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		type_store::RecordField[1] leaf_fields = { type_store::record_field(comp.intern_string("value"), type_store::INT) };
 		leaf_fields[0].layout = { .offset_bits = 0, .size_bits = 32 };
@@ -616,8 +578,9 @@ fn void offsetof_array_designators_accumulate_nested_record_offsets() @test
 		type_store::RecordField[1] root_fields = { type_store::record_field(comp.intern_string("items"), leaves) };
 		root_fields[0].layout = { .offset_bits = 0, .size_bits = 128 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(comp.intern_string("Root"), root_fields[..], layout));
-		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp); p.test_probe = &types;
+		parser::Parser p; p.init(&pp);
+		type_store::NodeIndex root_decl = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .container_qt = root } });
+		p.define_symbol({ .name = comp.intern_string("Root"), .kind = symbol_stack::SymbolKind.STRUCT, .qt = root, .node = root_decl });
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.builtin_offsetof(0, true)!!;
 		assert(p.at_eof() && result.val.to_i64(&comp)!! == 64);
@@ -644,9 +607,9 @@ fn void offsetof_resolves_promoted_anonymous_record_fields() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
-		Source src = comp.add_source_from_buffer("offsetof-anonymous.c", "(Root, value)\n")!!;
+		Source src = comp.add_source_from_buffer("offsetof-anonymous.c", "(struct Root, value)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		type_store::RecordField[1] inner_fields = {
 			type_store::record_field(comp.intern_string("value"), type_store::INT) };
@@ -662,8 +625,9 @@ fn void offsetof_resolves_promoted_anonymous_record_fields() @test
 			.pointer_alignment_bits = 8, .required_alignment_bits = 8 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(
 			comp.intern_string("Root"), fields[..], layout));
-		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp); p.test_probe = &types;
+		parser::Parser p; p.init(&pp);
+		type_store::NodeIndex root_decl = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .container_qt = root } });
+		p.define_symbol({ .name = comp.intern_string("Root"), .kind = symbol_stack::SymbolKind.STRUCT, .qt = root, .node = root_decl });
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.builtin_offsetof(0, true)!!;
 		assert(result.val.to_i64(&comp)!! == 24);
@@ -686,10 +650,10 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-byte-bit.c",
-			"(Root, items[2]) (Root, items[3]) (Root, items[-1]) (Root, items[2])\n")!!;
+			"(struct Root, items[2]) (struct Root, items[3]) (struct Root, items[-1]) (struct Root, items[2])\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		type_store::QualType items = comp.type_store.put(type_store::type_array(type_store::INT,
 			type_store::ArrayLenKind.FIXED, 3));
@@ -698,8 +662,9 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 		type_store::RecordLayout layout = { .size_bits = 104, .field_alignment_bits = 8,
 			.pointer_alignment_bits = 8, .required_alignment_bits = 8 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(comp.intern_string("Root"), fields[..], layout));
-		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp); p.test_probe = &types;
+		parser::Parser p; p.init(&pp);
+		type_store::NodeIndex root_decl = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .container_qt = root } });
+		p.define_symbol({ .name = comp.intern_string("Root"), .kind = symbol_stack::SymbolKind.STRUCT, .qt = root, .node = root_decl });
 		p.bind_finalized_tokens();
 		parser_result::Result byte_offset = p.builtin_offsetof(0)!!;
 		assert(byte_offset.val.to_i64(&comp)!! == 9);
@@ -718,8 +683,8 @@ fn void offsetof_uses_signed_offsets_checks_array_bounds_and_preserves_ast() @te
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[0].text, "array index 3 is past the end of the array");
 		test::eq(d.messages[1].text, "array index -1 is before the beginning of the array");
-		check(d.messages[0].location.col, 30);
-		check(d.messages[1].location.col, 47);
+		check(d.messages[0].location.col, 44);
+		check(d.messages[1].location.col, 68);
 		p.free(); pp.free(); comp.free(); d.free();
 	}
 	assert(ta.allocation_count() == 0);
@@ -732,10 +697,10 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("offsetof-nonconstant.c",
-			"(Root, [0]) (Root, items[index]) (Root, items[1])\n")!!;
+			"(struct Root, [0]) (struct Root, items[index]) (struct Root, items[1])\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		type_store::QualType items = comp.type_store.put(type_store::type_array(type_store::INT,
 			type_store::ArrayLenKind.FIXED, 2));
@@ -744,8 +709,9 @@ fn void offsetof_keeps_runtime_array_index_and_recovers_from_malformed_designato
 		type_store::RecordLayout layout = { .size_bits = 64, .field_alignment_bits = 8,
 			.pointer_alignment_bits = 8, .required_alignment_bits = 8 };
 		type_store::QualType root = comp.type_store.put(type_store::type_record(comp.intern_string("Root"), fields[..], layout));
-		OffsetTypeContext types = { .qt = root };
-		parser::Parser p; p.init(&pp); p.test_probe = &types;
+		parser::Parser p; p.init(&pp);
+		type_store::NodeIndex root_decl = p.tree.add_node({ .kind = tree::NodeKind.STRUCT_DECL, .container_decl = { .container_qt = root } });
+		p.define_symbol({ .name = comp.intern_string("Root"), .kind = symbol_stack::SymbolKind.STRUCT, .qt = root, .node = root_decl });
 		p.bind_finalized_tokens();
 		type_store::NodeIndex index_decl = p.tree.add_node({ .kind = tree::NodeKind.VARIABLE,
 			.variable = { .qt = type_store::INT } });
@@ -774,12 +740,11 @@ fn void bit_cast_accepts_equal_sized_operand_and_type() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("bit-cast.c", "(int, 1)\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
-		IntTypeHandler int_types;
-		parser::Parser p; p.init(&pp); p.test_probe = &int_types;
+		parser::Parser p; p.init(&pp);
 		p.bind_finalized_tokens();
 		parser_result::Result result = p.builtin_bit_cast(0)!!;
 		assert(p.at_eof());
@@ -797,7 +762,7 @@ fn void va_arg_pack_obeys_call_and_function_contexts() @test
 {
 	TrackingAllocator ta; ta.init(mem); defer ta.free();
 	{
-		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, null, &d);
+		Diagnostics d; d.init_list(&ta); Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		Source src = comp.add_source_from_buffer("va-pack.c", "__builtin_va_arg_pack() __builtin_va_arg_pack_len()\n")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;

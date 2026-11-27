@@ -28,11 +28,11 @@ struct Sink
 	Diagnostics diags;
 }
 
-fn void Sink.init(&self, ColorMode mode = NO_COLOR)
+fn void Sink.init(&self, bool use_ansi = false)
 {
 	self.ta.init(mem);
 	self.bw.init(&self.ta);
-	self.diags.init_writer(&self.bw, mode);
+	self.diags.init_writer(&self.bw, use_ansi);
 }
 
 fn String Sink.out(&self) => self.bw.str_view();
@@ -62,7 +62,7 @@ fn void spliced_location_golden() @test
 	Sink s;
 	s.init();
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	comp.add_source_from_buffer("newline splicing.c", "x;\nint trailing\\ \nws = 1;\n")!!;
 	check(s.out(),
 		"newline splicing.c:2:14: warning: backslash and newline separated by space [-Wbackslash-newline-escape]\n"
@@ -81,7 +81,7 @@ fn void unicode_location_golden() @test
 	Sink s;
 	s.init();
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Source src = comp.add_source_from_buffer("u.c", "int 中é = x;\n")!!;
 	// bytes: "int " (4) + E4 B8 AD (3) + C3 A9 (2) + " = " (3) -> 'x' at offset 12
 	Message m = warn("use of 'x'", UNUSED_VALUE);
@@ -102,7 +102,7 @@ fn void details_off_and_no_location() @test
 	s.init();
 	s.diags.details = false;
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Source src = comp.add_source_from_buffer("d.c", "int a;\n")!!;
 	Message m = warn("w1", UNUSED_VALUE);
 	m.has_location = true;
@@ -125,9 +125,9 @@ fn void color_escape_codes_and_reset() @test
 {
 	// hand-derived from Message.write and std.Io.Terminal.setColor
 	Sink s;
-	s.init(ESCAPE_CODES);
+	s.init(true);
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Source src = comp.add_source_from_buffer("c.c", "ab\n")!!;
 	Message m = warn("w", UNUSED_VALUE);
 	m.has_location = true;
@@ -149,7 +149,7 @@ fn void color_override() @test
 {
 	// -fno-color-diagnostics on an escape-code terminal
 	Sink s;
-	s.init(ESCAPE_CODES);
+	s.init(true);
 	s.diags.color = FORCE_OFF;
 	fault r = @catch(s.diags.add({ .kind = FATAL_ERROR, .text = "boom" }));
 	assert(r == compilation::FATAL_ERROR);
@@ -158,7 +158,7 @@ fn void color_override() @test
 
 	// -fcolor-diagnostics on a plain terminal
 	Sink t;
-	t.init(NO_COLOR);
+	t.init(false);
 	t.diags.color = FORCE_ON;
 	t.diags.add({ .kind = ERROR, .text = "e" })!!;
 	check(t.out(), "\e[1m\e[91merror: \e[37me\n\e[0m");
@@ -279,7 +279,7 @@ fn void system_header_suppression() @test
 	s.init();
 	s.diags.details = false;
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Source src = comp.add_source_from_buffer("sys.h", "int a;\n")!!;
 	SourceId sys_id = comp.add_source_alias(src.id, "sys.h", SYSTEM);
 	Location loc = { .id = sys_id, .byte_offset = 0, .line = 1 };
@@ -390,7 +390,7 @@ fn void macro_backtrace_fixture() @test
 	s.diags.details = false;
 	s.diags.macro_backtrace_limit = 1;
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Source src = comp.add_source_from_buffer("macro backtrace limit.c", "#define FOO(X) X\nFOO(2)\n")!!;
 	Location tok = loc_at(src, 21, 2);  // the '2' argument
 	Location call = loc_at(src, 17, 2); // FOO
@@ -414,7 +414,7 @@ fn void macro_backtrace_truncation() @test
 	s.init();
 	s.diags.details = false;
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Location[8] locs;
 	letter_locs(&comp, &locs);
 	Source other = comp.add_source_from_buffer("o.c", "zz\n")!!;
@@ -444,7 +444,7 @@ fn void macro_backtrace_unlimited_and_hidden() @test
 	s.diags.details = false;
 	s.diags.macro_backtrace_limit = uint::max; // -fmacro-backtrace-limit=0
 	Compilation comp;
-	comp.init(&s.ta, diagnostics: &s.diags);
+	comp.init(&s.ta, compilation::native_definition(), diagnostics: &s.diags);
 	Location[3] locs;
 	letter_locs(&comp, &locs);
 	Message m = warn("w", UNUSED_VALUE);
@@ -511,7 +511,7 @@ fn void output_failure_is_fatal() @test
 	ByteWriter bw;
 	bw.init_with_buffer(&small);
 	Diagnostics d;
-	d.init_writer(&bw, NO_COLOR);
+	d.init_writer(&bw, false);
 	fault r = @catch(d.add(warn("this does not fit", UNUSED_VALUE)));
 	assert(r == compilation::FATAL_ERROR);
 	// counted before the write, like Zig
@@ -532,7 +532,7 @@ fn void fatal_source_diagnostic_cleans_up() @test
 		d.state.error_warnings = true;
 		d.state.fatal_errors = true;
 		Compilation comp;
-		comp.init(&ta, diagnostics: &d);
+		comp.init(&ta, compilation::native_definition(), diagnostics: &d);
 		Source? r = comp.add_source_from_buffer("f.c", "a\\ \nb\n");
 		assert(@catch(r) == compilation::FATAL_ERROR);
 		check(comp.sources.len(), 0);
@@ -555,9 +555,9 @@ fn void fatal_source_diagnostic_cleans_up() @test
 	ByteWriter bw;
 	bw.init_with_buffer(&small);
 	Diagnostics d;
-	d.init_writer(&bw, NO_COLOR);
+	d.init_writer(&bw, false);
 	Compilation comp;
-	comp.init(&ta2, diagnostics: &d);
+	comp.init(&ta2, compilation::native_definition(), diagnostics: &d);
 	String raw = "a\\ \nb";
 	char* p = alloc::malloc(&ta2, raw.len + 1);
 	mem::copy(p, raw.ptr, raw.len);
@@ -577,7 +577,7 @@ fn void owned_default_diagnostics() @test
 	ta.init(mem);
 	defer ta.free();
 	Compilation comp;
-	comp.init(&ta);
+	comp.init(&ta, compilation::native_definition());
 	comp.add_source_from_buffer("x.c", "a\\ \nb")!!;
 	check(comp.warning_count(), 1);
 	assert(comp.diagnostics.output == IGNORE);

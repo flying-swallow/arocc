@@ -403,7 +403,7 @@ fn void driver_flag_enums_and_linker_state_are_applied() @test
 	d.init_list(mem);
 	defer d.free();
 	Compilation comp;
-	comp.init(mem, null, &d);
+	comp.init(mem, compilation::native_definition(), null, &d);
 	defer comp.free();
 	toolchain::Options tc_opts = {};
 	driver::apply_options(&opts, &comp, &tc_opts, &d)!!;

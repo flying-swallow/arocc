@@ -808,14 +808,6 @@ fn void TypeStore.free(&self)
 <* Number of non-builtin types stored (handle indices 0..len-1). *>
 fn usz TypeStore.len(&self) => (usz)self.types.len();
 
-macro copy_slice(Allocator gpa, slice) @local
-{
-	if (!slice.len) return slice[:0];
-	var copy = alloc::new_array(gpa, $Typeof(slice[0]), slice.len);
-	copy[..] = slice[..];
-	return copy;
-}
-
 // ---------------------------------------------------------------------------
 // put / putExtra / set
 // ---------------------------------------------------------------------------
@@ -915,7 +907,7 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.data[1] = (uint)self.funcs.len();
 			self.funcs.push(
 				{
-					.params = copy_slice(self.gpa, func.params), .attrs = attr
+					.params = alloc::clone_slice(self.gpa, func.params), .attrs = attr
 			}
 			);
 			switch (func.kind)
@@ -994,7 +986,7 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.data[1] = (uint)self.records.len();
 			self.records.push(
 				{
-					.decl_node = r.decl_node, .layout = r.layout, .fields = copy_slice(self.gpa, r.fields)
+					.decl_node = r.decl_node, .layout = r.layout, .fields = alloc::clone_slice(self.gpa, r.fields)
 			}
 			);
 		case ENUM:
@@ -1025,7 +1017,7 @@ fn void TypeStore.set(&self, Type ty, uint index)
 			repr.data[1] = (uint)self.enums.len();
 			self.enums.push(
 				{
-					.name = e.name, .decl_node = e.decl_node, .fields = copy_slice(self.gpa, e.fields)
+					.name = e.name, .decl_node = e.decl_node, .fields = alloc::clone_slice(self.gpa, e.fields)
 			}
 			);
 		case TYPEOF:

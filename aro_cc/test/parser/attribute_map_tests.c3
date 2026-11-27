@@ -142,7 +142,7 @@ fn void alignment_defaults_and_nested_typedefs() @test
 	ta.init(mem);
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		Target? parsed = target::parse_triple("x86_64-linux-gnu", target::host()!!);
 		comp.target = parsed!!;
 		// Tree node encode/decode is not part of this ticket. These hand-built

@@ -92,16 +92,6 @@ fn parser_result::Result? fixture_switch_expression(void* context, parser::Parse
 	return result;
 }
 
-<* Statement-expression bodies through the test StatementParser, as the frontend
-   handler routes them. *>
-struct StatementBodyHandler (parser::IParserTestProbe)
-{
-	parser_statement::StatementParser* statements;
-}
-
-fn type_store::NodeIndex? StatementBodyHandler.handle_statement_expression_body(&self, parser::Parser* p, bool eval) @dynamic
-	=> self.statements.parse_body(p, false);
-
 fn parser_result::Result? real_integer_constant_expression(void* context, parser::Parser* p, parser::ConstDeclFoldingMode mode, bool eval)
 	=> p.integer_const_expr(eval, mode);
 
@@ -126,7 +116,7 @@ fn void statement_compounds_unwind_scopes_and_parse_control_flow() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement.c", "{ ; { return; } if (1) while (1) break; else continue; do ; while (1); for (;;1) return 1; }")!!;
@@ -153,7 +143,7 @@ fn void compound_scope_unwinds_on_parse_error() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement.c", "{ if (1) }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -176,7 +166,7 @@ fn void compound_body_recovers_after_failed_statement() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ 1; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -207,7 +197,7 @@ fn void compound_body_keeps_next_statement_after_advanced_failure() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ int broken; return 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -233,7 +223,7 @@ fn void compound_body_recovers_two_failed_statements_in_one_body() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ bad; 1; bad; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -270,7 +260,7 @@ fn void compound_body_keeps_statement_after_declaration_consumed_its_semicolon()
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ int broken; 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -309,7 +299,7 @@ fn void compound_body_recovery_tracks_delimiter_kinds_independently() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ broken [ 0 } ; return 1; ] ; return 2; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -336,7 +326,7 @@ fn void compound_body_recovery_consumes_unmatched_closing_brace() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("statement-recovery.c", "{ broken } 2;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -359,7 +349,7 @@ fn void gnu_asm_basic_statement_and_qualifiers_parse() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("asm.c", "__asm__ volatile inline (\"nop\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -381,7 +371,7 @@ fn void gnu_asm_requires_string_and_trailing_semicolon() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("asm.c", "asm(1)")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -400,7 +390,7 @@ fn void asm_statement_falls_through_for_non_asm_statements() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("asm.c", "; {} asm(\"nop\");")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -424,7 +414,7 @@ fn void return_statements_preserve_value_and_void_operand_shapes() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "{ return 1; return; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -470,7 +460,7 @@ fn void function_return_context_types_and_validates_returns() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "foo { return 1; return; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -502,7 +492,7 @@ fn void pointer_to_integer_return_uses_conversion_diagnostic() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "foo { return 1; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -528,7 +518,7 @@ fn void void_function_returning_value_is_diagnosed() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("return.c", "foo { return 1; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -554,7 +544,7 @@ fn void switch_duplicate_cases_defaults_and_out_of_switch_diagnostics() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch.c", "{ switch (1) { case 1: ; case 1: ; default: ; default: ; } case 1: ; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -580,7 +570,7 @@ fn void switch_case_ranges_keep_typed_bounds_and_detect_interior_duplicates() @t
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-range.c", "{ switch (0) { case 2 ... 5: ; case 4: ; case 8: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -622,7 +612,7 @@ fn void switch_overlapping_case_ranges_are_duplicate_cases() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-overlap.c", "{ switch (0) { case 2 ... 5: ; case 4 ... 8: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -654,7 +644,7 @@ fn void switch_unavailable_case_values_are_diagnosed_in_source_order() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-unavailable.c", "{ switch (0) { case 1 ... a: ; case b: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -682,7 +672,7 @@ fn void descending_switch_case_range_reports_empty_range() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-empty-range.c", "{ switch (0) { case 5 ... 3: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -705,7 +695,7 @@ fn void switch_case_bound_requires_a_real_integer_type() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("switch-type.c", "{ switch (0) { case q: ; } }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -732,7 +722,7 @@ fn void computed_goto_requires_address_of_label_expression() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		// Ignore the independent discarded-value warning; this test checks function-level goto validation.
 		d.set("unused-value", OFF)!!;
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("goto.c", "{ goto *1; } { goto *1; &&target; target: ; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -756,7 +746,7 @@ fn void malformed_function_body_clears_label_and_scope_state() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("recovery.c", "{ kept: ; if (1) } { goto kept; }")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -793,7 +783,7 @@ fn void source_derived_recovered_function_does_not_leak_labels() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("label-recovery.c",
 			"void f(void){ kept: ; if (1) } void g(void){ goto kept; }")!!;
@@ -823,7 +813,7 @@ fn void statement_attributes_attach_and_validate_argument_counts() @test
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		// Zig gates the C23 attribute diagnostic on this warning option.
 		d.set("c23-extensions", WARNING)!!;
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-attrs.c", "__attribute__((unused)) first: ; [[gnu::unused]] second: ; __attribute__((unused(1))) third: ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -858,7 +848,7 @@ fn void fallthrough_statement_attribute_is_accepted_before_case_inside_switch() 
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-fallthrough.c",
 			"switch (1) { case 0: __attribute__((fallthrough)); case 1: break; }")!!;
@@ -890,7 +880,7 @@ fn void fallthrough_statement_attribute_outside_switch_is_diagnosed() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-fallthrough.c", "__attribute__((fallthrough));")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -913,7 +903,7 @@ fn void label_interposed_gnu_attributes_attach_to_labeled_node() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("label-attrs.c", "__attribute__((unused)) target: __attribute__((unused)) ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -942,7 +932,7 @@ fn void malformed_statement_attributes_and_scopes_are_restored() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-attrs-recovery.c", "{ __attribute__((unused)) for (;;) } ;")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
@@ -970,16 +960,12 @@ fn void gnu_statement_expression_wraps_compound_and_uses_final_expression_type()
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		d.set("gnu-statement-expression", diagnostics::MessageKind.WARNING)!!;
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr.c", "({ 1; })")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		p.set_function_context({ .active = true });
-		StatementGrammar statements_grammar = { .expr = &fixture_expression };
-		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
-		StatementBodyHandler body_handler = { .statements = &statements };
-		p.test_probe = &body_handler;
 		parser_result::Result result = p.parse_postfix_expr()!!;
 		assert(result.node.kind(&p.tree) == tree::NodeKind.STMT_EXPR);
 		assert(result.qt.eql(type_store::INT, &comp));
@@ -1006,16 +992,12 @@ fn void gnu_statement_expression_file_scope_diagnostics_are_ordered() @test
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
 		d.set("gnu-statement-expression", diagnostics::MessageKind.WARNING)!!;
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr-file-scope.c", "({ 1; })")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		uint original_scopes = (uint)p.symbols.active_len;
-		StatementGrammar statements_grammar = { .expr = &fixture_expression };
-		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
-		StatementBodyHandler body_handler = { .statements = &statements };
-		p.test_probe = &body_handler;
 		assert(@catch(p.parse_postfix_expr()) == parser::PARSING_FAILED);
 		assert(d.messages.len() == 2);
 		test::eq(d.messages[0].text, "use of GNU statement expression extension");
@@ -1033,16 +1015,12 @@ fn void gnu_statement_expression_without_final_expression_has_void_type() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr-void.c", "({ ; })")!!;
 		pp.add_token(pp.preprocess(src)!!)!!;
 		parser::Parser p; p.init(&pp); p.bind_finalized_tokens();
 		p.set_function_context({ .active = true });
-		StatementGrammar statements_grammar = { .expr = &fixture_expression };
-		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
-		StatementBodyHandler body_handler = { .statements = &statements };
-		p.test_probe = &body_handler;
 		parser_result::Result result = p.parse_postfix_expr()!!;
 		assert(result.node.kind(&p.tree) == tree::NodeKind.STMT_EXPR);
 		assert(result.qt.eql(type_store::VOID, &comp));
@@ -1060,7 +1038,7 @@ fn void malformed_gnu_statement_expression_restores_attribute_and_scope_state() 
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp; pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("stmt-expr-recovery.c",
 			"({ __attribute__((unused)) ; for (;;)")!!;
@@ -1071,10 +1049,6 @@ fn void malformed_gnu_statement_expression_restores_attribute_and_scope_state() 
 		usz original_attributes = (usz)p.tree.attr_map.attributes.len();
 		usz original_extra = (usz)p.tree.attr_map.extra.len();
 		usz original_decl_attrs = (usz)p.tree.attr_map.decl_attrs.len();
-		StatementGrammar statements_grammar = { .expr = &fixture_expression };
-		parser_statement::StatementParser statements = { .expressions = &statements_grammar, .local_declaration_probe = &statements_grammar };
-		StatementBodyHandler body_handler = { .statements = &statements };
-		p.test_probe = &body_handler;
 		// The statement grammar's own parse fault propagates out of the body.
 		fault failure = @catch(p.parse_postfix_expr());
 		assert(failure && parser_statement::recoverable_statement_item_fault(failure));
@@ -1113,7 +1087,7 @@ fn void parser_replays_pragma_inside_compound_statement() @test
 	defer ta.free();
 	{
 		diagnostics::Diagnostics d; d.init_list(&ta);
-		compilation::Compilation comp; comp.init(&ta, null, &d);
+		compilation::Compilation comp; comp.init(&ta, compilation::native_definition(), null, &d);
 		PragmaCompoundProbe probe = {};
 		bool added_probe = comp.pragmas.add("probe", &probe);
 		assert(added_probe);

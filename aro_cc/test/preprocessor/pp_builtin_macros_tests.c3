@@ -31,7 +31,7 @@ macro @with_pp(; @body(Compilation* comp, Diagnostics* d, Preprocessor* pp))
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		@body(&comp, &d, &pp);
@@ -75,7 +75,7 @@ fn String stamp(Preprocessor* pp, DateTimeStampKind kind, ulong ts)
 fn SourceEpoch? epoch_from_env(String text)
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	comp.environment.source_date_epoch.set(text);
 	return comp.source_epoch();
@@ -85,7 +85,7 @@ fn SourceEpoch? epoch_from_env(String text)
 fn SourceEpoch? epoch_from_clock(long secs)
 {
 	Compilation comp;
-	comp.init(mem);
+	comp.init(mem, compilation::native_definition());
 	defer comp.free();
 	comp.set_fixed_clock(secs);
 	return comp.source_epoch();
@@ -171,7 +171,7 @@ fn void init_reports_invalid_epoch() @test
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.environment.source_date_epoch.set("abc");
 		InitOptions opts = preprocessor::TESTING;
 		opts.has_source_epoch = false;

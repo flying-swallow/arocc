@@ -11,7 +11,7 @@ fn void? parse_buffer(Allocator gpa, char[] bytes)
 	defer diags.free();
 
 	compilation::Compilation comp;
-	comp.init(gpa, null, &diags);
+	comp.init(gpa, compilation::native_definition(), null, &diags);
 	defer comp.free();
 
 	source::Source src = comp.add_source_from_buffer("buffer.c", bytes)!;

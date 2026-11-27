@@ -488,9 +488,9 @@ fn FileTotals run_file(String name)
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 
 		String path = string::format(mem, "%s/%s", vectors_dir(), name);
 		defer free(path);

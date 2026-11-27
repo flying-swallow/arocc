@@ -3,14 +3,15 @@
 // stderr as "(path:row:col) Error: text"; exit 1 if any file had errors.
 module c3_parse_probe;
 import aro::frontend::c3::compiler, aro::frontend::c3::diagnostics;
-import aro::terminal, std::io, std::io::file, std::core::mem::alloc;
+import std::io, std::io::file, std::core::mem::alloc;
 
 fn int main(String[] args)
 {
 	compiler::compiler_reset();
 	defer compiler::compiler_free();
 	compiler::global_diagnostics.output = TO_WRITER;
-	compiler::global_diagnostics.terminal = { .writer = io::stderr(), .mode = NO_COLOR };
+	compiler::global_diagnostics.writer = io::stderr();
+	compiler::global_diagnostics.use_ansi = false;
 	int failed = 0;
 	foreach (path : args[1..])
 	{

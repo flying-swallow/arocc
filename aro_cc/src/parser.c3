@@ -39,29 +39,6 @@ struct TypeNameProbe
    optional method. *>
 excuse HOOK_ABSENT;
 
-<*
- Grammar and expression extension hooks supplied by the parser's owner. Every
- method is optional: a missing method (or a HOOK_ABSENT fault) means the
- grammar is unavailable, and Parser reports or skips it as documented on each
- dispatcher. The handler is borrowed and must outlive the Parser.
-*>
-interface IParserTestProbe @feat(TESTING)
-{
-	fn void? handle_declaration(Parser* p) @optional;
-	fn void? handle_type_name(Parser* p) @optional;
-	fn type_store::QualType? handle_typed_type_name(Parser* p) @optional;
-	<* A non-match is successful and must not diagnose or consume input. *>
-	fn TypeNameProbe? handle_typed_type_name_probe(Parser* p) @optional;
-	fn type_store::NodeIndex? handle_body(Parser* p) @optional;
-	fn void? handle_implicit_typedefs(Parser* p) @optional;
-	<* Called once after the translation unit's top-level parse loop reaches EOF. *>
-	fn void? handle_translation_unit_end(Parser* p) @optional;
-	<* Classify grammar faults that the translation-unit loop may recover from. *>
-	fn bool? is_recoverable_parse_fault(Parser* p, fault parse_fault) @optional;
-	<* Compound statement inside a GNU statement expression. *>
-	fn type_store::NodeIndex? handle_statement_expression_body(Parser* p, bool eval) @optional;
-}
-
 <* GNU &&label unary expressions. Installed by the statement grammar for the
    duration of a function body. *>
 interface IAddressOfLabel
@@ -132,7 +109,6 @@ struct Parser (IQueryable)
 	symbol_stack::SymbolStack symbols;
 	<* Declaration, type-name and statement grammar state; set up by `Parser.init`. *>
 	parser_declaration::DeclarationParser declarations;
-	IParserTestProbe test_probe @feat(TESTING);
 	IAddressOfLabel address_of_label;
 	tokens::TokenIndex tok_i;
 	tokens::TokenIndex tok_end;
@@ -719,19 +695,7 @@ fn void Parser.recover(&self)
 fn bool? Parser.is_recoverable_parse_fault(&self, fault parse_fault)
 {
 	if (parse_fault == PARSING_FAILED) return true;
-	bool? result;
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.is_recoverable_parse_fault)
-		{
-			result = self.test_probe.is_recoverable_parse_fault(self, parse_fault);
-		}
-		else
-		{
-			result = self.declarations.is_recoverable_parse_fault(self, parse_fault);
-		}
-	$else
-		result = self.declarations.is_recoverable_parse_fault(self, parse_fault);
-	$endif
+	bool? result = self.declarations.is_recoverable_parse_fault(self, parse_fault);
 	if (catch handler_fault = result)
 	{
 		if (handler_fault == HOOK_ABSENT) return false;
@@ -743,17 +707,6 @@ fn bool? Parser.is_recoverable_parse_fault(&self, fault parse_fault)
 <* Dispatch the declaration grammar's legacy type-name callback, or report its absence. *>
 fn void? Parser.parse_type_name(&self)
 {
-	$if env::TESTING:
-	if (self.test_probe && &self.test_probe.handle_type_name)
-	{
-		fault f = @catch(self.test_probe.handle_type_name(self));
-		if (f != HOOK_ABSENT)
-		{
-			if (f) return f~;
-			return;
-		}
-	}
-	$endif
 	fault f = @catch(self.declarations.handle_type_name(self));
 	if (f != HOOK_ABSENT)
 	{
@@ -766,20 +719,6 @@ fn void? Parser.parse_type_name(&self)
 <* Dispatch the typed type-name callback, or report its absence. *>
 fn type_store::QualType? Parser.parse_typed_type_name(&self)
 {
-	$if env::TESTING:
-	if (self.test_probe && &self.test_probe.handle_typed_type_name)
-	{
-		type_store::QualType? qt = self.test_probe.handle_typed_type_name(self);
-		if (catch f = qt)
-		{
-			if (f != HOOK_ABSENT) return f~;
-		}
-		else
-		{
-			return qt;
-		}
-	}
-	$endif
 	type_store::QualType? qt = self.declarations.handle_typed_type_name(self);
 	if (catch f = qt)
 	{
@@ -798,18 +737,7 @@ fn type_store::QualType? Parser.parse_typed_type_name(&self)
 fn TypeNameProbe? Parser.probe_typed_type_name(&self)
 {
 	tokens::TokenIndex start = self.tok_i;
-	TypeNameProbe? maybe_probe = HOOK_ABSENT~;
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.handle_typed_type_name_probe)
-		{
-			maybe_probe = self.test_probe.handle_typed_type_name_probe(self);
-		}
-	$endif
-	if (catch f = maybe_probe)
-	{
-		if (f != HOOK_ABSENT) return f~;
-		maybe_probe = self.declarations.handle_typed_type_name_probe(self);
-	}
+	TypeNameProbe? maybe_probe = self.declarations.handle_typed_type_name_probe(self);
 	if (catch f = maybe_probe)
 	{
 		if (f == HOOK_ABSENT) return { .matched = false };
@@ -824,20 +752,6 @@ fn TypeNameProbe? Parser.probe_typed_type_name(&self)
  node, or report its absence and fail with PARSING_FAILED. *>
 fn type_store::NodeIndex? Parser.parse_body(&self)
 {
-	$if env::TESTING:
-	if (self.test_probe && &self.test_probe.handle_body)
-	{
-		type_store::NodeIndex? body = self.test_probe.handle_body(self);
-		if (catch f = body)
-		{
-			if (f != HOOK_ABSENT) return f~;
-		}
-		else
-		{
-			return body;
-		}
-	}
-	$endif
 	type_store::NodeIndex? body = self.declarations.handle_body(self);
 	if (catch f = body)
 	{
@@ -880,20 +794,8 @@ fn Tree? Parser.parse(&self)
 	defer self.file_scope_decl_head.free();
 	self.comp.pragmas.before_parse(self.comp);
 	defer self.comp.pragmas.after_parse(self.comp);
-	bool prelude_handled = false;
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.handle_implicit_typedefs)
-		{
-			fault f = @catch(self.test_probe.handle_implicit_typedefs(self));
-			if (f && f != HOOK_ABSENT) return f~;
-			prelude_handled = !f;
-		}
-	$endif
-	if (!prelude_handled)
-	{
-		fault f = @catch(self.declarations.handle_implicit_typedefs(self));
-		if (f && f != HOOK_ABSENT) return f~;
-	}
+	fault prelude_fault = @catch(self.declarations.handle_implicit_typedefs(self));
+	if (prelude_fault && prelude_fault != HOOK_ABSENT) return prelude_fault~;
 	self.bind_finalized_tokens();
 	while (!self.at_eof())
 	{
@@ -941,13 +843,6 @@ fn Tree? Parser.parse(&self)
 		}
 		if (before == self.tok_i && !self.at_eof()) self.advance();
 	}
-	$if env::TESTING:
-		if (self.test_probe && &self.test_probe.handle_translation_unit_end)
-		{
-			fault f = @catch(self.test_probe.handle_translation_unit_end(self));
-			if (f && f != HOOK_ABSENT) return f~;
-		}
-	$endif
 	self.declarations.handle_translation_unit_end(self)!;
 	Tree result = self.tree;
 	self.tree = {};

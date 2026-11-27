@@ -13,7 +13,7 @@ fn void check_attribute_specifier(String input, uint kind)
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		if (kind == 2) comp.langopts.declspec_attrs = true;
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
@@ -87,7 +87,7 @@ fn void unknown_attribute_emits_unknown_name_diagnostic() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("unknown-attribute.c", "[[vendor::mystery]]")!!;
@@ -120,7 +120,7 @@ fn void malformed_attribute_rolls_back_buffer_state() @test
 		diagnostics::Diagnostics d;
 		d.init_list(&ta);
 		compilation::Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		preprocessor::Preprocessor pp;
 		pp.init(&comp, preprocessor::TESTING)!!;
 		source::Source src = comp.add_source_from_buffer("malformed-attribute.c", "__attribute__((aligned(8)")!!;

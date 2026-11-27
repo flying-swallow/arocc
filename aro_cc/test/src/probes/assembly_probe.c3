@@ -27,9 +27,9 @@ fn void ProbeFixture.init(&self)
 {
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
-	self.comp.init(&self.ta, null, &self.diagnostics);
+	self.comp.init(&self.ta, compilation::native_definition(), null, &self.diagnostics);
 	self.comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-	type_store::init_named_types(&self.comp);
+	type_store::init_named_types(&self.comp.type_store, &self.comp.target, &self.comp.string_interner);
 
 	DString text;
 	text.init(&self.ta);

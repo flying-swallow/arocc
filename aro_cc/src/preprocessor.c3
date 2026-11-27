@@ -769,7 +769,7 @@ fn String Preprocessor.tok_slice(&self, RawToken token)
 {
 	if (try lex = token.id.lexeme()) return lex;
 	Source src = self.comp.get_source(token.source);
-	return src.buf[token.start:token.end - token.start];
+	return src.storage.bytes()[token.start:token.end - token.start];
 }
 
 <*
@@ -784,7 +784,7 @@ fn String Preprocessor.expanded_slice_at(&self, TokenId id, Location loc, MacroW
 	{
 		if (!id.allows_digraphs(self.comp.langopts) && !(id == MACRO_WS && handling == PRESERVE_MACRO_WS)) return lex;
 	}
-	String buf = self.comp.get_source(loc.id).buf;
+	String buf = self.comp.get_source(loc.id).storage.bytes();
 	if (id == MACRO_STRING)
 	{
 		uint i = loc.byte_offset;
@@ -1105,8 +1105,8 @@ fn TokenWithExpansionLocs? Preprocessor.preprocess(&self, Source src)
 fn TreeToken? Preprocessor.tokenize(&self, Source src)
 {
 	Tokenizer tokenizer;
-	tokenizer.init(src.buf, src.id, self.comp.langopts, &self.comp.target, src.splice_locs);
-	self.ensure_total_token_capacity(self.tokens.len() + src.buf.len / 8);
+	tokenizer.init(src.storage.bytes(), src.id, self.comp.langopts, &self.comp.target, src.splice_locs);
+	self.ensure_total_token_capacity(self.tokens.len() + src.storage.bytes().len / 8);
 	while (true)
 	{
 		RawToken tok = tokenizer.next();

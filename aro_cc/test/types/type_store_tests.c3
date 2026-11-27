@@ -50,7 +50,7 @@ macro @with_target(String triple; @body(Compilation* comp))
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.target = tgt(triple);
 		@body(&comp);
 		comp.free();
@@ -543,7 +543,7 @@ fn void named_types_and_va_list() @test
 	{
 		@with_target(c.triple; Compilation* comp)
 		{
-			type_store::init_named_types(comp);
+			type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 			TypeStore* ts = &comp.type_store;
 			test::eq(dmp(comp, ts.va_list), c.va_list_dump);
 			check(ts.va_list.sizeof(comp), c.va_list_size);
@@ -562,7 +562,7 @@ fn void named_types_and_va_list() @test
 
 	@with_target("x86_64-linux-gnu"; Compilation* comp)
 	{
-		type_store::init_named_types(comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		TypeStore* ts = &comp.type_store;
 		// AST golden: 'va_list: __builtin_va_list: [1]struct __va_list_tag'.
 		QualType builtin = tdef(comp, "__builtin_va_list", ts.va_list);
@@ -582,7 +582,7 @@ fn void named_types_and_va_list() @test
 	};
 	@with_target("avr-freestanding-none"; Compilation* comp)
 	{
-		type_store::init_named_types(comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		TypeStore* ts = &comp.type_store;
 		assert(ts.va_list == type_store::VOID_POINTER);
 		assert(ts.uint_least16_t == type_store::UINT); // AVR uses int for int_least16_t
@@ -596,7 +596,7 @@ fn void named_types_and_va_list() @test
 	{
 		assert(type_store::int_least_n(comp, 64, SIGNED) == type_store::LONG_LONG);
 		assert(type_store::int_least_n(comp, 64, UNSIGNED) == type_store::ULONG_LONG);
-		type_store::init_named_types(comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		test::eq(dmp(comp, comp.type_store.va_list), "[1]struct __va_list_tag");
 	};
 }
@@ -712,7 +712,7 @@ fn void sizes_and_incomplete_types() @test
 		check(type_store::FLOAT.alignof(comp), 2);
 		check(type_store::DOUBLE.alignof(comp), 2);
 		check(type_store::LONG_DOUBLE.alignof(comp), 2);
-		type_store::init_named_types(comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		check(comp.type_store.ptrdiff.sizeof(comp), 2);
 		check(comp.type_store.size.sizeof(comp), 2);
 		check(comp.type_store.wchar.sizeof(comp), 2);

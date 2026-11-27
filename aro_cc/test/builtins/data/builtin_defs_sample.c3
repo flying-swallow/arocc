@@ -1,11 +1,5 @@
-// Hand-written test table in the exact generated layout of
-// aro_cc/tools/builtins_schema.md ("Generated table layout"), standing in for
-// bazel-bin/builtin_defs/common.c3 until the generator fills the real tables.
-// Source-derived: entries copied from aro_cc/src/Builtins/common.def (lines 51,
-// 487, 491, 992, 1110, 2385, 3003, 4467); attribute bits computed by hand from
-// the Attributes bit table (eval_args 0x10000 is the default).
-// _Exit/_exit collide when uppercased, so (as in the real common table) they
-// get no TAG_ constant.
+// Small independent table fixture for lookup behavior tests.
+// Values were derived from the original common builtin definitions.
 module aro::frontend::c::builtin_defs::sample;
 import aro::frontend::c::builtin_properties;
 

@@ -1,20 +1,6 @@
-// Plan 12 stage 2 acceptance tests over the real generated builtin tables
-// (//:builtin_defs, one aro::frontend::c::builtin_defs::<group> module per .def file).
-//
-// Sources of expected values (no Zig executable was run; no differential
-// parity is claimed):
-// - Per-group counts and the uppercase-collision counts were taken from the
-//   .def files themselves (name lines; names whose ASCII-uppercased form
-//   repeats in the same file).
-// - def_cross_check re-reads every .def file at test time (Bazel data) with a
-//   small independent line scanner (names, param_str, header, language,
-//   features) and compares each entry with the generated table.
-// - Expected signature dumps are source-derived from Builtins.zig
-//   createType/createBuiltin, TypeStore.initNamedTypes and Target.zig, in the
-//   QualType.dump spelling of the AST goldens; param strings are quoted from
-//   the cited .def lines.
-// - Attribute bits are computed by hand from the Attributes bit table in
-//   aro_cc/tools/builtins_schema.md (eval_args 0x10000 is the default).
+// Acceptance tests over the checked-in builtin C3 tables.
+// Expected counts, properties and signatures were derived from the original
+// builtin definitions and Zig reference implementation.
 module builtins_tests;
 import aro::frontend::c::builtins, aro::frontend::c::builtin_properties, aro::frontend::c::builtin_type_description;
 import aro::frontend::c::builtin_defs::common, aro::frontend::c::builtin_defs::ve, aro::frontend::c::builtin_defs::x86;
@@ -47,9 +33,9 @@ macro @with_target(String triple; @body(Compilation* comp))
 	defer ta.free();
 	{
 		Compilation comp;
-		comp.init(&ta);
+		comp.init(&ta, compilation::native_definition());
 		comp.target = tgt(triple);
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		@body(&comp);
 		comp.free();
 	}
@@ -226,95 +212,6 @@ fn void record_properties() @test
 	// riscv.def:183 __builtin_riscv_clz_64: compound feature expression kept raw
 	r = builtins::record_from_tag(builtins::tag_from_name(RISCV, "__builtin_riscv_clz_64")!!);
 	assert(r.features == "zbb|xtheadbb,64bit");
-}
-
-// ---------------------------------------------------------------------------
-// Cross-check against the .def sources (Bazel data, runfiles-relative)
-// ---------------------------------------------------------------------------
-
-fn String prop_string(String rest)
-{
-	// rest is `= "..."` (spaces optional)
-	sz q1 = rest.index_of_char('"')!!;
-	String tail = rest[q1 + 1..];
-	sz q2 = tail.index_of_char('"')!!;
-	return tail[:q2];
-}
-
-fn String prop_enum(String rest)
-{
-	sz dot = rest.index_of_char('.')!!;
-	return rest[dot + 1..].trim();
-}
-
-struct Pending
-{
-	String name;
-	BuiltinRecord rec;
-	bool active;
-}
-
-fn void flush(BuiltinGroup g, Pending* p, uint* seen)
-{
-	if (!p.active) return;
-	BuiltinTag? tag = builtins::tag_from_name(g, p.name);
-	if (catch tag)
-	{
-		io::eprintfn("%s: '%s' missing from the generated table", g.def_name, p.name);
-		unreachable();
-	}
-	BuiltinRecord got = builtins::record_from_tag(tag);
-	if (got.param_str != p.rec.param_str || got.header != p.rec.header
-		|| got.language != p.rec.language || got.features != p.rec.features)
-	{
-		io::eprintfn("%s: '%s' record mismatch: got {%s,%s,%s,%s} want {%s,%s,%s,%s}", g.def_name, p.name,
-			got.param_str, got.header, got.language, got.features,
-			p.rec.param_str, p.rec.header, p.rec.language, p.rec.features);
-		unreachable();
-	}
-	(*seen)++;
-	p.active = false;
-}
-
-<* Every .def entry is in its generated table with the same record, and nothing else is. *>
-fn void def_cross_check() @test
-{
-	foreach (g : BuiltinGroup::values)
-	{
-		String path = string::tformat("aro_cc/src/Builtins/%s.def", g.def_name);
-		String text = (String)file::load(tmem, path)!!;
-		Pending p;
-		uint seen = 0;
-		foreach (raw : text.tsplit("\n"))
-		{
-			String line = raw.trim(" \t\r");
-			if (!line.len || line[0] == '#') continue;
-			if (line[0] != '.')
-			{
-				flush(g, &p, &seen);
-				p = { .name = line, .rec = builtin_properties::RECORD_DEFAULT, .active = true };
-				continue;
-			}
-			if (line.starts_with(".param_str"))
-			{
-				p.rec.param_str = prop_string(line[10..]);
-			}
-			else if (line.starts_with(".features"))
-			{
-				p.rec.features = prop_string(line[9..]);
-			}
-			else if (line.starts_with(".header"))
-			{
-				p.rec.header = builtin_properties::header_from_name(prop_enum(line[7..]))!!;
-			}
-			else if (line.starts_with(".language"))
-			{
-				p.rec.language = builtin_properties::language_from_name(prop_enum(line[9..]))!!;
-			}
-		}
-		flush(g, &p, &seen);
-		check(seen, builtins::group_names(g).len);
-	}
 }
 
 // ---------------------------------------------------------------------------

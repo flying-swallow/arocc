@@ -13,7 +13,7 @@
 module aro::frontend::c::diagnostics;
 import aro::compiler::reporting;
 import aro::source, aro::frontend::c::compilation, aro::frontend::c::lang_opts, aro::frontend::c::parser, aro::frontend::c::tokens, std::core::string::ansi, std::io, std::collections::list, std::collections::enumset;
-import aro::frontend::c::driver_arguments, aro::terminal;
+import aro::frontend::c::driver_arguments;
 
 <* Zig `Message.Kind`; the label is the `{t}` spelling used in output. Order matters (max for -Wpedantic). *>
 enum MessageKind : char(String label)
@@ -341,16 +341,13 @@ macro bool Diagnostics.@enabled(&self, diag)
 }
 
 // ---------------------------------------------------------------------------
-// Terminal output (the no_color / escape_codes subset of std.Io.Terminal)
+// Color policy for diagnostic output
 
-alias ColorMode = terminal::ColorMode;
-alias Terminal = terminal::Terminal;
 
 <* Render the message (its effective_kind must not be OFF). Zig `Message.write`. *>
-fn void? Message.write(&self, Terminal term, bool details)
+fn void? Message.write(&self, OutStream w, bool use_ansi, bool details)
 {
-	OutStream w = term.writer;
-	term.set_color(ansi::Ansi.BOLD)!;
+	if (use_ansi) io::write_all(w, ansi::Ansi.BOLD)!;
 	if (self.has_location)
 	{
 		io::fprintf(w, "%s:%d:%d: ", self.location.path, self.location.line_no, self.location.col)!;
@@ -358,16 +355,16 @@ fn void? Message.write(&self, Terminal term, bool details)
 	switch (self.effective_kind)
 	{
 		case FATAL_ERROR:
-		case ERROR: term.set_color(ansi::Ansi.BRIGHT_RED)!;
-		case NOTE: term.set_color(ansi::Ansi.BRIGHT_CYAN)!;
-		case WARNING: term.set_color(ansi::Ansi.BRIGHT_MAGENTA)!;
+		case ERROR: if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_RED)!;
+		case NOTE: if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_CYAN)!;
+		case WARNING: if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_MAGENTA)!;
 		case OFF: unreachable("off messages are never written");
 	}
-	term.write(self.effective_kind.label)!;
-	term.write(": ")!;
+	io::write_all(w, self.effective_kind.label)!;
+	io::write_all(w, ": ")!;
 
-	term.set_color(ansi::Ansi.WHITE)!;
-	term.write(self.text)!;
+	if (use_ansi) io::write_all(w, ansi::Ansi.WHITE)!;
+	io::write_all(w, self.text)!;
 	if (self.has_opt)
 	{
 		if (self.effective_kind == ERROR && self.kind != ERROR)
@@ -383,32 +380,32 @@ fn void? Message.write(&self, Terminal term, bool details)
 	{
 		if (self.effective_kind == ERROR)
 		{
-			term.write(" [-Werror,-Wpedantic]")!;
+			io::write_all(w, " [-Werror,-Wpedantic]")!;
 		}
 		else if (self.effective_kind != self.kind)
 		{
-			term.write(" [-Wpedantic]")!;
+			io::write_all(w, " [-Wpedantic]")!;
 		}
 	}
 
 	if (!details || !self.has_location)
 	{
-		term.write("\n")!;
-		term.set_color(ansi::Ansi.RESET)!;
+		io::write_all(w, "\n")!;
+		if (use_ansi) io::write_all(w, ansi::Ansi.RESET)!;
 	}
 	else
 	{
 		ExpandedLocation loc = self.location;
-		term.set_color(ansi::Ansi.RESET)!;
-		term.write("\n")!;
-		term.write(loc.line)!;
-		if (loc.end_with_splice) term.write("\\ ")!;
-		term.write("\n")!;
+		if (use_ansi) io::write_all(w, ansi::Ansi.RESET)!;
+		io::write_all(w, "\n")!;
+		io::write_all(w, loc.line)!;
+		if (loc.end_with_splice) io::write_all(w, "\\ ")!;
+		io::write_all(w, "\n")!;
 		for (uint k = 0; k < loc.width; k++) w.write_byte(' ')!;
-		term.set_color(ansi::Ansi.BOLD)!;
-		term.set_color(ansi::Ansi.BRIGHT_GREEN)!;
-		term.write("^\n")!;
-		term.set_color(ansi::Ansi.RESET)!;
+		if (use_ansi) io::write_all(w, ansi::Ansi.BOLD)!;
+		if (use_ansi) io::write_all(w, ansi::Ansi.BRIGHT_GREEN)!;
+		io::write_all(w, "^\n")!;
+		if (use_ansi) io::write_all(w, ansi::Ansi.RESET)!;
 	}
 	if (&w.flush) w.flush()!;
 }
@@ -426,7 +423,7 @@ enum OutputKind : char
 <* Zig `color: ?bool`. *>
 enum ColorOverride : char
 {
-	AUTO,  // null: use the terminal's mode
+	AUTO,  // Use the stream's detected ANSI support.
 	FORCE_ON,  // true
 	FORCE_OFF,  // false
 }
@@ -434,8 +431,9 @@ enum ColorOverride : char
 struct Diagnostics
 {
 	OutputKind output;
-	<* TO_WRITER: destination and its detected mode. The stream is borrowed. *>
-	Terminal terminal;
+	<* TO_WRITER: destination and whether to emit ANSI codes. The stream is borrowed. *>
+	OutStream writer;
+	bool use_ansi;
 	<* TO_LIST: owns `messages` and every message's text / location.path / location.line copy. *>
 	Allocator list_allocator;
 	List{Message} messages;
@@ -466,12 +464,13 @@ fn void Diagnostics.init_ignore(&self)
 	*self = { .output = IGNORE, .details = true, .state = DEFAULT_STATE, .macro_backtrace_limit = 6 };
 }
 
-<* `.{ .output = .{ .to_writer = term } }`. The stream is borrowed. *>
-fn void Diagnostics.init_writer(&self, OutStream writer, ColorMode mode)
+<* Render diagnostics to a borrowed stream using the supplied ANSI setting. *>
+fn void Diagnostics.init_writer(&self, OutStream writer, bool use_ansi)
 {
 	self.init_ignore();
 	self.output = TO_WRITER;
-	self.terminal = { .writer = writer, .mode = mode };
+	self.writer = writer;
+	self.use_ansi = use_ansi;
 }
 
 <* `.{ .output = .{ .to_list = ... } }`. Messages and their strings are allocated from `a`. *>
@@ -726,10 +725,11 @@ fn void? Diagnostics.add_message(&self, Message msg)
 		case IGNORE:
 			break;
 		case TO_WRITER:
-			Terminal term = self.terminal;
-			if (self.color == FORCE_OFF) term.mode = NO_COLOR;
-			if (self.color == FORCE_ON && term.mode == NO_COLOR) term.mode = ESCAPE_CODES;
-			if (catch msg.write(term, self.details)) return compilation::FATAL_ERROR~;
+			OutStream w = self.writer;
+			bool use_ansi = self.use_ansi;
+			if (self.color == FORCE_OFF) use_ansi = false;
+			if (self.color == FORCE_ON) use_ansi = true;
+			if (catch msg.write(w, use_ansi, self.details)) return compilation::FATAL_ERROR~;
 		case TO_LIST:
 			Allocator a = self.list_allocator;
 			Message owned = msg;
@@ -986,6 +986,7 @@ enum Diagnostic : ushort (String fmt, MessageKind kind, DiagMeta meta, Diagnosti
 	// ---- Attributes (Wip.emit / emit_at; `{at}` is replaced by the attribute name) ----
 	// Zig `Attribute.Diagnostic`. `fmt` is C3 printf syntax, except `{at}`, which `Wip.emit` replaces with the quoted name of the attribute being reported before formatting.
 	UNIMPLEMENTED { "TODO: implement {at} attribute", WARNING, {}, ATTRIBUTE },
+	MALFORMED_AVAILABILITY { "malformed availability attribute", ERROR, {}, ATTRIBUTE },
 	ARG_COUNT_ZERO { "{at} attribute takes no arguments", ERROR, {}, ATTRIBUTE },
 	ARG_COUNT_ONE { "{at} attribute takes one argument", ERROR, {}, ATTRIBUTE },
 	ARG_COUNT { "{at} attribute takes %d arguments", ERROR, {}, ATTRIBUTE },

@@ -121,6 +121,24 @@ fn void? Parser.pointer_qualifiers(&self, attribute_wip::Wip* wip, type_store::Q
 				// In this position _Atomic is a type qualifier on the pointer.
 				*qt = p.comp.type_store.put(type_store::type_atomic(*qt));
 				p.advance();
+			case KEYWORD_NONNULL: case KEYWORD_NULLABLE: case KEYWORD_NULLABLE_RESULT: case KEYWORD_NULL_UNSPECIFIED:
+				{
+					type_store::QualType old = *qt;
+					if (try pointer = old.get(p.comp, type_store::TypeTag.POINTER))
+					{
+						type_store::Type rebuilt = pointer;
+						switch (id)
+						{
+							case KEYWORD_NONNULL: rebuilt.pointer.nullability = type_store::Nullability.NONNULL;
+							case KEYWORD_NULLABLE: rebuilt.pointer.nullability = type_store::Nullability.NULLABLE;
+							case KEYWORD_NULLABLE_RESULT: rebuilt.pointer.nullability = type_store::Nullability.NULLABLE_RESULT;
+							case KEYWORD_NULL_UNSPECIFIED: rebuilt.pointer.nullability = type_store::Nullability.UNSPECIFIED;
+							default: unreachable();
+						}
+						*qt = p.comp.type_store.put(rebuilt).with_qualifiers(old);
+					}
+					p.advance();
+				}
 			case KEYWORD_ATTRIBUTE1: case KEYWORD_ATTRIBUTE2:
 				parser_attribute::AttributeBuffer buffer;
 				buffer.init(p.comp.gpa);

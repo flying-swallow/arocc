@@ -22,9 +22,9 @@ fn void OptFixture.init(&self)
 {
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
-	self.comp.init(&self.ta, null, &self.diagnostics);
+	self.comp.init(&self.ta, compilation::native_definition(), null, &self.diagnostics);
 	self.comp.target = target::parse_triple("x86_64-linux-gnu", HOST)!!;
-	type_store::init_named_types(&self.comp);
+	type_store::init_named_types(&self.comp.type_store, &self.comp.target, &self.comp.string_interner);
 	self.pp.init(&self.comp, preprocessor::TESTING)!!;
 }
 
@@ -67,8 +67,7 @@ fn String OptFixture.dump(&self)
 	DString output;
 	output.init(&self.ta);
 	defer output.free();
-	Terminal term = { .writer = &output, .mode = diagnostics::ColorMode.NO_COLOR };
-	self.graph.dump(term)!!;
+	self.graph.dump(&output, false)!!;
 	return output.copy_str(&self.ta);
 }
 

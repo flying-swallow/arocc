@@ -101,8 +101,8 @@ fn void check_builtin_call(String text, bool eval, String diag_fragment = "", ui
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
@@ -244,8 +244,8 @@ fn void builtin_overflow_call_preserves_original_argument_nodes_and_types() @tes
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", "__builtin_add_overflow(char_arg, char_arg, out)\n")!!;
 		Preprocessor pp;
@@ -313,8 +313,8 @@ fn void check_builtin_call_diagnostics(String text, String fragment, uint expect
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
-		type_store::init_named_types(&comp);
+		comp.init(&ta, compilation::native_definition(), null, &d);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
@@ -360,12 +360,12 @@ fn void check_builtin_call_type(String text, String expected, String triple = ""
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		if (triple.len != 0)
 		{
 			comp.target = target::from_triple(triple)!!;
 		}
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
@@ -466,9 +466,9 @@ fn void check_arm_exclusive_call(String text, String[] diag_fragments, uint[] di
 		Diagnostics d;
 		d.init_list(&ta);
 		Compilation comp;
-		comp.init(&ta, null, &d);
+		comp.init(&ta, compilation::native_definition(), null, &d);
 		comp.target = target::from_triple("armv7a-linux-gnueabi")!!;
-		type_store::init_named_types(&comp);
+		type_store::init_named_types(&comp.type_store, &comp.target, &comp.string_interner);
 		CallOperands operands = make_call_operands(&comp);
 		Source src = comp.add_source_from_buffer("builtin-call.c", text)!!;
 		Preprocessor pp;
