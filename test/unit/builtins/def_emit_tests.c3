@@ -133,7 +133,7 @@ fn void empty_group() @test
 
 fn void collisions_only() @test
 {
-	// Mirrors the ve pairs (source: src/aro/Builtins/ve.def) plus a triple.
+	// Mirrors the ve pairs (source: aro/src/aro/Builtins/ve.def) plus a triple.
 	DefFile file;
 	file.init(mem, VE);
 	defer file.free();

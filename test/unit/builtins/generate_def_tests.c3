@@ -4,7 +4,7 @@
 // owns the full //test/unit/builtins:builtins_tests.
 //
 // Expected bit positions are source-derived from the field order of
-// `Attributes` (packed struct) in src/aro/Builtins/properties.zig.
+// `Attributes` (packed struct) in aro/src/aro/Builtins/properties.zig.
 module generate_def_tests;
 import std::io, std::collections::list, generate_def, aro::frontend::c::builtin_properties;
 

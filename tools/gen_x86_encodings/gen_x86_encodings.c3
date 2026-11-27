@@ -1,4 +1,4 @@
-// Generate src/backend/x86_64/encoding_table.c3 from the Zig compiler's
+// Generate ir.c3l/x86_64/encoding_table.c3 from the Zig compiler's
 // x86_64 backend (src/codegen/x86_64/Encoding.zig + encodings.zon).
 //
 //   bazel run //tools/gen_x86_encodings -- ZIG_X86_64_DIR OUT_C3 [ZIG_COMMIT]

@@ -23,6 +23,9 @@ fn void CodeGenFixture.init(&self)
 	self.ta.init(mem);
 	self.diagnostics.init_list(&self.ta);
 	self.comp.init(&self.ta, null, &self.diagnostics);
+	// These fixtures construct SysV-specific ASTs and expected IR explicitly.
+	self.comp.target = target::parse_triple("x86_64-linux-gnu", target::host()!!)!!;
+	type_store::init_named_types(&self.comp);
 	String source_text = "answer __builtin_longjmp target ptr va_start va_end va_copy __builtin_va_start __builtin_va_end __builtin_va_copy __builtin_va_arg";
 	Source src = self.comp.add_source_from_buffer("codegen.c", source_text)!!;
 	self.tokens[0] = { .id = tokenizer::TokenId.IDENTIFIER,

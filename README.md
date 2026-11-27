@@ -28,6 +28,34 @@ The new backend will reuse parts of the self-hosted Zig compiler.
 
 [#542](https://github.com/Vexu/arocc/issues/542)
 
+### ARM64 macOS code generation in the C3 compiler
+
+The C3 compiler has a native ARM64 backend for Apple Silicon macOS, organized
+like the x86-64 backend. It uses Apple's assembler and linker through `xcrun`;
+install Xcode Command Line Tools and the host C3 compiler before building.
+
+```sh
+bazel build //:aro_c3
+./bazel-bin/aro_c3 hello.c -o hello
+./hello
+```
+
+`-S`, `-c`, `-O0` through `-O3`, and `-fwhole-program` are supported. The first
+version handles scalar C, structs and floating-point aggregates, globals,
+varargs and libc interoperability. `-fintegrated-as`, vectors, inline assembly,
+atomics, TLS and 128-bit arithmetic are not supported on ARM64 yet.
+
+Some Xcode SDK headers still encounter C frontend parsing gaps for Apple
+availability and nullability annotations. The backend does not yet make those
+headers fully usable; the native ABI tests declare libc functions directly.
+
+See [the backend design](ir.c3l/aarch64/README.md). Run native execution
+and Apple Clang interoperability checks with:
+
+```sh
+bazel test //test/unit/backend:aarch64_tests //test/src/cli:darwin_arm64_integration
+```
+
 ### Optional optimizer in the C3 compiler
 
 The C3 compiler includes IR optimization by default. Build it without the
@@ -82,3 +110,7 @@ const aro = @import("aro");
 ```
 
 in your Zig code.
+
+### Reusable C3 IR
+
+Compiler sources live in `aro/`; all backend code lives in the reusable `ir.c3l/` module. See [IR library usage](docs/ir-library.md) and run `bazel run //:ir_example` for a frontend-free example.

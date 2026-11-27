@@ -1,5 +1,5 @@
 // Source-derived direct tests for the specialized builtin parsers
-// (src/frontend/c/parser_builtin.c3) and builtin_eval. Operands go through the Parser's
+// (aro/src/frontend/c/parser_builtin.c3) and builtin_eval. Operands go through the Parser's
 // real expression grammar; type names come from small test handlers.
 module builtin_expression_tests;
 import aro::primitive_value;
@@ -279,7 +279,7 @@ fn void builtin_eval_infl_target_long_double_formats() @test
 	assert(ta.allocation_count() == 0);
 }
 
-// Direct assertions for the behavior in src/aro/Builtins/eval.zig; these do
+// Direct assertions for the behavior in aro/src/aro/Builtins/eval.zig; these do
 // not claim that the C3 evaluator is an executable Zig parity test.
 fn void builtin_eval_nan_sign_predicates_and_constant_p_cases() @test
 {

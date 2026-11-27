@@ -92,6 +92,7 @@ test_suite(
         "//test/src/cli:cli_tests",
         "//test/src/cli:backend_cli_regression",
         "//test/src/cli:native_backend_cli_integration",
+        "//test/src/cli:darwin_arm64_integration",
         "//test/src/probes:native_assembly_integration",
         "//test/src/probes:preprocessor_integration",
         "//test/test_suite:all",

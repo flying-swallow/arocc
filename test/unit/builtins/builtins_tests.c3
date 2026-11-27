@@ -281,7 +281,7 @@ fn void def_cross_check() @test
 {
 	foreach (g : BuiltinGroup::values)
 	{
-		String path = string::tformat("src/aro/Builtins/%s.def", g.def_name);
+		String path = string::tformat("aro/src/aro/Builtins/%s.def", g.def_name);
 		String text = (String)file::load(tmem, path)!!;
 		Pending p;
 		uint seen = 0;

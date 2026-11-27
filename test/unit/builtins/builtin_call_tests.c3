@@ -1,7 +1,7 @@
 // Focused tests for the generated-signature builtin-call path.
 // Contract expectations are source-derived from Parser.zig CallExpr's
 // paramCountOverride/checkArithOverflowArg/checkVaStartArg/finish and Builtins/eval.zig,
-// cross-checked against src/frontend/c/builtin_eval.c3. No Zig executable was run;
+// cross-checked against aro/src/frontend/c/builtin_eval.c3. No Zig executable was run;
 // these tests do not claim executable Zig parity.
 module builtin_call_tests;
 import aro::frontend::c::builtin_call, aro::frontend::c::builtins, aro::frontend::c::compilation, aro::frontend::c::diagnostics, aro::frontend::c::parser, aro::frontend::c::parser_result;

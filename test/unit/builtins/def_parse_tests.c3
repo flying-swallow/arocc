@@ -50,7 +50,7 @@ const DefCounts[] COUNTS = {
 
 fn String def_path(BuiltinGroup g)
 {
-	return string::tformat("src/aro/Builtins/%s.def", g.def_name);
+	return string::tformat("aro/src/aro/Builtins/%s.def", g.def_name);
 }
 
 fn String load_def(BuiltinGroup g)

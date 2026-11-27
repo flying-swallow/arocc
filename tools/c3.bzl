@@ -34,6 +34,8 @@ def _opt_flag(ctx):
 
 def _compile(ctx, test):
     srcs, data = _collect(ctx)
+    # c3c scans .c3l directories for manifests even when sources are explicit.
+    manifests = depset([f for f in data.to_list() if f.basename == "manifest.json"])
     native_libs = [f for dep in ctx.attr.native_libs for f in dep.files.to_list()]
     native_objects = []
     native_cc_tools = [ctx.attr.native_cc[DefaultInfo].files_to_run] if ctx.executable.native_cc else []
@@ -102,7 +104,7 @@ def _compile(ctx, test):
     ctx.actions.run(
         executable = ctx.executable._c3c,
         arguments = [args],
-        inputs = depset(transitive = [srcs, depset(ctx.files._std), depset(ctx.files._c3c), depset(native_libs)], direct = [ctx.executable.native_cc] if ctx.executable.native_cc else []),
+        inputs = depset(transitive = [srcs, manifests, depset(ctx.files._std), depset(ctx.files._c3c), depset(native_libs)], direct = [ctx.executable.native_cc] if ctx.executable.native_cc else []),
         outputs = [out, build_tree],
         mnemonic = "C3Compile",
         progress_message = "Compiling C3 %{label}",
@@ -196,9 +198,9 @@ def _distribution_source_path(file, prefixes):
     # source-distribution locations follow the module names they declare.
     owner_name = file.owner.name if file.owner else ""
     if owner_name == "builtin_defs" and file.basename.endswith(".c3"):
-        return "src/frontend/c/builtin_defs/" + file.basename
+        return "aro/src/frontend/c/builtin_defs/" + file.basename
     if owner_name == "system_defaults_module" and file.basename == "system_defaults_module.c3":
-        return "src/system_defaults.c3"
+        return "aro/src/system_defaults.c3"
     return file.short_path
 
 def _distribution_data_path(file, prefixes):

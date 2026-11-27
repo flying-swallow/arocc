@@ -1,0 +1,27 @@
+struct Pair { long a; int b; };
+struct Odd { unsigned char a[3]; };
+struct F4 { float a, b, c, d; };
+struct D4 { double a[4]; };
+struct Large { long a[5]; };
+long narrow_stack(long,long,long,long,long,long,long,long,signed char,short,int);
+double float_stack(double,double,double,double,double,double,double,double,double,double);
+struct Pair pair(struct Pair, int);
+struct Odd odd(struct Odd);
+struct F4 floats(struct F4);
+struct D4 doubles(struct D4);
+struct Large large(struct Large);
+double exhausted(double,double,double,double,double,double,double,struct D4,double);
+long exhausted_gp(long,long,long,long,long,long,long,struct Pair,int);
+double variadic(int, ...);
+long variadic_named_stack(long,long,long,long,long,long,long,long,int,...);
+long variadic_records(int,...);
+extern int global_array[4];
+extern int *global_pointer;
+extern struct Pair global_pair;
+struct F3 { float a,b,c; };
+signed char small_return(int);
+float hfa_stack(float,float,float,float,float,float,float,float,long,long,long,long,long,long,long,long,signed char,struct F3,signed char);
+struct Huge { unsigned char a[256]; };
+struct Huge huge(struct Huge);
+
+extern unsigned long zero_storage[400];

@@ -4,7 +4,7 @@
 // Sources of expected values (no Zig executable was run; no differential
 // parity is claimed):
 // - test/unit/builtins/data/builtin_defs_sample.c3: a hand-written table in the
-//   generated layout, entries copied from src/aro/Builtins/common.def
+//   generated layout, entries copied from aro/src/aro/Builtins/common.def
 //   (source-derived attribute bits).
 // - groups_for_arch: the switch in Builtins.zig fromName (source-derived).
 // - language_allows: clang builtinIsSupported semantics (source-derived; Zig

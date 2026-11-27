@@ -1,6 +1,6 @@
 // Runfiles, workspace paths, parallel loops and small text helpers.
 module aro_harness;
-import std::io, std::io::path, std::io::file, std::collections::list, std::thread, std::os::posix;
+import std::io, std::io::path, std::io::file, std::collections::list, std::thread, std::thread::cpu;
 
 <* Bazel runfiles root for this test/binary: TEST_SRCDIR/TEST_WORKSPACE, RUNFILES_DIR/_main, or "" outside Bazel. *>
 fn String runfiles_root(Allocator a)
@@ -54,10 +54,10 @@ fn int[2] shard_info()
 	};
 }
 
-<* Number of online CPUs (os.cpu_count). *>
+<* Number of logical CPUs for the default worker count. *>
 fn int cpu_count() @feat(POSIX)
 {
-	CInt n = posix::get_nprocs();
+	int n = cpu::native_cpu();
 	return n > 0 ? n : 4;
 }
 

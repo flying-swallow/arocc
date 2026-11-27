@@ -74,3 +74,23 @@ c3_test(
     srcs = ["runfiles_portability_integration.c3"],
     data = ["//test:portability/runfiles fixtures/portable data.txt"],
 )
+
+# Native Darwin tools are selected by xcrun. Non-Darwin hosts skip execution;
+# no-sandbox permits access to the selected Xcode SDK and tool services.
+c3_main_test(
+    name = "darwin_arm64_integration",
+    srcs = ["darwin_arm64_integration.c3"],
+    deps = [":native_test_support", "//:aro_c3_lib"],
+    args = [
+        "$(location //:aro_c3)",
+        "$(location //test:native/darwin_arm64_abi.c)",
+        "$(location //test:native/darwin_arm64_consumer.c)",
+    ],
+    data = [
+        "//:aro_c3",
+        "//test:native/darwin_arm64_abi.c",
+        "//test:native/darwin_arm64_consumer.c",
+        "//test:native/darwin_arm64_abi.h",
+    ],
+    tags = ["no-sandbox"],
+)

@@ -26,7 +26,7 @@ fn void regenerate_twice_identical() @test
 {
 	foreach (g : BuiltinGroup::values)
 	{
-		String text = (String)file::load(tmem, string::tformat("src/aro/Builtins/%s.def", g.def_name))!!;
+		String text = (String)file::load(tmem, string::tformat("aro/src/aro/Builtins/%s.def", g.def_name))!!;
 		String first = emit_group(g, text);
 		String second = emit_group(g, text);
 		assert(first == second, "%s: regeneration differs", g.def_name);
