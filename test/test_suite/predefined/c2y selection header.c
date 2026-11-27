@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -std=c2y -Wpre-c2y-compat
 void entry() {
     if (int a = 1) { // #warning@9: declarations in if conditions are incompatible with C standards before C2y [-Wpre-c2y-compat]

@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: --target=x86_64-linux -std=c23 -fdeclspec
 // #todo: TODO: implement 'access' attribute
 // #todo: TODO: implement 'alias' attribute

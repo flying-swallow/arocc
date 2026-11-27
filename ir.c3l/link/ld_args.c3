@@ -1,7 +1,7 @@
 // Parser and lookup helpers for the subset of GNU ld arguments used by the
 // in-process ELF linker.
 module aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import std::collections::list;
 import std::core::string;
 import aro::toolchain::discovery;
@@ -122,22 +122,22 @@ fn void reset_plan(LinkPlan* plan)
 }
 
 <* @return? MALFORMED_LD_ARGS *>
-fn void? malformed_ld_args(Diagnostics* d, String reason)
+fn void? malformed_ld_args(reporting::Sink d, String reason)
 {
-	@link_err(d, Diagnostic.MALFORMED_LD_ARGS, reason)!;
+	@link_err(d, LinkDiagnostic.MALFORMED_LD_ARGS, reason)!;
 	return MALFORMED_LD_ARGS~;
 }
 
-fn void? missing_ld_value(Diagnostics* d, String flag)
+fn void? missing_ld_value(reporting::Sink d, String flag)
 {
 	return malformed_ld_args(d, string::tformat("'%s' requires a value", flag))!;
 }
 
 <* @return? UNSUPPORTED_LD_ARG *>
-fn void? unsupported_ld_arg(LinkPlan* plan, Diagnostics* d, String arg)
+fn void? unsupported_ld_arg(LinkPlan* plan, reporting::Sink d, String arg)
 {
 	plan.unsupported_arg = arg;
-	@link_err(d, Diagnostic.UNSUPPORTED_LD_ARG, arg)!;
+	@link_err(d, LinkDiagnostic.UNSUPPORTED_LD_ARG, arg)!;
 	return UNSUPPORTED_LD_ARG~;
 }
 
@@ -233,7 +233,7 @@ fn String library_filename(Allocator a, String name, String suffix)
 
  @return? link::MALFORMED_LD_ARGS, link::UNSUPPORTED_LD_ARG
 *>
-fn void? parse_ld_args(LinkPlan* plan, Diagnostics* d, String[] args)
+fn void? parse_ld_args(LinkPlan* plan, reporting::Sink d, String[] args)
 {
 	reset_plan(plan);
 	bool as_needed = false;

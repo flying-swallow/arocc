@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 void foo(void) {
     1 = 1; // #error@7: expression is not assignable
     const int a = 2; // #note@15: variable 'a' declared const here

@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -Wno-unused
 void foo(void) {
     const volatile _Atomic long a;

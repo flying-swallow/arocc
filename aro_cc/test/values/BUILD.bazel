@@ -1,0 +1,52 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: values. One target per line so parallel additions merge cleanly.
+
+filegroup(
+    name = "integer_values",
+    srcs = glob(["data/integer_values/*.txt"]),
+)
+
+filegroup(
+    name = "float_values",
+    srcs = glob(["data/float_values/*.txt"]),
+)
+
+c3_test(name = "value_interner_tests", srcs = ["value_interner_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "integer_value_tests", srcs = ["integer_value_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "bigint_tests", srcs = ["bigint_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "integer_vector_tests", srcs = ["integer_vector_tests.c3"], data = [":integer_values"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_capability_tests", srcs = ["float_capability_tests.c3"])
+c3_test(name = "float_contract_tests", srcs = ["float_contract_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_print_tests", srcs = ["float_print_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_print_manual_tests", srcs = ["float_print_manual_tests.c3"], deps = ["//:aro_cc_lib"], tags = ["manual"])
+c3_test(name = "annex_g_tests", srcs = ["annex_g_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_narrow_tests", srcs = ["float_narrow_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_conversion_tests", srcs = ["float_conversion_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_wide_tests", srcs = ["float_wide_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_value_tests", srcs = ["float_value_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "float_vector_tests", srcs = ["float_vector_tests.c3"], data = [":float_values"], deps = ["//:aro_cc_lib"])
+c3_test(name = "number_value_tests", srcs = ["number_value_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "number_value_manual_tests", srcs = ["number_value_manual_tests.c3"], deps = ["//:aro_cc_lib"], tags = ["manual"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":value_interner_tests",
+        ":integer_value_tests",
+        ":bigint_tests",
+        ":integer_vector_tests",
+        ":float_capability_tests",
+        ":float_contract_tests",
+        ":float_print_tests",
+        ":annex_g_tests",
+        ":float_narrow_tests",
+        ":float_conversion_tests",
+        ":float_wide_tests",
+        ":float_value_tests",
+        ":float_vector_tests",
+        ":number_value_tests",
+    ],
+    visibility = ["//aro_cc/test:__pkg__"],
+)

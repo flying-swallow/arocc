@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -Wno-deprecated-non-prototype -std=c17
 int foo(int bar) {
     (void)sizeof(struct Foo { int a; });

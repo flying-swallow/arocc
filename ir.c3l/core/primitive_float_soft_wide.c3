@@ -23,7 +23,7 @@
 //     the sign of a zero product/quotient is the XOR of the operand signs.
 //
 // Reference behaviour pinned by running Zig 0.17.0 (x86_64-linux, see
-// test/unit/values/float_wide_tests.c3 for the vectors) and kept here on purpose:
+// aro_cc/test/values/float_wide_tests.c3 for the vectors) and kept here on purpose:
 //   - f128 `a - b` is __subtf3 = __addtf3(a, -b): when only b is NaN the result
 //     is b quieted WITH ITS SIGN FLIPPED.
 //   - x87 NaN selection (f80): an unnormal / pseudo-NaN / pseudo-infinity

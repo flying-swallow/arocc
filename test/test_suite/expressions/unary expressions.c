@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 void foo(void) {
     (void)+1;
     +(int*)1; // #error@5: invalid argument type 'int *' to unary expression

@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -std=c23 -Wpedantic
 // #todo: TODO constexpr record field access
 constexpr int a = 1;

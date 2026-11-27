@@ -44,7 +44,7 @@
 // in aro::frontend::c::value; interner storage goes in aro::value_interner; everything else
 // on PrimitiveValue goes here.
 //
-// Reference vectors: test/unit/values/data/float_values (bit patterns produced
+// Reference vectors: aro_cc/test/values/data/float_values (bit patterns produced
 // by a standalone Zig 0.17.0 probe program; development-only, no target depends
 // on the Zig binary). They pin every "confirm with vectors" item below.
 //
@@ -56,7 +56,7 @@
 // from_f128(.., F64).
 //
 // =============================================================================
-// Native capability decision (backed by //test/unit/values:float_capability_tests)
+// Native capability decision (backed by //aro_cc/test/values:float_capability_tests)
 // =============================================================================
 //
 // Probed with c3c 0.8.5 on x86_64-linux-gnu at -O0 and -O2:
@@ -107,7 +107,7 @@
 // IEEE implementation, match the reference and document it (CONVENTIONS rule:
 // "Match current behavior even when it differs").
 //
-// NaN rules (confirmed by the Zig 0.17.0 vectors in test/unit/float_values,
+// NaN rules (confirmed by the Zig 0.17.0 vectors in aro_cc/test/unit/float_values,
 // canonical configuration `-fllvm -mcpu=baseline`; see its README):
 //   - Invalid operation (0/0, inf-inf, 0*inf) -> DEFAULT_NAN_* below:
 //     f16/f32/f64 negative quiet NaN (x86 SSE), f80 negative "real indefinite"
@@ -422,7 +422,7 @@ fn PrimitiveValue PrimitiveValue.div(self, PrimitiveValue rhs)
 // f128_mul / f128_div for parseFloat's fast path (primitive_float_parse.c3).
 //
 // NaN through casts (observed with Zig 0.17.0 on x86_64-linux, LLVM backend,
-// baseline CPU; test/unit/float_values/nan.txt): sign kept, payload aligned
+// baseline CPU; aro_cc/test/unit/float_values/nan.txt): sign kept, payload aligned
 // at the top of the fraction. The quiet bit is set by every cast EXCEPT those
 // that go through a compiler-rt routine that keeps it: any -> f128
 // (__extend*ftf2), f16 -> f32 (__extendhfsf2), f16 -> f80 (__extendhfxf2) and

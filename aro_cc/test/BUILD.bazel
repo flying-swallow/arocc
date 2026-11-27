@@ -1,0 +1,129 @@
+test_suite(
+    name = "frontend_unit",
+    tests = [
+        "//aro_cc/test/backend:all",
+        "//aro_cc/test/builtins:all",
+        "//aro_cc/test/driver:all",
+        "//aro_cc/test/lexer:all",
+        "//aro_cc/test/parser:all",
+        "//aro_cc/test/preprocessor:all",
+        "//aro_cc/test/tree:all",
+        "//aro_cc/test/types:all",
+        "//aro_cc/test/values:all",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Test fixtures. Layout follows c3c's aro_cc/test/:
+#
+#   src/<group>/             harness code: test_suite runner, records, gcc, cli,
+#                            probes, manifest runner, fuzz, shared lib (own packages)
+#   test_suite/<area>/       integration cases (own package, //aro_cc/test/test_suite)
+#   <area>/                  C frontend unit tests with their data/ (own packages)
+#   unit/backend/, unit/c3/  shared backend and C3 frontend unit tests
+#   records/                 record-layout corpus (//aro_cc/test/src/records)
+#   regression/<area>/       probe data: assembly/ and ir/ cases, preprocessor/ fixture tree
+#   native/                  backend CLI sources
+#   gcc/                     GCC C testsuite copy (GPL-3.0+, see gcc/SOURCE)
+#   portability/             runfiles path with a space
+#   fuzz/corpus/             fuzz replay inputs
+#
+# This is a single package so recursive globs see every fixture without
+# crossing package boundaries.
+
+_FIXTURE_VISIBILITY = [
+    "//:__pkg__",
+    "//aro_cc/test:__subpackages__",
+    "//tools:__subpackages__",
+]
+
+# Individual fixture files are addressable as //aro_cc/test:<path>.
+exports_files(
+    glob(
+        [
+            "regression/**",
+            "native/**",
+            "portability/**",
+            "fuzz/**",
+        ],
+    ),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+# GCC C testsuite copy for //aro_cc/test/src/gcc:gcc_testsuite_*.
+filegroup(
+    name = "gcc_testsuite",
+    srcs = glob(["gcc/**"]),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+filegroup(
+    name = "record_fixtures",
+    srcs = glob(["records/**"]),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+[filegroup(
+    name = "regression_%s_fixtures" % area,
+    srcs = glob(["regression/%s/fixtures/**" % area]),
+    visibility = _FIXTURE_VISIBILITY,
+) for area in [
+    "assembly",
+    "preprocessor",
+]]
+
+filegroup(
+    name = "fuzz_corpus",
+    srcs = glob(["fuzz/corpus/**"]),
+    visibility = _FIXTURE_VISIBILITY,
+)
+
+UNIT_AREAS = [
+    "backend",
+    "c3",
+]
+
+test_suite(
+    name = "unit",
+    tests = ["//aro_cc/test/unit/%s:all" % area for area in UNIT_AREAS] + ["//aro_cc/test:frontend_unit"] + [
+        "//aro_cc/test/src/lib:harness_lib_tests",
+        "//aro_cc/test/src/manifest:runner_tests",
+        "//aro_cc/test/src/test_suite:test_suite_runner_tests",
+        "//aro_cc/test/src/gcc:gcc_testsuite_tests",
+        "//aro_cc/test/src/clang:clang_testsuite_tests",
+    ],
+)
+
+test_suite(
+    name = "integration",
+    tests = [
+        "//aro_cc/test/src/cli:runfiles_portability_integration",
+        "//aro_cc/test/src/cli:library_consumer",
+        "//aro_cc/test/src/cli:cli_tests",
+        "//aro_cc/test/src/cli:backend_cli_regression",
+        "//aro_cc/test/src/cli:native_backend_cli_integration",
+        "//aro_cc/test/src/cli:darwin_arm64_integration",
+        "//aro_cc/test/src/probes:native_assembly_integration",
+        "//aro_cc/test/src/probes:preprocessor_integration",
+        "//aro_cc/test/test_suite:all",
+    ],
+)
+
+test_suite(
+    name = "records",
+    tests = [
+        "//aro_cc/test/src/records:record_runner_tests",
+        "//aro_cc/test/src/records:record_regression",
+    ],
+)
+
+test_suite(
+    name = "regression",
+    tests = [
+        ":unit",
+        ":integration",
+        ":records",
+        "//aro_cc/test/src/probes:assembly_regression",
+    ],
+)
+filegroup(name = "clang_testsuite", srcs = glob(["clang/**"]), visibility = ["//aro_cc/test:__subpackages__"])

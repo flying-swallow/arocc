@@ -1,7 +1,7 @@
 // Synthetic GNU archive and linker-script tests, plus host format cross-checks.
 module link_archive_tests;
 import aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import link_test_builders;
 import std::core::mem, std::core::mem::allocators, std::core::string;
 
@@ -10,16 +10,15 @@ macro check(left, right)
 	test::eq((long)left, (long)right);
 }
 
-fn void expect_no_diagnostics(Diagnostics* d)
+fn void expect_no_diagnostics(Collector* d)
 {
 	check(d.messages.len(), 0);
 }
 
-fn void expect_diagnostic_error(Diagnostics* d)
+fn void expect_diagnostic_error(Collector* d)
 {
 	check(d.messages.len(), 1);
-	check(d.messages[0].kind.ordinal, diagnostics::MessageKind.ERROR.ordinal);
-	check(d.messages[0].effective_kind.ordinal, diagnostics::MessageKind.ERROR.ordinal);
+	check(d.messages[0].kind.ordinal, reporting::Severity.ERROR.ordinal);
 }
 
 fn void expect_archive_failure(char[] bytes, bool unsupported = false)
@@ -27,10 +26,10 @@ fn void expect_archive_failure(char[] bytes, bool unsupported = false)
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::Archive? parsed = link::read_archive(&arena, &d, "bad.a", bytes);
+	link::Archive? parsed = link::read_archive(&arena, d.tooling_sink(), "bad.a", bytes);
 	if (unsupported)
 	{
 		check(@catch(parsed), link::UNSUPPORTED_ARCHIVE);
@@ -47,14 +46,14 @@ fn void expect_member_failure(char[] bytes)
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::Archive archive = link::read_archive(&arena, &d, "bad.a", bytes)!!;
+	link::Archive archive = link::read_archive(&arena, d.tooling_sink(), "bad.a", bytes)!!;
 	expect_no_diagnostics(&d);
 	ulong cursor = archive.first_member;
 	link::ArchiveMember member;
-	bool? parsed = archive.next_member(&d, &cursor, &member);
+	bool? parsed = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(@catch(parsed), link::MALFORMED_ARCHIVE);
 	expect_diagnostic_error(&d);
 }
@@ -64,10 +63,10 @@ fn void expect_script_failure(String text, bool unsupported, uint line)
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::LdScript? parsed = link::parse_ld_script(&arena, &d, "bad.ld", text);
+	link::LdScript? parsed = link::parse_ld_script(&arena, d.tooling_sink(), "bad.ld", text);
 	if (unsupported)
 	{
 		check(@catch(parsed), link::UNSUPPORTED_SCRIPT);
@@ -127,10 +126,10 @@ fn void synthetic_archive_members_and_index() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::Archive archive = link::read_archive(&arena, &d, "synthetic.a", (char[])bytes.view())!!;
+	link::Archive archive = link::read_archive(&arena, d.tooling_sink(), "synthetic.a", (char[])bytes.view())!!;
 	expect_no_diagnostics(&d);
 	check(archive.symbols.len, 3);
 	test::eq(archive.symbols[0].name, "foo");
@@ -139,11 +138,11 @@ fn void synthetic_archive_members_and_index() @test
 	check(archive.symbols[0].member_offset > 8, true);
 	assert(archive.symbols[0].member_offset != archive.symbols[1].member_offset);
 	check(archive.symbols[1].member_offset, archive.symbols[2].member_offset);
-	link::ArchiveMember foo_member = archive.member_at(&d, archive.symbols[0].member_offset)!!;
+	link::ArchiveMember foo_member = archive.member_at(d.tooling_sink(), archive.symbols[0].member_offset)!!;
 	test::eq(foo_member.name, "short.o");
 	link::ArchiveSymbol* baz = archive.find_symbol("baz");
 	assert(baz != null);
-	link::ArchiveMember baz_member = archive.member_at(&d, baz.member_offset)!!;
+	link::ArchiveMember baz_member = archive.member_at(d.tooling_sink(), baz.member_offset)!!;
 	test::eq(baz_member.name, "a_very_long_member_name.o");
 	test::eq((String)baz_member.data, "wxyz");
 	check(baz_member.size, 4);
@@ -151,17 +150,17 @@ fn void synthetic_archive_members_and_index() @test
 
 	ulong cursor = archive.first_member;
 	link::ArchiveMember member;
-	bool? has_member = archive.next_member(&d, &cursor, &member);
+	bool? has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, true);
 	test::eq(member.name, "short.o");
 	test::eq((String)member.data, "abc");
 	check(member.size, 3);
-	has_member = archive.next_member(&d, &cursor, &member);
+	has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, true);
 	test::eq(member.name, "a_very_long_member_name.o");
 	test::eq((String)member.data, "wxyz");
 	check(member.size, 4);
-	has_member = archive.next_member(&d, &cursor, &member);
+	has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, false);
 	expect_no_diagnostics(&d);
 }
@@ -179,21 +178,21 @@ fn void archive_without_index_or_long_names() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::Archive archive = link::read_archive(&arena, &d, "no-index.a", (char[])bytes.view())!!;
+	link::Archive archive = link::read_archive(&arena, d.tooling_sink(), "no-index.a", (char[])bytes.view())!!;
 	expect_no_diagnostics(&d);
 	check(archive.symbols.len, 0);
 	ulong cursor = archive.first_member;
 	link::ArchiveMember member;
-	bool? has_member = archive.next_member(&d, &cursor, &member);
+	bool? has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, true);
 	test::eq(member.name, "one.o");
-	has_member = archive.next_member(&d, &cursor, &member);
+	has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, true);
 	test::eq(member.name, "two.o");
-	has_member = archive.next_member(&d, &cursor, &member);
+	has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, false);
 	expect_no_diagnostics(&d);
 }
@@ -208,15 +207,15 @@ fn void empty_archive() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::Archive archive = link::read_archive(&arena, &d, "empty.a", (char[])bytes.view())!!;
+	link::Archive archive = link::read_archive(&arena, d.tooling_sink(), "empty.a", (char[])bytes.view())!!;
 	expect_no_diagnostics(&d);
 	check(archive.symbols.len, 0);
 	ulong cursor = archive.first_member;
 	link::ArchiveMember member;
-	bool? has_member = archive.next_member(&d, &cursor, &member);
+	bool? has_member = archive.next_member(d.tooling_sink(), &cursor, &member);
 	check(has_member!!, false);
 	expect_no_diagnostics(&d);
 }
@@ -274,48 +273,48 @@ fn void archive_rejects_malformed() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::Archive no_table = link::read_archive(&arena, &d, "no-table.a", (char[])bad_long_ref.view())!!;
+	link::Archive no_table = link::read_archive(&arena, d.tooling_sink(), "no-table.a", (char[])bad_long_ref.view())!!;
 	expect_no_diagnostics(&d);
 	ulong no_table_cursor = no_table.first_member;
 	link::ArchiveMember no_table_member;
-	bool? invalid_name = no_table.next_member(&d, &no_table_cursor, &no_table_member);
+	bool? invalid_name = no_table.next_member(d.tooling_sink(), &no_table_cursor, &no_table_member);
 	check(@catch(invalid_name), link::MALFORMED_ARCHIVE);
 	expect_diagnostic_error(&d);
 	d.free();
-	d.init_list(mem);
-	link::Archive parsed_offset = link::read_archive(&arena, &d, "bad-offset.a", (char[])bad_offset.view())!!;
+	d.init(mem);
+	link::Archive parsed_offset = link::read_archive(&arena, d.tooling_sink(), "bad-offset.a", (char[])bad_offset.view())!!;
 	expect_no_diagnostics(&d);
 	check(parsed_offset.symbols[0].member_offset, 69);
-	link::ArchiveMember? invalid_member = parsed_offset.member_at(&d, parsed_offset.symbols[0].member_offset);
+	link::ArchiveMember? invalid_member = parsed_offset.member_at(d.tooling_sink(), parsed_offset.symbols[0].member_offset);
 	check(@catch(invalid_member), link::MALFORMED_ARCHIVE);
 	expect_diagnostic_error(&d);
 }
 
 fn void host_libc_nonshared() @test @feat(POSIX)
 {
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkFs fs;
 	fs.init(mem);
 	defer fs.free();
 	String path = "/usr/lib/x86_64-linux-gnu/libc_nonshared.a";
 	if (!fs.exists(path)) return;
-	char[] bytes = fs.read(&d, path)!!;
+	char[] bytes = fs.read(d.tooling_sink(), path)!!;
 	DynamicArenaAllocator arena;
 	arena.init(mem, 1024);
 	defer arena.free();
-	link::Archive archive = link::read_archive(&arena, &d, path, bytes)!!;
+	link::Archive archive = link::read_archive(&arena, d.tooling_sink(), path, bytes)!!;
 	expect_no_diagnostics(&d);
 	assert(archive.symbols.len > 0);
 	// Confirmed with `nm -s`: atexit is present in the host archive index.
 	link::ArchiveSymbol* symbol = archive.find_symbol("atexit");
 	assert(symbol != null, "host libc_nonshared indexes atexit");
-	link::ArchiveMember member = archive.member_at(&d, symbol.member_offset)!!;
-	link::ElfFile elf = link::read_elf(&arena, &d,
+	link::ArchiveMember member = archive.member_at(d.tooling_sink(), symbol.member_offset)!!;
+	link::ElfFile elf = link::read_elf(&arena, d.tooling_sink(),
 		string::tformat("%s(%s)", path, member.name), member.data)!!;
 	check((uint)elf.kind, (uint)link::ElfKind.REL);
 	link::InputSymbol* definition = elf.find_symbol("atexit");
@@ -329,10 +328,10 @@ fn void synthetic_ld_script_inputs() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::LdScript libc = link::parse_ld_script(&arena, &d, "libc.so", libc_script)!!;
+	link::LdScript libc = link::parse_ld_script(&arena, d.tooling_sink(), "libc.so", libc_script)!!;
 	expect_no_diagnostics(&d);
 	check(libc.inputs.len, 3);
 	test::eq(libc.output_format, "elf64-x86-64");
@@ -349,7 +348,7 @@ fn void synthetic_ld_script_inputs() @test
 	check(libc.inputs[2].as_needed, true);
 	check(libc.inputs[2].is_absolute(), true);
 
-	link::LdScript gcc = link::parse_ld_script(&arena, &d, "libgcc_s.so",
+	link::LdScript gcc = link::parse_ld_script(&arena, d.tooling_sink(), "libgcc_s.so",
 		"GROUP ( libgcc_s.so.1 -lgcc )")!!;
 	expect_no_diagnostics(&d);
 	check(gcc.inputs.len, 2);
@@ -361,7 +360,7 @@ fn void synthetic_ld_script_inputs() @test
 	check(gcc.inputs[0].in_group, true);
 	check(gcc.inputs[1].in_group, true);
 
-	link::LdScript input = link::parse_ld_script(&arena, &d, "input.ld",
+	link::LdScript input = link::parse_ld_script(&arena, d.tooling_sink(), "input.ld",
 		"INPUT(a.o, \"b c.o\" -lm)")!!;
 	check(input.inputs.len, 3);
 	test::eq(input.inputs[0].name, "a.o");
@@ -370,12 +369,12 @@ fn void synthetic_ld_script_inputs() @test
 	test::eq(input.inputs[2].name, "m");
 	foreach (script_input : input.inputs) check(script_input.in_group, false);
 
-	link::LdScript comments = link::parse_ld_script(&arena, &d, "comments.ld",
+	link::LdScript comments = link::parse_ld_script(&arena, d.tooling_sink(), "comments.ld",
 		"INPUT(/* before token */ a.o, /* across\nlines */ b.o)")!!;
 	check(comments.inputs.len, 2);
 	test::eq(comments.inputs[1].name, "b.o");
 
-	link::LdScript formats = link::parse_ld_script(&arena, &d, "formats.ld",
+	link::LdScript formats = link::parse_ld_script(&arena, d.tooling_sink(), "formats.ld",
 		"OUTPUT_FORMAT(first, second, third) INPUT(x.o)")!!;
 	test::eq(formats.output_format, "first");
 	check(formats.has_output_format, true);
@@ -399,19 +398,19 @@ fn void ld_script_rejects_malformed_and_unsupported() @test
 fn void host_libc_so_script() @test @feat(POSIX)
 {
 	String path = "/usr/lib/x86_64-linux-gnu/libc.so";
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkFs fs;
 	fs.init(mem);
 	defer fs.free();
 	if (!fs.exists(path)) return;
-	char[] bytes = fs.read(&d, path)!!;
+	char[] bytes = fs.read(d.tooling_sink(), path)!!;
 	assert(link::looks_like_script(bytes));
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	link::LdScript script = link::parse_ld_script(&arena, &d, path, (String)bytes)!!;
+	link::LdScript script = link::parse_ld_script(&arena, d.tooling_sink(), path, (String)bytes)!!;
 	check(script.inputs.len, 3);
 	test::eq(script.output_format, "elf64-x86-64");
 	check(script.inputs[2].as_needed, true);
@@ -420,8 +419,8 @@ fn void host_libc_so_script() @test @feat(POSIX)
 
 fn void host_libgcc_s_script() @test @feat(POSIX)
 {
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkFs fs;
 	fs.init(mem);
@@ -432,7 +431,7 @@ fn void host_libgcc_s_script() @test @feat(POSIX)
 	{
 		String candidate = string::tformat("/usr/lib/gcc/x86_64-linux-gnu/%d/libgcc_s.so", version);
 		if (!fs.exists(candidate)) continue;
-		char[] candidate_bytes = fs.read(&d, candidate)!!;
+		char[] candidate_bytes = fs.read(d.tooling_sink(), candidate)!!;
 		if (!link::looks_like_script(candidate_bytes)) continue;
 		path = candidate;
 		bytes = candidate_bytes;
@@ -442,7 +441,7 @@ fn void host_libgcc_s_script() @test @feat(POSIX)
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	link::LdScript script = link::parse_ld_script(&arena, &d, path, (String)bytes)!!;
+	link::LdScript script = link::parse_ld_script(&arena, d.tooling_sink(), path, (String)bytes)!!;
 	bool saw_relative_soname = false;
 	bool saw_gcc = false;
 	foreach (script_input : script.inputs)

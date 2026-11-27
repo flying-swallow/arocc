@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: --target=x86_64-windows-msvc -std=c23
 // #todo: TODO: reimplement msvc pointer attribute keywords
 #include <stddef.h>

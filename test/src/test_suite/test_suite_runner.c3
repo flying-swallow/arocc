@@ -1024,7 +1024,7 @@ fn int worker_thread_main(void* arg)
 
 fn void usage(String appname) @noreturn
 {
-	io::printfn("Usage: %s <aro_c3 path> <file/dir> [options]", appname);
+	io::printfn("Usage: %s <aro_cc path> <file/dir> [options]", appname);
 	io::printn();
 	io::printn("Options:");
 	io::printn(" -s, --skipped       only run skipped tests");
@@ -1104,7 +1104,7 @@ fn int run_main(String[] args)
 	context.extra_flags = flag_list.array_view();
 	if (context.cc_path.len && env::POSIX)
 	{
-		// aro_c3 finds `as` next to the declared cc through PATH.
+		// aro_cc finds `as` next to the declared cc through PATH.
 		String old_path = env::tget_var("PATH") ?? "";
 		env::set_var("PATH", string::tformat("%s:%s", aro_runner::dirname(context.cc_path), old_path));
 	}

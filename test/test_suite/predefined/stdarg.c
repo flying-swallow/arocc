@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #note: stdarg.h:12:52: expanded from here
 // #note: stdarg.h:12:29: expanded from here
 // #note: stdarg.h:12:29: expanded from here

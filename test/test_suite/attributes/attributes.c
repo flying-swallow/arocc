@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -Wno-deprecated-non-prototype -Wc23-extensions -std=gnu17
 // #todo: TODO: implement 'mode' attribute
 // #todo: TODO: implement 'format' attribute

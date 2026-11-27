@@ -1,0 +1,40 @@
+load("//tools:c3.bzl", "c3_library")
+
+c3_library(
+    name = "common",
+    srcs = [
+        "annex_g.c3",
+        "aro.c3",
+        "source.c3",
+        "utf8.c3",
+        "string_interner.c3",
+        "tracy.c3",
+        "diagnostics.c3",
+        "includes.c3",
+    ],
+    deps = ["//ir.c3l:ir"],
+    visibility = ["//visibility:public"],
+)
+
+c3_library(
+    name = "tooling",
+    srcs = [
+        "host_process.c3",
+        "process_util.c3",
+        "toolchain/discovery.c3",
+        "toolchain.c3",
+        "toolchain/distro.c3",
+        "toolchain/darwin.c3",
+        "toolchain/gcc_detector.c3",
+        "toolchain/gcc_version.c3",
+        "toolchain/linux.c3",
+        "toolchain/multilib.c3",
+        "toolchain_link.c3",
+        "//:system_defaults_module",
+    ],
+    deps = [":common"],
+    visibility = ["//visibility:public"],
+)
+
+
+filegroup(name = "sources", srcs = glob(["**/*.c3"]), visibility = ["//visibility:public"])

@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -Wno-unused -std=c23
 int foo(void) {
     return sizeof(int) + _Alignof(float);

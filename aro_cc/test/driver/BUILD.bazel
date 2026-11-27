@@ -1,0 +1,39 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: driver. One target per line so parallel additions merge cleanly.
+
+genrule(
+    name = "profiling_stub",
+    srcs = ["data/profiling_stub.c"],
+    outs = ["profiling_stub.o"],
+    cmd = "cc -std=c11 -Wall -Wextra -Werror -c $(location data/profiling_stub.c) -o $@",
+    visibility = ["//visibility:private"],
+)
+
+c3_test(name = "compiler_common_tests", srcs = ["compiler_common_tests.c3"], deps = ["//aro/compiler:common"])
+
+c3_test(name = "build_smoke", srcs = ["build_smoke.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "fuzz_temp_tests", srcs = ["fuzz_temp_tests.c3", "//aro_cc/test/src/fuzz:fuzz_lib.c3"], data = ["//:aro_builtin_headers"], deps = ["//:aro_cc_lib"], copts = ["-U", "VMEM_TEMP"])
+c3_test(name = "diagnostics_tests", srcs = ["diagnostics_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "driver_options_tests", srcs = ["driver_options_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "toolchain_discovery_tests", srcs = ["toolchain_discovery_tests.c3"], deps = ["//aro/compiler:tooling"])
+c3_test(name = "toolchain_tests", srcs = ["toolchain_tests.c3"], deps = ["//aro/compiler:tooling"])
+c3_test(name = "profiling_disabled_tests", srcs = ["profiling_tests.c3"], deps = ["//:aro_cc_lib"], native_libs = [":profiling_stub"])
+c3_test(name = "profiling_enabled_tests", srcs = ["profiling_tests.c3"], deps = ["//:aro_cc_lib"], copts = ["-D", "TRACY", "-D", "TRACY_ALLOCATION", "-D", "TRACY_CALLSTACK"], native_libs = [":profiling_stub"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":compiler_common_tests",
+        ":build_smoke",
+        ":fuzz_temp_tests",
+        ":diagnostics_tests",
+        ":driver_options_tests",
+        ":toolchain_discovery_tests",
+        ":toolchain_tests",
+        ":profiling_disabled_tests",
+        ":profiling_enabled_tests",
+    ],
+    visibility = ["//aro_cc/test:__pkg__"],
+)

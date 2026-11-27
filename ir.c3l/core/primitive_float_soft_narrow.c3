@@ -34,7 +34,7 @@ module aro::primitive_value;
 // constant-folds with another sign, never reaches the result, and the order of
 // two NaN operands does not depend on how the backend commutes add/mul.
 //
-// Observed (Zig 0.17.0 x86_64-linux probe, see test/unit/values/float_narrow_tests.c3):
+// Observed (Zig 0.17.0 x86_64-linux probe, see aro_cc/test/values/float_narrow_tests.c3):
 // the LLVM backend (-O ReleaseSafe -mcpu baseline) gives exactly these results
 // in every case probed. With -mcpu native, LLVM may commute the operands of
 // a + b and a * b, so with two NaN operands the rhs NaN can win. The self-hosted

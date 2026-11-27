@@ -1,5 +1,5 @@
 // C3 port of the old gcc_testsuite.py: run the GCC C testsuite (the copy in
-// test/gcc) against aro_c3, treating GCC's expectations as golden.
+// test/gcc) against aro_cc, treating GCC's expectations as golden.
 //
 //   compile  gcc.c-torture/compile/*.c        must compile cleanly
 //   execute  gcc.c-torture/execute/*.c        must compile, link and exit 0
@@ -25,7 +25,7 @@
 // whole .s file, so `.` matches newline and ^/$ anchor the file). They are
 // translated to POSIX ERE for std::encoding::experimental::regex; non-greedy
 // quantifiers, (?...) groups and backreferences make the case UNSUPPORTED.
-// aro_c3 emits Intel syntax and GCC's patterns often assume AT&T mnemonics and
+// aro_cc emits Intel syntax and GCC's patterns often assume AT&T mnemonics and
 // GCC's optimizer, so failures of checks guarded by an x86 target selector are
 // reported under the separate category "x86-insn", and failures of cases that
 // depend on a dropped flag (anything but -O levels) under "dropped-option".
@@ -2235,7 +2235,7 @@ const String USAGE = `usage: gcc_testsuite [-h] [--gcc-testsuite GCC_TESTSUITE] 
                      [--filter FILTER] [--jobs JOBS] [--timeout TIMEOUT] [--out OUT]
                      [--resource-dir RESOURCE_DIR] [--abi-include ABI_INCLUDE] [--selftest]
 
-Run the GCC C testsuite against aro_c3, treating GCC's expectations as golden.
+Run the GCC C testsuite against aro_cc, treating GCC's expectations as golden.
 
 options:
   -h, --help            show this help message and exit
@@ -2356,7 +2356,7 @@ fn int main(String[] argv) @feat(!CLANG_RUNNER)
 	Options args;
 	String root = root_dir(mem);
 	args.gcc_testsuite = string::format(mem, "%s/test/gcc", root);
-	args.aro = string::format(mem, "%s/bazel-bin/aro_c3", root);
+	args.aro = string::format(mem, "%s/bazel-bin/aro_cc", root);
 	args.suite = "compile,execute,ieee,dg,asm,abi";
 	args.filter = "*";
 	args.jobs = aro_harness::cpu_count();
@@ -2430,7 +2430,7 @@ fn int main(String[] argv) @feat(!CLANG_RUNNER)
 	args.aro = py_absolute(mem, args.aro);
 	if (args.zig_arocc.len) args.zig_arocc = py_absolute(mem, args.zig_arocc);
 	args.abi_include = py_absolute(mem, args.abi_include);
-	if (!aro_harness::any_exists(args.aro)) return fatal(string::tformat("aro binary not found: %s (bazel build //:aro_c3)", args.aro));
+	if (!aro_harness::any_exists(args.aro)) return fatal(string::tformat("aro binary not found: %s (bazel build //:aro_cc)", args.aro));
 	if (args.zig_arocc.len && !aro_harness::any_exists(args.zig_arocc))
 	{
 		return fatal(string::tformat("zig arocc not found: %s; build it with `zig build -p <dir>` in %s", args.zig_arocc, root));

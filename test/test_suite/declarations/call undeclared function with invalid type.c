@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 struct S {
     does_not_exist x; // #error@5: unknown type name 'does_not_exist'
 };

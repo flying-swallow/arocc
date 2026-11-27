@@ -4013,7 +4013,7 @@ fn bool inline_calls(ir::Ir* graph, OptOptions opts)
 					ir::Decl* callee = &graph.decls.entries[(sz)callee_index];
 					// Escaping callee allocas are fine: they are hoisted to the caller entry
 					// (inline_entry_alloc_position), as LLVM's InlineFunction hoists static
-					// allocas. See test/test_suite/run/inline_escaping_alloca_loop.c.
+					// allocas. See aro_cc/test/test_suite/run/inline_escaping_alloca_loop.c.
 					if (callee.kind != ir::DeclKind.FUNCTION || callee.body.len == 0 || inline_unsupported_control(callee)) continue;
 					// Never inline a weak body: the linker may pick another definition.
 					if (callee.inline_hint == ir::InlineHint.NEVER || callee.is_weak) continue;

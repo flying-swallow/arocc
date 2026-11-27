@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 _Static_assert(1, "foo" "\n" "bar");
 _Static_assert(1, "foo" "abc\x606262 "); // #error@29: escape sequence out of range
 _Static_assert(1, "\000062");

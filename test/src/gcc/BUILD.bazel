@@ -32,7 +32,7 @@ _GCC_TESTSUITE_SUITES = {
     srcs = ["gcc_testsuite.c3"],
     args = [
         "--aro",
-        "$(rootpath //:aro_c3)",
+        "$(rootpath //:aro_cc)",
         "--abi-include",
         "test/src/gcc/abi_include",
         "--suite",
@@ -40,7 +40,7 @@ _GCC_TESTSUITE_SUITES = {
     ],
     data = [
         "abi_include/xmmintrin.h",
-        "//:aro_c3",
+        "//:aro_cc",
         "//test:gcc_testsuite",
     ],
     shard_count = shards,
@@ -61,11 +61,11 @@ c3_binary(
     srcs = ["gcc_testsuite.c3"],
     args = [
         "--aro",
-        "$(rootpath //:aro_c3)",
+        "$(rootpath //:aro_cc)",
         "--suite",
         ",".join(_GCC_TESTSUITE_SUITES.keys()),
     ],
-    data = ["//:aro_c3"],
+    data = ["//:aro_cc"],
     deps = ["//test/src/lib:harness_lib"],
 )
 exports_files(["gcc_testsuite.c3"], visibility = ["//test/src/clang:__pkg__"])

@@ -1,6 +1,6 @@
 // Lazy, bounds-checked reader for GNU System V archives.
 module aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import std::collections::list;
 
 const ulong AR_MAGIC_SIZE = 8;
@@ -64,16 +64,16 @@ fn bool is_thin_archive(char[] bytes)
 }
 
 <* @return? MALFORMED_ARCHIVE *>
-fn void? malformed_archive(Diagnostics* d, String path, String reason)
+fn void? malformed_archive(reporting::Sink d, String path, String reason)
 {
-	@link_err(d, Diagnostic.MALFORMED_ARCHIVE, path, reason)!;
+	@link_err(d, LinkDiagnostic.MALFORMED_ARCHIVE, path, reason)!;
 	return MALFORMED_ARCHIVE~;
 }
 
 <* @return? UNSUPPORTED_ARCHIVE *>
-fn void? unsupported_archive(Diagnostics* d, String path, String reason)
+fn void? unsupported_archive(reporting::Sink d, String path, String reason)
 {
-	@link_err(d, Diagnostic.UNSUPPORTED_ARCHIVE, path, reason)!;
+	@link_err(d, LinkDiagnostic.UNSUPPORTED_ARCHIVE, path, reason)!;
 	return UNSUPPORTED_ARCHIVE~;
 }
 
@@ -215,7 +215,7 @@ fn String? gnu_long_name(String table, ulong offset)
 }
 
 <* Decode one regular member; special members are rejected by this helper. *>
-fn ArchiveMember? decode_archive_member(Archive* archive, RawArchiveHeader header, Diagnostics* d)
+fn ArchiveMember? decode_archive_member(Archive* archive, RawArchiveHeader header, reporting::Sink d)
 {
 	String raw_name = header.name;
 	if (is_special_archive_name(raw_name)) return MALFORMED_ARCHIVE~;
@@ -259,7 +259,7 @@ fn ArchiveMember? decode_archive_member(Archive* archive, RawArchiveHeader heade
  All member data and names borrow the input bytes.
  @return? link::MALFORMED_ARCHIVE, link::UNSUPPORTED_ARCHIVE
 *>
-fn Archive? read_archive(Allocator arena, Diagnostics* d, String path, char[] bytes)
+fn Archive? read_archive(Allocator arena, reporting::Sink d, String path, char[] bytes)
 {
 	if (is_thin_archive(bytes)) unsupported_archive(d, path, "thin archives are not supported")!;
 	if (!is_archive(bytes)) malformed_archive(d, path, "invalid or truncated archive magic")!;
@@ -311,7 +311,7 @@ fn Archive? read_archive(Allocator arena, Diagnostics* d, String path, char[] by
  Parse the member whose header is named by a GNU symbol index offset.
  @return? link::MALFORMED_ARCHIVE, link::UNSUPPORTED_ARCHIVE
 *>
-fn ArchiveMember? Archive.member_at(&self, Diagnostics* d, ulong header_offset)
+fn ArchiveMember? Archive.member_at(&self, reporting::Sink d, ulong header_offset)
 {
 	if (header_offset < AR_MAGIC_SIZE || (header_offset & 1) != 0 ||
 		!archive_range_ok(header_offset, AR_HEADER_SIZE, (ulong)self.bytes.len))
@@ -334,7 +334,7 @@ fn ArchiveMember? Archive.member_at(&self, Diagnostics* d, ulong header_offset)
  encountered later in the archive are skipped without materializing their data.
  @return? link::MALFORMED_ARCHIVE, link::UNSUPPORTED_ARCHIVE
 *>
-fn bool? Archive.next_member(&self, Diagnostics* d, ulong* cursor, ArchiveMember* out)
+fn bool? Archive.next_member(&self, reporting::Sink d, ulong* cursor, ArchiveMember* out)
 {
 	ulong position = *cursor;
 	ulong length = (ulong)self.bytes.len;

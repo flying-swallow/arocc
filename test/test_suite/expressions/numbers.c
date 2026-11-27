@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 int a = 0b; // #error@9: invalid suffix 'b' on integer constant
 int b = 0x; // #error@9: invalid suffix 'x' on integer constant
 int c = 0b12; // #error@9: invalid digit '2' in binary constant

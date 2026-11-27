@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -Wno-implicit-int
 _Alignas(2) int foo(void); // #error@1: '_Alignas' attribute only applies to variables and fields
 typedef int F(void);

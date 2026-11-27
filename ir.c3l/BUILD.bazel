@@ -97,6 +97,14 @@ c3_library(
     srcs = [
         "assembly.c3",
         "assembly_x86_64.c3",
+    ],
+    deps = [":ir", ":link"],
+    visibility = ["//visibility:public"],
+)
+
+c3_library(
+    name = "link",
+    srcs = [
         "link/archive.c3",
         "link/elf_reader.c3",
         "link/ld_args.c3",
@@ -104,7 +112,6 @@ c3_library(
         "link/link_diag.c3",
         "link/link_fs.c3",
     ],
-    deps = [":ir"],
+    deps = [":ir", "//aro/compiler:tooling"],
     visibility = ["//visibility:public"],
 )
-

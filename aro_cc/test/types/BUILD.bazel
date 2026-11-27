@@ -1,0 +1,22 @@
+load("//tools:c3.bzl", "c3_test")
+
+# Unit tests: types. One target per line so parallel additions merge cleanly.
+
+c3_test(name = "target_tests", srcs = ["target_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "type_store_tests", srcs = ["type_store_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "type_builder_tests", srcs = ["type_builder_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "record_layout_tests", srcs = ["record_layout_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "builtin_type_description_tests", srcs = ["builtin_type_description_tests.c3"], deps = ["//:aro_cc_lib"])
+
+# Default suite; manual tests stay addressable but out of it.
+test_suite(
+    name = "all",
+    tests = [
+        ":target_tests",
+        ":type_store_tests",
+        ":type_builder_tests",
+        ":record_layout_tests",
+        ":builtin_type_description_tests",
+    ],
+    visibility = ["//aro_cc/test:__pkg__"],
+)

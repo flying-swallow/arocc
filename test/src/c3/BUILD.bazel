@@ -1,3 +1,4 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//tools:c3.bzl", "c3_binary")
 
 # C3 frontend probes and harnesses.
@@ -23,4 +24,11 @@ c3_binary(
     name = "check_probe",
     srcs = ["check_probe.c3"],
     deps = ["//:aro_c3_frontend_lib"],
+)
+
+sh_test(
+    name = "compiler_cli_test",
+    srcs = ["compiler_cli_test.sh"],
+    args = ["$(location //:aro_c3)"],
+    data = ["//:aro_c3"],
 )

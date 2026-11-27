@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #todo: TODO missing uninitialized in own initializer warning
 void foo(void) {
     int a, b[a] = {}; // #error@17: variable-sized object may not be initialized

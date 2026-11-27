@@ -250,7 +250,7 @@ fn void worker(void* ptr, sz i)
 
 fn int main(String[] argv)
 {
- Options opts = { .root = "test/clang", .aro = "bazel-bin/aro_c3", .out = "/tmp/aro-clang-testsuite", .filter = "*", .suite = "Lexer,Preprocessor,Parser,Sema,C", .jobs = 4, .timeout = 10 };
+ Options opts = { .root = "test/clang", .aro = "bazel-bin/aro_cc", .out = "/tmp/aro-clang-testsuite", .filter = "*", .suite = "Lexer,Preprocessor,Parser,Sema,C", .jobs = 4, .timeout = 10 };
  foreach (i, arg : argv)
  {
   if (arg == "--help") { io::printn("clang_testsuite [--root PATH] [--aro PATH] [--suite Lexer,Preprocessor,Parser,Sema,C] [--filter GLOB] [--jobs N] [--timeout SECONDS] [--out PATH]"); return 0; }

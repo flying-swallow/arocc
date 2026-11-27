@@ -10,7 +10,7 @@
 // features. It also includes every target feature string in the builtin .def
 // files. CpuModel lists the generic/baseline model of every architecture
 // family aro supports, every model Target.zig names, and the -mcpu models used
-// by test/records target strings that Zig defines. Plan 14 stage 0 added every
+// by aro_cc/test/records target strings that Zig defines. Plan 14 stage 0 added every
 // feature Compilation.zig's x86 / aarch64 predefined-macro tables name and the
 // complete wasm feature list (iterated in declaration order for __wasm_*__).
 // Still missing: FEATURE_DEPS rows for those new features (e.g. avx512vbmi ->
@@ -994,7 +994,7 @@ enum CpuModel : ushort (String name, String llvm_name, FeatureFamily family, Fea
 	WASM_MVP { "mvp", "mvp", WASM, {} },
 	WASM_GENERIC { "generic", "generic", WASM, { WASM_BULK_MEMORY, WASM_MULTIVALUE, WASM_MUTABLE_GLOBALS, WASM_NONTRAPPING_FPTOINT, WASM_REFERENCE_TYPES, WASM_SIGN_EXT } },
 	WASM_LIME1 { "lime1", "lime1", WASM, { WASM_BULK_MEMORY_OPT, WASM_CALL_INDIRECT_OVERLONG, WASM_EXTENDED_CONST, WASM_MULTIVALUE, WASM_MUTABLE_GLOBALS, WASM_NONTRAPPING_FPTOINT, WASM_SIGN_EXT } },
-	// architectures whose family is not tracked: models named by Model.generic/baseline or test/records
+	// architectures whose family is not tracked: models named by Model.generic/baseline or aro_cc/test/records
 	AVR1 { "avr1", "avr1", OTHER, {} },
 	AVR2 { "avr2", "avr2", OTHER, {} },
 	MSP430_MODEL { "msp430", "msp430", OTHER, {} },

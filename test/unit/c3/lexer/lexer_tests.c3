@@ -301,3 +301,20 @@ fn void token_spellings()
 	test::eq(TokenType.TYPE_IDENT.is_any_type(), true);
 	test::eq(TokenType.FN.is_any_type(), false);
 }
+
+fn void shared_tooling_reports_use_c3_diagnostics() @test
+{
+	TrackingAllocator allocator;
+	allocator.init(mem);
+	Diagnostics diagnostics;
+	diagnostics.init_list(&allocator);
+	diagnostics.tooling_sink().emit(ERROR, "linker failed")!!;
+	diagnostics.tooling_sink().emit(OFF, "disabled warning", "fuse-ld-path")!!;
+	diagnostics.tooling_sink().emit(NOTE, "toolchain selected")!!;
+	assert(diagnostics.errors == 1);
+	assert(diagnostics.reports.len() == 2);
+	assert(diagnostics.reports[0].text == "linker failed");
+	diagnostics.free();
+	assert(allocator.allocation_count() == 0);
+	allocator.free();
+}

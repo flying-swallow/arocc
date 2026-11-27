@@ -1,4 +1,4 @@
-// #skip: stdout differs (aro_c3 gap)
+// #skip: stdout differs (aro_cc gap)
 // #opt: --target=x86_64-linux-gnu
 int foo(int);
 extern int foo(int);

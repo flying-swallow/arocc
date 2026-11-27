@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #error: first argument to va_arg is of type int and not 'va_list'
 /** manifest:
 syntax

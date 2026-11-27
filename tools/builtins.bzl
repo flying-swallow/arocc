@@ -1,13 +1,13 @@
 """Owner: 12.2 table-gen (skeleton by plan 12 stage 0).
 
 `builtin_defs` runs //tools:generate_def once per .def file and outputs the
-generated C3 table modules (aro::frontend::c::builtin_defs::<group>), which //:aro_c3_lib
+generated C3 table modules (aro::frontend::c::builtin_defs::<group>), which //:aro_cc_lib
 lists as sources. Layout: tools/builtins_schema.md.
 
 Invariants:
 - Every .def file is a declared input of exactly the action that reads it, so
   editing one .def reruns only that group's action (and everything compiled
-  from aro_c3_lib).
+  from aro_cc_lib).
 - The group name is the .def basename; outputs go to
   <package>/<name>/<group>.c3. The generator receives only the input path,
   output path and group, so the outputs do not depend on the execroot.

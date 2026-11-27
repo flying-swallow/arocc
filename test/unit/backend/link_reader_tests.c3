@@ -2,11 +2,11 @@
 // Synthetic ELF fixtures use the small byte builders in data/link_test_builders.c3.
 module link_reader_tests;
 import aro::backend::object, aro::backend::link;
-import aro::frontend::c::diagnostics, aro::host_process, aro::target;
+import aro::compiler::reporting, aro::host_process, aro::target;
 import link_test_builders;
 import std::collections::list;
 import std::core::mem, std::core::mem::allocators;
-import std::io;
+import std::io, std::io::file, std::io::path, std::os::env;
 
 macro check(left, right)
 {
@@ -221,10 +221,10 @@ fn void expect_reader_failure(char[] bytes, bool unsupported = false)
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::ElfFile? result = link::read_elf(&arena, &d, "bad-input.o", bytes);
+	link::ElfFile? result = link::read_elf(&arena, d.tooling_sink(), "bad-input.o", bytes);
 	if (unsupported)
 	{
 		check(@catch(result), link::UNSUPPORTED_ELF);
@@ -234,11 +234,10 @@ fn void expect_reader_failure(char[] bytes, bool unsupported = false)
 		check(@catch(result), link::MALFORMED_ELF);
 	}
 	check(d.messages.len(), 1);
-	check(d.messages[0].kind.ordinal, diagnostics::MessageKind.ERROR.ordinal);
-	check(d.messages[0].effective_kind.ordinal, diagnostics::MessageKind.ERROR.ordinal);
+	check(d.messages[0].kind.ordinal, reporting::Severity.ERROR.ordinal);
 }
 
-fn void expect_no_diagnostics(Diagnostics* d)
+fn void expect_no_diagnostics(Collector* d)
 {
 	check(d.messages.len(), 0);
 }
@@ -288,10 +287,10 @@ fn void reader_round_trips_writer_output() @test
 	DynamicArenaAllocator read_arena;
 	read_arena.init(mem, 256);
 	defer read_arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::ElfFile elf = link::read_elf(&read_arena, &d, "writer.o", (char[])out.bytes.str_view())!!;
+	link::ElfFile elf = link::read_elf(&read_arena, d.tooling_sink(), "writer.o", (char[])out.bytes.str_view())!!;
 	expect_no_diagnostics(&d);
 	check((uint)elf.kind, (uint)link::ElfKind.REL);
 	check(elf.machine, 62);
@@ -360,10 +359,10 @@ fn void reader_round_trips_explicit_relocations() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::ElfFile elf = link::read_elf(&arena, &d, "relocs.o", (char[])out.bytes.str_view())!!;
+	link::ElfFile elf = link::read_elf(&arena, d.tooling_sink(), "relocs.o", (char[])out.bytes.str_view())!!;
 	expect_no_diagnostics(&d);
 	link::InputSection* data_section = elf.find_section(".data");
 	assert(data_section != null);
@@ -426,10 +425,10 @@ fn void reader_decodes_groups_and_common_symbols() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::ElfFile elf = link::read_elf(&arena, &d, "group.o", (char[])fixture.view())!!;
+	link::ElfFile elf = link::read_elf(&arena, d.tooling_sink(), "group.o", (char[])fixture.view())!!;
 	expect_no_diagnostics(&d);
 	check(elf.groups.len, 1);
 	link::SectionGroup* group = &elf.groups[0];
@@ -453,10 +452,10 @@ fn void reader_decodes_synthetic_dynamic_versions() @test
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
-	link::ElfFile elf = link::read_elf(&arena, &d, "libx.so", (char[])fixture.view())!!;
+	link::ElfFile elf = link::read_elf(&arena, d.tooling_sink(), "libx.so", (char[])fixture.view())!!;
 	expect_no_diagnostics(&d);
 	check((uint)elf.kind, (uint)link::ElfKind.DYN);
 	check(elf.has_soname, true);
@@ -487,19 +486,19 @@ fn void scrt1_reader_handles_host_startup_object() @test @feat(POSIX)
 	String path = "";
 	if (result.started && result.exited && result.exit_code == 0) path = trim_newlines((String)result.stdout);
 	if (!path.len || path == "Scrt1.o") path = "/usr/lib/x86_64-linux-gnu/Scrt1.o";
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkFs fs;
 	fs.init(mem);
 	defer fs.free();
 	if (!fs.exists(path)) path = "/lib/x86_64-linux-gnu/Scrt1.o";
 	if (!fs.exists(path)) return;
-	char[] bytes = fs.read(&d, path)!!;
+	char[] bytes = fs.read(d.tooling_sink(), path)!!;
 	DynamicArenaAllocator arena;
 	arena.init(mem, 256);
 	defer arena.free();
-	link::ElfFile elf = link::read_elf(&arena, &d, path, bytes)!!;
+	link::ElfFile elf = link::read_elf(&arena, d.tooling_sink(), path, bytes)!!;
 	expect_no_diagnostics(&d);
 	check((uint)elf.kind, (uint)link::ElfKind.REL);
 	link::InputSymbol* start = elf.find_symbol("_start");
@@ -519,8 +518,8 @@ fn void scrt1_reader_handles_host_startup_object() @test @feat(POSIX)
 
 fn void libc_reader_selects_default_and_compat_versions() @test @feat(POSIX)
 {
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkFs fs;
 	fs.init(mem);
@@ -528,11 +527,11 @@ fn void libc_reader_selects_default_and_compat_versions() @test @feat(POSIX)
 	String path = "/lib/x86_64-linux-gnu/libc.so.6";
 	if (!fs.exists(path)) path = "/usr/lib/x86_64-linux-gnu/libc.so.6";
 	if (!fs.exists(path)) return;
-	char[] bytes = fs.read(&d, path)!!;
+	char[] bytes = fs.read(d.tooling_sink(), path)!!;
 	DynamicArenaAllocator arena;
 	arena.init(mem, 1024);
 	defer arena.free();
-	link::ElfFile elf = link::read_elf(&arena, &d, path, bytes)!!;
+	link::ElfFile elf = link::read_elf(&arena, d.tooling_sink(), path, bytes)!!;
 	expect_no_diagnostics(&d);
 	check((uint)elf.kind, (uint)link::ElfKind.DYN);
 	check(elf.has_soname, true);
@@ -548,39 +547,41 @@ fn void link_fs_overlay_cache_errors_and_lifetime() @test
 {
 	TrackingAllocator ta;
 	ta.init(mem);
-	Diagnostics d;
-	d.init_list(mem);
+	Collector d;
+	d.init(mem);
 	{
 	link::LinkFs fs;
 	fs.init(&ta);
 	fs.add_overlay("libfake.a", "synthetic archive");
 	check(fs.exists("libfake.a"), true);
-	char[] original_overlay = fs.read(&d, "libfake.a")!!;
+	char[] original_overlay = fs.read(d.tooling_sink(), "libfake.a")!!;
 	test::eq((String)original_overlay, "synthetic archive");
 	fs.add_overlay("libfake.a", "replacement");
 	test::eq((String)original_overlay, "synthetic archive");
-	test::eq((String)fs.read(&d, "libfake.a")!!, "replacement");
+	test::eq((String)fs.read(d.tooling_sink(), "libfake.a")!!, "replacement");
 
-	String disk_path = "/etc/os-release";
+	String root = env::get_var(tmem, "TEST_TMPDIR") ?? (String)path::temp_directory(tmem)!!;
+	String disk_path = string::tformat("%s/aro-link-reader-cache", root);
+	file::save(disk_path, "fixture")!!;
+	defer (void)file::delete(disk_path);
 	assert(fs.exists(disk_path), "host disk-cache fixture exists");
-	char[] first = fs.read(&d, disk_path)!!;
-	char[] second = fs.read(&d, disk_path)!!;
+	char[] first = fs.read(d.tooling_sink(), disk_path)!!;
+	char[] second = fs.read(d.tooling_sink(), disk_path)!!;
 	check(first.ptr == second.ptr, true);
 	fs.add_overlay(disk_path, "overlay wins");
-	test::eq((String)fs.read(&d, disk_path)!!, "overlay wins");
-	String libc_link = "/usr/lib/x86_64-linux-gnu/libc.so";
+	test::eq((String)fs.read(d.tooling_sink(), disk_path)!!, "overlay wins");
+	String libc_link = disk_path;
 	assert(fs.exists(libc_link), "host libc linker path exists");
 	fs.add_overlay(libc_link, "x");
-	test::eq((String)fs.read(&d, libc_link)!!, "x");
+	test::eq((String)fs.read(d.tooling_sink(), libc_link)!!, "x");
 	expect_no_diagnostics(&d);
 
 	String missing_path = "/definitely-missing-arocc-link-input";
 	check(fs.exists(missing_path), false);
-	char[]? missing = fs.read(&d, missing_path);
+	char[]? missing = fs.read(d.tooling_sink(), missing_path);
 	check(@catch(missing), link::FILE_NOT_FOUND);
 	check(d.messages.len(), 1);
-	check(d.messages[0].kind.ordinal, diagnostics::MessageKind.ERROR.ordinal);
-	check(d.messages[0].effective_kind.ordinal, diagnostics::MessageKind.ERROR.ordinal);
+	check(d.messages[0].kind.ordinal, reporting::Severity.ERROR.ordinal);
 
 	fs.free();
 	}

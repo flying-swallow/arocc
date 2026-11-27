@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 void plain_nonnull(int *a, int b, char *c) __attribute__((nonnull));
 void nonnull_with_args(int *a, int *b, int c) __attribute__((nonnull(2, 1)));
 

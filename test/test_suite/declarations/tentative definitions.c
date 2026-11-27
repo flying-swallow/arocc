@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 struct Tentative; // #note@8: forward declaration of 'struct Tentative'
 struct Tentative t1, t2; // #error@18: tentative definition has type 'struct Tentative' that is never completed
 

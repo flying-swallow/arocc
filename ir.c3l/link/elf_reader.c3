@@ -1,6 +1,6 @@
 // Bounds-checked ELF64 reader for the in-process linker's ET_REL/ET_DYN inputs.
 module aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import std::collections::list;
 
 const ushort ET_REL = 1;
@@ -191,16 +191,16 @@ fn String? cstr(char[] table, uint off)
 }
 
 <* @return? MALFORMED_ELF *>
-fn void? malformed(Diagnostics* d, String path, String reason)
+fn void? malformed(reporting::Sink d, String path, String reason)
 {
-	@link_err(d, Diagnostic.MALFORMED_ELF, path, reason)!;
+	@link_err(d, LinkDiagnostic.MALFORMED_ELF, path, reason)!;
 	return MALFORMED_ELF~;
 }
 
 <* @return? UNSUPPORTED_ELF *>
-fn void? unsupported(Diagnostics* d, String path, String reason)
+fn void? unsupported(reporting::Sink d, String path, String reason)
 {
-	@link_err(d, Diagnostic.UNSUPPORTED_ELF, path, reason)!;
+	@link_err(d, LinkDiagnostic.UNSUPPORTED_ELF, path, reason)!;
 	return UNSUPPORTED_ELF~;
 }
 
@@ -231,7 +231,7 @@ fn uint find_linked_section_type(InputSection[] sections, uint type, uint link)
 }
 
 <* @return? MALFORMED_ELF *>
-fn String? section_string(Diagnostics* d, String path, char[] table, uint off)
+fn String? section_string(reporting::Sink d, String path, char[] table, uint off)
 {
 	String? result = cstr(table, off);
 	if (catch f = result)
@@ -243,7 +243,7 @@ fn String? section_string(Diagnostics* d, String path, char[] table, uint off)
 }
 
 <* @return? MALFORMED_ELF, UNSUPPORTED_ELF *>
-fn uint? read_symbols(Allocator arena, Diagnostics* d, String path, InputSection[] sections,
+fn uint? read_symbols(Allocator arena, reporting::Sink d, String path, InputSection[] sections,
 	uint table_index, uint expected_type, InputSymbol[]* out_symbols, uint* first_global)
 {
 	InputSection* table = &sections[(sz)table_index];
@@ -352,7 +352,7 @@ fn uint? read_symbols(Allocator arena, Diagnostics* d, String path, InputSection
 }
 
 <* @return? MALFORMED_ELF, UNSUPPORTED_ELF *>
-fn void? parse_relas(Allocator arena, Diagnostics* d, String path, InputSection[] sections,
+fn void? parse_relas(Allocator arena, reporting::Sink d, String path, InputSection[] sections,
 	uint symbol_table_index, uint symbol_count, RelaSection[]* out_relas)
 {
 	List{RelaSection} relas;
@@ -404,7 +404,7 @@ fn void? parse_relas(Allocator arena, Diagnostics* d, String path, InputSection[
 }
 
 <* @return? MALFORMED_ELF *>
-fn void? parse_groups(Allocator arena, Diagnostics* d, String path, InputSection[] sections,
+fn void? parse_groups(Allocator arena, reporting::Sink d, String path, InputSection[] sections,
 	InputSymbol[] symbols, uint symbol_table_index, SectionGroup[]* out_groups)
 {
 	List{SectionGroup} groups;
@@ -452,7 +452,7 @@ fn void? parse_groups(Allocator arena, Diagnostics* d, String path, InputSection
 }
 
 <* @return? MALFORMED_ELF *>
-fn void? parse_dynamic(Allocator arena, Diagnostics* d, String path, InputSection[] sections,
+fn void? parse_dynamic(Allocator arena, reporting::Sink d, String path, InputSection[] sections,
 	String* soname, bool* has_soname, String[]* out_needed)
 {
 	List{String} needed;
@@ -503,7 +503,7 @@ fn String? version_name(VersionName[] versions, ushort index)
 }
 
 <* @return? MALFORMED_ELF *>
-fn void? parse_versions(Allocator arena, Diagnostics* d, String path, InputSection[] sections,
+fn void? parse_versions(Allocator arena, reporting::Sink d, String path, InputSection[] sections,
 	InputSymbol[] symbols, uint dynsym_index)
 {
 	uint versym_index = 0;
@@ -622,7 +622,7 @@ fn void? parse_versions(Allocator arena, Diagnostics* d, String path, InputSecti
  The caller owns the arena and releases the complete result by freeing it.
  @return? link::MALFORMED_ELF, link::UNSUPPORTED_ELF
 *>
-fn ElfFile? read_elf(Allocator arena, Diagnostics* d, String path, char[] bytes)
+fn ElfFile? read_elf(Allocator arena, reporting::Sink d, String path, char[] bytes)
 {
 	if ((ulong)bytes.len < ELF_HEADER_SIZE) malformed(d, path, "ELF header is truncated")!;
 	if (!is_elf(bytes)) malformed(d, path, "invalid ELF magic")!;

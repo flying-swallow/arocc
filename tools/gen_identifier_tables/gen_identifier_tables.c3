@@ -1,4 +1,4 @@
-// Generate aro/src/frontend/c/identifier_tables.c3 from aro/src/aro/char_info/identifier_tables.zig.
+// Generate aro_cc/src/identifier_tables.c3 from aro/src/aro/char_info/identifier_tables.zig.
 //
 // The Zig file is the reference copy of the unicode-ident XID_Start/XID_Continue
 // trie (Unicode data, see LICENSE-UNICODE). This tool copies its data verbatim
@@ -10,7 +10,7 @@ module gen_identifier_tables;
 import std::io, std::collections::list, aro_harness;
 
 const String SRC_REL = "aro/src/aro/char_info/identifier_tables.zig";
-const String DST_REL = "aro/src/frontend/c/identifier_tables.c3";
+const String DST_REL = "aro_cc/src/identifier_tables.c3";
 
 faultdef BAD_INPUT;
 

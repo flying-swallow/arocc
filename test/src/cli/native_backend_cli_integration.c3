@@ -1,4 +1,4 @@
-// Compile data and control flow with aro_c3, link using the host compiler,
+// Compile data and control flow with aro_cc, link using the host compiler,
 // and execute the results through both native output paths.
 module native_backend_cli_integration;
 import std::io, aro_harness, native;
@@ -15,7 +15,7 @@ fn int main(String[] args)
 {
 	if (args.len != 5)
 	{
-		io::eprintfn("usage: %s <aro_c3> <backend_data.c> <backend_consumer.c> <c_compiler>", args[0]);
+		io::eprintfn("usage: %s <aro_cc> <backend_data.c> <backend_consumer.c> <c_compiler>", args[0]);
 		return 2;
 	}
 	String aro_c3_arg = args[1];
@@ -45,7 +45,7 @@ fn int main(String[] args)
 			return 1;
 		}
 	}
-	String aro_c3 = native::resolve_arg(mem, aro_c3_arg);
+	String aro_cc = native::resolve_arg(mem, aro_c3_arg);
 	String cc = native::resolve_arg(mem, cc_arg);
 
 	String? tmpdir = aro_harness::make_temp_dir(mem, "aro-native-backend.");
@@ -59,12 +59,12 @@ fn int main(String[] args)
 	String consumer_object = string::format(mem, "%s/backend_consumer.o", tmpdir);
 	String binary = string::format(mem, "%s/backend_consumer", tmpdir);
 
-	// The declared native tool runfiles keep cc and as side by side. aro_c3 finds
+	// The declared native tool runfiles keep cc and as side by side. aro_cc finds
 	// its assembler through PATH, so expose that directory for its invocation.
 	native::prepend_path(aro_harness::dirname_of(cc));
 
 	int status;
-	if ((status = step({ aro_c3, "-c", data_source, "-o", data_object }))) return status;
+	if ((status = step({ aro_cc, "-c", data_source, "-o", data_object }))) return status;
 	if ((status = step({ cc, "-c", consumer_source, "-o", consumer_object }))) return status;
 	if ((status = step({ cc, consumer_object, data_object, "-o", binary }))) return status;
 	if ((status = step({ binary }))) return status;
@@ -72,7 +72,7 @@ fn int main(String[] args)
 	// A link step with only object inputs goes straight to the linker (it used to
 	// fail with "no input files").
 	String linked_by_aro = string::format(mem, "%s/backend_consumer_aro_link", tmpdir);
-	if ((status = step({ aro_c3, consumer_object, data_object, "-o", linked_by_aro }))) return status;
+	if ((status = step({ aro_cc, consumer_object, data_object, "-o", linked_by_aro }))) return status;
 	if ((status = step({ linked_by_aro }))) return status;
 
 	// Exercise scalar identities, dominating CSE, PHI edges, side effects,
@@ -98,7 +98,7 @@ fn int main(String[] args)
 	{
 		foreach (level : (String[]){ "-O0", "-O1", "-O2", "-O3", "-Os", "-Oz" })
 		{
-			if ((status = step({ aro_c3, level, "--verify-ir", mode, "-c", pipeline_source, "-o", data_object }))) return status;
+			if ((status = step({ aro_cc, level, "--verify-ir", mode, "-c", pipeline_source, "-o", data_object }))) return status;
 			if ((status = step({ cc, data_object, "-o", binary }))) return status;
 			if ((status = step({ binary }))) return status;
 		}

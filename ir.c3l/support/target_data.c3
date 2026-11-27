@@ -10,11 +10,11 @@
 // not available in this environment, so every table here is
 // "from Zig std.Target knowledge, not verified by execution".
 //
-// Cross-checks that WERE done (see test/unit/types/target_tests.c3):
+// Cross-checks that WERE done (see aro_cc/test/types/target_tests.c3):
 // - sizeof/_Alignof of char..double and void* for every target string of
-//   test/records/0013_test.c (mahkoh/repr-c expectations, 109 targets) except
+//   aro_cc/test/records/0013_test.c (mahkoh/repr-c expectations, 109 targets) except
 //   the x86/arm Darwin ones the record runner skips;
-// - test/cases fixtures: "avr sizeof long.c" (long double 4 bytes),
+// - aro_cc/test/cases fixtures: "avr sizeof long.c" (long double 4 bytes),
 //   "msp430 builtin types.c" (long double 8 bytes, align 2, unsigned char),
 //   "float header *.c" (x86_64 and x86 NetBSD long double is x87 80-bit,
 //   aarch64-linux-gnu long double is IEEE quad), "uefi intmax_t.c";

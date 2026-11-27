@@ -1,5 +1,5 @@
 // #kind: syntax
-// Reduced from GCC testsuite cases that used to crash aro_c3.
+// Reduced from GCC testsuite cases that used to crash aro_cc.
 #include <stdarg.h>
 
 int label_diff(void)

@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -std=c17
 void foo(void) {
     if ((char)1); // #warning@17: if statement has empty body [-Wempty-body] // #note@17: put the semicolon on a separate line to silence this warning

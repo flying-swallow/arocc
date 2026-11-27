@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 #pragma GCC diagnostic warning "-Wgnu-statement-expression"
 
 int g = ({ // #warning@10: use of GNU statement expression extension [-Wgnu-statement-expression] // #error@10: statement expression not allowed at file scope

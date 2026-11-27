@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -fdeclspec --target=x86_64-linux
 // #todo: TODO: implement 'restrict' attribute
 #pragma GCC diagnostic ignored "-Wgnu-alignof-expression"

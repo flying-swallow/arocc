@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #note: <scratch space>:4:13: expanded from here
 // #note: <scratch space>:9:9: expanded from here
 #include "include/global_var_once_pragma_operator.h"

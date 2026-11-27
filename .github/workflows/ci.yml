@@ -25,8 +25,10 @@ on:
       - '.bazelignore'
       - 'include/**'
       - 'aro/src/**'
+      - 'aro/compiler/**'
+      - 'aro_cc/**'
+      - 'aro_c3c/**'
       - 'ir.c3l/**'
-      - 'test/**'
       - 'tools/**'
       - 'aro/app/**'
       - 'distfiles/**'
@@ -56,8 +58,10 @@ on:
       - '.bazelignore'
       - 'include/**'
       - 'aro/src/**'
+      - 'aro/compiler/**'
+      - 'aro_cc/**'
+      - 'aro_c3c/**'
       - 'ir.c3l/**'
-      - 'test/**'
       - 'tools/**'
       - 'aro/app/**'
       - 'distfiles/**'
@@ -170,8 +174,8 @@ jobs:
           bazel --batch --output_user_root="$bazel_root" fetch \
             --experimental_collect_system_network_usage=false \
             --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
-            //:aro_c3 //:aro_distribution //tools:generate_def \
-            //tools/... //test/unit/... //test/src/... //test/test_suite/... //test/src/fuzz:replay_test
+            //:aro_cc //:aro_c3c //:aro_distribution //tools:generate_def \
+            //tools/... //aro_cc/test/... //aro_c3c:all
 
       - name: Build all C3 targets (${{ matrix.compilation_mode }})
         shell: bash
@@ -180,8 +184,8 @@ jobs:
           bazel --batch --output_user_root="$bazel_root" build \
             --experimental_collect_system_network_usage=false \
             --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
-            //:aro_c3 //:aro_distribution //tools:generate_def \
-            //tools/... //test/unit/... //test/src/... //test/test_suite/... //test/src/fuzz:replay_test
+            //:aro_cc //:aro_c3c //:aro_distribution //tools:generate_def \
+            //tools/... //aro_cc/test/... //aro_c3c:all
 
       - name: Run C3 suites, cross-target frontend/layout, CLI/distribution, and fuzz replay (${{ matrix.compilation_mode }})
         shell: bash
@@ -193,18 +197,18 @@ jobs:
             --experimental_collect_system_network_usage=false \
             --repo_env="C3C=$C3C" -c ${{ matrix.compilation_mode }} \
             --test_output=errors \
-            //test:unit //test:integration //test:records //test:regression \
-            //test/src/cli:cli_tests \
-            //test/src/cli:backend_cli_regression \
-            //test/src/cli:library_consumer \
-            //test/src/cli:native_backend_cli_integration \
-            //test/src/fuzz:replay_test \
-            //test/unit/values:float_print_manual_tests \
-            //test/unit/lexer:text_literal_semantics_manual_tests \
-            //test/unit/values:number_value_manual_tests \
-            //test/unit/preprocessor:macro_expand_manual_tests \
-            //test/unit/driver:profiling_disabled_tests \
-            //test/unit/driver:profiling_enabled_tests
+            //aro_cc/test:unit //aro_cc/test:integration //aro_cc/test:records //aro_cc/test:regression //aro_c3c:all \
+            //aro_cc/test/src/cli:cli_tests \
+            //aro_cc/test/src/cli:backend_cli_regression \
+            //aro_cc/test/src/cli:library_consumer \
+            //aro_cc/test/src/cli:native_backend_cli_integration \
+            //aro_cc/test/src/fuzz:replay_test \
+            //aro_cc/test/values:float_print_manual_tests \
+            //aro_cc/test/lexer:text_literal_semantics_manual_tests \
+            //aro_cc/test/values:number_value_manual_tests \
+            //aro_cc/test/preprocessor:macro_expand_manual_tests \
+            //aro_cc/test/driver:profiling_disabled_tests \
+            //aro_cc/test/driver:profiling_enabled_tests
 
       # The required profiling suite exercises both feature states with the
       # checked-in ABI stub. A real Tracy client needs an external Tracy source
@@ -223,7 +227,7 @@ jobs:
           bazel --batch --output_user_root="$bazel_root" build \
             --experimental_collect_system_network_usage=false \
             --repo_env="C3C=$C3C" --action_env="AFL_CC=$AFL_CC" \
-            -c ${{ matrix.compilation_mode }} //test/src/fuzz:afl_fuzz
+            -c ${{ matrix.compilation_mode }} //aro_cc/test/src/fuzz:afl_fuzz
           AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 afl-fuzz \
-            -i test/fuzz/corpus -o "$RUNNER_TEMP/afl-smoke" -V 10 -- \
-            bazel-bin/test/src/fuzz/afl_fuzz
+            -i aro_cc/test/fuzz/corpus -o "$RUNNER_TEMP/afl-smoke" -V 10 -- \
+            bazel-bin/aro_cc/test/src/fuzz/afl_fuzz

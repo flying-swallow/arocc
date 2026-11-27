@@ -5,8 +5,8 @@ load("//tools:c3.bzl", "c3_library", "c3_main_test", "c3_test")
 c3_test(
     name = "cli_tests",
     srcs = ["cli_tests.c3"],
-    data = ["//:aro_c3"],
-    deps = ["//test/src/manifest:runner_lib", "//:aro_c3_lib"],
+    data = ["//:aro_cc"],
+    deps = ["//test/src/manifest:runner_lib", "//:aro_cc_lib"],
 )
 
 # Source-derived lifecycle checks for data-only backend CLI modes, subprocess
@@ -14,7 +14,7 @@ c3_test(
 c3_test(
     name = "backend_cli_regression",
     srcs = ["backend_cli_regression.c3"],
-    deps = ["//:aro_c3_lib"],
+    deps = ["//:aro_cc_lib"],
 )
 
 # Host gate, `// expect N` parsing and PATH setup shared by the native
@@ -26,20 +26,20 @@ c3_library(
     visibility = ["//test/src:__subpackages__"],
 )
 
-# Native Linux x86-64 acceptance: compile supported data through aro_c3, then
+# Native Linux x86-64 acceptance: compile supported data through aro_cc, then
 # link and run a separately compiled C consumer using the declared host cc.
 c3_main_test(
     name = "native_backend_cli_integration",
     srcs = ["native_backend_cli_integration.c3"],
     deps = [":native_test_support"],
     args = [
-        "$(location //:aro_c3)",
+        "$(location //:aro_cc)",
         "$(location //test:native/backend_data.c)",
         "$(location //test:native/backend_consumer.c)",
         "$(location @native_assembler_tools//:cc)",
     ],
     data = [
-        "//:aro_c3",
+        "//:aro_cc",
         "//test:native/backend_data.c",
         "//test:native/backend_consumer.c",
         "@native_assembler_tools//:cc",
@@ -80,14 +80,14 @@ c3_test(
 c3_main_test(
     name = "darwin_arm64_integration",
     srcs = ["darwin_arm64_integration.c3"],
-    deps = [":native_test_support", "//:aro_c3_lib"],
+    deps = [":native_test_support", "//:aro_cc_lib"],
     args = [
-        "$(location //:aro_c3)",
+        "$(location //:aro_cc)",
         "$(location //test:native/darwin_arm64_abi.c)",
         "$(location //test:native/darwin_arm64_consumer.c)",
     ],
     data = [
-        "//:aro_c3",
+        "//:aro_cc",
         "//test:native/darwin_arm64_abi.c",
         "//test:native/darwin_arm64_consumer.c",
         "//test:native/darwin_arm64_abi.h",

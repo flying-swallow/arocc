@@ -43,11 +43,11 @@ def test_suite_area(area, native = False, name = None, env = {}, **kwargs):
       **kwargs: forwarded to the test rule (tags, size, ...).
     """
     args = [
-        "$(location //:aro_c3)",
+        "$(location //:aro_cc)",
         "test/test_suite/" + area,
         "--no-terminal",
     ]
-    data = ["//:aro_c3", ":" + area, ":_support"]
+    data = ["//:aro_cc", ":" + area, ":_support"]
     if native:
         args += ["--cc", "$(location @native_assembler_tools//:cc)"]
         data += _NATIVE_TOOLS

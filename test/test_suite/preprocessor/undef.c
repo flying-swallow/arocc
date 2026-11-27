@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -undef --target=x86_64-linux-gnu
 #if defined(linux) || defined(__linux) || defined(__linux__)
 #error Should not be defined

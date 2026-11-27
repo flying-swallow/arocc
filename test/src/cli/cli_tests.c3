@@ -383,7 +383,7 @@ fn String? production_executable_from_manifest(String manifest_path, String work
 	char[]? manifest_data = file::load(tmem, manifest_path);
 	if (catch manifest_data) return NOT_FOUND~;
 	String contents = (String)manifest_data;
-	String expected = string::tformat("%s/aro_c3%s", workspace, suffix);
+	String expected = string::tformat("%s/aro_cc%s", workspace, suffix);
 	usz start = 0;
 	while (start < contents.len)
 	{
@@ -414,17 +414,17 @@ fn String production_executable()
 	String workspace = env::get_var(tmem, "TEST_WORKSPACE") ?? "";
 	String root = env::get_var(tmem, "TEST_SRCDIR") ?? "";
 	String suffix = env::WIN32 ? ".exe" : "";
-	assert(workspace.len, "TEST_WORKSPACE is required to resolve aro_c3 from runfiles");
+	assert(workspace.len, "TEST_WORKSPACE is required to resolve aro_cc from runfiles");
 	if (root.len)
 	{
-		String candidate = aro_runner::join_path(tmem, aro_runner::join_path(tmem, root, workspace), string::tformat("aro_c3%s", suffix));
+		String candidate = aro_runner::join_path(tmem, aro_runner::join_path(tmem, root, workspace), string::tformat("aro_cc%s", suffix));
 		if (file::is_file(candidate)) return candidate;
 	}
 	if (try manifest = env::get_var(tmem, "RUNFILES_MANIFEST_FILE"))
 	{
 		if (try candidate = production_executable_from_manifest(manifest, workspace, suffix)) return candidate;
 	}
-	unreachable("production aro_c3 binary was not found in runfiles tree or RUNFILES_MANIFEST_FILE");
+	unreachable("production aro_cc binary was not found in runfiles tree or RUNFILES_MANIFEST_FILE");
 	return "";
 }
 
@@ -443,7 +443,7 @@ fn ChildResult run_production_cli(String[] args, EnvPair[] overrides = {}, bool 
 		environment = filtered.array_view();
 	}
 	ChildResult result = aro_runner::run_child(tmem, argv.array_view(), "", environment);
-	assert(result.spawned && result.exited, "aro_c3 failed to start or exit");
+	assert(result.spawned && result.exited, "aro_cc failed to start or exit");
 	return result;
 }
 
@@ -455,12 +455,12 @@ fn void production_main_uses_runfiles_environment_for_builtin_headers() @test
 	String runfiles = env::get_var(tmem, "TEST_SRCDIR") ?? "";
 	assert(runfiles.len, "TEST_SRCDIR is required for the production CLI runfiles test");
 	ChildResult explicit_runfiles = run_production_cli(args, { { .key = "RUNFILES_DIR", .value = runfiles } });
-	assert(explicit_runfiles.exit_code == 0, "aro_c3 failed to use RUNFILES_DIR: %s", explicit_runfiles.stderr);
-	assert(explicit_runfiles.stdout.contains("size_t value;"), "aro_c3 did not find stddef.h through RUNFILES_DIR");
+	assert(explicit_runfiles.exit_code == 0, "aro_cc failed to use RUNFILES_DIR: %s", explicit_runfiles.stderr);
+	assert(explicit_runfiles.stdout.contains("size_t value;"), "aro_cc did not find stddef.h through RUNFILES_DIR");
 
 	ChildResult fallback = run_production_cli(args, {}, true);
-	assert(fallback.exit_code == 0, "aro_c3 failed to use TEST_SRCDIR fallback: %s", fallback.stderr);
-	assert(fallback.stdout.contains("size_t value;"), "aro_c3 did not find stddef.h through TEST_SRCDIR");
+	assert(fallback.exit_code == 0, "aro_cc failed to use TEST_SRCDIR fallback: %s", fallback.stderr);
+	assert(fallback.stdout.contains("size_t value;"), "aro_cc did not find stddef.h through TEST_SRCDIR");
 }
 
 fn void production_cli_renders_color_overrides_to_stderr() @test
@@ -484,8 +484,8 @@ fn void production_main_copies_source_date_epoch_environment() @test
 	String input = put(dir, "date.c", "const char* date = __DATE__;\n");
 	String[] args = { "-E", "-P", "-nostdinc", "-nobuiltininc", input };
 	ChildResult result = run_production_cli(args, { { .key = "SOURCE_DATE_EPOCH", .value = "0" } });
-	assert(result.exit_code == 0, "aro_c3 failed while expanding __DATE__: %s", result.stderr);
-	assert(result.stdout.contains("Jan  1 1970"), "aro_c3 did not pass SOURCE_DATE_EPOCH into compilation: %s", result.stdout);
+	assert(result.exit_code == 0, "aro_cc failed while expanding __DATE__: %s", result.stderr);
+	assert(result.stdout.contains("Jan  1 1970"), "aro_cc did not pass SOURCE_DATE_EPOCH into compilation: %s", result.stdout);
 }
 
 fn void production_preprocessor_output_dash_uses_stdout() @test
@@ -494,7 +494,7 @@ fn void production_preprocessor_output_dash_uses_stdout() @test
 	String input = put(dir, "stdout.c", "int output_to_stdout = 11;\n");
 	String[] args = { "-E", "-P", "-nostdinc", "-nobuiltininc", "-o", "-", input };
 	ChildResult result = run_production_cli(args);
-	assert(result.exit_code == 0, "aro_c3 failed while writing preprocessor output to stdout: %s", result.stderr);
+	assert(result.exit_code == 0, "aro_cc failed while writing preprocessor output to stdout: %s", result.stderr);
 	assert(result.stdout.contains("int output_to_stdout = 11;"), "-E -o - did not write preprocessor output to stdout: %s", result.stdout);
 }
 
@@ -504,7 +504,7 @@ fn void production_verbose_ast_uses_stdout() @test
 	String input = put(dir, "ast.c", "int ast_output = 13;\n");
 	String[] args = { "-fsyntax-only", "--verbose-ast", "-nostdinc", "-nobuiltininc", input };
 	ChildResult result = run_production_cli(args);
-	assert(result.exit_code == 0, "aro_c3 failed while dumping a valid AST: %s", result.stderr);
+	assert(result.exit_code == 0, "aro_cc failed while dumping a valid AST: %s", result.stderr);
 	assert(result.stdout.contains("ast_output"), "--verbose-ast did not write the parsed tree to stdout: %s", result.stdout);
 	assert(result.stderr.len == 0, "valid --verbose-ast input emitted unexpected diagnostics: %s", result.stderr);
 }

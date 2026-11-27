@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: --target=x86_64-linux -std=c23
 int arr[20] = {0};
 _Static_assert(&arr[10] - &arr[0] == 10);

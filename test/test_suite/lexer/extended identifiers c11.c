@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -std=c11
 #pragma GCC diagnostic warning "-Wc99-compat"
 

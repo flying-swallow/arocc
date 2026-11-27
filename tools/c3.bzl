@@ -198,9 +198,9 @@ def _distribution_source_path(file, prefixes):
     # source-distribution locations follow the module names they declare.
     owner_name = file.owner.name if file.owner else ""
     if owner_name == "builtin_defs" and file.basename.endswith(".c3"):
-        return "aro/src/frontend/c/builtin_defs/" + file.basename
+        return "aro_cc/src/builtin_defs/" + file.basename
     if owner_name == "system_defaults_module" and file.basename == "system_defaults_module.c3":
-        return "aro/src/system_defaults.c3"
+        return "aro/compiler/system_defaults.c3"
     return file.short_path
 
 def _distribution_data_path(file, prefixes):

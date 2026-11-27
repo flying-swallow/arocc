@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // Source-derived from the invalid-arity cases in // #error@47: expected 1 argument(s) got 0
 // test/cases/builtin_constant_p.c. This also pins the diagnostic to the
 // closing parenthesis that completes the malformed call.

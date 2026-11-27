@@ -5,15 +5,12 @@ load("//tools:c3.bzl", "c3_test")
 c3_test(name = "ir_core_tests", srcs = ["ir_core_tests.c3"], deps = ["//ir.c3l:core"])
 
 c3_test(name = "ir_tests", srcs = ["ir_tests.c3"], deps = ["//ir.c3l:ir"])
-c3_test(name = "bitset_tests", srcs = ["bitset_tests.c3"], deps = ["//:aro_c3_lib"])
-c3_test(name = "codegen_tests", srcs = ["codegen_tests.c3"], deps = ["//:aro_c3_lib"])
-c3_test(name = "ir_opt_tests", srcs = ["ir_opt_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "bitset_tests", srcs = ["bitset_tests.c3"], deps = ["//:aro_cc_lib"])
 c3_test(name = "elf_tests", srcs = ["elf_tests.c3"], deps = ["//ir.c3l:ir"])
-c3_test(name = "elf_link_tests", srcs = ["elf_link_tests.c3"], deps = ["//:aro_c3_lib"])
-c3_test(name = "link_reader_tests", srcs = ["link_reader_tests.c3", "data/link_test_builders.c3"], deps = ["//:aro_c3_lib"])
-c3_test(name = "link_archive_tests", srcs = ["link_archive_tests.c3", "data/link_test_builders.c3"], deps = ["//:aro_c3_lib"])
-c3_test(name = "link_args_tests", srcs = ["link_args_tests.c3"], deps = ["//:aro_c3_lib"])
-c3_test(name = "assembly_tests", srcs = ["assembly_tests.c3"], deps = ["//:aro_c3_lib"])
+c3_test(name = "elf_link_tests", srcs = ["elf_link_tests.c3"], deps = ["//:aro_cc_lib"])
+c3_test(name = "link_reader_tests", srcs = ["link_reader_tests.c3", "data/link_test_builders.c3"], deps = ["//ir.c3l:link"])
+c3_test(name = "link_archive_tests", srcs = ["link_archive_tests.c3", "data/link_test_builders.c3"], deps = ["//ir.c3l:link"])
+c3_test(name = "link_args_tests", srcs = ["link_args_tests.c3"], deps = ["//ir.c3l:link"])
 c3_test(name = "x86_64_tests", srcs = ["x86_64_tests.c3"], deps = ["//ir.c3l:ir"])
 
 c3_test(name = "aarch64_tests", srcs = ["aarch64_tests.c3"], deps = ["//ir.c3l:ir"])
@@ -24,14 +21,11 @@ test_suite(
     tests = [
         ":ir_core_tests",
         ":ir_tests",
-        ":codegen_tests",
-        ":ir_opt_tests",
         ":elf_tests",
         ":elf_link_tests",
         ":link_reader_tests",
         ":link_archive_tests",
         ":link_args_tests",
-        ":assembly_tests",
         ":x86_64_tests",
         ":aarch64_tests",
     ],

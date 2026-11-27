@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #note: <scratch space>:1:1: expanded from here
 #define a 1 ## 2 // #note@11: expanded from here
 #define b a

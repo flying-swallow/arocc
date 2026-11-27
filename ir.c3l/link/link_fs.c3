@@ -1,6 +1,6 @@
 // Linker input filesystem with deterministic in-memory overlays and read cache.
 module aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import std::collections::list;
 import std::io::file;
 
@@ -98,7 +98,7 @@ fn bool LinkFs.exists(&self, String path)
 
  @return? link::FILE_NOT_FOUND
 *>
-fn char[]? LinkFs.read(&self, Diagnostics* d, String path)
+fn char[]? LinkFs.read(&self, reporting::Sink d, String path)
 {
 	if (LinkFsEntry* overlay = find_entry(&self.overlay, path)) return overlay.bytes;
 	if (LinkFsEntry* cached = find_entry(&self.loaded, path)) return cached.bytes;
@@ -106,7 +106,7 @@ fn char[]? LinkFs.read(&self, Diagnostics* d, String path)
 	char[]? loaded_opt = file::load(self.allocator, path);
 	if (catch loaded_opt)
 	{
-		@link_err(d, Diagnostic.CANNOT_OPEN, path)!;
+		@link_err(d, LinkDiagnostic.CANNOT_OPEN, path)!;
 		return FILE_NOT_FOUND~;
 	}
 

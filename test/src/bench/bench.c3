@@ -1,4 +1,4 @@
-// Compile-time and run-time benchmark of aro_c3 against the host gcc/clang.
+// Compile-time and run-time benchmark of aro_cc against the host gcc/clang.
 //
 //   bazel run -c opt //test/src/bench:bench [-- --mode compile|run|all]
 //       [--runs N] [--corpus FILE]... [--filter GLOB] [--compilers gcc,clang]
@@ -217,7 +217,7 @@ fn int main(String[] argv)
 {
 	Options o;
 	String root = aro_harness::repo_root(mem);
-	o.aro = string::format(mem, "%s/bazel-bin/aro_c3", root);
+	o.aro = string::format(mem, "%s/bazel-bin/aro_cc", root);
 	o.resource_dir = root;
 	o.bench_dir = string::format(mem, "%s/test/bench/run", root);
 	o.mode = "all";

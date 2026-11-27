@@ -1,6 +1,6 @@
 // Parser for the input-list subset of GNU ld scripts used by system libraries.
 module aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import std::collections::list;
 
 enum ScriptInputKind : char
@@ -52,16 +52,16 @@ struct ScriptToken
 }
 
 <* @return? link::MALFORMED_SCRIPT *>
-fn void? malformed_script(Diagnostics* d, String path, uint line, String reason)
+fn void? malformed_script(reporting::Sink d, String path, uint line, String reason)
 {
-	@link_err(d, Diagnostic.MALFORMED_SCRIPT, path, (int)line, reason)!;
+	@link_err(d, LinkDiagnostic.MALFORMED_SCRIPT, path, (int)line, reason)!;
 	return MALFORMED_SCRIPT~;
 }
 
 <* @return? link::UNSUPPORTED_SCRIPT *>
-fn void? unsupported_script(Diagnostics* d, String path, String command)
+fn void? unsupported_script(reporting::Sink d, String path, String command)
 {
-	@link_err(d, Diagnostic.UNSUPPORTED_SCRIPT, path, command)!;
+	@link_err(d, LinkDiagnostic.UNSUPPORTED_SCRIPT, path, command)!;
 	return UNSUPPORTED_SCRIPT~;
 }
 
@@ -71,7 +71,7 @@ fn bool script_whitespace(char c)
 }
 
 <* Tokenize while borrowing word contents from the original script text. @return? link::MALFORMED_SCRIPT *>
-fn ScriptToken[]? lex_ld_script(Allocator arena, Diagnostics* d, String path, String text)
+fn ScriptToken[]? lex_ld_script(Allocator arena, reporting::Sink d, String path, String text)
 {
 	List{ScriptToken} tokens;
 	tokens.init(arena);
@@ -158,7 +158,7 @@ fn ScriptToken[]? lex_ld_script(Allocator arena, Diagnostics* d, String path, St
 
 struct ScriptParser
 {
-	Diagnostics* diagnostics;
+	reporting::Sink diagnostics;
 	String path;
 	ScriptToken[] tokens;
 	sz at;
@@ -281,7 +281,7 @@ fn void? ScriptParser.parse_output_format(&self)
 }
 
 <* @return? link::MALFORMED_SCRIPT, link::UNSUPPORTED_SCRIPT *>
-fn LdScript? parse_ld_script(Allocator arena, Diagnostics* d, String path, String text)
+fn LdScript? parse_ld_script(Allocator arena, reporting::Sink d, String path, String text)
 {
 	ScriptToken[]? token_result = lex_ld_script(arena, d, path, text);
 	if (catch token_result) return MALFORMED_SCRIPT~;

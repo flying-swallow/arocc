@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: --target=x86-linux-gnu -pedantic
 // Note: examples taken from here: https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html
 // Some examples do not use real instructions or register names, which may cause failures once we do

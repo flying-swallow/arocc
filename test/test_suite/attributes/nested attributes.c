@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 typedef int __attribute__((aligned(1))) ALIGN_1;
 typedef ALIGN_1 __attribute__((unused)) UNUSED;
 _Static_assert(_Alignof(UNUSED) == 1, "");

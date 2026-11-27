@@ -4,7 +4,7 @@ load("//tools:c3.bzl", "c3_library", "c3_test")
 c3_library(
     name = "record_runner_lib",
     srcs = ["record_runner.c3"],
-    deps = ["//:aro_c3_lib"],
+    deps = ["//:aro_cc_lib"],
 )
 
 c3_test(
@@ -18,7 +18,7 @@ c3_test(
     srcs = ["record_regression.c3"],
     data = [
         ":record_runner_lib",
-        "//:aro_c3",
+        "//:aro_cc",
         "//test:record_fixtures",
     ],
     deps = [":record_runner_lib"],

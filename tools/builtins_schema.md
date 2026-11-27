@@ -19,8 +19,8 @@ Zig reference: `build/generate_def.zig`, `build.zig` (`generateDef`, 19 inputs),
 | `tools/generate_def.c3` | 12.2 table-gen | `emit_table`. |
 | `tools/generate_def_main.c3` | 12.2 table-gen | CLI `main` (done in stage 0). |
 | `tools/builtins.bzl` | 12.2 table-gen | `builtin_defs` rule (done in stage 0). |
-| `test/unit/builtins/generate_def_tests.c3` | stage 0, extendable | Contract checks for the shared types. |
-| `test/unit/builtins/builtins_tests.c3` | stage 2 integrator | Acceptance tests. |
+| `aro_cc/test/builtins/generate_def_tests.c3` | stage 0, extendable | Contract checks for the shared types. |
+| `aro_cc/test/builtins/builtins_tests.c3` | stage 2 integrator | Acceptance tests. |
 
 The plan gives "`tools/generate_def.c3`" to both def-parser and table-gen. The
 contract splits it into the files above, so the two agents never edit the same
@@ -32,12 +32,12 @@ unit tests can link the parser and emitter without a second `main`.
 
 ```
 src/aro/Builtins/<group>.def --(//tools:generate_def, one action per file)--> bazel-bin/builtin_defs/<group>.c3
-//:builtin_defs (19 outputs) ----------------------------------------------> listed in //:aro_c3_lib srcs
+//:builtin_defs (19 outputs) ----------------------------------------------> listed in //:aro_cc_lib srcs
 //tools:generate_def = generate_def_main.c3 + //tools:generate_def_lib
 //tools:generate_def_lib = generate_def{,_parse,_schema}.c3 + //:src/builtin_properties.c3
 ```
 
-The generator never depends on `aro_c3_lib`, because that would be a cycle.
+The generator never depends on `aro_cc_lib`, because that would be a cycle.
 `builtin_properties.c3` is compiled into both, and it therefore imports
 nothing but std.
 
@@ -47,7 +47,7 @@ prints `<input>:<line>: error: <FAULT>: <detail>` to stderr, exits 1, and
 writes nothing.
 
 Per-file actions mean that editing one `.def` reruns only that group's
-generation (plus the C3 compiles that consume `aro_c3_lib`).
+generation (plus the C3 compiles that consume `aro_cc_lib`).
 
 ## Input grammar (`.def`)
 
@@ -189,10 +189,10 @@ const BuiltinTag TAG_<NAME UPPERCASED> = { .group = <GROUP>, .index = <i> };
 
 The layout was checked at full scale. With the real generated tables
 (13,552 builtins, about 41k lines), an uncontended c3c compile of
-`aro_c3_lib` plus a small test takes about 2.0 s at -O0 and 1.6 s at -O2,
+`aro_cc_lib` plus a small test takes about 2.0 s at -O0 and 1.6 s at -O2,
 against about 1.7 s with empty tables (stage 2 measurement). The
 uppercase-collision counts above (1 pair in common, 8 in ve, none elsewhere)
-were verified against the generated tables by `//test/unit/builtins:builtins_tests`.
+were verified against the generated tables by `//aro_cc/test/builtins:builtins_tests`.
 
 ## Runtime API
 
@@ -235,10 +235,10 @@ were verified against the generated tables by `//test/unit/builtins:builtins_tes
 
 ## Acceptance split (plan 12)
 
-Parser faults are covered by `//test/unit/builtins:def_parse_tests`, emitter layout by
-`//test/unit/builtins:def_emit_tests`, regeneration determinism (parse + emit twice, and
+Parser faults are covered by `//aro_cc/test/builtins:def_parse_tests`, emitter layout by
+`//aro_cc/test/builtins:def_emit_tests`, regeneration determinism (parse + emit twice, and
 equality with the Bazel `GenerateDef` outputs) by
-`//test/unit/builtins:builtin_defs_regen_tests`. The integrator's `//test/unit/builtins:builtins_tests`
+`//aro_cc/test/builtins:builtin_defs_regen_tests`. The integrator's `//aro_cc/test/builtins:builtins_tests`
 covers:
 
 - every definition round-trips, i.e. name, then tag, then name and record,

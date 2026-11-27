@@ -1,7 +1,7 @@
 // Linker argv parsing and library lookup tests.
 module link_args_tests;
 import aro::backend::link;
-import aro::frontend::c::diagnostics;
+import aro::compiler::reporting;
 import aro::target;
 import aro::toolchain;
 import aro::toolchain::discovery;
@@ -102,13 +102,13 @@ fn void default_dynamic_exe_ubuntu() @test
 	};
 	check_args(&args, expected[..]);
 
-	diagnostics::Diagnostics d;
-	d.init_list(&arena);
+	reporting::Collector d;
+	d.init(&arena);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(&arena);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args.array_view())!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args.array_view())!!;
 	check(plan.kind, link::OutputKind.EXEC);
 	check(plan.output, "a.out");
 	check(plan.emulation, "elf_x86_64");
@@ -157,13 +157,13 @@ fn void pie_and_rdynamic_strip() @test
 	uint export_count = 0;
 	foreach (arg : args) if (arg == "-export-dynamic") export_count++;
 	check(export_count, 2);
-	diagnostics::Diagnostics d;
-	d.init_list(&arena);
+	reporting::Collector d;
+	d.init(&arena);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(&arena);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args.array_view())!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args.array_view())!!;
 	check(plan.kind, link::OutputKind.PIE);
 	check(plan.export_dynamic, true);
 	check(plan.strip_all, true);
@@ -182,13 +182,13 @@ fn void static_group() @test
 	args.init(&arena);
 	defer args.free();
 	tc.build_linker_args("", { "main.o" }, &args)!!;
-	diagnostics::Diagnostics d;
-	d.init_list(&arena);
+	reporting::Collector d;
+	d.init(&arena);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(&arena);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args.array_view())!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args.array_view())!!;
 	check(plan.kind, link::OutputKind.STATIC);
 	check(plan.inputs.len(), 11);
 	check_input(&plan, 0, link::LinkItemKind.FILE, "crt1.o", false, true);
@@ -217,13 +217,13 @@ fn void static_pie() @test
 	args.init(&arena);
 	defer args.free();
 	tc.build_linker_args("", { "main.o" }, &args)!!;
-	diagnostics::Diagnostics d;
-	d.init_list(&arena);
+	reporting::Collector d;
+	d.init(&arena);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(&arena);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args.array_view())!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args.array_view())!!;
 	check(plan.kind, link::OutputKind.STATIC_PIE);
 	check(plan.no_dynamic_linker, true);
 	check(plan.z_text, true);
@@ -244,13 +244,13 @@ fn void shared() @test
 	args.init(&arena);
 	defer args.free();
 	tc.build_linker_args("output.so", { "main.o" }, &args)!!;
-	diagnostics::Diagnostics d;
-	d.init_list(&arena);
+	reporting::Collector d;
+	d.init(&arena);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(&arena);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args.array_view())!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args.array_view())!!;
 	check(plan.kind, link::OutputKind.SHARED);
 	check(plan.output, "output.so");
 	check(plan.has_dynamic_linker, false);
@@ -272,13 +272,13 @@ fn void user_libs_in_order() @test
 	args.init(&arena);
 	defer args.free();
 	tc.build_linker_args("p", { "main.o", "-lm", "-l:libfoo.a", "libbar.so" }, &args)!!;
-	diagnostics::Diagnostics d;
-	d.init_list(&arena);
+	reporting::Collector d;
+	d.init(&arena);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(&arena);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args.array_view())!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args.array_view())!!;
 	check(plan.search_dirs.len(), 1);
 	check(plan.search_dirs[0], "/user/lib");
 	check(has_input(&plan, link::LinkItemKind.LIBRARY, "m"), true);
@@ -298,13 +298,13 @@ fn void manual_flags() @test
 		"--whole-archive", "a.a", "--no-whole-archive", "-e", "start", "-z", "now",
 		"-z", "noexecstack", "-zmax-page-size=0x200000", "-L", "/d", "-o", "out", "x.o",
 	};
-	diagnostics::Diagnostics d;
-	d.init_list(mem);
+	reporting::Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(mem);
 	defer plan.free();
-	link::parse_ld_args(&plan, &d, args[..])!!;
+	link::parse_ld_args(&plan, d.tooling_sink(), args[..])!!;
 	check(plan.inputs.len(), 4);
 	check_input(&plan, 0, link::LinkItemKind.LIBRARY, "x", false, true);
 	check_input(&plan, 1, link::LinkItemKind.LIBRARY, "y", true);
@@ -324,24 +324,23 @@ fn void manual_flags() @test
 
 fn void expect_reject(String[] args, bool unsupported, String unsupported_arg = "")
 {
-	diagnostics::Diagnostics d;
-	d.init_list(mem);
+	reporting::Collector d;
+	d.init(mem);
 	defer d.free();
 	link::LinkPlan plan;
 	plan.init(mem);
 	defer plan.free();
 	if (unsupported)
 	{
-		check(@catch(link::parse_ld_args(&plan, &d, args)), link::UNSUPPORTED_LD_ARG);
+		check(@catch(link::parse_ld_args(&plan, d.tooling_sink(), args)), link::UNSUPPORTED_LD_ARG);
 		check(plan.unsupported_arg, unsupported_arg);
 	}
 	else
 	{
-		check(@catch(link::parse_ld_args(&plan, &d, args)), link::MALFORMED_LD_ARGS);
+		check(@catch(link::parse_ld_args(&plan, d.tooling_sink(), args)), link::MALFORMED_LD_ARGS);
 	}
 	check(d.messages.len(), 1);
-	check(d.messages[0].kind, diagnostics::MessageKind.NOTE);
-	check(d.messages[0].effective_kind, diagnostics::MessageKind.NOTE);
+	check(d.messages[0].kind, reporting::Severity.NOTE);
 	check(d.errors, 0);
 }
 
@@ -405,12 +404,12 @@ fn void link_plan_allocation_leak_check() @test
 	TrackingAllocator ta;
 	ta.init(mem);
 	{
-		diagnostics::Diagnostics d;
-		d.init_list(&ta);
+		reporting::Collector d;
+		d.init(&ta);
 		link::LinkPlan plan;
 		plan.init(&ta);
 		String[4] args = { "-L/one", "-o", "out", "input.o" };
-		link::parse_ld_args(&plan, &d, args[..])!!;
+		link::parse_ld_args(&plan, d.tooling_sink(), args[..])!!;
 		plan.free();
 		d.free();
 	}

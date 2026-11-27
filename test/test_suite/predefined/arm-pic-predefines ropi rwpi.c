@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #kind: expand_error
 // #opt: --target=arm-linux-gnueabi --emulate=clang -fropi -frwpi
 // Based on https://github.com/llvm/llvm-project/blob/main/clang/test/Preprocessor/arm-pic-predefines.c

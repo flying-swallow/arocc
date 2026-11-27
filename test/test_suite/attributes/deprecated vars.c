@@ -1,4 +1,4 @@
-// #skip: block-scope `int x[[deprecated]];` misparses as a subscript (aro_c3 gap); deprecated uses otherwise match
+// #skip: block-scope `int x[[deprecated]];` misparses as a subscript (aro_cc gap); deprecated uses otherwise match
 // #opt: -std=c23 -Wno-unused-value
 void foo(__attribute__((deprecated)) int arg, int arg2 __attribute__((deprecated))) { // #note@25: 'arg' has been explicitly marked deprecated here // #note@71: 'arg2' has been explicitly marked deprecated here
     __attribute__((deprecated)) int foo = 1; // #note@20: 'foo' has been explicitly marked deprecated here

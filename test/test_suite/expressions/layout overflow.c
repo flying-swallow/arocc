@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -fdeclspec
 struct S { // #error@8: type 'struct S' is too large
     char x[2305843009213693952ULL -1];

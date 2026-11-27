@@ -1,7 +1,7 @@
 load("//tools:c3.bzl", "c3_binary", "c3_test")
 
 # Rewrites the BEGIN/END GENERATED RECORD VECTORS region of
-# test/unit/types/target_tests.c3 from test/records/0013_test.c.
+# aro_cc/test/types/target_tests.c3 from test/records/0013_test.c.
 #   bazel run //tools/gen_target_record_vectors [-- --check]
 c3_binary(
     name = "gen_target_record_vectors",

@@ -1,4 +1,4 @@
-// #skip: diagnostics differ (aro_c3 gap)
+// #skip: diagnostics differ (aro_cc gap)
 // #opt: -Wno-implicit-int -std=c17
 int foo; // #note@5: previous definition is here // #note@5: previous definition is here
 

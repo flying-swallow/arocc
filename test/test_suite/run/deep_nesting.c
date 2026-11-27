@@ -1,6 +1,6 @@
 // #kind: run
 // #exit: 0
-// Deep nesting must fit the 64 MiB stack aro_c3 requests at startup (like
+// Deep nesting must fit the 64 MiB stack aro_cc requests at startup (like
 // GCC's stack_limit_increase): 3000-4000 levels need a few KiB per level in
 // the parser and codegen. Frames of ~10-25 KiB per level used to overflow.
 // Repetition is additive (3000 = 1000 x 3), never nested macro calls.

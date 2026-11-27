@@ -84,7 +84,7 @@ fn void print_head3(String text)
 	io::print(text[:end]);
 }
 
-<* Prepend `dir` (made absolute) to this process's PATH, so aro_c3 finds the declared `as`. *>
+<* Prepend `dir` (made absolute) to this process's PATH, so aro_cc finds the declared `as`. *>
 fn void prepend_path(String dir)
 {
 	@pool()

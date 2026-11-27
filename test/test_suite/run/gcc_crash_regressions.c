@@ -1,6 +1,6 @@
 // #kind: run
 // #exit: 0
-// Reduced from GCC torture cases that used to crash aro_c3 (zero-struct-1.c,
+// Reduced from GCC torture cases that used to crash aro_cc (zero-struct-1.c,
 // 961125-1.c, strcmpopt_6.c) plus folded `||`/`&&` codegen.
 char y[3];
 char *f = &y[0];

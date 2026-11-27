@@ -6,7 +6,7 @@ load(":defs.bzl", "test_suite_area")
 # include/embed/framework trees copied into every worker directory.
 #
 #   bazel test //test/test_suite:test_suite_preprocessor
-#   bazel run //test/src/test_suite:test_suite_runner -- $PWD/bazel-bin/aro_c3 $PWD/test/test_suite [-s]
+#   bazel run //test/src/test_suite:test_suite_runner -- $PWD/bazel-bin/aro_cc $PWD/test/test_suite [-s]
 
 AREAS = [
     "attributes",
@@ -34,7 +34,7 @@ filegroup(
 
 [test_suite_area(area) for area in AREAS]
 
-# Native Linux x86-64 cases: compile with aro_c3 using the default -O1, -O0,
+# Native Linux x86-64 cases: compile with aro_cc using the default -O1, -O0,
 # -O2, --x86-64-spill-all, -fintegrated-as, or -fno-integrated-as, link with
 # the declared cc, run and compare the exit status. Other hosts skip them.
 test_suite_area("run", native = True)
