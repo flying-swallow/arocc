@@ -123,6 +123,7 @@ fn void canonical_builtins() @test
 	@with_target("x86_64-linux-gnu"; Compilation* comp)
 	{
 		TypeStore* ts = &comp.type_store;
+		usz initial_len = ts.len();
 		foreach (k : TypeInt::values)
 		{
 			QualType qt = ts.put(type_store::type_int(k));
@@ -142,7 +143,7 @@ fn void canonical_builtins() @test
 		assert(ts.put({ .tag = STORAGE_FLOAT, .storage_float = MFP8 }) == type_store::MFP8);
 		assert(ts.put(type_store::type_int(LONG)) == type_store::LONG);
 		assert(ts.put(type_store::type_float(LONG_DOUBLE)) == type_store::LONG_DOUBLE);
-		check(ts.len(), 0); // builtins never allocate a slot
+		check(ts.len(), initial_len); // builtins never allocate another slot
 
 		// The builtin pointer handles decode to pointers of their child.
 		assert(type_store::VOID_POINTER.get_type(comp).pointer.child == type_store::VOID);

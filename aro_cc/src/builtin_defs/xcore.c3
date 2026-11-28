@@ -5,10 +5,10 @@ import aro::frontend::c::builtin_properties;
 
 enum Builtin : ushort (String name, BuiltinRecord record)
 {
-	TAG___BUILTIN_BITREV { "__builtin_bitrev", { "UiUi", ALL_LANGUAGES, NONE, { .is_const = true }, "" } },
-	TAG___BUILTIN_GETID { "__builtin_getid", { "Si", ALL_LANGUAGES, NONE, { .is_const = true }, "" } },
-	TAG___BUILTIN_GETPS { "__builtin_getps", { "UiUi", ALL_LANGUAGES, NONE, {  }, "" } },
-	TAG___BUILTIN_SETPS { "__builtin_setps", { "vUiUi", ALL_LANGUAGES, NONE, {  }, "" } },
+	TAG___BUILTIN_BITREV { "__builtin_bitrev", { "UiUi", ALL_LANGUAGES, NONE, { .eval_args = true, .is_const = true }, "" } },
+	TAG___BUILTIN_GETID { "__builtin_getid", { "Si", ALL_LANGUAGES, NONE, { .eval_args = true, .is_const = true }, "" } },
+	TAG___BUILTIN_GETPS { "__builtin_getps", { "UiUi", ALL_LANGUAGES, NONE, { .eval_args = true }, "" } },
+	TAG___BUILTIN_SETPS { "__builtin_setps", { "vUiUi", ALL_LANGUAGES, NONE, { .eval_args = true }, "" } },
 }
 
 const BuiltinGroup GROUP = XCORE;

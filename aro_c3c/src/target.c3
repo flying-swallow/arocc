@@ -27,8 +27,8 @@
 // - `x86_features_from_host` is the non-LLVM c3c build's
 //   `hostinfo_x86_features`, which detects nothing: a native x64 target gets
 //   the baseline cpu set (this matches the LLVM-less reference c3c).
-// - `target_host_arch` / `default_target` are fixed to x86_64 Linux (the only
-//   host arocc builds the C3 frontend on).
+// - `default_target` is fixed to x86_64 Linux (the target used by arocc's
+//   compiler tests); `target_host_arch` follows the host C3 compiler.
 // - `OUTF` warnings go to stdout via io::printfn; `FATAL_ERROR` is
 //   `@error_exit`.
 // - PlatformTarget's per-arch union members are separate structs.
@@ -2531,6 +2531,7 @@ fn void target_setup(BuildTarget* build_target)
 // target.c:2515
 fn ArchType target_host_arch()
 {
-	// c3c picks this from the host compiler's predefined macros.
-	return X86_64;
+	// c3c picks this from the host compiler's predefined architecture.
+	// The C3 standard library exposes the same architecture enum and order.
+	return ArchType::from_ordinal(env::ARCH_TYPE.ordinal);
 }

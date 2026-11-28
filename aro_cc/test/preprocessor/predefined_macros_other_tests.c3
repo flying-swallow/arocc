@@ -194,6 +194,8 @@ fn String other_os_tag(OsTag tag) => emit("x86_64-linux-none", "", &sec_other_os
 
 fn String unix(String triple, bool is_gnu) => emit(triple, "", &sec_unix, { .is_gnu = is_gnu });
 
+fn String unix_tag(OsTag tag) => emit("x86_64-linux-none", "", &sec_unix, { .set_os = true, .os = tag });
+
 fn String pthread(String triple, bool on) => emit(triple, "", &sec_pthread, { .pthread = on });
 
 fn void other_os_defines() @test
@@ -201,8 +203,8 @@ fn void other_os_defines() @test
 	test::eq(other_os("x86_64-linux-gnu", true), "#define linux 1\n#define __linux 1\n#define __linux__ 1\n");
 	test::eq(other_os("x86_64-linux-gnu", false), "#define __linux 1\n#define __linux__ 1\n");
 	test::eq(other_os("x86_64-freebsd.13.2-none", false), "#define __FreeBSD__ 13\n#define __FreeBSD_cc_version 130001\n");
-	test::eq(other_os("x86_64-ps4-none", false), "#define __FreeBSD__ 9\n#define __FreeBSD_cc_version 900001\n");
-	test::eq(other_os("x86_64-ps5-none", false), "#define __FreeBSD__ 9\n#define __FreeBSD_cc_version 900001\n");
+	test::eq(other_os_tag(PS4), "#define __FreeBSD__ 9\n#define __FreeBSD_cc_version 900001\n");
+	test::eq(other_os_tag(PS5), "#define __FreeBSD__ 9\n#define __FreeBSD_cc_version 900001\n");
 	test::eq(other_os("x86_64-illumos-none", true), "#define sun 1\n#define __sun 1\n#define __sun__ 1\n#define __illumos__ 1\n");
 	test::eq(other_os("wasm32-wasi-musl", false), "#define __wasi__ 1\n");
 	test::eq(other_os("wasm32-emscripten-musl", false), "#define __EMSCRIPTEN__ 1\n");
@@ -234,7 +236,7 @@ fn void unix_and_android_defines() @test
 	test::eq(unix("aarch64-linux-android", false), "#define __unix 1\n#define __unix__ 1\n#define __ANDROID__ 1\n");
 	test::eq(unix("arm-linux-androideabi", false), "#define __unix 1\n#define __unix__ 1\n#define __ANDROID__ 1\n");
 	test::eq(unix("x86_64-haiku-none", false), "#define __unix 1\n#define __unix__ 1\n");
-	test::eq(unix("x86_64-ps5-none", false), "#define __unix 1\n#define __unix__ 1\n");
+	test::eq(unix_tag(PS5), "#define __unix 1\n#define __unix__ 1\n");
 	test::eq(unix("wasm32-emscripten-musl", false), "#define __unix 1\n#define __unix__ 1\n");
 	test::eq(unix("x86_64-windows-msvc", true), "");
 	test::eq(unix("wasm32-wasi-musl", true), "");

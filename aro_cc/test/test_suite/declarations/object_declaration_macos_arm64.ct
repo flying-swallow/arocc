@@ -18,6 +18,3 @@ implicit typedef: 'struct __NSConstantString_tag'
 implicit typedef: '__mfp8'
  name: __mfp8
 
-variable: 'int'
- name: value
- definition: 0x6

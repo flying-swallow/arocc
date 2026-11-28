@@ -53,6 +53,7 @@ c3_main_test(
 c3_main_test(
     name = "library_consumer",
     srcs = ["library_consumer_integration.c3"],
+    env = {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
     args = [
         "$(location //:aro_distribution)",
         "$(location @c3c//:c3c)",
