@@ -1,6 +1,7 @@
 /** manifest:
 syntax
 */
+// #opt: --target=x86_64-linux-gnu --emulate=gcc
 int value;
 // #expect: stdout
 implicit typedef: '__int128'

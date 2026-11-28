@@ -1,4 +1,4 @@
-
+// #opt: --target=x86_64-linux-gnu --emulate=gcc
 // #expect: stdout
 implicit typedef: '__int128'
  name: __int128_t

@@ -1,0 +1,8 @@
+load("//aro_cc/tools:c3.bzl", "c3_library")
+
+c3_library(
+    name = "llvm",
+    srcs = ["builder.c3", "core.c3", "passes.c3", "target.c3"],
+    data = ["manifest.json"],
+    visibility = ["//visibility:public"],
+)

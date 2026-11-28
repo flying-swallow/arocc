@@ -96,7 +96,7 @@ fn void expect_complex_of(Compilation* comp, QualType qt, QualType elem)
 // ---------------------------------------------------------------------------
 // Integer literal types
 
-fn void decimal_literal_works_before_named_types_are_initialized() @test
+fn void decimal_literal_works_when_named_intmax_is_unset() @test
 {
 	TrackingAllocator ta;
 	ta.init(mem);
@@ -106,7 +106,10 @@ fn void decimal_literal_works_before_named_types_are_initialized() @test
 		d.init_list(&ta);
 		Compilation comp;
 		comp.init(&ta, compilation::native_definition(), null, &d);
-		assert(comp.type_store.intmax.is_invalid(), "raw parser setup leaves named intmax unset");
+		// Compilation.init initializes all named types; clear intmax to exercise
+		// number_value's fallback to the target's intmax type.
+		comp.type_store.intmax = type_store::INVALID;
+		assert(comp.type_store.intmax.is_invalid(), "test setup leaves named intmax unset");
 
 		NumberValue v = int_lit(&comp, DECIMAL, "1", NONE);
 		assert(v.qt == type_store::INT);

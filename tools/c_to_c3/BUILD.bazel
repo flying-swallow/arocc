@@ -1,0 +1,19 @@
+load("//aro_cc/tools:c3.bzl", "c3_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+c3_binary(
+    name = "aro_c_to_c3",
+    srcs = ["main.c3"],
+    deps = ["//:aro_cc_lib"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "translation_test",
+    srcs = ["translation_test.sh"],
+    args = [
+        "$(rootpath :aro_c_to_c3)",
+        "$(rootpath //:aro_c3c)",
+    ],
+    data = [":aro_c_to_c3", "//:aro_c3c"],
+)

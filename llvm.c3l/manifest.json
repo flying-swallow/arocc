@@ -1,0 +1,4 @@
+{
+  "provides": "llvm",
+  "sources": ["core.c3", "builder.c3", "target.c3", "passes.c3"]
+}
